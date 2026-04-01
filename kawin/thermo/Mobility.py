@@ -385,7 +385,7 @@ def tracer_diffusivity(composition_set, mobility_callables = None, mobility_corr
     if mobility_callables is None:
         raise ValueError('mobility_callables is required')
 
-    R = 8.314
+    R = 8.3145
     T = composition_set.dof[composition_set.phase_record.state_variables.index(v.T)]
     return R * T * mobility_from_composition_set(composition_set, mobility_callables, mobility_correction, parameters)
 
