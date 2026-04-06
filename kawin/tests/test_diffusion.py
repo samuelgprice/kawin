@@ -4,19 +4,40 @@ import numpy as np
 from numpy.testing import assert_allclose
 import pytest
 
-from kawin.diffusion import SinglePhaseModel, HomogenizationModel, TemperatureParameters
+from kawin.diffusion import SinglePhaseModel, HomogenizationModel, MovingBoundary1DModel, TemperatureParameters
 from kawin.diffusion.mesh import Cartesian1D, Cylindrical1D, Spherical1D, Cartesian2D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh import ProfileBuilder, StepProfile1D, LinearProfile1D, DiracDeltaProfile, ConstantProfile, GaussianProfile, ExperimentalProfile1D, BoundedEllipseProfile, BoundedRectangleProfile
 from kawin.diffusion.DiffusionParameters import computeMobility, _computeSingleMobility, TemperatureParameters, HashTable
 from kawin.diffusion.HomogenizationParameters import HomogenizationParameters, computeHomogenizationFunction
 from kawin.thermo import GeneralThermodynamics
 from kawin.tests.datasets import *
+from kawin.solver import explicitEulerIterator
 
 NiCrTherm = GeneralThermodynamics(NICRAL_TDB, ['NI', 'CR'], ['FCC_A1', 'BCC_A2'])
 NiCrAlTherm = GeneralThermodynamics(NICRAL_TDB, ['NI', 'CR', 'AL'], ['FCC_A1', 'BCC_A2'])
 FeCrNiTherm = GeneralThermodynamics(FECRNI_DB, ['FE', 'CR', 'NI'], ['FCC_A1', 'BCC_A2'])
 FeCrNiTherm_sigma = GeneralThermodynamics(FECRNI_DB, ['FE', 'CR', 'NI'], ['FCC_A1', 'BCC_A2', 'SIGMA'])
 FeCTherm = GeneralThermodynamics(FECRC_DB, ['FE', 'C'], ['FCC_A1'])
+
+
+class ConstantBinaryThermodynamics:
+    def __init__(self, phases, diffusivities, interface_compositions):
+        self.phases = phases
+        self.diffusivities = diffusivities
+        self.interface_compositions = interface_compositions
+
+    def clearCache(self):
+        return
+
+    def getInterdiffusivity(self, x, T, removeCache=True, phase=None):
+        values = np.atleast_1d(T).astype(np.float64)
+        return np.squeeze(np.ones(values.shape, dtype=np.float64) * self.diffusivities[phase])
+
+    def getInterfacialComposition(self, T, gExtra=0, precPhase=None):
+        values = np.atleast_1d(T).astype(np.float64)
+        left = np.ones(values.shape, dtype=np.float64) * self.interface_compositions[0]
+        right = np.ones(values.shape, dtype=np.float64) * self.interface_compositions[1]
+        return np.squeeze(left), np.squeeze(right)
 
 def test_compositionInput():
     '''
@@ -608,3 +629,98 @@ def test_diffusion_interstitial():
     # There seems to be some stochastic behavior (from global eq?), so lower the tolerance here
     assert_allclose(comps[40,1], 0.062927, rtol=1e-2)
     assert_allclose(comps[60,1], 0.016164, rtol=1e-2)
+
+
+def test_moving_boundary_dxdt():
+    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    mesh = Cartesian1D(['CR'], [0, 1], 10)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
+        interface_compositions=(0.3, 0.7),
+    )
+    model = MovingBoundary1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=0.5,
+    )
+    model.setup()
+    dxdt = model.getdXdt(model.currentTime, model.getCurrentX())
+    fluxes = model.getFluxes(model.currentTime, model.getCurrentX())
+    dt = model.getDt(dxdt)
+
+    assert dxdt[0].shape == (10, 1)
+    assert_allclose(dxdt[0][4, 0], 20.0, atol=0, rtol=1e-6)
+    assert_allclose(dxdt[0][5, 0], -40.0, atol=0, rtol=1e-6)
+    assert_allclose(dxdt[1], -5.0, atol=0, rtol=1e-6)
+    assert_allclose(fluxes[5, 0], -3.0, atol=0, rtol=1e-6)
+    assert_allclose(dt, 0.002, atol=0, rtol=1e-6)
+
+
+def test_moving_boundary_mass_conservation():
+    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    mesh = Cartesian1D(['CR'], [0, 1], 20)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    model = MovingBoundary1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=0.5,
+        record=True,
+    )
+    initial_mass = model.getTotalMass()
+    model.solve(0.01, iterator=explicitEulerIterator)
+    final_mass = model.getTotalMass()
+
+    assert abs(model.getInterfacePosition() - 0.5) > 0
+    assert_allclose(final_mass, initial_mass, atol=1e-10, rtol=1e-8)
+
+
+def test_moving_boundary_saving_loading(tmpdir):
+    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    mesh = Cartesian1D(['CR'], [0, 1], 20)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    model = MovingBoundary1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=0.5,
+        record=True,
+    )
+    model.solve(0.01, iterator=explicitEulerIterator)
+    model.save(tmpdir / 'moving_boundary.npz')
+
+    new_mesh = Cartesian1D(['CR'], [0, 1], 20)
+    new_mesh.setResponseProfile(profile)
+    new_model = MovingBoundary1DModel(
+        new_mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=0.5,
+        record=True,
+    )
+    new_model.load(tmpdir / 'moving_boundary.npz')
+
+    assert_allclose(new_model.data.currentY, model.data.currentY)
+    assert_allclose(new_model.getInterfacePosition(), model.getInterfacePosition())
+    assert_allclose(new_model.currentTime, model.currentTime)

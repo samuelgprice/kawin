@@ -4,4 +4,5 @@ from .MeshBase import ProfileBuilder, ConstantProfile, DiracDeltaProfile, Gaussi
 from .FVM1D import MixedBoundary1D, PeriodicBoundary1D
 from .FVM1D import FiniteVolume1D, Cartesian1D, Cylindrical1D, Spherical1D
 from .FVM1D import StepProfile1D, LinearProfile1D, ExperimentalProfile1D
+from .MovingBoundary1D import MovingBoundaryGeometry, get_moving_boundary_geometry, get_control_volume_widths, integrate_binary_profile
 from .FVM2D import Cartesian2D
