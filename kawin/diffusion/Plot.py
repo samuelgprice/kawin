@@ -8,6 +8,7 @@ from kawin.thermo.Mobility import u_to_x_frac, expand_u_frac, expand_x_frac, int
 from kawin.diffusion.Diffusion import DiffusionModel
 from kawin.diffusion.DiffusionParameters import computeMobility, HashTable
 from kawin.diffusion.mesh import FiniteVolumeGrid, FiniteVolume1D, Cartesian2D
+from kawin.diffusion.mesh.MovingBoundary1D import get_moving_boundary_geometry
 
 def _get_1D_mesh(model: DiffusionModel):
     mesh: FiniteVolume1D = model.mesh
@@ -239,6 +240,287 @@ def plot1DFlux(model: DiffusionModel, elements=None, zScale=1, zOffset=0, time=N
     if len(elements) > 1:
         ax.legend()
     ax.set_ylabel(f'$J/V_m$ ($m/s$)')
+    return ax
+
+
+def plotMovingBoundaryState(
+    model_or_mesh,
+    composition=None,
+    interface_position=None,
+    interface_compositions=None,
+    distance_multiplier=1.0,
+    zScale=1,
+    zOffset=0,
+    time=None,
+    ax=None,
+    annotate=True,
+    annotate_positions=False,
+    annotate_interface_distances=False,
+    annotate_interface_compositions=False,
+    annotationWindow=2,
+    maxAnnotatedCells=20,
+    zoom_cells=None,
+    auto_composition_zoom=True,
+    composition_padding=0.08,
+    *args,
+    **kwargs,
+):
+    '''
+    Plots the current moving-boundary mesh state on a single axis.
+
+    The composition is shown on the usual y-axis, while a small geometry band
+    below y=0 marks cell faces, cell centers and the interface position.
+    This keeps the plot easy to call from a debugger while still showing how
+    the interface sits relative to the discrete control volumes.
+
+    Parameters
+    ----------
+    model_or_mesh:
+        Either a MovingBoundary1DModel-like object, or a mesh-like object.
+        For the mesh path, composition and interface_position may be passed
+        explicitly. The interface position may also be inferred from
+        mesh.interface_position / mesh.interfacePosition when available.
+    '''
+    ax = _get_axis(ax)
+    left_interface_composition = None
+    right_interface_composition = None
+    if hasattr(model_or_mesh, 'getInterfacePosition') and hasattr(model_or_mesh, 'data'):
+        mesh = _get_1D_mesh(model_or_mesh)
+        composition = np.asarray(model_or_mesh.data.y(time), dtype=np.float64).reshape(-1)
+        interface_position = float(model_or_mesh.getInterfacePosition(time))
+        if annotate_interface_compositions:
+            state_time = model_or_mesh.currentTime if time is None else time
+            try:
+                _, _, left_interface_composition, right_interface_composition, _, _ = model_or_mesh._getInterfaceState(
+                    state_time,
+                    composition,
+                    interface_position,
+                )
+            except Exception:
+                left_interface_composition = None
+                right_interface_composition = None
+    else:
+        from kawin.diffusion.mesh.MovingBoundary1D import _extract_moving_boundary_inputs
+
+        mesh = model_or_mesh
+        composition, interface_position = _extract_moving_boundary_inputs(
+            mesh,
+            composition=composition,
+            interface_position=interface_position,
+        )
+        if interface_compositions is not None:
+            left_interface_composition = float(interface_compositions[0])
+            right_interface_composition = float(interface_compositions[1])
+    geometry = get_moving_boundary_geometry(mesh, interface_position)
+
+    z = np.ravel(mesh.z).astype(np.float64)
+    z_edge = np.ravel(mesh.zEdge).astype(np.float64)
+    display_scale = float(distance_multiplier) / zScale
+    x_centers = (z + zOffset) * display_scale
+    x_edges = (z_edge + zOffset) * display_scale
+    x_interface = (interface_position + zOffset) * display_scale
+    x_left_face = (geometry.left_face + zOffset) * display_scale
+    x_right_face = (geometry.right_face + zOffset) * display_scale
+
+    plot_kwargs = _adjust_kwargs(
+        'moving_boundary',
+        {'color': 'C0', 'marker': 'o', 'markersize': 4, 'linewidth': 1.5, 'label': 'Composition'},
+        kwargs,
+    )
+    ax.plot(x_centers, composition, *args, **plot_kwargs)
+
+    if zoom_cells is None:
+        visible_comp = composition
+    else:
+        pad = max(0, int(zoom_cells))
+        left_i = max(0, geometry.left_index - pad)
+        right_i = min(len(z) - 1, geometry.right_index + pad)
+        visible_comp = composition[left_i:right_i + 1]
+
+    comp_min = float(np.min(visible_comp))
+    comp_max = float(np.max(visible_comp))
+    comp_span = comp_max - comp_min
+    if auto_composition_zoom:
+        if comp_span <= 0:
+            y_data_pad = max(0.02, abs(comp_max) * 0.05, 1e-6)
+        else:
+            y_data_pad = max(float(composition_padding) * comp_span, 1e-6)
+        ymax = comp_max + y_data_pad
+    else:
+        ymax = max(1.02, comp_max + 0.12)
+
+    ymin = min(-0.18, comp_min - max(0.04, 0.5 * (ymax - comp_min)))
+    ax.set_ylim([ymin, ymax])
+
+    # Geometry strip below the composition profile.
+    y_face_low = ymin + 0.02
+    y_face_high = -0.015
+    y_center = 0.5 * (y_face_low + y_face_high)
+    y_center_highlight = y_center + 0.015
+
+    for edge in x_edges:
+        ax.plot([edge, edge], [y_face_low, y_face_high], color='0.85', linewidth=0.8, zorder=0)
+
+    ax.axvspan(x_left_face, x_interface, ymin=0, ymax=1, color='C1', alpha=0.08, zorder=0)
+    ax.axvspan(x_interface, x_right_face, ymin=0, ymax=1, color='C2', alpha=0.08, zorder=0)
+
+    ax.scatter(x_centers, np.full_like(x_centers, y_center), s=18, color='0.35', zorder=3, clip_on=False)
+    ax.scatter(
+        [x_centers[geometry.left_index], x_centers[geometry.right_index]],
+        [y_center_highlight, y_center_highlight],
+        s=28,
+        color=['C1', 'C2'],
+        zorder=4,
+        clip_on=False,
+    )
+    ax.axvline(x_interface, color='C3', linestyle='--', linewidth=1.5, label='Interface')
+
+    if annotate_interface_compositions and left_interface_composition is not None and right_interface_composition is not None:
+        ax.scatter(
+            [x_interface, x_interface],
+            [left_interface_composition, right_interface_composition],
+            s=42,
+            color=['C1', 'C2'],
+            edgecolors='black',
+            linewidths=0.6,
+            zorder=5,
+            clip_on=False,
+            label='Interface compositions',
+        )
+        ax.text(
+            x_interface,
+            left_interface_composition,
+            f' c_int,L={left_interface_composition:.6g}',
+            color='C1',
+            ha='left',
+            va='bottom',
+            fontsize=8,
+        )
+        ax.text(
+            x_interface,
+            right_interface_composition,
+            f' c_int,R={right_interface_composition:.6g}',
+            color='C2',
+            ha='left',
+            va='top',
+            fontsize=8,
+        )
+
+    if annotate_interface_distances:
+        arrow_y = y_face_high + 0.12 * (ymax - ymin)
+        text_y = arrow_y + 0.035 * (ymax - ymin)
+
+        ax.annotate(
+            '',
+            xy=(x_interface, arrow_y),
+            xytext=(x_centers[geometry.left_index], arrow_y),
+            arrowprops={'arrowstyle': '<->', 'color': 'C1', 'linewidth': 1.2},
+        )
+        ax.annotate(
+            '',
+            xy=(x_centers[geometry.right_index], arrow_y),
+            xytext=(x_interface, arrow_y),
+            arrowprops={'arrowstyle': '<->', 'color': 'C2', 'linewidth': 1.2},
+        )
+
+        ax.text(
+            0.5 * (x_centers[geometry.left_index] + x_interface),
+            text_y,
+            f'left_distance = {((interface_position - z[geometry.left_index]) * display_scale):.9g}',
+            color='C1',
+            ha='center',
+            va='bottom',
+            fontsize=8,
+            rotation=90,
+        )
+        ax.text(
+            0.5 * (x_interface + x_centers[geometry.right_index]),
+            text_y,
+            f'right_distance = {((z[geometry.right_index] - interface_position) * display_scale):.9g}',
+            color='C2',
+            ha='center',
+            va='bottom',
+            fontsize=8,
+            rotation=90,
+        )
+
+    if annotate:
+        if len(composition) <= maxAnnotatedCells:
+            indices = np.arange(len(composition))
+        else:
+            start = max(0, geometry.left_index - int(annotationWindow))
+            stop = min(len(composition), geometry.right_index + int(annotationWindow) + 1)
+            indices = np.arange(start, stop)
+
+        for i in indices:
+                ax.text(
+                x_centers[i],
+                composition[i] + 0.02 * np.sign(x_centers[i] - x_interface),
+                f'[{i}] {composition[i]:.7g}',
+                ha='center',
+                va='bottom',
+                fontsize=8,
+            )
+
+        # ax.text(x_interface, ymax - 0.03 * (ymax - ymin), 'interface', color='C3', ha='center', va='top')
+        ax.text(x_left_face, y_face_low, 'Lf', color='C1', ha='right', va='top', fontsize=8)
+        ax.text(x_right_face, y_face_low, 'Rf', color='C2', ha='left', va='top', fontsize=8)
+        ax.text(x_centers[geometry.left_index], y_face_high, f'C{geometry.left_index}', color='C1', ha='right', va='bottom', fontsize=8)
+        ax.text(x_centers[geometry.right_index], y_face_high, f'C{geometry.right_index}', color='C2', ha='left', va='bottom', fontsize=8)
+
+    if annotate_positions:
+        if len(composition) <= maxAnnotatedCells:
+            pos_indices = np.arange(len(composition))
+        else:
+            start = max(0, geometry.left_index - int(annotationWindow))
+            stop = min(len(composition), geometry.right_index + int(annotationWindow) + 1)
+            pos_indices = np.arange(start, stop)
+
+        center_position_y = ymin + 0.72 * (y_center - ymin)
+        for i in pos_indices:
+            ax.text(
+                x_centers[i],
+                center_position_y,
+                f'{x_centers[i]:.9g}',
+                ha='center',
+                va='top',
+                fontsize=7,
+                color='0.25',
+                rotation=90,
+            )
+
+        edge_indices = np.unique(np.concatenate((pos_indices, [pos_indices[-1] + 1]))).astype(int)
+        edge_indices = edge_indices[(edge_indices >= 0) & (edge_indices < len(x_edges))]
+        for i in edge_indices:
+            ax.text(
+                x_edges[i],
+                y_face_high,
+                f'{x_edges[i]:.9g}',
+                ha='center',
+                va='bottom',
+                fontsize=7,
+                color='0.5',
+                rotation=90,
+            )
+
+        ax.text(
+            x_interface, # - 0.015 * (x_edges[-1] - x_edges[0]),
+            (y_face_high + 0.12 * (ymax - ymin)) + 0.035 * (ymax - ymin), #y_face_high + 0.05 * (ymax - ymin),
+            f'{x_interface:.9g}',
+            ha='right',
+            va='bottom',
+            fontsize=8,
+            color='C3',
+            rotation=90,
+        )
+
+    if zoom_cells is None:
+        _set_1D_xlim(ax, mesh, zScale, zOffset)
+    else:
+        ax.set_xlim([x_edges[left_i], x_edges[right_i + 1]])
+    ax.set_xlabel(f'Distance*{display_scale:.0e} (m)')
+    ax.set_ylabel('Composition / mesh state')
+    ax.legend()
     return ax
 
 def plot2D(model: DiffusionModel, element, zScale=1, time=None, ax=None, plotUFrac=False, *args, **kwargs):

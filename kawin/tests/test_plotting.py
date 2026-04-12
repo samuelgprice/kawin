@@ -5,10 +5,12 @@ from kawin.thermo import BinaryThermodynamics, MulticomponentThermodynamics, Gen
 from kawin.precipitation import PrecipitateModel, MatrixParameters, PrecipitateParameters
 from kawin.diffusion import SinglePhaseModel
 from kawin.diffusion.mesh import Cartesian1D, Cartesian2D, StepProfile1D, BoundedRectangleProfile, ProfileBuilder
+from kawin.diffusion import MovingBoundary1DModel
+from kawin.diffusion.mesh.MovingBoundary1D import debug_moving_boundary_state
 
 #from kawin.precipitation.Plot import plotEuler
 from kawin.precipitation.Plot import plotPrecipitateResults
-from kawin.diffusion.Plot import plot1D, plot1DFlux, plot1DPhases, plot1DTwoAxis, plot2D, plot2DFluxes, plot2DPhases
+from kawin.diffusion.Plot import plot1D, plot1DFlux, plot1DPhases, plot1DTwoAxis, plot2D, plot2DFluxes, plot2DPhases, plotMovingBoundaryState
 
 from kawin.tests.datasets import NICRAL_TDB
 
@@ -17,6 +19,26 @@ ternPrecTherm = MulticomponentThermodynamics(NICRAL_TDB, ['NI', 'AL', 'CR'], ['F
 
 binDiffTherm = GeneralThermodynamics(NICRAL_TDB, ['NI', 'CR'], ['FCC_A1', 'BCC_A2'])
 ternDiffTherm = GeneralThermodynamics(NICRAL_TDB, ['NI', 'CR', 'AL'], ['FCC_A1', 'BCC_A2'])
+
+
+class ConstantBinaryThermodynamics:
+    def __init__(self, phases, diffusivities, interface_compositions):
+        self.phases = phases
+        self.diffusivities = diffusivities
+        self.interface_compositions = interface_compositions
+
+    def clearCache(self):
+        return
+
+    def getInterdiffusivity(self, x, T, removeCache=True, phase=None):
+        values = np.atleast_1d(T).astype(np.float64)
+        return np.squeeze(np.ones(values.shape, dtype=np.float64) * self.diffusivities[phase])
+
+    def getInterfacialComposition(self, T, gExtra=0, precPhase=None):
+        values = np.atleast_1d(T).astype(np.float64)
+        left = np.ones(values.shape, dtype=np.float64) * self.interface_compositions[0]
+        right = np.ones(values.shape, dtype=np.float64) * self.interface_compositions[1]
+        return np.squeeze(left), np.squeeze(right)
 
 def test_precipitate_plotting():
     binary_matrix = MatrixParameters(['AL'])
@@ -157,3 +179,47 @@ def test_diffusion_plotting2d():
     fig, ax = plt.subplots()
     plot2DFluxes(model, 'CR', 'y', ax=ax)
     plt.close(fig)
+
+
+def test_moving_boundary_state_plot_and_summary():
+    profile = ProfileBuilder([(StepProfile1D(0, 0.2, 0.8), 'CR')])
+    mesh = Cartesian1D(['CR'], [-1, 1], 8)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        ['FCC_A1', 'BCC_A2'],
+        {'FCC_A1': 1e-15, 'BCC_A2': 2e-15},
+        (0.3, 0.7),
+    )
+    model = MovingBoundary1DModel(
+        mesh,
+        ['NI', 'CR'],
+        ['FCC_A1', 'BCC_A2'],
+        therm,
+        1000,
+        interfacePosition=0.15,
+    )
+
+    fig, ax = plt.subplots()
+    plotMovingBoundaryState(model, ax=ax)
+    assert len(ax.lines) >= 3
+    assert len(ax.collections) >= 2
+    plt.close(fig)
+
+    fig, ax = plt.subplots()
+    model.plotMeshState(ax=ax)
+    plt.close(fig)
+
+    summary = model.describeMeshState(window=1)
+    assert 'interface_position' in summary
+    assert '<left of interface>' in summary
+    assert '<right of interface>' in summary
+
+    mesh.interface_position = 0.15
+    summary2, _ = debug_moving_boundary_state(
+        mesh,
+        composition=mesh.y[:, 0],
+        plot=False,
+        print_summary=False,
+        window=1,
+    )
+    assert 'interface_position' in summary2

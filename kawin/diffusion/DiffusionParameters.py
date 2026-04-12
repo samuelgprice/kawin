@@ -261,6 +261,17 @@ class DiffusionConstraints:
         Max composition change a node can see per iteration in the homogenization model
         There is not an analagous method for von Neumann stability as we have for the single
         phase diffusion model, so this is a naive approach to numerical stability
+    movingBoundaryThreshold : float
+        Factor to limit explicit interface motion in the moving-boundary diffusion model
+        This is the maximum fraction of the full cell width that the interface
+        may move in a single explicit step, and should be less than 0.5 to
+        prevent crossing more than one cell center in a step
+    movingBoundaryMassTolerance : float
+        Allowed absolute inventory error after moving-boundary mass correction
+        If this is not finite, then no post-correction mass check will be applied
+    movingBoundaryMassAction : str
+        Action to take when the post-correction inventory error exceeds the tolerance
+        Must be one of ['ignore', 'warn', 'raise']
     '''
     def __init__(self):
         self.reset()
@@ -269,3 +280,6 @@ class DiffusionConstraints:
         self.minComposition = 1e-8
         self.vonNeumannThreshold = 0.4
         self.maxCompositionChange = 0.002
+        self.movingBoundaryThreshold = 0.25
+        self.movingBoundaryMassTolerance = np.inf
+        self.movingBoundaryMassAction = 'warn'

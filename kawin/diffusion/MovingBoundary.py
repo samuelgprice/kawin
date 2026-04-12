@@ -1,12 +1,16 @@
+import warnings
+
 import numpy as np
 
 from kawin.GenericModel import GenericModel
 from kawin.diffusion.Diffusion import DiffusionModel
 from kawin.diffusion.mesh.FVM1D import Cartesian1D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh.MovingBoundary1D import (
+    debug_moving_boundary_state,
     get_control_volume_widths,
     get_moving_boundary_geometry,
     integrate_binary_profile,
+    summarize_moving_boundary_state,
 )
 from kawin.thermo.Mobility import interstitials
 
@@ -14,13 +18,20 @@ from kawin.thermo.Mobility import interstitials
 class _ScalarHistory:
     def __init__(self, record: bool | int = False):
         if isinstance(record, bool):
-            self.recordInterval = 1 if record else -1
+            if record:
+                self.recordInterval = 1
+            else:
+                self.recordInterval = -1
         else:
             self.recordInterval = record
+
         self.batchSize = 1000
         self.reset()
 
     def reset(self):
+        '''
+        Resets arrays
+        '''
         self._y = np.zeros(self.batchSize, dtype=np.float64)
         self._time = np.zeros(self.batchSize, dtype=np.float64)
         self.currentIndex = 0
@@ -29,14 +40,20 @@ class _ScalarHistory:
         self.N = 0
 
     def record(self, time, y, force: bool = False):
+        '''
+        Stores current state of time and scalar variable
+        '''
         if self.recordInterval > 0:
             if self.currentIndex % self.recordInterval == 0 or force:
                 self.N = int(self.currentIndex / self.recordInterval)
+
                 if self.N >= self._time.shape[0]:
                     self._y = np.pad(self._y, (0, self.batchSize))
                     self._time = np.pad(self._time, (0, self.batchSize))
+
                 self._y[self.N] = y
                 self._time[self.N] = time
+
             self.currentIndex += 1
         else:
             self._y[self.N] = y
@@ -46,11 +63,19 @@ class _ScalarHistory:
         self.currentTime = float(time)
 
     def finalize(self):
+        '''
+        Removes extra padding
+        '''
         self.record(self.currentTime, self.currentY, force=True)
-        self._y = self._y[: self.N + 1]
-        self._time = self._time[: self.N + 1]
+        self._y = self._y[:self.N+1]
+        self._time = self._time[:self.N+1]
 
-    def y(self, time=None):
+    def y(self, time = None):
+        '''
+        Returns scalar variable at time
+
+        If recording is disabled, then this will return the current state
+        '''
         if time is None:
             return float(self._y[self.N])
 
@@ -59,13 +84,14 @@ class _ScalarHistory:
                 return float(self._y[0])
             if time >= self._time[self.N]:
                 return float(self._y[self.N])
-            upper = int(np.argmax(self._time[: self.N + 1] > time))
-            lower = upper - 1
-            y0 = self._y[lower]
-            y1 = self._y[upper]
-            t0 = self._time[lower]
-            t1 = self._time[upper]
-            return float((y1 - y0) * (time - t0) / (t1 - t0) + y0)
+            else:
+                uind = np.argmax(self._time > time)
+                lind = uind - 1
+
+                uy, utime = self._y[uind], self._time[uind]
+                ly, ltime = self._y[lind], self._time[lind]
+
+                return float((uy - ly) * (time - ltime) / (utime - ltime) + ly)
         return float(self._y[0])
 
 
@@ -124,6 +150,8 @@ class MovingBoundary1DModel(DiffusionModel):
             raise TypeError("Thermodynamics object must implement getInterdiffusivity for MovingBoundary1DModel.")
         if isinstance(getattr(self.mesh, "boundaryConditions", None), PeriodicBoundary1D):
             raise ValueError("Periodic boundary conditions are not supported for MovingBoundary1DModel.")
+        if self.constraints.movingBoundaryThreshold <= 0 or self.constraints.movingBoundaryThreshold >= 0.5:
+            raise ValueError("movingBoundaryThreshold must be in the range (0, 0.5) for MovingBoundary1DModel.")
         self._clipInterfacePosition(self.initialInterfacePosition, strict=True)
 
     def reset(self):
@@ -182,13 +210,23 @@ class MovingBoundary1DModel(DiffusionModel):
         return [composition, interface_position]
 
     def _getBoundaryConditions(self):
+        '''
+        Returns boundary conditions and creates a default zero-flux condition if needed
+        '''
         boundary_conditions = getattr(self.mesh, "boundaryConditions", None)
         if boundary_conditions is None:
             boundary_conditions = MixedBoundary1D(self.mesh.responses)
             self.mesh.boundaryConditions = boundary_conditions
         return boundary_conditions
 
-    def _clipInterfacePosition(self, interface_position: float, strict: bool = False) -> float:
+    def _clipInterfacePosition(self, interface_position: float, strict: bool = True) -> float:
+        '''
+        Bounds interface position to the valid cell-center domain
+
+        The moving-boundary geometry assumes the interface lies strictly between
+        adjacent cell centers, so this prevents invalid cut-cell widths
+        and one-sided interface distances.
+        '''
         z = np.ravel(self.mesh.z)
         eps = max(float(self.mesh.dz) * 1e-8, 1e-14)
         lower = float(z[0] + eps)
@@ -198,6 +236,9 @@ class MovingBoundary1DModel(DiffusionModel):
         return float(np.clip(interface_position, lower, upper))
 
     def _getInterfaceState(self, t, composition, interface_position):
+        '''
+        Returns geometry, local-equilibrium interface compositions and interface diffusivities
+        '''
         geometry = get_moving_boundary_geometry(self.mesh, interface_position)
         T_interface = float(self.temperatureParameters(np.array([[interface_position]]), t)[0])
         c_left_int, c_right_int = self.therm.getInterfacialComposition(T_interface, 0, precPhase=self.phases[1])
@@ -212,6 +253,12 @@ class MovingBoundary1DModel(DiffusionModel):
         return geometry, T_interface, c_left_int, c_right_int, D_left_int, D_right_int
 
     def _computeBulkFluxes(self, composition, t, geometry):
+        '''
+        Computes bulk finite-volume face fluxes away from the moving interface
+
+        The interface-adjacent one-sided fluxes are handled separately in
+        _computeState using the local-equilibrium interface compositions.
+        '''
         comp = np.asarray(composition, dtype=np.float64).reshape(-1)
         z = np.ravel(self.mesh.z)
         face_fluxes = np.zeros(len(comp) + 1, dtype=np.float64)
@@ -227,8 +274,10 @@ class MovingBoundary1DModel(DiffusionModel):
             if len(left_D) > 0:
                 max_diffusivity = max(max_diffusivity, float(np.max(np.abs(left_D))))
             if len(left_D) > 1:
-                left_D_face = 0.5 * (left_D[:-1] + left_D[1:])
-                face_fluxes[1 : geometry.left_index + 1] = -left_D_face * np.diff(left_comp) / np.diff(z[: geometry.left_index + 1])
+                left_D_face, _ = self.mesh.midPointCalculator.getDMid(left_D, isPeriodic=False)
+                face_fluxes[1 : geometry.left_index + 1] = self.mesh._diffusiveFlux(
+                    left_D_face, left_comp[1:], left_comp[:-1], self.mesh.dzs[0]
+                )
 
         if geometry.right_index < len(comp) - 1:
             right_comp = comp[geometry.right_index:]
@@ -239,39 +288,38 @@ class MovingBoundary1DModel(DiffusionModel):
             if len(right_D) > 0:
                 max_diffusivity = max(max_diffusivity, float(np.max(np.abs(right_D))))
             if len(right_D) > 1:
-                right_D_face = 0.5 * (right_D[:-1] + right_D[1:])
-                start = geometry.right_index + 1
-                stop = len(comp)
-                face_fluxes[start:stop] = -right_D_face * np.diff(right_comp) / np.diff(z[geometry.right_index:])
+                right_D_face, _ = self.mesh.midPointCalculator.getDMid(right_D, isPeriodic=False)
+                face_fluxes[geometry.right_index + 1 : len(comp)] = self.mesh._diffusiveFlux(
+                    right_D_face, right_comp[1:], right_comp[:-1], self.mesh.dzs[0]
+                )
 
         fluxes_2d = face_fluxes[:, np.newaxis]
         left_bc.adjustFluxes(fluxes_2d)
         return fluxes_2d[:, 0], max_diffusivity
 
     def _computeState(self, t, xCurr):
+        '''
+        Computes composition rates and interface velocity for the current state
+
+        This evaluates one-sided interface fluxes, applies the Stefan balance
+        for the moving boundary, updates the interface-adjacent cut cells using
+        their actual control-volume widths, and stores a stable time step estimate.
+        '''
         composition = np.asarray(xCurr[0], dtype=np.float64).reshape(-1)
         interface_position = self._clipInterfacePosition(float(xCurr[1]))
         geometry, _, c_left_int, c_right_int, D_left_int, D_right_int = self._getInterfaceState(
             t, composition, interface_position
         )
+        # debug_moving_boundary_state(self.mesh, composition=composition, interface_position=interface_position, interface_compositions=self._getInterfaceState(t, composition, interface_position)[2:4], zoom_cells=2, distance_multiplier=1e6, annotate_positions=True, annotate_interface_distances=True, annotate_interface_compositions=True)
         face_fluxes, max_bulk_diffusivity = self._computeBulkFluxes(composition, t, geometry)
         J_int_left = -D_left_int * (c_left_int - composition[geometry.left_index]) / geometry.left_distance
         J_int_right = -D_right_int * (composition[geometry.right_index] - c_right_int) / geometry.right_distance
-        velocity = (J_int_right - J_int_left) / (c_right_int - c_left_int)
+        velocity = (J_int_right - J_int_left) / (c_right_int - c_left_int) ##XXX This does not use the compositions at the interface-adjacent cells (Lee and Oh does) so this may need to be revisited
 
-        dcdt = np.zeros_like(composition, dtype=np.float64)
+        dcdt = self.mesh._fluxTodXdt(face_fluxes[:,np.newaxis])[:,0]
         widths = get_control_volume_widths(self.mesh, interface_position)
-        for i in range(len(composition)):
-            if i == geometry.left_index:
-                left_flux = face_fluxes[i]
-                right_flux = J_int_left
-            elif i == geometry.right_index:
-                left_flux = J_int_right
-                right_flux = face_fluxes[i + 1]
-            else:
-                left_flux = face_fluxes[i]
-                right_flux = face_fluxes[i + 1]
-            dcdt[i] = -(right_flux - left_flux) / widths[i]
+        dcdt[geometry.left_index] = -(J_int_left - face_fluxes[geometry.left_index]) / widths[geometry.left_index] ##NOTE This breaks the conservation property of the update
+        dcdt[geometry.right_index] = -(face_fluxes[geometry.right_index + 1] - J_int_right) / widths[geometry.right_index]
 
         bc = self._getBoundaryConditions()
         bc.adjustdXdt(dcdt[:, np.newaxis])
@@ -285,11 +333,11 @@ class MovingBoundary1DModel(DiffusionModel):
         D_scale = max(diff_candidates)
         min_width = float(np.min(widths))
         if D_scale > 0:
-            dt_diff = self.constraints.vonNeumannThreshold * min_width**2 / D_scale
+            dt_diff = self.constraints.vonNeumannThreshold * min_width**2 / D_scale ##NOTE This DOES take account for the interface-adjacent cells having very small widths because get_control_volume_widths() uses geom.left_volume and geom.right_volume
         else:
             dt_diff = np.inf
         if abs(velocity) > 0:
-            dt_move = 0.45 * min(geometry.left_distance, geometry.right_distance) / abs(velocity)
+            dt_move = self.constraints.movingBoundaryThreshold * float(self.mesh.dz) / abs(velocity)
         else:
             dt_move = np.inf
         self._currdt = min(dt_diff, dt_move)
@@ -299,19 +347,31 @@ class MovingBoundary1DModel(DiffusionModel):
         return dcdt[:, np.newaxis], float(velocity)
 
     def getFluxes(self, t, xCurr):
+        '''
+        Returns total face fluxes for the current moving-boundary state
+        '''
         self._computeState(t, xCurr)
         return self._lastFluxes[:, np.newaxis]
 
     def getdXdt(self, t, xCurr):
+        '''
+        Returns composition rates and interface-position rate
+        '''
         dcdt, velocity = self._computeState(t, xCurr)
         return [dcdt, velocity]
 
     def getDt(self, dXdt):
+        '''
+        Returns the most recent diffusion/interface-motion time step limit
+        '''
         if np.isfinite(self._currdt) and self._currdt > 0:
             return self._currdt
         return self.deltaTime
 
     def _isClosedSystem(self):
+        '''
+        Checks whether both external boundaries are zero-flux
+        '''
         bc = self._getBoundaryConditions()
         if isinstance(bc, PeriodicBoundary1D):
             return False
@@ -325,40 +385,156 @@ class MovingBoundary1DModel(DiffusionModel):
         )
 
     def _correctInterfaceMass(self, composition, interface_position):
+        '''
+        Applies a small interface-position correction to preserve total inventory
+
+        The bulk update is conservative by construction, but this correction
+        reduces drift from explicit stepping and interface-position clipping.
+        '''
         if not self._isClosedSystem():
-            return interface_position
+            raise ValueError("Mass correction is only valid for closed systems.")
+            # return interface_position
 
         geometry = get_moving_boundary_geometry(self.mesh, interface_position)
         current_mass = integrate_binary_profile(self.mesh, composition, interface_position)
         delta_mass = self._initialInventory - current_mass
-        denominator = composition[geometry.left_index] - composition[geometry.right_index]
+        denominator = composition[geometry.left_index] - composition[geometry.right_index] ##XXX This does not use the interface compositions (Lee and Oh does) so this may need to be revisited [Actually, it may have to be like this because of how the mass integral works it only considers the cell compositions and not the interface ones]
         if abs(denominator) < 1e-14:
             return interface_position
         corrected = interface_position + delta_mass / denominator
-        corrected = float(np.clip(corrected, geometry.left_center + 1e-14, geometry.right_center - 1e-14))
+        corrected = float(np.clip(corrected, geometry.left_center + 1e-14, geometry.right_center - 1e-14)) 
         return corrected
 
+    def _checkMassCorrection(self, composition, interface_position):
+        '''
+        Checks the residual inventory error after mass correction
+
+        If a finite tolerance is supplied, this can ignore, warn or raise
+        depending on the configured moving-boundary mass action.
+        '''
+        if not self._isClosedSystem() or self._initialInventory is None:
+            return
+
+        tolerance = self.constraints.movingBoundaryMassTolerance
+        if tolerance is None or not np.isfinite(tolerance):
+            return
+
+        current_mass = integrate_binary_profile(self.mesh, composition, interface_position)
+        residual = abs(self._initialInventory - current_mass)
+        if residual <= tolerance:
+            return
+
+        action = str(self.constraints.movingBoundaryMassAction).lower()
+        message = (
+            f'MovingBoundary1DModel mass correction residual {residual:.3e} exceeded '
+            f'tolerance {tolerance:.3e} at t = {self.currentTime:.3e}.'
+        )
+        if action == 'ignore':
+            return
+        if action == 'warn':
+            warnings.warn(message, RuntimeWarning, stacklevel=2)
+            return
+        if action == 'raise':
+            raise ValueError(message)
+        raise ValueError(
+            "movingBoundaryMassAction must be one of ['ignore', 'warn', 'raise']."
+        )
+
     def postProcess(self, time, x):
+        '''
+        Clips the updated state, records composition and interface position, and updates coupled models
+        '''
         GenericModel.postProcess(self, time, x)
         composition = np.asarray(x[0], dtype=np.float64)
         composition[:, 0] = np.clip(
             composition[:, 0], self.constraints.minComposition, 1 - self.constraints.minComposition
         )
         interface_position = self._clipInterfacePosition(float(x[1]))
+        (composition==self.mesh.y).all()
+        # debug_moving_boundary_state(self.mesh, composition=composition, interface_position=interface_position, interface_compositions=self._getInterfaceState(time, composition, interface_position)[2:4], zoom_cells=2, distance_multiplier=1e6, annotate_positions=True, annotate_interface_distances=True, annotate_interface_compositions=True)
         interface_position = self._correctInterfaceMass(composition[:, 0], interface_position)
+        self._checkMassCorrection(composition[:, 0], interface_position)
         self.data.record(time, composition)
         self.interfaceData.record(time, interface_position)
         self.updateCoupledModels()
         return [composition, interface_position], False
 
     def postSolve(self):
+        '''
+        Finalizes recorded composition and interface-position histories
+        '''
         self.data.finalize()
         self.interfaceData.finalize()
 
-    def getInterfacePosition(self, time=None):
+    def getInterfacePosition(self, time = None):
+        '''
+        Returns interface position at time
+        '''
         return self.interfaceData.y(time)
 
-    def getTotalMass(self, time=None):
+    def getTotalMass(self, time = None):
+        '''
+        Returns total solute inventory using the current moving-boundary geometry
+        '''
         composition = np.asarray(self.data.y(time), dtype=np.float64).reshape(-1)
         interface_position = self.getInterfacePosition(time)
         return integrate_binary_profile(self.mesh, composition, interface_position)
+
+    def describeMeshState(self, time = None, window: int = 2, precision: int = 9, distance_multiplier: float = 1.0):
+        '''
+        Returns a compact text summary of the current moving-boundary mesh state.
+
+        This is mainly intended for debugger use.
+        '''
+        composition = np.asarray(self.data.y(time), dtype=np.float64).reshape(-1)
+        interface_position = self.getInterfacePosition(time)
+        summary = summarize_moving_boundary_state(
+            self.mesh,
+            composition,
+            interface_position,
+            window=window,
+            precision=precision,
+            distance_multiplier=distance_multiplier,
+        )
+        return f"time = {self.currentTime:.6g}\n{summary}" if time is None else f"time = {time:.6g}\n{summary}"
+
+    def plotMeshState(self, time = None, ax = None, **kwargs):
+        '''
+        Plots the current moving-boundary mesh state.
+
+        This is intended as a convenience wrapper so the state can be visualized
+        directly from a debugger or notebook.
+        '''
+        from kawin.diffusion.Plot import plotMovingBoundaryState
+
+        return plotMovingBoundaryState(self, time=time, ax=ax, **kwargs)
+
+    def debugMeshState(self, time = None, ax = None, show: bool = True, **kwargs):
+        '''
+        Prints and plots the current moving-boundary mesh state.
+
+        This is intended as the most direct debugger convenience entry point.
+        '''
+        from kawin.diffusion.Plot import plotMovingBoundaryState
+
+        composition = np.asarray(self.data.y(time), dtype=np.float64).reshape(-1)
+        interface_position = self.getInterfacePosition(time)
+        summary = summarize_moving_boundary_state(
+            self.mesh,
+            composition,
+            interface_position,
+            window=kwargs.pop('window', 2),
+            precision=kwargs.pop('precision', 9),
+            distance_multiplier=kwargs.get('distance_multiplier', 1.0),
+        )
+        print_summary = kwargs.pop('print_summary', True)
+        if print_summary:
+            time_label = self.currentTime if time is None else time
+            print(f"time = {time_label:.6g}\n{summary}")
+
+        ax = plotMovingBoundaryState(self, time=time, ax=ax, **kwargs)
+        if show:
+            import matplotlib.pyplot as plt
+
+            plt.show()
+        return summary, ax

@@ -631,7 +631,7 @@ def test_diffusion_interstitial():
     assert_allclose(comps[60,1], 0.016164, rtol=1e-2)
 
 
-def test_moving_boundary_dxdt():
+def test_moving_boundary_dXdt():
     profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
     mesh = Cartesian1D(['CR'], [0, 1], 10)
     mesh.setResponseProfile(profile)
@@ -640,6 +640,10 @@ def test_moving_boundary_dxdt():
         diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
         interface_compositions=(0.3, 0.7),
     )
+    from kawin.diffusion.DiffusionParameters import DiffusionConstraints
+    constraints = DiffusionConstraints()
+    constraints.minComposition = 1e-10
+    
     model = MovingBoundary1DModel(
         mesh,
         ['FE', 'CR'],
@@ -647,29 +651,36 @@ def test_moving_boundary_dxdt():
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
         interfacePosition=0.5,
+        constraints=constraints,
     )
+    
     model.setup()
-    dxdt = model.getdXdt(model.currentTime, model.getCurrentX())
+    dXdt = model.getdXdt(model.currentTime, model.getCurrentX())
     fluxes = model.getFluxes(model.currentTime, model.getCurrentX())
-    dt = model.getDt(dxdt)
+    dt = model.getDt(dXdt)
 
-    assert dxdt[0].shape == (10, 1)
-    assert_allclose(dxdt[0][4, 0], 20.0, atol=0, rtol=1e-6)
-    assert_allclose(dxdt[0][5, 0], -40.0, atol=0, rtol=1e-6)
-    assert_allclose(dxdt[1], -5.0, atol=0, rtol=1e-6)
+    assert dXdt[0].shape == (10, 1)
+    assert_allclose(dXdt[0][4, 0], 20.0, atol=0, rtol=1e-6)
+    assert_allclose(dXdt[0][5, 0], -40.0, atol=0, rtol=1e-6)
+    assert_allclose(dXdt[1], -5.0, atol=0, rtol=1e-6)
     assert_allclose(fluxes[5, 0], -3.0, atol=0, rtol=1e-6)
     assert_allclose(dt, 0.002, atol=0, rtol=1e-6)
 
 
 def test_moving_boundary_mass_conservation():
-    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    profile = ProfileBuilder([(StepProfile1D(0.5, 0.1, 0.8), 'CR')])
     mesh = Cartesian1D(['CR'], [0, 1], 20)
     mesh.setResponseProfile(profile)
     therm = ConstantBinaryThermodynamics(
         phases=['ALPHA', 'BETA'],
-        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
         interface_compositions=(0.35, 0.65),
     )
+    
+    from kawin.diffusion.DiffusionParameters import DiffusionConstraints
+    constraints = DiffusionConstraints()
+    constraints.minComposition = 1e-10
+    
     model = MovingBoundary1DModel(
         mesh,
         ['FE', 'CR'],
@@ -677,6 +688,7 @@ def test_moving_boundary_mass_conservation():
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
         interfacePosition=0.5,
+        constraints=constraints,
         record=True,
     )
     initial_mass = model.getTotalMass()
@@ -724,3 +736,53 @@ def test_moving_boundary_saving_loading(tmpdir):
     assert_allclose(new_model.data.currentY, model.data.currentY)
     assert_allclose(new_model.getInterfacePosition(), model.getInterfacePosition())
     assert_allclose(new_model.currentTime, model.currentTime)
+
+
+def test_moving_boundary_mass_check_warns():
+    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    mesh = Cartesian1D(['CR'], [0, 1], 20)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    model = MovingBoundary1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=0.5,
+    )
+    model.constraints.movingBoundaryMassTolerance = 1e-8
+    model.constraints.movingBoundaryMassAction = 'warn'
+    model._initialInventory += 1e-4
+
+    with pytest.warns(RuntimeWarning, match='mass correction residual'):
+        model._checkMassCorrection(model.data.currentY[:,0], model.getInterfacePosition())
+
+
+def test_moving_boundary_mass_check_raises():
+    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    mesh = Cartesian1D(['CR'], [0, 1], 20)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    model = MovingBoundary1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=0.5,
+    )
+    model.constraints.movingBoundaryMassTolerance = 1e-8
+    model.constraints.movingBoundaryMassAction = 'raise'
+    model._initialInventory += 1e-4
+
+    with pytest.raises(ValueError, match='mass correction residual'):
+        model._checkMassCorrection(model.data.currentY[:,0], model.getInterfacePosition())
