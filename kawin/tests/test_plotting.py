@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from kawin.thermo import BinaryThermodynamics, MulticomponentThermodynamics, GeneralThermodynamics
 from kawin.precipitation import PrecipitateModel, MatrixParameters, PrecipitateParameters
 from kawin.diffusion import SinglePhaseModel
-from kawin.diffusion.mesh import Cartesian1D, Cartesian2D, StepProfile1D, BoundedRectangleProfile, ProfileBuilder
+from kawin.diffusion.mesh import Cartesian1D, CartesianFD1D, Cartesian2D, StepProfile1D, BoundedRectangleProfile, ProfileBuilder
 from kawin.diffusion import MovingBoundary1DModel
 from kawin.diffusion.mesh.MovingBoundary1D import debug_moving_boundary_state
 
@@ -96,62 +96,63 @@ def test_precipitate_plotting():
 
 def test_diffusion_plotting1d():
     #Single phase and Homogenizaton model goes through the same path for plotting
-    profile_binary = ProfileBuilder([(StepProfile1D(0.5, 0.1, 0.9), 'CR')])
-    mesh_binary = Cartesian1D(['CR'], [-1,1], 100)
-    mesh_binary.setResponseProfile(profile_binary)
+    for mesh_cls in (Cartesian1D, CartesianFD1D):
+        profile_binary = ProfileBuilder([(StepProfile1D(0.5, 0.1, 0.9), 'CR')])
+        mesh_binary = mesh_cls(['CR'], [-1,1], 100)
+        mesh_binary.setResponseProfile(profile_binary)
 
-    profile_ternary = ProfileBuilder([(StepProfile1D(0.5, [0.1,0.2], [0.9,0.01]), ['CR', 'AL'])])
-    mesh_ternary = Cartesian1D(['CR', 'AL'], [-1,1], 100)
-    mesh_ternary.setResponseProfile(profile_ternary)
+        profile_ternary = ProfileBuilder([(StepProfile1D(0.5, [0.1,0.2], [0.9,0.01]), ['CR', 'AL'])])
+        mesh_ternary = mesh_cls(['CR', 'AL'], [-1,1], 100)
+        mesh_ternary.setResponseProfile(profile_ternary)
 
-    temperature = 1000
-    binary_single = SinglePhaseModel(mesh_binary, ['NI', 'CR'], ['FCC_A1'], binDiffTherm, temperature)
-    binary_multi = SinglePhaseModel(mesh_binary, ['NI', 'CR'], ['FCC_A1', 'BCC_A2'], binDiffTherm, temperature)
-    ternary_single = SinglePhaseModel(mesh_ternary, ['NI', 'CR', 'AL'], ['FCC_A1'], ternDiffTherm, temperature)
-    ternary_multi = SinglePhaseModel(mesh_ternary, ['NI', 'CR', 'AL'], ['FCC_A1', 'BCC_A2'], ternDiffTherm, temperature)
+        temperature = 1000
+        binary_single = SinglePhaseModel(mesh_binary, ['NI', 'CR'], ['FCC_A1'], binDiffTherm, temperature)
+        binary_multi = SinglePhaseModel(mesh_binary, ['NI', 'CR'], ['FCC_A1', 'BCC_A2'], binDiffTherm, temperature)
+        ternary_single = SinglePhaseModel(mesh_ternary, ['NI', 'CR', 'AL'], ['FCC_A1'], ternDiffTherm, temperature)
+        ternary_multi = SinglePhaseModel(mesh_ternary, ['NI', 'CR', 'AL'], ['FCC_A1', 'BCC_A2'], ternDiffTherm, temperature)
 
-    models = [
-        (binary_single, 2, 1),
-        (binary_multi, 2, 2),
-        (ternary_single, 3, 1),
-        (ternary_multi, 3, 2),
-    ]
+        models = [
+            (binary_single, 2, 1),
+            (binary_multi, 2, 2),
+            (ternary_single, 3, 1),
+            (ternary_multi, 3, 2),
+        ]
 
-    for m in models:
-        #For each plot, check that the number of lines correspond to number of elements or phases
-        #For 'plot', number of lines should be elements (with or without reference) or a single element
-        #For 'plotTwoAxis', number of lines for each axis should be length of input array
-        #For 'plotPhases', number of lines is number of phases or single phase
-        fig, ax = plt.subplots()
-        plot1D(m[0], elements=m[0].allElements, ax=ax)
-        assert len(ax.lines) == m[1]
-        plt.close(fig)
+        for m in models:
+            #For each plot, check that the number of lines correspond to number of elements or phases
+            #For 'plot', number of lines should be elements (with or without reference) or a single element
+            #For 'plotTwoAxis', number of lines for each axis should be length of input array
+            #For 'plotPhases', number of lines is number of phases or single phase
+            fig, ax = plt.subplots()
+            plot1D(m[0], elements=m[0].allElements, ax=ax)
+            assert len(ax.lines) == m[1]
+            plt.close(fig)
 
-        fig, ax = plt.subplots()
-        plot1D(m[0], elements=None, ax=ax)
-        assert len(ax.lines) == m[1]-1
-        plt.close(fig)
+            fig, ax = plt.subplots()
+            plot1D(m[0], elements=None, ax=ax)
+            assert len(ax.lines) == m[1]-1
+            plt.close(fig)
 
-        fig, ax = plt.subplots()
-        plot1D(m[0], elements=m[0].allElements[0], ax=ax)
-        assert len(ax.lines) == 1
-        plt.close(fig)
+            fig, ax = plt.subplots()
+            plot1D(m[0], elements=m[0].allElements[0], ax=ax)
+            assert len(ax.lines) == 1
+            plt.close(fig)
 
-        fig, axL = plt.subplots()
-        axR = ax.twinx()
-        plot1DTwoAxis(m[0], m[0].allElements[0], m[0].allElements[1:], axL=axL, axR=axR)
-        assert len(axL.lines) == 1
-        assert len(axR.lines) == len(m[0].allElements)-1
-        plt.close(fig)
+            fig, axL = plt.subplots()
+            axR = axL.twinx()
+            plot1DTwoAxis(m[0], m[0].allElements[0], m[0].allElements[1:], axL=axL, axR=axR)
+            assert len(axL.lines) == 1
+            assert len(axR.lines) == len(m[0].allElements)-1
+            plt.close(fig)
 
-        fig, ax = plt.subplots()
-        plot1DPhases(m[0], phases=None, ax=ax)
-        assert len(ax.lines) == m[2]
-        plt.close(fig)
-        
-        fig, ax = plt.subplots()
-        plot1DFlux(m[0], elements=m[0].elements, ax=ax)
-        assert len(ax.lines) == m[1]-1
+            fig, ax = plt.subplots()
+            plot1DPhases(m[0], phases=None, ax=ax)
+            assert len(ax.lines) == m[2]
+            plt.close(fig)
+
+            fig, ax = plt.subplots()
+            plot1DFlux(m[0], elements=m[0].elements, ax=ax)
+            assert len(ax.lines) == m[1]-1
 
 def test_diffusion_plotting2d():
     '''

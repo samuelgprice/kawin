@@ -7,13 +7,13 @@ from kawin.PlotUtils import _get_axis, _adjust_kwargs
 from kawin.thermo.Mobility import u_to_x_frac, expand_u_frac, expand_x_frac, interstitials
 from kawin.diffusion.Diffusion import DiffusionModel
 from kawin.diffusion.DiffusionParameters import computeMobility, HashTable
-from kawin.diffusion.mesh import FiniteVolumeGrid, FiniteVolume1D, Cartesian2D
+from kawin.diffusion.mesh import FiniteVolumeGrid, FiniteVolume1D, FiniteDifference1D, Cartesian2D
 from kawin.diffusion.mesh.MovingBoundary1D import get_moving_boundary_geometry
 
 def _get_1D_mesh(model: DiffusionModel):
-    mesh: FiniteVolume1D = model.mesh
-    if not isinstance(mesh, FiniteVolume1D):
-        raise ValueError('Diffusion mesh must be Cartesian1D, Cylindrical1D, Spherical1D or a subclass of FiniteVolume1D')
+    mesh = model.mesh
+    if not isinstance(mesh, (FiniteVolume1D, FiniteDifference1D)):
+        raise ValueError('Diffusion mesh must be a supported 1D finite-volume or finite-difference mesh.')
     return mesh
 
 def _set_1D_xlim(ax, mesh: FiniteVolume1D, zScale, zOffset):

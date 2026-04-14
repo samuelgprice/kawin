@@ -5,7 +5,7 @@ from numpy.testing import assert_allclose
 import pytest
 
 from kawin.diffusion import SinglePhaseModel, HomogenizationModel, MovingBoundary1DModel, TemperatureParameters
-from kawin.diffusion.mesh import Cartesian1D, Cylindrical1D, Spherical1D, Cartesian2D, MixedBoundary1D, PeriodicBoundary1D
+from kawin.diffusion.mesh import Cartesian1D, CartesianFD1D, Cylindrical1D, Spherical1D, Cartesian2D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh import ProfileBuilder, StepProfile1D, LinearProfile1D, DiracDeltaProfile, ConstantProfile, GaussianProfile, ExperimentalProfile1D, BoundedEllipseProfile, BoundedRectangleProfile
 from kawin.diffusion.DiffusionParameters import computeMobility, _computeSingleMobility, TemperatureParameters, HashTable
 from kawin.diffusion.HomogenizationParameters import HomogenizationParameters, computeHomogenizationFunction
@@ -463,6 +463,131 @@ def test_diffusionSavingLoading(tmpdir):
     #assert_allclose(mesh.flattenResponse(new_m.mesh.y), new_m._recordedX[0], rtol=1e-3)
     assert_allclose(new_m.data.y(0), new_m.data._y[0], rtol=1e-3)
 
+
+def test_fdm_diffusionSavingLoading(tmpdir):
+    '''
+    Tests saving/loading behavior of the finite-difference diffusion model
+    '''
+    profile = ProfileBuilder()
+    profile.addBuildStep(LinearProfile1D(-1e-3, [0.077, 0.054], 1e-3, [0.359, 0.062]), ['CR', 'AL'])
+    temperature = TemperatureParameters(1200+273.15)
+    mesh = CartesianFD1D(['CR', 'AL'], [-1e-3, 1e-3], 20)
+    mesh.setResponseProfile(profile)
+
+    m = SinglePhaseModel(mesh, ['NI', 'CR', 'AL'], ['FCC_A1'],
+                         thermodynamics=NiCrAlTherm,
+                         temperature=temperature, record=True)
+
+    m.solve(10*3600, verbose=True, vIt=1)
+    m.save(tmpdir / 'fdm_diff.npz')
+
+    
+    new_m = SinglePhaseModel(mesh, ['NI', 'CR', 'AL'], ['FCC_A1'],
+                         thermodynamics=NiCrAlTherm,
+                         temperature=temperature, record=True)
+    new_m.load(tmpdir / 'fdm_diff.npz')
+
+    assert_allclose(m.data.currentY, new_m.data.currentY)
+    assert_allclose(m.currentTime, new_m.currentTime)
+    assert_allclose(new_m.data.y(-1), new_m.data._y[0], rtol=1e-3)
+    assert_allclose(new_m.data.y(11*3600), new_m.data._y[-1], rtol=1e-3)
+    assert_allclose(new_m.data.y(0), new_m.data._y[0], rtol=1e-3)
+
+def test_fvm_vs_fdm_constantD(tmpdir):
+
+    profile = ProfileBuilder()
+    profile.addBuildStep(LinearProfile1D(-1e-3, [0.077], 1e-3, [0.359]), ['CR'])
+    temperature = TemperatureParameters(1000)
+    
+    
+    therm = ConstantBinaryThermodynamics(
+        phases=['FCC_A1'],
+        diffusivities={'FCC_A1': 1e-14},
+        interface_compositions=(0.3, 0.7),
+    )
+
+    mesh_FVM = Cartesian1D(['CR'], [-1e-3, 1e-3], 20)
+    mesh_FVM.setResponseProfile(profile)
+    m_FVM = SinglePhaseModel(mesh_FVM, ['FE', 'CR'], ['FCC_A1'],
+                         thermodynamics=therm,
+                         temperature=temperature, record=True)
+    
+
+    mesh_FDM = CartesianFD1D(['CR'], [-1e-3, 1e-3], 20+1) # Need 21 points for 20 elements
+    mesh_FDM.setResponseProfile(profile)
+    m_FDM = SinglePhaseModel(mesh_FDM, ['FE', 'CR'], ['FCC_A1'],
+                         thermodynamics=therm,
+                         temperature=temperature, record=True)
+    
+    def getMidpoints(arr):
+        return (arr[:-1] + arr[1:])/2
+    
+    assert (np.ravel(m_FVM.mesh.z)==getMidpoints(np.ravel(m_FDM.mesh.z))).all()
+    assert_allclose(np.ravel(m_FVM.mesh.y), getMidpoints(np.ravel(m_FDM.mesh.y)))
+    np.ravel(m_FVM.mesh.zEdge), np.ravel(m_FDM.mesh.zEdge)
+
+    m_FVM.solve(10*3600, verbose=True, vIt=1)
+    m_FDM.solve(10*3600, verbose=True, vIt=1)
+    
+    m_FVM.save(tmpdir / 'fvm_diff.npz')
+    m_FDM.save(tmpdir / 'fdm_diff.npz')
+
+
+    assert_allclose(np.ravel(m_FVM.data.currentY), getMidpoints(np.ravel(m_FDM.data.currentY)))
+    assert_allclose(m_FVM.currentTime, m_FDM.currentTime)
+
+def test_fvm_vs_fdm_variableD(tmpdir):
+    profile = ProfileBuilder()
+    # profile.addBuildStep(LinearProfile1D(-1e-3, [0.077, 0.054], 1e-3, [0.359, 0.062]), ['CR', 'AL'])
+    profile.addBuildStep(LinearProfile1D(-1e-3, [0.077], 1e-3, [0.359]), ['CR'])
+    temperature = TemperatureParameters(1200+273.15) 
+    
+
+    # mesh_FVM = Cartesian1D(['CR', 'AL'], [-1e-3, 1e-3], 20)
+    mesh_FVM = Cartesian1D(['CR'], [-1e-3, 1e-3], 20)
+    mesh_FVM.setResponseProfile(profile)
+    # m_FVM = SinglePhaseModel(mesh_FVM, ['NI', 'CR', 'AL'], ['FCC_A1'],
+    #                      thermodynamics=NiCrAlTherm,
+    #                      temperature=temperature, record=True)
+    m_FVM = SinglePhaseModel(mesh_FVM, ['NI', 'CR'], ['FCC_A1'],
+                         thermodynamics=NiCrTherm,
+                         temperature=temperature, record=True)
+    
+
+    # mesh_FDM = CartesianFD1D(['CR', 'AL'], [-1e-3, 1e-3], 20+1)
+    mesh_FDM = CartesianFD1D(['CR'], [-1e-3, 1e-3], 20+1)
+    mesh_FDM.setResponseProfile(profile)
+    # m_FDM = SinglePhaseModel(mesh_FDM, ['NI', 'CR', 'AL'], ['FCC_A1'],
+    #                      thermodynamics=NiCrAlTherm,
+    #                      temperature=temperature, record=True)
+    m_FDM = SinglePhaseModel(mesh_FDM, ['NI', 'CR'], ['FCC_A1'],
+                         thermodynamics=NiCrTherm,
+                         temperature=temperature, record=True)
+    
+    def getMidpoints(arr):
+        return (arr[:-1] + arr[1:])/2
+    
+    assert (np.ravel(m_FVM.mesh.z)==getMidpoints(np.ravel(m_FDM.mesh.z))).all()
+    assert_allclose(np.ravel(m_FVM.mesh.y[:,0]), getMidpoints(np.ravel(m_FDM.mesh.y[:,0])))
+    # assert_allclose(np.ravel(m_FVM.mesh.y[:,1]), getMidpoints(np.ravel(m_FDM.mesh.y[:,1])))
+    np.ravel(m_FVM.mesh.zEdge), np.ravel(m_FDM.mesh.zEdge)
+
+    m_FVM.solve(10*3600, verbose=True, vIt=1)
+    m_FDM.solve(10*3600, verbose=True, vIt=1)
+    
+    m_FVM.save(tmpdir / 'fvm_diff.npz')
+    m_FDM.save(tmpdir / 'fdm_diff.npz')
+
+
+    assert_allclose(np.ravel(m_FVM.data.currentY[:,0]), getMidpoints(np.ravel(m_FDM.data.currentY[:,0])))
+    # assert_allclose(np.ravel(m_FVM.data.currentY[:,1]), getMidpoints(np.ravel(m_FDM.data.currentY[:,1])))
+    assert_allclose(m_FVM.currentTime, m_FDM.currentTime)
+
+    
+    
+
+
+
 def test_single_phase_2d():
     '''
     Test Cartesion2D mesh in a single phase model
@@ -629,6 +754,104 @@ def test_diffusion_interstitial():
     # There seems to be some stochastic behavior (from global eq?), so lower the tolerance here
     assert_allclose(comps[40,1], 0.062927, rtol=1e-2)
     assert_allclose(comps[60,1], 0.016164, rtol=1e-2)
+
+
+def test_fdm_mesh_and_single_phase_shape():
+    profile = ProfileBuilder([(StepProfile1D(0.0, [0.2, 0.1], [0.4, 0.3]), ['CR', 'AL'])])
+    mesh = CartesianFD1D(['CR', 'AL'], [-1e-3, 1e-3], 21)
+    mesh.setResponseProfile(profile)
+
+    model = SinglePhaseModel(mesh, ['NI', 'CR', 'AL'], ['FCC_A1'], NiCrAlTherm, TemperatureParameters(1073))
+    model.setup()
+    dxdt = model.getdXdt(model.currentTime, model.getCurrentX())
+    fluxes = model.getFluxes(model.currentTime, model.getCurrentX())
+
+    assert mesh.z.shape == (21, 1)
+    assert mesh.zEdge.shape == (22, 1)
+    assert dxdt[0].shape == (21, 2)
+    assert fluxes.shape == (22, 2)
+
+
+def test_fdm_constant_and_linear_profiles():
+    therm = ConstantBinaryThermodynamics(
+        phases=['FCC_A1'],
+        diffusivities={'FCC_A1': 1.0},
+        interface_compositions=(0.3, 0.7),
+    )
+
+    constant_profile = ProfileBuilder([(ConstantProfile(0.4), 'CR')])
+    constant_mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    constant_mesh.setResponseProfile(constant_profile)
+    constant_model = SinglePhaseModel(constant_mesh, ['FE', 'CR'], ['FCC_A1'], therm, TemperatureParameters(1000))
+    constant_model.setup()
+    constant_dxdt = constant_model.getdXdt(constant_model.currentTime, constant_model.getCurrentX())
+    assert_allclose(constant_dxdt[0], 0, atol=1e-12, rtol=0)
+
+    linear_profile = ProfileBuilder([(LinearProfile1D(0, 0.2, 1, 0.8), 'CR')])
+    linear_mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    linear_mesh.setResponseProfile(linear_profile)
+    linear_model = SinglePhaseModel(linear_mesh, ['FE', 'CR'], ['FCC_A1'], therm, TemperatureParameters(1000))
+    linear_model.setup()
+    linear_dxdt = linear_model.getdXdt(linear_model.currentTime, linear_model.getCurrentX())
+    assert_allclose(linear_dxdt[0][1:-1], 0, atol=1e-10, rtol=0)
+
+
+def test_fdm_boundary_conditions_and_periodic_fluxes():
+    therm = ConstantBinaryThermodynamics(
+        phases=['FCC_A1'],
+        diffusivities={'FCC_A1': 1.0},
+        interface_compositions=(0.3, 0.7),
+    )
+    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+
+    bc = MixedBoundary1D(['CR'])
+    bc.setLBC('CR', 'dirichlet', 0.2)
+    bc.setRBC('CR', 'flux', 0.0)
+
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile, bc)
+    model = SinglePhaseModel(mesh, ['FE', 'CR'], ['FCC_A1'], therm, TemperatureParameters(1000))
+    model.setup()
+    dxdt = model.getdXdt(model.currentTime, model.getCurrentX())
+    fluxes = model.getFluxes(model.currentTime, model.getCurrentX())
+
+    assert_allclose(dxdt[0][0, 0], 0, atol=1e-12, rtol=0)
+    assert_allclose(fluxes[-1, 0], 0, atol=1e-12, rtol=0)
+
+    periodic = PeriodicBoundary1D()
+    periodic_mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    periodic_mesh.setResponseProfile(profile, periodic)
+    periodic_model = SinglePhaseModel(periodic_mesh, ['FE', 'CR'], ['FCC_A1'], therm, TemperatureParameters(1000))
+    periodic_model.setup()
+    periodic_fluxes = periodic_model.getFluxes(periodic_model.currentTime, periodic_model.getCurrentX())
+
+    assert_allclose(periodic_fluxes[0], periodic_fluxes[-1], atol=1e-12, rtol=0)
+
+
+def test_fdm_single_phase_and_homogenization_models_accept_mesh():
+    profile = ProfileBuilder([(StepProfile1D(0.0, [0.2, 0.1], [0.4, 0.3]), ['CR', 'AL'])])
+    mesh = CartesianFD1D(['CR', 'AL'], [-5e-4, 5e-4], 21)
+    mesh.setResponseProfile(profile)
+
+    single = SinglePhaseModel(mesh, ['NI', 'CR', 'AL'], ['FCC_A1'], NiCrAlTherm, TemperatureParameters(1073))
+    single.setup()
+    single_dxdt = single.getdXdt(single.currentTime, single.getCurrentX())
+    assert single_dxdt[0].shape == (21, 2)
+    assert np.isfinite(single.getDt(single_dxdt))
+
+    homogenization_parameters = HomogenizationParameters(HomogenizationParameters.HASHIN_LOWER, eps=0.01)
+    homogenization = HomogenizationModel(
+        mesh,
+        ['FE', 'CR', 'NI'],
+        ['FCC_A1', 'BCC_A2'],
+        thermodynamics=FeCrNiTherm,
+        temperature=TemperatureParameters(1373.15),
+        homogenizationParameters=homogenization_parameters,
+    )
+    homogenization.setup()
+    homo_dxdt = homogenization.getdXdt(homogenization.currentTime, homogenization.getCurrentX())
+    assert homo_dxdt[0].shape == (21, 2)
+    assert np.isfinite(homogenization.getDt(homo_dxdt))
 
 
 def test_moving_boundary_dXdt():
