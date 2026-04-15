@@ -493,17 +493,17 @@ def test_fdm_diffusionSavingLoading(tmpdir):
     assert_allclose(new_m.data.y(11*3600), new_m.data._y[-1], rtol=1e-3)
     assert_allclose(new_m.data.y(0), new_m.data._y[0], rtol=1e-3)
 
-def test_fvm_vs_fdm_constantD(tmpdir):
+def test_fvm_vs_fdm_constantD_linearCompProfile(tmpdir):
 
     profile = ProfileBuilder()
-    profile.addBuildStep(LinearProfile1D(-1e-3, [0.077], 1e-3, [0.359]), ['CR'])
+    profile.addBuildStep(LinearProfile1D(-1e-3, [0.1], 1e-3, [0.3]), ['CR'])
     temperature = TemperatureParameters(1000)
     
     
     therm = ConstantBinaryThermodynamics(
         phases=['FCC_A1'],
         diffusivities={'FCC_A1': 1e-14},
-        interface_compositions=(0.3, 0.7),
+        interface_compositions=(None, None),
     )
 
     mesh_FVM = Cartesian1D(['CR'], [-1e-3, 1e-3], 20)
@@ -536,12 +536,73 @@ def test_fvm_vs_fdm_constantD(tmpdir):
     assert_allclose(np.ravel(m_FVM.data.currentY), getMidpoints(np.ravel(m_FDM.data.currentY)))
     assert_allclose(m_FVM.currentTime, m_FDM.currentTime)
 
+def test_fvm_vs_fdm_constantD_nonlinearCompProfile(tmpdir):
+
+    profile = ProfileBuilder()
+    z_arr = np.linspace(-1e-3, 1e-3, 21)
+    p_of_z = lambda z: (z-(-1e-3))/(1e-3 - (-1e-3))
+    y_of_z = lambda z: 0.1 + 0.2 * (p_of_z(z)**5)
+
+    # import matplotlib.pyplot as plt
+    # plt.plot(z_arr, y_of_z(z_arr),  'o', linestyle='solid')
+    # plt.legend()
+    # plt.show()
+
+    profile.addBuildStep(ExperimentalProfile1D(z=z_arr.tolist(), values=y_of_z(z_arr).tolist()), ['CR'])
+    temperature = TemperatureParameters(1000)
+    
+    
+    therm = ConstantBinaryThermodynamics(
+        phases=['FCC_A1'],
+        diffusivities={'FCC_A1': 1e-14},
+        interface_compositions=(None, None),
+    )
+
+    mesh_FVM = Cartesian1D(['CR'], [-1e-3, 1e-3], 20)
+    mesh_FVM.setResponseProfile(profile)
+    m_FVM = SinglePhaseModel(mesh_FVM, ['FE', 'CR'], ['FCC_A1'],
+                         thermodynamics=therm,
+                         temperature=temperature, record=True)
+    
+
+    mesh_FDM = CartesianFD1D(['CR'], [-1e-3, 1e-3], 20+1) # Need 21 points for 20 elements
+    mesh_FDM.setResponseProfile(profile)
+    m_FDM = SinglePhaseModel(mesh_FDM, ['FE', 'CR'], ['FCC_A1'],
+                         thermodynamics=therm,
+                         temperature=temperature, record=True)
+    
+    def getMidpoints(arr):
+        return (arr[:-1] + arr[1:])/2
+    
+    assert (np.ravel(m_FVM.mesh.z)==getMidpoints(np.ravel(m_FDM.mesh.z))).all()
+    assert_allclose(np.ravel(m_FVM.mesh.y), getMidpoints(np.ravel(m_FDM.mesh.y)))
+    np.ravel(m_FVM.mesh.zEdge), np.ravel(m_FDM.mesh.zEdge)
+
+    m_FVM.solve(1000*3600, verbose=True, vIt=1)
+    m_FDM.solve(1000*3600, verbose=True, vIt=1)
+    
+    m_FVM.save(tmpdir / 'fvm_diff.npz')
+    m_FDM.save(tmpdir / 'fdm_diff.npz')
+
+    import matplotlib.pyplot as plt
+    plt.plot(z_arr, y_of_z(z_arr), 'x', markersize=10,linestyle='solid', color='k', label='Profile')
+    plt.plot(m_FVM.mesh.z, m_FVM.data.y(0)[:,0], 'o', linestyle='solid', label='FVM')
+    plt.plot(m_FDM.mesh.z, m_FDM.data.y(0)[:,0], 'o', linestyle='solid', label='FDM')
+    plt.legend()
+    plt.show()
+
+    assert_allclose(np.ravel(m_FVM.data.currentY), getMidpoints(np.ravel(m_FDM.data.currentY)), rtol=1e-10)
+    assert_allclose(m_FVM.currentTime, m_FDM.currentTime)
+
 def test_fvm_vs_fdm_variableD(tmpdir):
     profile = ProfileBuilder()
     # profile.addBuildStep(LinearProfile1D(-1e-3, [0.077, 0.054], 1e-3, [0.359, 0.062]), ['CR', 'AL'])
-    profile.addBuildStep(LinearProfile1D(-1e-3, [0.077], 1e-3, [0.359]), ['CR'])
+    profile.addBuildStep(LinearProfile1D(-1e-3, [0.1], 1e-3, [0.3]), ['CR'])
     temperature = TemperatureParameters(1200+273.15) 
-    
+
+    from kawin.diffusion.DiffusionParameters import DiffusionConstraints
+    constraints = DiffusionConstraints()
+    constraints.minComposition = 1e-10    
 
     # mesh_FVM = Cartesian1D(['CR', 'AL'], [-1e-3, 1e-3], 20)
     mesh_FVM = Cartesian1D(['CR'], [-1e-3, 1e-3], 20)
@@ -551,7 +612,7 @@ def test_fvm_vs_fdm_variableD(tmpdir):
     #                      temperature=temperature, record=True)
     m_FVM = SinglePhaseModel(mesh_FVM, ['NI', 'CR'], ['FCC_A1'],
                          thermodynamics=NiCrTherm,
-                         temperature=temperature, record=True)
+                         temperature=temperature, constraints=constraints, record=True)
     
 
     # mesh_FDM = CartesianFD1D(['CR', 'AL'], [-1e-3, 1e-3], 20+1)
@@ -562,7 +623,7 @@ def test_fvm_vs_fdm_variableD(tmpdir):
     #                      temperature=temperature, record=True)
     m_FDM = SinglePhaseModel(mesh_FDM, ['NI', 'CR'], ['FCC_A1'],
                          thermodynamics=NiCrTherm,
-                         temperature=temperature, record=True)
+                         temperature=temperature, constraints=constraints, record=True)
     
     def getMidpoints(arr):
         return (arr[:-1] + arr[1:])/2
@@ -572,14 +633,14 @@ def test_fvm_vs_fdm_variableD(tmpdir):
     # assert_allclose(np.ravel(m_FVM.mesh.y[:,1]), getMidpoints(np.ravel(m_FDM.mesh.y[:,1])))
     np.ravel(m_FVM.mesh.zEdge), np.ravel(m_FDM.mesh.zEdge)
 
-    m_FVM.solve(10*3600, verbose=True, vIt=1)
-    m_FDM.solve(10*3600, verbose=True, vIt=1)
+    m_FVM.solve(10*3600, verbose=True, vIt=1, iterator=explicitEulerIterator)
+    m_FDM.solve(10*3600, verbose=True, vIt=1, iterator=explicitEulerIterator)
     
     m_FVM.save(tmpdir / 'fvm_diff.npz')
     m_FDM.save(tmpdir / 'fdm_diff.npz')
 
 
-    assert_allclose(np.ravel(m_FVM.data.currentY[:,0]), getMidpoints(np.ravel(m_FDM.data.currentY[:,0])))
+    assert_allclose(np.ravel(m_FVM.data.currentY[:,0]), getMidpoints(np.ravel(m_FDM.data.currentY[:,0]))) ##NOTE: This is not supposed to pass because the variable diffusivity results in Mean(D(c_i), D(c_i+1)) != D(Mean(c_i, c_i+1))
     # assert_allclose(np.ravel(m_FVM.data.currentY[:,1]), getMidpoints(np.ravel(m_FDM.data.currentY[:,1])))
     assert_allclose(m_FVM.currentTime, m_FDM.currentTime)
 

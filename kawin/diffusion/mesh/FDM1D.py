@@ -81,7 +81,7 @@ class FiniteDifference1D(FiniteVolumeGrid):
             else:
                 left_response_diff = np.asarray(r[1] - r[0], dtype=np.float64)
                 right_response_diff = np.asarray(r[-1] - r[-2], dtype=np.float64)
-                left_D = np.asarray(atNodeFunc(D[0]), dtype=np.float64)
+                left_D = np.asarray(atNodeFunc(D[0]), dtype=np.float64) ##Note: I'm not sure this is the right way to do BCs for finite difference> It may make more sense to still use D_mid[0] (Actually this is what happens because fluxes[0] gets set to 0 by adjustFluxes())
                 right_D = np.asarray(atNodeFunc(D[-1]), dtype=np.float64)
                 if np.ndim(left_D) < np.ndim(left_response_diff):
                     left_D = np.expand_dims(left_D, axis=-1)
