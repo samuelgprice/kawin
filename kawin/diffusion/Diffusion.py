@@ -156,8 +156,9 @@ class DiffusionModel(GenericModel):
         # We a scaled minimum composition to account for multicomponent system
         # So for a 3 component system, if 2 components at at the min comp, then the third is as 1-2*minComp
         scaledMinComp = len(self.allElements)*self.constraints.minComposition
-        yFlat[yFlat > scaledMinComp] = yFlat[yFlat > scaledMinComp] - scaledMinComp
-        yFlat[yFlat < scaledMinComp] = self.constraints.minComposition
+        if ((1-ySum)<scaledMinComp).any() or (yFlat<scaledMinComp).any():
+            yFlat[yFlat > scaledMinComp] = yFlat[yFlat > scaledMinComp] - scaledMinComp
+            yFlat[yFlat < scaledMinComp] = self.constraints.minComposition
 
         # Convert composition to u-fraction and store into mesh
         yFull = expand_x_frac(yFlat)
