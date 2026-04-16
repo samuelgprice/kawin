@@ -165,9 +165,7 @@ class MovingBoundary1DModel(DiffusionModel):
         if hasattr(self, "mesh") and self.mesh is not None and hasattr(self, "constraints"):
             self._validateMeshComposition()
         if hasattr(self, "mesh") and self.mesh is not None:
-            self._initialInventory = integrate_binary_profile(
-                self.mesh, np.asarray(self.data.currentY).reshape(-1), self.initialInterfacePosition
-            )
+            self._initialInventory = integrate_binary_profile(self.mesh, np.asarray(self.data.currentY).reshape(-1), self.initialInterfacePosition) ##XXX: This seems suspect that it uses self.initialInterfacePosition
 
     def toDict(self):
         data = super().toDict()
@@ -213,11 +211,11 @@ class MovingBoundary1DModel(DiffusionModel):
         '''
         Returns boundary conditions and creates a default zero-flux condition if needed
         '''
-        boundary_conditions = getattr(self.mesh, "boundaryConditions", None)
-        if boundary_conditions is None:
-            boundary_conditions = MixedBoundary1D(self.mesh.responses)
-            self.mesh.boundaryConditions = boundary_conditions
-        return boundary_conditions
+        bc = getattr(self.mesh, "boundaryConditions", None)
+        if bc is None:
+            bc = MixedBoundary1D(self.mesh.responses)
+            self.mesh.boundaryConditions = bc
+        return bc
 
     def _clipInterfacePosition(self, interface_position: float, strict: bool = True) -> float:
         '''

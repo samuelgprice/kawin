@@ -1,5 +1,6 @@
 from .SinglePhase import SinglePhaseModel
 from .Homogenization import HomogenizationModel
 from .MovingBoundary import MovingBoundary1DModel
+from .MovingBoundaryFDM import MovingBoundaryFD1DModel
 from .DiffusionParameters import HashTable, TemperatureParameters, computeMobility
 from .HomogenizationParameters import HomogenizationParameters, computeHomogenizationFunction
