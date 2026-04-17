@@ -5,8 +5,9 @@ from kawin.thermo import BinaryThermodynamics, MulticomponentThermodynamics, Gen
 from kawin.precipitation import PrecipitateModel, MatrixParameters, PrecipitateParameters
 from kawin.diffusion import SinglePhaseModel
 from kawin.diffusion.mesh import Cartesian1D, CartesianFD1D, Cartesian2D, StepProfile1D, BoundedRectangleProfile, ProfileBuilder
-from kawin.diffusion import MovingBoundary1DModel
+from kawin.diffusion import MovingBoundary1DModel, MovingBoundaryFD1DModel
 from kawin.diffusion.mesh.MovingBoundary1D import debug_moving_boundary_state
+from kawin.diffusion.mesh.MovingBoundaryFD1D import debug_moving_boundary_fd_state
 
 #from kawin.precipitation.Plot import plotEuler
 from kawin.precipitation.Plot import plotPrecipitateResults
@@ -217,6 +218,53 @@ def test_moving_boundary_state_plot_and_summary():
 
     mesh.interface_position = 0.15
     summary2, _ = debug_moving_boundary_state(
+        mesh,
+        composition=mesh.y[:, 0],
+        plot=False,
+        print_summary=False,
+        window=1,
+    )
+    assert 'interface_position' in summary2
+
+
+def test_moving_boundary_fdm_state_plot_and_summary():
+    profile = ProfileBuilder([(StepProfile1D(0, 0.2, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [-1, 1], 9)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        ['FCC_A1', 'BCC_A2'],
+        {'FCC_A1': 1e-15, 'BCC_A2': 2e-15},
+        (0.3, 0.7),
+    )
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['NI', 'CR'],
+        ['FCC_A1', 'BCC_A2'],
+        therm,
+        1000,
+        interfacePosition=0.15,
+        pstar=0.5,
+    )
+
+    fig, ax = plt.subplots()
+    plotMovingBoundaryState(model, ax=ax)
+    assert len(ax.lines) >= 2
+    assert len(ax.collections) >= 2
+    plt.close(fig)
+
+    fig, ax = plt.subplots()
+    model.plotMeshState(ax=ax)
+    plt.close(fig)
+
+    summary = model.describeMeshState(window=1)
+    assert 'interface_position' in summary
+    assert '<left of interface>' in summary
+    assert '<right of interface>' in summary
+    assert '<ignored>' in summary
+
+    mesh.interface_position = 0.15
+    mesh.pstar = 0.5
+    summary2, _ = debug_moving_boundary_fd_state(
         mesh,
         composition=mesh.y[:, 0],
         plot=False,

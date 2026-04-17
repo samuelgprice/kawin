@@ -9,6 +9,7 @@ from kawin.diffusion.Diffusion import DiffusionModel
 from kawin.diffusion.DiffusionParameters import computeMobility, HashTable
 from kawin.diffusion.mesh import FiniteVolumeGrid, FiniteVolume1D, FiniteDifference1D, Cartesian2D
 from kawin.diffusion.mesh.MovingBoundary1D import get_moving_boundary_geometry
+from kawin.diffusion.mesh.MovingBoundaryFD1D import get_moving_boundary_fd_geometry
 
 def _get_1D_mesh(model: DiffusionModel):
     mesh = model.mesh
@@ -284,10 +285,13 @@ def plotMovingBoundaryState(
     ax = _get_axis(ax)
     left_interface_composition = None
     right_interface_composition = None
+    pstar = kwargs.pop('pstar', None)
     if hasattr(model_or_mesh, 'getInterfacePosition') and hasattr(model_or_mesh, 'data'):
         mesh = _get_1D_mesh(model_or_mesh)
         composition = np.asarray(model_or_mesh.data.y(time), dtype=np.float64).reshape(-1)
         interface_position = float(model_or_mesh.getInterfacePosition(time))
+        if pstar is None and hasattr(model_or_mesh, 'pstar'):
+            pstar = float(model_or_mesh.pstar)
         if annotate_interface_compositions:
             state_time = model_or_mesh.currentTime if time is None else time
             try:
@@ -300,27 +304,45 @@ def plotMovingBoundaryState(
                 left_interface_composition = None
                 right_interface_composition = None
     else:
-        from kawin.diffusion.mesh.MovingBoundary1D import _extract_moving_boundary_inputs
-
         mesh = model_or_mesh
-        composition, interface_position = _extract_moving_boundary_inputs(
-            mesh,
-            composition=composition,
-            interface_position=interface_position,
-        )
+        if isinstance(mesh, FiniteDifference1D):
+            from kawin.diffusion.mesh.MovingBoundaryFD1D import _extract_moving_boundary_fd_inputs
+
+            composition, interface_position, pstar = _extract_moving_boundary_fd_inputs(
+                mesh,
+                composition=composition,
+                interface_position=interface_position,
+                pstar=pstar,
+            )
+        else:
+            from kawin.diffusion.mesh.MovingBoundary1D import _extract_moving_boundary_inputs
+
+            composition, interface_position = _extract_moving_boundary_inputs(
+                mesh,
+                composition=composition,
+                interface_position=interface_position,
+            )
         if interface_compositions is not None:
             left_interface_composition = float(interface_compositions[0])
             right_interface_composition = float(interface_compositions[1])
-    geometry = get_moving_boundary_geometry(mesh, interface_position)
 
     z = np.ravel(mesh.z).astype(np.float64)
-    z_edge = np.ravel(mesh.zEdge).astype(np.float64)
     display_scale = float(distance_multiplier) / zScale
     x_centers = (z + zOffset) * display_scale
-    x_edges = (z_edge + zOffset) * display_scale
     x_interface = (interface_position + zOffset) * display_scale
-    x_left_face = (geometry.left_face + zOffset) * display_scale
-    x_right_face = (geometry.right_face + zOffset) * display_scale
+    is_fdm = isinstance(mesh, FiniteDifference1D)
+
+    if is_fdm:
+        geometry = get_moving_boundary_fd_geometry(mesh, interface_position, pstar)
+        x_edges = None
+        x_left_face = x_interface
+        x_right_face = x_interface
+    else:
+        geometry = get_moving_boundary_geometry(mesh, interface_position)
+        z_edge = np.ravel(mesh.zEdge).astype(np.float64)
+        x_edges = (z_edge + zOffset) * display_scale
+        x_left_face = (geometry.left_face + zOffset) * display_scale
+        x_right_face = (geometry.right_face + zOffset) * display_scale
 
     plot_kwargs = _adjust_kwargs(
         'moving_boundary',
@@ -358,11 +380,16 @@ def plotMovingBoundaryState(
     y_center = 0.5 * (y_face_low + y_face_high)
     y_center_highlight = y_center + 0.015
 
-    for edge in x_edges:
-        ax.plot([edge, edge], [y_face_low, y_face_high], color='0.85', linewidth=0.8, zorder=0)
-
-    ax.axvspan(x_left_face, x_interface, ymin=0, ymax=1, color='C1', alpha=0.08, zorder=0)
-    ax.axvspan(x_interface, x_right_face, ymin=0, ymax=1, color='C2', alpha=0.08, zorder=0)
+    if is_fdm:
+        for center in x_centers:
+            ax.plot([center, center], [y_face_low, y_face_high], color='0.88', linewidth=0.8, zorder=0)
+        ax.axvspan(x_centers[geometry.left_index], x_interface, ymin=0, ymax=1, color='C1', alpha=0.08, zorder=0)
+        ax.axvspan(x_interface, x_centers[geometry.right_index], ymin=0, ymax=1, color='C2', alpha=0.08, zorder=0)
+    else:
+        for edge in x_edges:
+            ax.plot([edge, edge], [y_face_low, y_face_high], color='0.85', linewidth=0.8, zorder=0)
+        ax.axvspan(x_left_face, x_interface, ymin=0, ymax=1, color='C1', alpha=0.08, zorder=0)
+        ax.axvspan(x_interface, x_right_face, ymin=0, ymax=1, color='C2', alpha=0.08, zorder=0)
 
     ax.scatter(x_centers, np.full_like(x_centers, y_center), s=18, color='0.35', zorder=3, clip_on=False)
     ax.scatter(
@@ -463,10 +490,23 @@ def plotMovingBoundaryState(
             )
 
         # ax.text(x_interface, ymax - 0.03 * (ymax - ymin), 'interface', color='C3', ha='center', va='top')
-        ax.text(x_left_face, y_face_low, 'Lf', color='C1', ha='right', va='top', fontsize=8)
-        ax.text(x_right_face, y_face_low, 'Rf', color='C2', ha='left', va='top', fontsize=8)
-        ax.text(x_centers[geometry.left_index], y_face_high, f'C{geometry.left_index}', color='C1', ha='right', va='bottom', fontsize=8)
-        ax.text(x_centers[geometry.right_index], y_face_high, f'C{geometry.right_index}', color='C2', ha='left', va='bottom', fontsize=8)
+        if is_fdm:
+            ax.text(x_centers[geometry.left_index], y_face_low, f'N{geometry.left_index}', color='C1', ha='right', va='top', fontsize=8)
+            ax.text(x_centers[geometry.right_index], y_face_low, f'N{geometry.right_index}', color='C2', ha='left', va='top', fontsize=8)
+            ax.text(
+                x_centers[geometry.ignored_index],
+                y_face_high,
+                f'ignored={geometry.ignored_index}',
+                color='C3',
+                ha='center',
+                va='bottom',
+                fontsize=8,
+            )
+        else:
+            ax.text(x_left_face, y_face_low, 'Lf', color='C1', ha='right', va='top', fontsize=8)
+            ax.text(x_right_face, y_face_low, 'Rf', color='C2', ha='left', va='top', fontsize=8)
+            ax.text(x_centers[geometry.left_index], y_face_high, f'C{geometry.left_index}', color='C1', ha='right', va='bottom', fontsize=8)
+            ax.text(x_centers[geometry.right_index], y_face_high, f'C{geometry.right_index}', color='C2', ha='left', va='bottom', fontsize=8)
 
     if annotate_positions:
         if len(composition) <= maxAnnotatedCells:
@@ -489,19 +529,20 @@ def plotMovingBoundaryState(
                 rotation=90,
             )
 
-        edge_indices = np.unique(np.concatenate((pos_indices, [pos_indices[-1] + 1]))).astype(int)
-        edge_indices = edge_indices[(edge_indices >= 0) & (edge_indices < len(x_edges))]
-        for i in edge_indices:
-            ax.text(
-                x_edges[i],
-                y_face_high,
-                f'{x_edges[i]:.9g}',
-                ha='center',
-                va='bottom',
-                fontsize=7,
-                color='0.5',
-                rotation=90,
-            )
+        if not is_fdm:
+            edge_indices = np.unique(np.concatenate((pos_indices, [pos_indices[-1] + 1]))).astype(int)
+            edge_indices = edge_indices[(edge_indices >= 0) & (edge_indices < len(x_edges))]
+            for i in edge_indices:
+                ax.text(
+                    x_edges[i],
+                    y_face_high,
+                    f'{x_edges[i]:.9g}',
+                    ha='center',
+                    va='bottom',
+                    fontsize=7,
+                    color='0.5',
+                    rotation=90,
+                )
 
         ax.text(
             x_interface, # - 0.015 * (x_edges[-1] - x_edges[0]),
@@ -515,9 +556,16 @@ def plotMovingBoundaryState(
         )
 
     if zoom_cells is None:
-        _set_1D_xlim(ax, mesh, zScale, zOffset)
+        if is_fdm:
+            ax.set_xlim([x_centers[0], x_centers[-1]])
+            ax.set_xlabel(f'Distance*{display_scale:.0e} (m)')
+        else:
+            _set_1D_xlim(ax, mesh, zScale, zOffset)
     else:
-        ax.set_xlim([x_edges[left_i], x_edges[right_i + 1]])
+        if is_fdm:
+            ax.set_xlim([x_centers[left_i], x_centers[right_i]])
+        else:
+            ax.set_xlim([x_edges[left_i], x_edges[right_i + 1]])
     ax.set_xlabel(f'Distance*{display_scale:.0e} (m)')
     ax.set_ylabel('Composition / mesh state')
     ax.legend()

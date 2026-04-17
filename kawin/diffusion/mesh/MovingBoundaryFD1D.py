@@ -74,6 +74,24 @@ def _geometry_from_z(z, interface_position: float, pstar: float) -> MovingBounda
     This is the array-based implementation behind
     :func:`get_moving_boundary_fd_geometry` and is reused by the pure helper
     routines in this module.
+
+    Returned geometry fields
+    ------------------------
+    left_index / right_index
+        The two mesh nodes that bracket the interface position such that
+        ``z[left_index] < interface_position < z[right_index]``.
+    p
+        The normalized interface position between the bracketing nodes, with
+        ``p = 0`` at ``left_index`` and ``p = 1`` at ``right_index``.
+    ignored_index
+        The interface-adjacent node that is reconstructed rather than updated
+        directly during the explicit Lee/Oh-style step.
+    left_near_index / right_near_index
+        The nodes immediately adjacent to the ignored node that receive the
+        quadratic interface-aware stencil update on the left and right sides.
+    left_distance / right_distance
+        One-sided node-to-interface distances used in gradient and flux
+        calculations at the interface.
     """
     z = _flatten_1d_coordinates(z)
     interface_position = _regularize_interface_position(z, interface_position)
@@ -93,7 +111,7 @@ def _geometry_from_z(z, interface_position: float, pstar: float) -> MovingBounda
     p = float((interface_position - z[left_index]) / dx)
     p = float(np.clip(p, 0.0, 1.0))
     ignored_index = left_index if p < pstar else right_index
-    left_near_index = right_index - 1 if p < pstar else left_index
+    left_near_index = max(0, left_index - 1) if p < pstar else left_index
     right_near_index = right_index if p < pstar else min(right_index + 1, len(z) - 1)
     return MovingBoundaryFDGeometry(
         left_index=left_index,
@@ -182,25 +200,29 @@ def interpolate_previous_ignored_composition(z, composition, s_old, p_old, s_new
     index = geom_old.ignored_index
 
     if index <= geom_new.left_index:
+        if index!=geom_new.left_index:
+            raise ValueError("Unexpected geometry change: ignored node moved more than one position to the left.")
         if geom_new.left_index - 2 >= 0:
             c[index] = exact_lagrange(
                 z[index],
                 derivative_num=0,
-                xi=[z[geom_new.left_index - 1], z[geom_new.left_index], s_new],
-                yi=[c[geom_new.left_index - 1], c[geom_new.left_index], interface_compositions[0]],
+                xi=[z[geom_new.left_index - 2], z[geom_new.left_index - 1], s_new],
+                yi=[c[geom_new.left_index - 2], c[geom_new.left_index - 1], interface_compositions[0]],
             )
         elif geom_new.left_index >= 0:
-            c[index] = c[geom_new.left_index] + (interface_compositions[0] - c[geom_new.left_index]) / (geom_new.p + 1.0)
+            c[index] = c[geom_new.left_index - 1] + (interface_compositions[0] - c[geom_new.left_index - 1]) / (geom_new.p + 1.0)
     else:
+        if index != geom_new.right_index:
+            raise ValueError("Unexpected geometry change: ignored node moved more than one position to the right.")
         if geom_new.right_index + 2 < len(z):
             c[index] = exact_lagrange(
                 z[index],
                 derivative_num=0,
-                xi=[s_new, z[geom_new.right_index], z[geom_new.right_index + 1]],
-                yi=[interface_compositions[1], c[geom_new.right_index], c[geom_new.right_index + 1]],
+                xi=[s_new, z[geom_new.right_index + 1], z[geom_new.right_index + 2]],
+                yi=[interface_compositions[1], c[geom_new.right_index + 1], c[geom_new.right_index + 2]],
             )
         elif geom_new.right_index < len(z):
-            c[index] = c[geom_new.right_index] - (c[geom_new.right_index] - interface_compositions[1]) / (2.0 - geom_new.p)
+            c[index] = c[geom_new.right_index + 1] - (c[geom_new.right_index + 1] - interface_compositions[1]) / (2.0 - geom_new.p)
     return c
 
 
@@ -281,3 +303,182 @@ def integrate_binary_fd_profile(
         weight_ignore = 1.0 - weight_no_ignore
         return float(weight_no_ignore * no_ignore_value + weight_ignore * ignore_value)
     raise ValueError("integration_mode must be one of ['ignore', 'noIgnore', 'weighted'].")
+
+
+def summarize_moving_boundary_fd_state(
+    mesh,
+    composition: np.ndarray,
+    interface_position: float,
+    pstar: float,
+    window: int = 2,
+    precision: int = 9,
+    distance_multiplier: float = 1.0,
+) -> str:
+    '''
+    Returns a compact text summary of the FDM moving-boundary mesh state.
+
+    This is intended for quick inspection in the debugger, so it focuses on
+    the interface-adjacent nodes while still listing the local node positions,
+    the active ignored node and the one-sided interface distances.
+    '''
+    z = _flatten_1d_coordinates(mesh.z).astype(np.float64)
+    composition = np.asarray(composition, dtype=np.float64).reshape(-1)
+    if len(composition) != len(z):
+        raise ValueError("Composition array must align with the 1D FDM moving-boundary mesh.")
+
+    geom = get_moving_boundary_fd_geometry(mesh, interface_position, pstar)
+    scale = float(distance_multiplier)
+    left = max(0, geom.left_index - int(window))
+    right = min(len(z) - 1, geom.right_index + int(window))
+    fmt = f".{int(precision)}g"
+
+    lines = [
+        "MovingBoundaryFD1D state:",
+        (
+            f"  interface_position = {format(geom.interface_position * scale, fmt)} "
+            f"between nodes[{geom.left_index}] = {format(z[geom.left_index] * scale, fmt)} "
+            f"and nodes[{geom.right_index}] = {format(z[geom.right_index] * scale, fmt)}"
+        ),
+        (
+            f"  p = {format(geom.p, fmt)}, pstar = {format(pstar, fmt)}, "
+            f"ignored_index = {geom.ignored_index}"
+        ),
+        (
+            f"  center-to-interface distances = left {format(geom.left_distance * scale, fmt)}, "
+            f"right {format(geom.right_distance * scale, fmt)}"
+        ),
+        "  local nodes:",
+    ]
+
+    for i in range(left, right + 1):
+        marker = ""
+        if i == geom.left_index:
+            marker = " <left of interface>"
+        elif i == geom.right_index:
+            marker = " <right of interface>"
+        if i == geom.ignored_index:
+            marker += " <ignored>"
+        lines.append(
+            "    "
+            f"[{i}] position={format(z[i] * scale, fmt)} "
+            f"composition={format(composition[i], fmt)}{marker}"
+        )
+
+    return "\n".join(lines)
+
+
+def _extract_moving_boundary_fd_inputs(mesh, composition=None, interface_position=None, pstar=None):
+    '''
+    Extracts composition, interface position and pstar from a mesh-like object when possible.
+
+    This is meant to support debugger-time inspection where the caller may only
+    have access to a mesh object plus a few local variables.
+    '''
+    if composition is None:
+        raise ValueError(
+            "Composition must be supplied explicitly. "
+            "The debugger helper does not fall back to mesh.y because mesh.y may be stale during solving."
+        )
+
+    if interface_position is None:
+        for attr in ("interface_position", "interfacePosition"):
+            if hasattr(mesh, attr):
+                interface_position = getattr(mesh, attr)
+                break
+
+    if interface_position is None:
+        raise ValueError(
+            "Interface position was not supplied and could not be inferred from the mesh. "
+            "Pass interface_position explicitly or attach mesh.interface_position."
+        )
+
+    if pstar is None:
+        for attr in ("pstar",):
+            if hasattr(mesh, attr):
+                pstar = getattr(mesh, attr)
+                break
+
+    if pstar is None:
+        raise ValueError(
+            "pstar was not supplied and could not be inferred from the mesh. "
+            "Pass pstar explicitly or attach mesh.pstar."
+        )
+
+    return np.asarray(composition, dtype=np.float64).reshape(-1), float(interface_position), float(pstar)
+
+
+def debug_moving_boundary_fd_state(
+    mesh,
+    composition=None,
+    interface_position=None,
+    pstar=None,
+    interface_compositions=None,
+    *,
+    window: int = 2,
+    precision: int = 9,
+    distance_multiplier: float = 1.0,
+    plot: bool = True,
+    ax=None,
+    show: bool = True,
+    annotate: bool = True,
+    annotate_positions: bool = False,
+    annotate_interface_distances: bool = False,
+    annotate_interface_compositions: bool = False,
+    annotationWindow: int = 2,
+    maxAnnotatedCells: int = 20,
+    zoom_cells=None,
+    print_summary: bool = True,
+):
+    '''
+    Prints and optionally plots an FDM moving-boundary mesh state for debugger use.
+
+    This accepts either:
+    - an explicit mesh + composition + interface_position + pstar, or
+    - an explicit mesh + composition, with interface position inferred from
+      ``mesh.interface_position`` / ``mesh.interfacePosition`` and ``pstar``
+      inferred from ``mesh.pstar`` when available.
+    '''
+    composition, interface_position, pstar = _extract_moving_boundary_fd_inputs(
+        mesh,
+        composition=composition,
+        interface_position=interface_position,
+        pstar=pstar,
+    )
+    summary = summarize_moving_boundary_fd_state(
+        mesh,
+        composition,
+        interface_position,
+        pstar,
+        window=window,
+        precision=precision,
+        distance_multiplier=distance_multiplier,
+    )
+    if print_summary:
+        print(summary)
+
+    axis = None
+    if plot:
+        from kawin.diffusion.Plot import plotMovingBoundaryState
+
+        axis = plotMovingBoundaryState(
+            mesh,
+            composition=composition,
+            interface_position=interface_position,
+            interface_compositions=interface_compositions,
+            pstar=pstar,
+            ax=ax,
+            distance_multiplier=distance_multiplier,
+            annotate=annotate,
+            annotate_positions=annotate_positions,
+            annotate_interface_distances=annotate_interface_distances,
+            annotate_interface_compositions=annotate_interface_compositions,
+            annotationWindow=annotationWindow,
+            maxAnnotatedCells=maxAnnotatedCells,
+            zoom_cells=zoom_cells,
+        )
+        if show:
+            import matplotlib.pyplot as plt
+
+            plt.show()
+
+    return summary, axis

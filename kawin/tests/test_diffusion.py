@@ -8,6 +8,7 @@ from kawin.diffusion import SinglePhaseModel, HomogenizationModel, MovingBoundar
 from kawin.diffusion.mesh import Cartesian1D, CartesianFD1D, Cylindrical1D, Spherical1D, Cartesian2D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh import ProfileBuilder, StepProfile1D, LinearProfile1D, DiracDeltaProfile, ConstantProfile, GaussianProfile, ExperimentalProfile1D, BoundedEllipseProfile, BoundedRectangleProfile
 from kawin.diffusion.mesh import get_moving_boundary_fd_geometry
+from kawin.diffusion.mesh.MovingBoundaryFD1D import quad_fit_derivs
 from kawin.diffusion.DiffusionParameters import computeMobility, _computeSingleMobility, TemperatureParameters, HashTable
 from kawin.diffusion.HomogenizationParameters import HomogenizationParameters, computeHomogenizationFunction
 from kawin.thermo import GeneralThermodynamics
@@ -590,7 +591,7 @@ def test_fvm_vs_fdm_constantD_nonlinearCompProfile(tmpdir):
     plt.plot(m_FVM.mesh.z, m_FVM.data.y(0)[:,0], 'o', linestyle='solid', label='FVM')
     plt.plot(m_FDM.mesh.z, m_FDM.data.y(0)[:,0], 'o', linestyle='solid', label='FDM')
     plt.legend()
-    plt.show()
+    plt.show(block=False)
 
     assert_allclose(np.ravel(m_FVM.data.currentY), getMidpoints(np.ravel(m_FDM.data.currentY)), rtol=1e-10)
     assert_allclose(m_FVM.currentTime, m_FDM.currentTime)
@@ -926,11 +927,16 @@ def test_moving_boundary_fdm_geometry_switches_ignored_node():
     assert geom_left.left_index == 4
     assert geom_left.right_index == 5
     assert geom_left.ignored_index == 4
+    assert geom_left.left_near_index == 3
+    assert geom_left.right_near_index == 5
     assert geom_right.ignored_index == 5
+    assert geom_right.left_near_index == 4
+    assert geom_right.right_near_index == 6
 
 
 def test_moving_boundary_fdm_dXdt_and_fluxes():
-    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    interfacePosition = 0.525
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.2, 0.8), 'CR')])
     mesh = CartesianFD1D(['CR'], [0, 1], 21)
     mesh.setResponseProfile(profile)
     therm = ConstantBinaryThermodynamics(
@@ -944,7 +950,7 @@ def test_moving_boundary_fdm_dXdt_and_fluxes():
         ['ALPHA', 'BETA'],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
-        interfacePosition=0.525,
+        interfacePosition=interfacePosition,
         interfaceUpdate='basic',
     )
     model.setup()
@@ -958,8 +964,54 @@ def test_moving_boundary_fdm_dXdt_and_fluxes():
     assert np.isfinite(dt) and dt > 0
 
 
+def test_moving_boundary_fdm_left_near_node_uses_quadratic_update_for_p_less_than_pstar():
+    interfacePosition = 0.515
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.2, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
+        interface_compositions=(0.3, 0.7),
+    )
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        interfaceUpdate='basic',
+        pstar=0.5,
+    )
+    model.setup()
+
+    x_curr = model.getCurrentX()
+    c_old = np.asarray(x_curr[0], dtype=np.float64).reshape(-1)
+    s_old = float(x_curr[1])
+    geom = model._getInterfaceState(model.currentTime, c_old, s_old)[0]
+    assert geom.p < model.pstar
+    assert geom.left_near_index == geom.left_index - 1
+
+    dXdt = model.getdXdt(model.currentTime, x_curr)
+    dt = model.getDt(dXdt)
+    diffusivity_nodes = model._bulk_diffusivity_nodes(c_old, model.currentTime, geom)
+    expected_second_derivative = quad_fit_derivs(
+        np.array([mesh.z[geom.left_near_index - 1, 0], mesh.z[geom.left_near_index, 0], s_old], dtype=np.float64),
+        np.array([c_old[geom.left_near_index - 1], c_old[geom.left_near_index], 0.3], dtype=np.float64),
+        mesh.z[geom.left_near_index, 0],
+    )[1]
+    expected_dxdt = diffusivity_nodes[geom.left_near_index] * expected_second_derivative
+    bulk_dxdt = diffusivity_nodes[geom.left_near_index] * model._neumann_laplacian_uniform(c_old, geom.left_near_index)
+
+    assert_allclose(dXdt[0][geom.left_near_index, 0], expected_dxdt, rtol=1e-10, atol=1e-10)
+    assert abs(dXdt[0][geom.left_near_index, 0] - bulk_dxdt) > max(1e-8, 1e-6 * abs(expected_dxdt))
+    assert np.isfinite(dt) and dt > 0
+
+
 def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
-    profile = ProfileBuilder([(StepProfile1D(0.5, 0.1, 0.8), 'CR')])
+    interfacePosition = 0.5125
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
     therm = ConstantBinaryThermodynamics(
         phases=['ALPHA', 'BETA'],
         diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
@@ -974,9 +1026,10 @@ def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
         ['ALPHA', 'BETA'],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
-        interfacePosition=0.5125,
+        interfacePosition=interfacePosition,
         interfaceUpdate='basic',
     )
+    ideal_mass = 0.5125*0.1 + (1-0.5125)*0.8
     initial_mass = basic.getTotalMass()
     basic.solve(0.002, iterator=explicitEulerIterator)
     basic_error = abs(basic.getTotalMass() - initial_mass)
@@ -989,18 +1042,20 @@ def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
         ['ALPHA', 'BETA'],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
-        interfacePosition=0.5125,
+        interfacePosition=interfacePosition,
         interfaceUpdate='lee_oh_corrected',
     )
     initial_mass_corrected = corrected.getTotalMass()
     corrected.solve(0.002, iterator=explicitEulerIterator)
     corrected_error = abs(corrected.getTotalMass() - initial_mass_corrected)
-
+    
     assert corrected_error <= basic_error + 1e-8
+    assert ideal_mass==initial_mass
 
 
 def test_moving_boundary_fdm_saving_loading():
-    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    interfacePosition = 0.525
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.2, 0.8), 'CR')])
     mesh = CartesianFD1D(['CR'], [0, 1], 21)
     mesh.setResponseProfile(profile)
     therm = ConstantBinaryThermodynamics(
@@ -1014,7 +1069,7 @@ def test_moving_boundary_fdm_saving_loading():
         ['ALPHA', 'BETA'],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
-        interfacePosition=0.525,
+        interfacePosition=interfacePosition,
         interfaceUpdate='lee_oh_corrected',
         record=True,
     )
@@ -1031,7 +1086,7 @@ def test_moving_boundary_fdm_saving_loading():
         ['ALPHA', 'BETA'],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
-        interfacePosition=0.525,
+        interfacePosition=interfacePosition,
         interfaceUpdate='lee_oh_corrected',
         record=True,
     )
@@ -1047,7 +1102,8 @@ def test_moving_boundary_fdm_saving_loading():
 
 
 def test_moving_boundary_dXdt():
-    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    interfacePosition = 0.5
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.2, 0.8), 'CR')])
     mesh = Cartesian1D(['CR'], [0, 1], 10)
     mesh.setResponseProfile(profile)
     therm = ConstantBinaryThermodynamics(
@@ -1065,7 +1121,7 @@ def test_moving_boundary_dXdt():
         ['ALPHA', 'BETA'],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
-        interfacePosition=0.5,
+        interfacePosition=interfacePosition,
         constraints=constraints,
     )
     
@@ -1083,7 +1139,8 @@ def test_moving_boundary_dXdt():
 
 
 def test_moving_boundary_mass_conservation():
-    profile = ProfileBuilder([(StepProfile1D(0.5, 0.1, 0.8), 'CR')])
+    interfacePosition = 0.5
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
     mesh = Cartesian1D(['CR'], [0, 1], 20)
     mesh.setResponseProfile(profile)
     therm = ConstantBinaryThermodynamics(
@@ -1102,7 +1159,7 @@ def test_moving_boundary_mass_conservation():
         ['ALPHA', 'BETA'],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
-        interfacePosition=0.5,
+        interfacePosition=interfacePosition,
         constraints=constraints,
         record=True,
     )
@@ -1110,12 +1167,13 @@ def test_moving_boundary_mass_conservation():
     model.solve(0.01, iterator=explicitEulerIterator)
     final_mass = model.getTotalMass()
 
-    assert abs(model.getInterfacePosition() - 0.5) > 0
+    assert abs(model.getInterfacePosition() - interfacePosition) > 0
     assert_allclose(final_mass, initial_mass, atol=1e-10, rtol=1e-8)
 
 
 def test_moving_boundary_saving_loading(tmpdir):
-    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    interfacePosition = 0.5
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.2, 0.8), 'CR')])
     mesh = Cartesian1D(['CR'], [0, 1], 20)
     mesh.setResponseProfile(profile)
     therm = ConstantBinaryThermodynamics(
@@ -1129,7 +1187,7 @@ def test_moving_boundary_saving_loading(tmpdir):
         ['ALPHA', 'BETA'],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
-        interfacePosition=0.5,
+        interfacePosition=interfacePosition,
         record=True,
     )
     model.solve(0.01, iterator=explicitEulerIterator)
@@ -1143,7 +1201,7 @@ def test_moving_boundary_saving_loading(tmpdir):
         ['ALPHA', 'BETA'],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
-        interfacePosition=0.5,
+        interfacePosition=interfacePosition,
         record=True,
     )
     new_model.load(tmpdir / 'moving_boundary.npz')
@@ -1154,7 +1212,8 @@ def test_moving_boundary_saving_loading(tmpdir):
 
 
 def test_moving_boundary_mass_check_warns():
-    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    interfacePosition = 0.5
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.2, 0.8), 'CR')])
     mesh = Cartesian1D(['CR'], [0, 1], 20)
     mesh.setResponseProfile(profile)
     therm = ConstantBinaryThermodynamics(
@@ -1168,7 +1227,7 @@ def test_moving_boundary_mass_check_warns():
         ['ALPHA', 'BETA'],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
-        interfacePosition=0.5,
+        interfacePosition=interfacePosition,
     )
     model.constraints.movingBoundaryMassTolerance = 1e-8
     model.constraints.movingBoundaryMassAction = 'warn'
@@ -1179,7 +1238,8 @@ def test_moving_boundary_mass_check_warns():
 
 
 def test_moving_boundary_mass_check_raises():
-    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    interfacePosition = 0.5
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.2, 0.8), 'CR')])
     mesh = Cartesian1D(['CR'], [0, 1], 20)
     mesh.setResponseProfile(profile)
     therm = ConstantBinaryThermodynamics(
@@ -1193,7 +1253,7 @@ def test_moving_boundary_mass_check_raises():
         ['ALPHA', 'BETA'],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
-        interfacePosition=0.5,
+        interfacePosition=interfacePosition,
     )
     model.constraints.movingBoundaryMassTolerance = 1e-8
     model.constraints.movingBoundaryMassAction = 'raise'

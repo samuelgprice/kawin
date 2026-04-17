@@ -6,5 +6,7 @@ from .FVM1D import FiniteVolume1D, Cartesian1D, Cylindrical1D, Spherical1D
 from .FVM1D import StepProfile1D, LinearProfile1D, ExperimentalProfile1D
 from .FDM1D import FiniteDifference1D, CartesianFD1D
 from .MovingBoundary1D import MovingBoundaryGeometry, get_moving_boundary_geometry, get_control_volume_widths, integrate_binary_profile
+from .MovingBoundary1D import summarize_moving_boundary_state, debug_moving_boundary_state
 from .MovingBoundaryFD1D import MovingBoundaryFDGeometry, get_moving_boundary_fd_geometry, integrate_binary_fd_profile
+from .MovingBoundaryFD1D import summarize_moving_boundary_fd_state, debug_moving_boundary_fd_state
 from .FVM2D import Cartesian2D

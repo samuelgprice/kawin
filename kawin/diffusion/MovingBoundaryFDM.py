@@ -8,10 +8,12 @@ from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundar
 from kawin.diffusion.mesh.MeshBase import DiffusionPair, arithmeticMean
 from kawin.diffusion.mesh.MovingBoundaryFD1D import (
     augment_profile_with_interface_compositions,
+    debug_moving_boundary_fd_state,
     get_moving_boundary_fd_geometry,
     integrate_binary_fd_profile,
     quad_fit_derivs,
     interpolate_previous_ignored_composition,
+    summarize_moving_boundary_fd_state,
 )
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
@@ -315,6 +317,10 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         i2 = max(0, i2)
         j1 = min(len(z) - 1, j1)
         j2 = min(len(z) - 1, j2)
+        
+        if geom.ignored_index in [i1, i2, j1, j2]:
+            raise ValueError("Interface gradient evaluation stencils should not include the ignored node.")
+        
         x_left = np.array([z[i1], z[i2], interface_position], dtype=np.float64)
         y_left = np.array([composition[i1], composition[i2], interface_compositions[0]], dtype=np.float64)
         x_right = np.array([interface_position, z[j1], z[j2]], dtype=np.float64)
@@ -326,7 +332,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
     def _max_interface_step_fraction(self, geom, velocity):
         '''
         Returns the largest allowed interface move, in units of ``dz``, for the current regime
-        '''
+        ''' ##XXX: I think this might be incorrect as it may never allow the step to cross the node
         if velocity >= 0:
             node_limit = 1.0 - geom.p
             regime_limit = (self.pstar - geom.p) if geom.p < self.pstar else node_limit
@@ -404,7 +410,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             if i == geom.left_near_index and i >= 1:
                 self._update_near_interface_node(c_old, c_new, i, s_old, "A", (c_left_int, c_right_int), diffusivity_nodes[i])
             else:
-                c_new[i] = c_old[i] + self._currdt * diffusivity_nodes[i] * self._neumann_laplacian_uniform(c_old, i)
+                c_new[i] = c_old[i] + self._currdt * diffusivity_nodes[i] * self._neumann_laplacian_uniform(c_old, i) ##FIXME: The use of diffusivity_nodes[i] is not strictly correct here. The flux-form discretization should be used inside _neumann_laplacian_uniform(). I'm not sure yet how to handle this for _update_near_interface_node()
 
         for i in range(max(0, b_first), len(c_old)):
             if i == ignored:
@@ -412,7 +418,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             if i == geom.right_near_index and i + 1 < len(c_old):
                 self._update_near_interface_node(c_old, c_new, i, s_old, "B", (c_left_int, c_right_int), diffusivity_nodes[i])
             else:
-                c_new[i] = c_old[i] + self._currdt * diffusivity_nodes[i] * self._neumann_laplacian_uniform(c_old, i)
+                c_new[i] = c_old[i] + self._currdt * diffusivity_nodes[i] * self._neumann_laplacian_uniform(c_old, i) ##FIXME: The use of diffusivity_nodes[i] is not strictly correct here. The flux-form discretization should be used inside _neumann_laplacian_uniform(). I'm not sure yet how to handle this for _update_near_interface_node()
 
         c_stage = np.asarray(
             interpolate_previous_ignored_composition(
@@ -433,6 +439,16 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         if self.interfaceUpdate == "basic":
             velocity = (flux_left - flux_right) / denom_basic if abs(denom_basic) > 1e-14 else 0.0
             ds = self._currdt * velocity
+
+            current_mass = integrate_binary_fd_profile(self.mesh.z, c_stage, s_old=s_old, p_old=geom.p, 
+                s_new=s_old+ds,
+                pstar=self.pstar, interface_compositions=(c_left_int, c_right_int), integration_mode=self.integrationMode, s_for_interp="new")
+            
+            flux_left_alt = -D_left_int * grad_left_pred; flux_right_alt = -D_right_int * grad_right_pred 
+            velocity_alt = (flux_left_alt - flux_right_alt) / denom_basic if abs(denom_basic) > 1e-14 else 0.0
+            current_mass_alt = integrate_binary_fd_profile(self.mesh.z, c_stage, s_old=s_old, p_old=geom.p, 
+                s_new=s_old+(self._currdt * velocity_alt),
+                pstar=self.pstar, interface_compositions=(c_left_int, c_right_int), integration_mode=self.integrationMode, s_for_interp="new")
         else:
             denom = c_right_int + c_stage[geom.right_index] - c_left_int - c_stage[geom.left_index]
             ds_intermediate = self._currdt * (2.0 / denom) * (flux_left - flux_right)
@@ -637,3 +653,64 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             integration_mode=self.integrationMode,
             s_for_interp="old",
         )
+
+    def describeMeshState(self, time = None, window: int = 2, precision: int = 9, distance_multiplier: float = 1.0):
+        '''
+        Returns a compact text summary of the current FDM moving-boundary mesh state.
+
+        This is mainly intended for debugger use.
+        '''
+        composition = np.asarray(self.data.y(time), dtype=np.float64).reshape(-1)
+        interface_position = self.getInterfacePosition(time)
+        summary = summarize_moving_boundary_fd_state(
+            self.mesh,
+            composition,
+            interface_position,
+            self.pstar,
+            window=window,
+            precision=precision,
+            distance_multiplier=distance_multiplier,
+        )
+        return f"time = {self.currentTime:.6g}\n{summary}" if time is None else f"time = {time:.6g}\n{summary}"
+
+    def plotMeshState(self, time = None, ax = None, **kwargs):
+        '''
+        Plots the current FDM moving-boundary mesh state.
+
+        This is intended as a convenience wrapper so the state can be visualized
+        directly from a debugger or notebook.
+        '''
+        from kawin.diffusion.Plot import plotMovingBoundaryState
+
+        return plotMovingBoundaryState(self, time=time, ax=ax, **kwargs)
+
+    def debugMeshState(self, time = None, ax = None, show: bool = True, **kwargs):
+        '''
+        Prints and plots the current FDM moving-boundary mesh state.
+
+        This is intended as the most direct debugger convenience entry point.
+        '''
+        composition = np.asarray(self.data.y(time), dtype=np.float64).reshape(-1)
+        interface_position = self.getInterfacePosition(time)
+        summary = summarize_moving_boundary_fd_state(
+            self.mesh,
+            composition,
+            interface_position,
+            self.pstar,
+            window=kwargs.get('window', 2),
+            precision=kwargs.get('precision', 9),
+            distance_multiplier=kwargs.get('distance_multiplier', 1.0),
+        )
+        print_summary = kwargs.pop('print_summary', True)
+        if print_summary:
+            time_label = self.currentTime if time is None else time
+            print(f"time = {time_label:.6g}\n{summary}")
+
+        from kawin.diffusion.Plot import plotMovingBoundaryState
+
+        ax = plotMovingBoundaryState(self, time=time, ax=ax, **kwargs)
+        if show:
+            import matplotlib.pyplot as plt
+
+            plt.show()
+        return summary, ax
