@@ -103,6 +103,16 @@ class MovingBoundaryFD1DModel(DiffusionModel):
     planar interface position is tracked as a separate scalar state. Interface
     motion uses an explicit Lee/Oh-style interpolation treatment with either a
     basic Stefan update or the corrected ``lee_oh_corrected`` update.
+
+    Parameters
+    ----------
+    fluxGradientMode : {"pre_diffusion", "post_diffusion"}, optional
+        Selects which interface gradients are used when computing the
+        interfacial fluxes for the Stefan update. ``"pre_diffusion"`` uses
+        gradients reconstructed from the profile before the bulk diffusion
+        update, while ``"post_diffusion"`` uses gradients from the profile
+        after that explicit diffusion stage. The default is
+        ``"post_diffusion"``.
     """
 
     def __init__(
@@ -118,12 +128,14 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         interfaceUpdate: str = "basic",
         pstar: float = 0.5,
         integrationMode: str = "weighted",
+        fluxGradientMode: str = "post_diffusion",
     ):
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceData = _ScalarHistory(record)
         self.interfaceUpdate = str(interfaceUpdate)
         self.pstar = float(pstar)
         self.integrationMode = str(integrationMode)
+        self.fluxGradientMode = str(fluxGradientMode)
         self._initialInventory = None
         self._currdt = np.inf
         self._lastFluxes = None
@@ -163,6 +175,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             raise ValueError("interfaceUpdate must be one of ['basic', 'lee_oh_corrected'].")
         if self.integrationMode not in {"ignore", "noIgnore", "weighted"}:
             raise ValueError("integrationMode must be one of ['ignore', 'noIgnore', 'weighted'].")
+        if self.fluxGradientMode not in {"pre_diffusion", "post_diffusion"}:
+            raise ValueError("fluxGradientMode must be one of ['pre_diffusion', 'post_diffusion'].")
         if not (0 < self.pstar < 1):
             raise ValueError("pstar must lie strictly between 0 and 1.")
         self._clipInterfacePosition(self.initialInterfacePosition, strict=True)
@@ -186,12 +200,14 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 "interface_time": self.interfaceData._time,
                 "interface_interval": self.interfaceData.recordInterval,
                 "interface_index": self.interfaceData.N,
+                "flux_gradient_mode": self.fluxGradientMode,
             }
         )
         return data
 
     def fromDict(self, data):
         super().fromDict(data)
+        self.fluxGradientMode = str(data.get("flux_gradient_mode", "post_diffusion"))
         self.interfaceData.recordInterval = int(data["interface_interval"])
         self.interfaceData.N = int(data["interface_index"])
         self.interfaceData._y = np.array(data["interface_position"], dtype=np.float64)
@@ -232,6 +248,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         '''
         Clips the interface to the open domain and nudges it off exact node locations
         '''
+        return interface_position ##NOTE: Bypassing this for now as it is unlikely that the interface will need to be nudged and this function is slow (mostly due to calling np.isclose() on entire array)
         z = np.ravel(self.mesh.z)
         eps = max(float(self.mesh.dz) * 1e-8, 1e-14)
         lower = float(z[0] + eps)
@@ -329,7 +346,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         grad_right, _ = quad_fit_derivs(x_right, y_right, interface_position)
         return float(grad_left), float(grad_right)
 
-    def _max_interface_step_fraction(self, geom, velocity):
+    def  _max_interface_step_fraction(self, geom, velocity):
         '''
         Returns the largest allowed interface move, in units of ``dz``, for the current regime
         ''' ##XXX: I think this might be incorrect as it may never allow the step to cross the node
@@ -388,12 +405,14 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         denom_basic = c_right_int - c_left_int
         s_dot_pred = (D_left_int * grad_left_pred - D_right_int * grad_right_pred) / denom_basic if abs(denom_basic) > 1e-14 else 0.0
         move_fraction = min(
-            self.constraints.movingBoundaryThreshold,
-            0.95 * self._max_interface_step_fraction(geom, s_dot_pred),
+            self.constraints.movingBoundaryThreshold, np.inf
+            # 0.95 * self._max_interface_step_fraction(geom, s_dot_pred),
         )
         dt_move = move_fraction * self.mesh.dz / abs(s_dot_pred) if abs(s_dot_pred) > 0 else np.inf
         allowed_dt = getattr(self, "deltaTime", np.inf)
         self._currdt = min(dt_diff, dt_move, allowed_dt)
+        if dt_diff>dt_move:
+            raise ValueError("Not Expecting dt_move to control the time step at this point")
 
         ignored = geom.ignored_index
         if geom.p < self.pstar:
@@ -433,25 +452,23 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             dtype=np.float64,
         )
         grad_left, grad_right = self._interface_gradients(c_stage, s_old, (c_left_int, c_right_int))
-        flux_left = -D_left_int * grad_left
-        flux_right = -D_right_int * grad_right
+        if self.fluxGradientMode == "pre_diffusion":
+            flux_left = -D_left_int * grad_left_pred
+            flux_right = -D_right_int * grad_right_pred
+        else:
+            flux_left = -D_left_int * grad_left
+            flux_right = -D_right_int * grad_right
 
         if self.interfaceUpdate == "basic":
-            velocity = (flux_left - flux_right) / denom_basic if abs(denom_basic) > 1e-14 else 0.0
+            velocity = (flux_right - flux_left) / denom_basic if abs(denom_basic) > 1e-14 else 0.0
             ds = self._currdt * velocity
 
             current_mass = integrate_binary_fd_profile(self.mesh.z, c_stage, s_old=s_old, p_old=geom.p, 
                 s_new=s_old+ds,
                 pstar=self.pstar, interface_compositions=(c_left_int, c_right_int), integration_mode=self.integrationMode, s_for_interp="new")
-            
-            flux_left_alt = -D_left_int * grad_left_pred; flux_right_alt = -D_right_int * grad_right_pred 
-            velocity_alt = (flux_left_alt - flux_right_alt) / denom_basic if abs(denom_basic) > 1e-14 else 0.0
-            current_mass_alt = integrate_binary_fd_profile(self.mesh.z, c_stage, s_old=s_old, p_old=geom.p, 
-                s_new=s_old+(self._currdt * velocity_alt),
-                pstar=self.pstar, interface_compositions=(c_left_int, c_right_int), integration_mode=self.integrationMode, s_for_interp="new")
         else:
             denom = c_right_int + c_stage[geom.right_index] - c_left_int - c_stage[geom.left_index]
-            ds_intermediate = self._currdt * (2.0 / denom) * (flux_left - flux_right)
+            ds_intermediate = self._currdt * (2.0 / denom) * (flux_right - flux_left)
             s_intermediate = s_old + ds_intermediate
             current_mass = integrate_binary_fd_profile(
                 self.mesh.z,
@@ -468,16 +485,16 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             ds = ds_intermediate + (2.0 * delta_mass) / denom
             velocity = ds / self._currdt if self._currdt > 0 else 0.0
 
-        max_fraction = self._max_interface_step_fraction(geom, velocity)
+        max_fraction = self.constraints.movingBoundaryThreshold #self._max_interface_step_fraction(geom, velocity)
         requested_fraction = abs(ds) / self.mesh.dz
         if not np.isfinite(requested_fraction):
             raise ValueError("MovingBoundaryFD1DModel produced a non-finite interface increment.")
         max_fraction = max(max_fraction, 1e-12)
         if requested_fraction > max_fraction:
-            ds = np.sign(ds) * 0.95 * max_fraction * self.mesh.dz
+            raise ValueError("MovingBoundaryFD1DModel requested_fraction is greater than max_fraction") #ds = np.sign(ds) * 0.95 * max_fraction * self.mesh.dz
             velocity = ds / self._currdt if self._currdt > 0 else 0.0
 
-        s_new = self._clipInterfacePosition(s_old + ds, strict=False)
+        s_new = self._clipInterfacePosition(s_old + ds, strict=True)
         c_final = np.asarray(
             interpolate_previous_ignored_composition(
                 self.mesh.z,
@@ -526,14 +543,14 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         '''
         if dt <= 0:
             return
-        interface_position = self._clipInterfacePosition(float(x[1]), strict=False)
+        interface_position = self._clipInterfacePosition(float(x[1]), strict=True)
         velocity = float(dXdt[1])
         if not np.isfinite(velocity):
             dXdt[1] = 0.0
             return
 
         geom = get_moving_boundary_fd_geometry(self.mesh, interface_position, self.pstar)
-        max_fraction = max(1e-12, 0.95 * self._max_interface_step_fraction(geom, velocity))
+        max_fraction = self.constraints.movingBoundaryThreshold #max(1e-12, 0.95 * self._max_interface_step_fraction(geom, velocity))
         max_ds = max_fraction * self.mesh.dz
         z = np.ravel(self.mesh.z)
         eps = max(float(self.mesh.dz) * 1e-8, 1e-14)

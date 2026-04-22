@@ -94,7 +94,7 @@ def _geometry_from_z(z, interface_position: float, pstar: float) -> MovingBounda
         calculations at the interface.
     """
     z = _flatten_1d_coordinates(z)
-    interface_position = _regularize_interface_position(z, interface_position)
+    # interface_position = _regularize_interface_position(z, interface_position) ## Bypassing this for now as it is unlikely that the interface will need to nudged and this function is slow (mostly due to calling np.isclose() on entire array)
     if len(z) < 4:
         raise ValueError("FDM moving boundary model requires at least four grid nodes.")
     if not (0 < pstar < 1):

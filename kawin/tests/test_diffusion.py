@@ -951,6 +951,7 @@ def test_moving_boundary_fdm_dXdt_and_fluxes():
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
+        fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
     )
     model.setup()
@@ -981,6 +982,7 @@ def test_moving_boundary_fdm_left_near_node_uses_quadratic_update_for_p_less_tha
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
+        fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
         pstar=0.5,
     )
@@ -1027,6 +1029,7 @@ def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
+        fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
     )
     ideal_mass = 0.5125*0.1 + (1-0.5125)*0.8
@@ -1043,6 +1046,7 @@ def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
         thermodynamics=therm,
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
+        fluxGradientMode='post_diffusion',
         interfaceUpdate='lee_oh_corrected',
     )
     initial_mass_corrected = corrected.getTotalMass()
@@ -1051,6 +1055,52 @@ def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
     
     assert corrected_error <= basic_error + 1e-8
     assert ideal_mass==initial_mass
+
+
+def test_moving_boundary_fdm_flux_gradient_mode_switches_interface_flux_source():
+    interfacePosition = 0.515
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.2, 0.8), 'CR')])
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
+        interface_compositions=(0.3, 0.7),
+    )
+
+    mesh_default = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh_default.setResponseProfile(profile)
+    mesh_post = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh_post.setResponseProfile(profile)
+    post_model = MovingBoundaryFD1DModel(
+        mesh_post,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+    )
+    post_model.setup()
+
+    mesh_pre = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh_pre.setResponseProfile(profile)
+    pre_model = MovingBoundaryFD1DModel(
+        mesh_pre,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        interfaceUpdate='basic',
+        fluxGradientMode='pre_diffusion',
+    )
+    pre_model.setup()
+
+    post_dXdt = post_model.getdXdt(post_model.currentTime, post_model.getCurrentX())
+    pre_dXdt = pre_model.getdXdt(pre_model.currentTime, pre_model.getCurrentX())
+
+    assert not np.isclose(pre_dXdt[1], post_dXdt[1], rtol=1e-8, atol=1e-10)
+    assert not np.allclose(pre_model._lastInterfaceFluxes, post_model._lastInterfaceFluxes, rtol=1e-8, atol=1e-10)
 
 
 def test_moving_boundary_fdm_saving_loading():
@@ -1071,6 +1121,7 @@ def test_moving_boundary_fdm_saving_loading():
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         interfaceUpdate='lee_oh_corrected',
+        fluxGradientMode='pre_diffusion',
         record=True,
     )
     model.solve(0.002, iterator=explicitEulerIterator)
@@ -1088,6 +1139,7 @@ def test_moving_boundary_fdm_saving_loading():
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         interfaceUpdate='lee_oh_corrected',
+        fluxGradientMode='post_diffusion',
         record=True,
     )
     new_model.load(save_path)
@@ -1095,6 +1147,7 @@ def test_moving_boundary_fdm_saving_loading():
     assert_allclose(new_model.data.currentY, model.data.currentY)
     assert_allclose(new_model.getInterfacePosition(), model.getInterfacePosition())
     assert_allclose(new_model.currentTime, model.currentTime)
+    assert new_model.fluxGradientMode == model.fluxGradientMode
     try:
         os.remove(save_path)
     except PermissionError:
