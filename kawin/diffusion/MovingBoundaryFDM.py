@@ -102,10 +102,19 @@ class MovingBoundaryFD1DModel(DiffusionModel):
     The composition field evolves on a fixed ``CartesianFD1D`` grid while the
     planar interface position is tracked as a separate scalar state. Interface
     motion uses an explicit Lee/Oh-style interpolation treatment with either a
-    basic Stefan update or the corrected ``lee_oh_corrected`` update.
+    basic Stefan update or the corrected ``lee_oh_corrected`` update. Bulk
+    nodes away from the interface can use either the legacy ``D c_xx`` update
+    or a flux-form finite-difference update that matches ``CartesianFD1D``.
+    In both modes, the current quadratic near-interface stencil is retained.
 
     Parameters
     ----------
+    bulkUpdateScheme : {"legacy", "flux_form"}
+        Bulk diffusion update used for non-interface nodes. ``"legacy"``
+        reproduces the historical ``D_i * c_xx`` treatment, while
+        ``"flux_form"`` uses the node-centered flux-form discretization from
+        the fixed-grid FDM implementation. This argument is required so that
+        comparisons between the two schemes are explicit.
     fluxGradientMode : {"pre_diffusion", "post_diffusion"}, optional
         Selects which interface gradients are used when computing the
         interfacial fluxes for the Stefan update. ``"pre_diffusion"`` uses
@@ -123,6 +132,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         thermodynamics,
         temperature,
         interfacePosition,
+        bulkUpdateScheme: str,
         constraints=None,
         record=False,
         interfaceUpdate: str = "basic",
@@ -136,6 +146,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         self.pstar = float(pstar)
         self.integrationMode = str(integrationMode)
         self.fluxGradientMode = str(fluxGradientMode)
+        self.bulkUpdateScheme = str(bulkUpdateScheme)
         self._initialInventory = None
         self._currdt = np.inf
         self._lastFluxes = None
@@ -177,6 +188,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             raise ValueError("integrationMode must be one of ['ignore', 'noIgnore', 'weighted'].")
         if self.fluxGradientMode not in {"pre_diffusion", "post_diffusion"}:
             raise ValueError("fluxGradientMode must be one of ['pre_diffusion', 'post_diffusion'].")
+        if self.bulkUpdateScheme not in {"legacy", "flux_form"}:
+            raise ValueError("bulkUpdateScheme must be one of ['legacy', 'flux_form'].")
         if not (0 < self.pstar < 1):
             raise ValueError("pstar must lie strictly between 0 and 1.")
         self._clipInterfacePosition(self.initialInterfacePosition, strict=True)
@@ -201,6 +214,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 "interface_interval": self.interfaceData.recordInterval,
                 "interface_index": self.interfaceData.N,
                 "flux_gradient_mode": self.fluxGradientMode,
+                "bulk_update_scheme": self.bulkUpdateScheme,
             }
         )
         return data
@@ -208,6 +222,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
     def fromDict(self, data):
         super().fromDict(data)
         self.fluxGradientMode = str(data.get("flux_gradient_mode", "post_diffusion"))
+        self.bulkUpdateScheme = str(data["bulk_update_scheme"])
         self.interfaceData.recordInterval = int(data["interface_interval"])
         self.interfaceData.N = int(data["interface_index"])
         self.interfaceData._y = np.array(data["interface_position"], dtype=np.float64)
@@ -304,6 +319,43 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             return 2.0 * (c[-2] - c[-1]) / (self.mesh.dz**2)
         return (c[i + 1] - 2.0 * c[i] + c[i - 1]) / (self.mesh.dz**2)
 
+    def _bulk_dcdt_legacy(self, composition, diffusivity_nodes):
+        '''
+        Returns the legacy bulk-node rate using ``D_i * c_xx`` on the FDM grid.
+        '''
+        c = np.asarray(composition, dtype=np.float64).reshape(-1)
+        d = np.asarray(diffusivity_nodes, dtype=np.float64).reshape(-1)
+        laplacian = np.empty_like(c)
+        laplacian[0] = 2.0 * (c[1] - c[0]) / (self.mesh.dz**2)
+        laplacian[-1] = 2.0 * (c[-2] - c[-1]) / (self.mesh.dz**2)
+        laplacian[1:-1] = (c[2:] - 2.0 * c[1:-1] + c[:-2]) / (self.mesh.dz**2)
+        return d * laplacian
+
+    def _bulk_dcdt_flux_form(self, composition, diffusivity_nodes):
+        '''
+        Returns the flux-form bulk-node rate consistent with ``CartesianFD1D``.
+        '''
+        c = np.asarray(composition, dtype=np.float64).reshape(-1)
+        d = np.asarray(diffusivity_nodes, dtype=np.float64).reshape(-1)
+        pairs = [
+            DiffusionPair(
+                diffusivity=d[:, np.newaxis],
+                response=c[:, np.newaxis],
+                averageFunction=arithmeticMean,
+            )
+        ]
+        return self.mesh.computedXdt(pairs)[:, 0]
+
+    def _bulk_dcdt(self, composition, diffusivity_nodes):
+        '''
+        Returns the selected bulk diffusion operator for non-interface nodes.
+        '''
+        if self.bulkUpdateScheme == "legacy":
+            return self._bulk_dcdt_legacy(composition, diffusivity_nodes)
+        if self.bulkUpdateScheme == "flux_form":
+            return self._bulk_dcdt_flux_form(composition, diffusivity_nodes)
+        raise ValueError("bulkUpdateScheme must be one of ['legacy', 'flux_form'].")
+
     def _update_near_interface_node(self, c_old, c_new, idx, s, side, interface_compositions, diffusivity):
         '''
         Updates an interface-adjacent node using a quadratic interpolation stencil
@@ -377,9 +429,11 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         Computes composition rates and interface velocity for one explicit FDM step
 
         This method contains the shared stepping core for both interface update
-        modes. It performs bulk diffusion away from the interface, reconstructs
-        the ignored node, evaluates one-sided interface gradients, and then
-        applies either the basic or Lee/Oh-corrected interface motion update.
+        modes. It performs the selected bulk-node diffusion update away from
+        the interface, reconstructs the ignored node, evaluates one-sided
+        interface gradients, and then applies either the basic or
+        Lee/Oh-corrected interface motion update. The current quadratic
+        near-interface stencil is retained in both bulk update modes.
         '''
         c_old = np.asarray(xCurr[0], dtype=np.float64).reshape(-1)
         s_old = self._clipInterfacePosition(float(xCurr[1]))
@@ -422,22 +476,43 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             a_last = geom.left_index
             b_first = geom.right_index + 1
 
-        c_new = c_old.copy()
-        for i in range(0, max(-1, a_last) + 1):
-            if i == ignored:
-                continue
-            if i == geom.left_near_index and i >= 1:
-                self._update_near_interface_node(c_old, c_new, i, s_old, "A", (c_left_int, c_right_int), diffusivity_nodes[i])
-            else:
-                c_new[i] = c_old[i] + self._currdt * diffusivity_nodes[i] * self._neumann_laplacian_uniform(c_old, i) ##FIXME: The use of diffusivity_nodes[i] is not strictly correct here. The flux-form discretization should be used inside _neumann_laplacian_uniform(). I'm not sure yet how to handle this for _update_near_interface_node()
+        bulk_dcdt = self._bulk_dcdt(c_old, diffusivity_nodes)
+        bulk_mask = np.zeros(len(c_old), dtype=bool)
+        if a_last >= 0:
+            bulk_mask[: a_last + 1] = True
+        if b_first < len(c_old):
+            bulk_mask[b_first:] = True
+        bulk_mask[ignored] = False
 
-        for i in range(max(0, b_first), len(c_old)):
-            if i == ignored:
-                continue
-            if i == geom.right_near_index and i + 1 < len(c_old):
-                self._update_near_interface_node(c_old, c_new, i, s_old, "B", (c_left_int, c_right_int), diffusivity_nodes[i])
-            else:
-                c_new[i] = c_old[i] + self._currdt * diffusivity_nodes[i] * self._neumann_laplacian_uniform(c_old, i) ##FIXME: The use of diffusivity_nodes[i] is not strictly correct here. The flux-form discretization should be used inside _neumann_laplacian_uniform(). I'm not sure yet how to handle this for _update_near_interface_node()
+        left_near_active = geom.left_near_index >= 1 and geom.left_near_index <= a_last
+        right_near_active = geom.right_near_index + 1 < len(c_old) and geom.right_near_index >= b_first
+        if left_near_active:
+            bulk_mask[geom.left_near_index] = False
+        if right_near_active:
+            bulk_mask[geom.right_near_index] = False
+
+        c_new = c_old.copy()
+        c_new[bulk_mask] = c_old[bulk_mask] + self._currdt * bulk_dcdt[bulk_mask]
+        if left_near_active:
+            self._update_near_interface_node(
+                c_old,
+                c_new,
+                geom.left_near_index,
+                s_old,
+                "A",
+                (c_left_int, c_right_int),
+                diffusivity_nodes[geom.left_near_index],
+            )
+        if right_near_active:
+            self._update_near_interface_node(
+                c_old,
+                c_new,
+                geom.right_near_index,
+                s_old,
+                "B",
+                (c_left_int, c_right_int),
+                diffusivity_nodes[geom.right_near_index],
+            )
 
         c_stage = np.asarray(
             interpolate_previous_ignored_composition(
@@ -491,6 +566,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             raise ValueError("MovingBoundaryFD1DModel produced a non-finite interface increment.")
         max_fraction = max(max_fraction, 1e-12)
         if requested_fraction > max_fraction:
+            print(f"(max_fraction, requested_fraction): {(max_fraction, requested_fraction)}")
             raise ValueError("MovingBoundaryFD1DModel requested_fraction is greater than max_fraction") #ds = np.sign(ds) * 0.95 * max_fraction * self.mesh.dz
             velocity = ds / self._currdt if self._currdt > 0 else 0.0
 
