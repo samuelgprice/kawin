@@ -1250,8 +1250,8 @@ def test_moving_boundary_fdm_bulk_update_scheme_matches_for_constant_diffusivity
     legacy_positions = np.array(legacy.interfaceData._y[: legacy.interfaceData.N + 1], dtype=np.float64)
     flux_positions = np.array(flux_form.interfaceData._y[: flux_form.interfaceData.N + 1], dtype=np.float64)
 
-    assert_allclose(flux_times, legacy_times, rtol=0, atol=0)
-    assert_allclose(flux_positions, legacy_positions, rtol=0, atol=0)
+    assert_allclose(flux_times, legacy_times, rtol=0, atol=1e-17) ##These were exactly equal when flux-form was used for bulk. Then when flux_form was used for near-interface they are different because different order of operations gives different round-off errors
+    assert_allclose(flux_positions, legacy_positions, rtol=0, atol=1e-15)
 
 
 def test_moving_boundary_fdm_flux_form_uses_variable_diffusivity_bulk_update():
@@ -1366,28 +1366,254 @@ def test_moving_boundary_fdm_bulk_update_switch_only_changes_ordinary_bulk_nodes
     )[0]
 
     assert_allclose(
-        flux_dXdt[0][geom.left_near_index, 0],
-        legacy_dXdt[0][geom.left_near_index, 0],
-        rtol=1e-12,
-        atol=1e-12,
-    )
-    if geom.right_near_index + 1 < flux_form.mesh.N:
-        assert_allclose(
-            flux_dXdt[0][geom.right_near_index, 0],
-            legacy_dXdt[0][geom.right_near_index, 0],
-            rtol=1e-12,
-            atol=1e-12,
-        )
-    assert_allclose(
         flux_form.data.currentY[geom.ignored_index, 0],
         legacy.data.currentY[geom.ignored_index, 0],
         rtol=0,
         atol=0,
     )
     differing_bulk = np.where(np.abs(flux_dXdt[0][:, 0] - legacy_dXdt[0][:, 0]) > 1e-12)[0]
-    assert geom.ignored_index not in differing_bulk
-    assert geom.left_near_index not in differing_bulk
-    assert geom.right_near_index not in differing_bulk
+    assert geom.left_near_index in differing_bulk
+    assert geom.right_near_index in differing_bulk
+
+
+def test_moving_boundary_fdm_flux_form_matches_legacy_at_left_near_node_for_constant_diffusivity():
+    interfacePosition = 0.515
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
+        interface_compositions=(0.3, 0.7),
+    )
+
+    mesh_legacy = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh_legacy.setResponseProfile(profile)
+    legacy = MovingBoundaryFD1DModel(
+        mesh_legacy,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        record=True,
+    )
+
+    mesh_flux = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh_flux.setResponseProfile(profile)
+    flux_form = MovingBoundaryFD1DModel(
+        mesh_flux,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='flux_form',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        record=True,
+    )
+
+    legacy_dXdt = legacy.getdXdt(legacy.currentTime, legacy.getCurrentX())
+    flux_dXdt = flux_form.getdXdt(flux_form.currentTime, flux_form.getCurrentX())
+    geom = flux_form._getInterfaceState(
+        flux_form.currentTime,
+        np.asarray(flux_form.getCurrentX()[0], dtype=np.float64).reshape(-1),
+        float(flux_form.getCurrentX()[1]),
+    )[0]
+    assert geom.p < flux_form.pstar
+    assert_allclose(
+        flux_dXdt[0][geom.left_near_index, 0],
+        legacy_dXdt[0][geom.left_near_index, 0],
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    assert_allclose(flux_dXdt[1], legacy_dXdt[1], rtol=1e-12, atol=1e-12)
+
+    legacy.solve(0.002, iterator=explicitEulerIterator)
+    flux_form.solve(0.002, iterator=explicitEulerIterator)
+    assert_allclose(flux_form.interfaceData._time[: flux_form.interfaceData.N + 1], legacy.interfaceData._time[: legacy.interfaceData.N + 1], rtol=0, atol=0)
+    assert_allclose(flux_form.interfaceData._y[: flux_form.interfaceData.N + 1], legacy.interfaceData._y[: legacy.interfaceData.N + 1], rtol=0, atol=0)
+
+
+def test_moving_boundary_fdm_flux_form_matches_legacy_at_right_near_node_for_constant_diffusivity():
+    interfacePosition = 0.585
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
+        interface_compositions=(0.3, 0.7),
+    )
+
+    mesh_legacy = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh_legacy.setResponseProfile(profile)
+    legacy = MovingBoundaryFD1DModel(
+        mesh_legacy,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        record=True,
+    )
+
+    mesh_flux = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh_flux.setResponseProfile(profile)
+    flux_form = MovingBoundaryFD1DModel(
+        mesh_flux,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='flux_form',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        record=True,
+    )
+
+    legacy_dXdt = legacy.getdXdt(legacy.currentTime, legacy.getCurrentX())
+    flux_dXdt = flux_form.getdXdt(flux_form.currentTime, flux_form.getCurrentX())
+    geom = flux_form._getInterfaceState(
+        flux_form.currentTime,
+        np.asarray(flux_form.getCurrentX()[0], dtype=np.float64).reshape(-1),
+        float(flux_form.getCurrentX()[1]),
+    )[0]
+    assert geom.p >= flux_form.pstar
+    assert_allclose(
+        flux_dXdt[0][geom.right_near_index, 0],
+        legacy_dXdt[0][geom.right_near_index, 0],
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    assert_allclose(flux_dXdt[1], legacy_dXdt[1], rtol=1e-12, atol=1e-12)
+
+    legacy.solve(0.002, iterator=explicitEulerIterator)
+    flux_form.solve(0.002, iterator=explicitEulerIterator)
+    assert_allclose(flux_form.interfaceData._time[: flux_form.interfaceData.N + 1], legacy.interfaceData._time[: legacy.interfaceData.N + 1], rtol=0, atol=1e-18)
+    assert_allclose(flux_form.interfaceData._y[: flux_form.interfaceData.N + 1], legacy.interfaceData._y[: legacy.interfaceData.N + 1], rtol=0, atol=1e-18)
+
+
+def test_moving_boundary_fdm_flux_form_left_near_node_matches_cut_cell_formula():
+    interfacePosition = 0.515
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    therm = VariableBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
+        interface_compositions=(0.3, 0.7),
+    )
+
+    mesh_legacy = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh_legacy.setResponseProfile(profile)
+    legacy = MovingBoundaryFD1DModel(
+        mesh_legacy,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+    )
+    legacy.setup()
+
+    mesh_flux = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh_flux.setResponseProfile(profile)
+    flux_form = MovingBoundaryFD1DModel(
+        mesh_flux,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='flux_form',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+    )
+    flux_form.setup()
+
+    c_old = np.asarray(flux_form.getCurrentX()[0], dtype=np.float64).reshape(-1)
+    s_old = float(flux_form.getCurrentX()[1])
+    geom, _, c_left_int, c_right_int, D_left_int, D_right_int = flux_form._getInterfaceState(flux_form.currentTime, c_old, s_old)
+    diffusivity_nodes = flux_form._bulk_diffusivity_nodes(c_old, flux_form.currentTime, geom)
+    flux_dXdt = flux_form.getdXdt(flux_form.currentTime, flux_form.getCurrentX())
+    legacy_dXdt = legacy.getdXdt(legacy.currentTime, legacy.getCurrentX())
+    idx, expected = flux_form._near_interface_dcdt_flux_form(
+        c_old,
+        diffusivity_nodes,
+        geom,
+        "A",
+        (c_left_int, c_right_int),
+        (D_left_int, D_right_int),
+    )
+
+    assert idx == geom.left_near_index
+    assert_allclose(flux_dXdt[0][idx, 0], expected, rtol=1e-12, atol=1e-12)
+    assert not np.isclose(flux_dXdt[0][idx, 0], legacy_dXdt[0][idx, 0], rtol=1e-10, atol=1e-12)
+
+
+def test_moving_boundary_fdm_flux_form_right_near_node_matches_cut_cell_formula():
+    interfacePosition = 0.565
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    therm = VariableBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
+        interface_compositions=(0.3, 0.7),
+    )
+
+    mesh_legacy = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh_legacy.setResponseProfile(profile)
+    legacy = MovingBoundaryFD1DModel(
+        mesh_legacy,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+    )
+    legacy.setup()
+
+    mesh_flux = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh_flux.setResponseProfile(profile)
+    flux_form = MovingBoundaryFD1DModel(
+        mesh_flux,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='flux_form',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+    )
+    flux_form.setup()
+
+    c_old = np.asarray(flux_form.getCurrentX()[0], dtype=np.float64).reshape(-1)
+    s_old = float(flux_form.getCurrentX()[1])
+    geom, _, c_left_int, c_right_int, D_left_int, D_right_int = flux_form._getInterfaceState(flux_form.currentTime, c_old, s_old)
+    diffusivity_nodes = flux_form._bulk_diffusivity_nodes(c_old, flux_form.currentTime, geom)
+    flux_dXdt = flux_form.getdXdt(flux_form.currentTime, flux_form.getCurrentX())
+    legacy_dXdt = legacy.getdXdt(legacy.currentTime, legacy.getCurrentX())
+    idx, expected = flux_form._near_interface_dcdt_flux_form(
+        c_old,
+        diffusivity_nodes,
+        geom,
+        "B",
+        (c_left_int, c_right_int),
+        (D_left_int, D_right_int),
+    )
+
+    assert idx == geom.right_near_index
+    assert_allclose(flux_dXdt[0][idx, 0], expected, rtol=1e-12, atol=1e-12)
+    assert not np.isclose(flux_dXdt[0][idx, 0], legacy_dXdt[0][idx, 0], rtol=1e-10, atol=1e-12)
 
 
 def test_moving_boundary_dXdt():

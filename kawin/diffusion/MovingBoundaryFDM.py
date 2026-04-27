@@ -105,7 +105,9 @@ class MovingBoundaryFD1DModel(DiffusionModel):
     basic Stefan update or the corrected ``lee_oh_corrected`` update. Bulk
     nodes away from the interface can use either the legacy ``D c_xx`` update
     or a flux-form finite-difference update that matches ``CartesianFD1D``.
-    In both modes, the current quadratic near-interface stencil is retained.
+    In ``flux_form`` mode, the near-interface nodes also use conservative
+    cut-cell balances. In ``legacy`` mode, they retain the historical
+    quadratic ``D_i * c_xx`` update.
 
     Parameters
     ----------
@@ -358,7 +360,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
 
     def _update_near_interface_node(self, c_old, c_new, idx, s, side, interface_compositions, diffusivity):
         '''
-        Updates an interface-adjacent node using a quadratic interpolation stencil
+        Updates an interface-adjacent node using the legacy quadratic stencil.
         '''
         z = np.ravel(self.mesh.z)
         if side == "A":
@@ -369,6 +371,59 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             yq = np.array([interface_compositions[1], c_old[idx], c_old[idx + 1]], dtype=np.float64)
         _, d2 = quad_fit_derivs(xq, yq, z[idx])
         c_new[idx] = c_old[idx] + self._currdt * diffusivity * d2
+
+    def _near_interface_dcdt_flux_form(
+        self,
+        composition,
+        diffusivity_nodes,
+        geometry,
+        side,
+        interface_compositions,
+        interface_diffusivities,
+    ):
+        '''
+        Returns a conservative cut-cell update for one near-interface node.
+
+        The node-centered FDM is interpreted on the dual mesh. Near the moving
+        interface, the dual cell is truncated on one side, so the update is the
+        divergence of one bulk face flux and one cut-face flux divided by the
+        asymmetric dual-cell width.
+        '''
+        c = np.asarray(composition, dtype=np.float64).reshape(-1)
+        d = np.asarray(diffusivity_nodes, dtype=np.float64).reshape(-1)
+        z = np.ravel(self.mesh.z)
+        h = float(self.mesh.dz)
+        avg = lambda a, b: float(np.asarray(arithmeticMean([a, b]), dtype=np.float64))
+
+        if side == "A":
+            idx = int(geometry.left_near_index)
+            if idx < 1:
+                raise ValueError("Left near-interface flux-form update requires a left neighbor.")
+            dA = float(geometry.interface_position - z[idx])
+            if dA <= 0:
+                raise ValueError("Left near-interface distance must be positive.")
+            D_AL = avg(d[idx - 1], d[idx])
+            D_AR = avg(d[idx], interface_diffusivities[0])
+            J_AL = -D_AL * (c[idx] - c[idx - 1]) / h
+            J_AR = -D_AR * (interface_compositions[0] - c[idx]) / dA
+            deltaA = 0.5 * (h + dA)
+            return idx, float(-(J_AR - J_AL) / deltaA)
+
+        if side == "B":
+            idx = int(geometry.right_near_index)
+            if idx + 1 >= len(c):
+                raise ValueError("Right near-interface flux-form update requires a right neighbor.")
+            dB = float(z[idx] - geometry.interface_position)
+            if dB <= 0:
+                raise ValueError("Right near-interface distance must be positive.")
+            D_BL = avg(interface_diffusivities[1], d[idx])
+            D_BR = avg(d[idx], d[idx + 1])
+            J_BL = -D_BL * (c[idx] - interface_compositions[1]) / dB
+            J_BR = -D_BR * (c[idx + 1] - c[idx]) / h
+            deltaB = 0.5 * (dB + h)
+            return idx, float(-(J_BR - J_BL) / deltaB)
+
+        raise ValueError("side must be 'A' or 'B'.")
 
     def _interface_gradients(self, composition, interface_position, interface_compositions):
         '''
@@ -432,8 +487,9 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         modes. It performs the selected bulk-node diffusion update away from
         the interface, reconstructs the ignored node, evaluates one-sided
         interface gradients, and then applies either the basic or
-        Lee/Oh-corrected interface motion update. The current quadratic
-        near-interface stencil is retained in both bulk update modes.
+        Lee/Oh-corrected interface motion update. In ``flux_form`` mode, the
+        near-interface nodes use conservative cut-cell balances. In
+        ``legacy`` mode, they retain the quadratic ``D_i * c_xx`` stencil.
         '''
         c_old = np.asarray(xCurr[0], dtype=np.float64).reshape(-1)
         s_old = self._clipInterfacePosition(float(xCurr[1]))
@@ -494,25 +550,47 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         c_new = c_old.copy()
         c_new[bulk_mask] = c_old[bulk_mask] + self._currdt * bulk_dcdt[bulk_mask]
         if left_near_active:
-            self._update_near_interface_node(
-                c_old,
-                c_new,
-                geom.left_near_index,
-                s_old,
-                "A",
-                (c_left_int, c_right_int),
-                diffusivity_nodes[geom.left_near_index],
-            )
+            if self.bulkUpdateScheme == "legacy":
+                self._update_near_interface_node(
+                    c_old,
+                    c_new,
+                    geom.left_near_index,
+                    s_old,
+                    "A",
+                    (c_left_int, c_right_int),
+                    diffusivity_nodes[geom.left_near_index],
+                )
+            else:
+                idx, dcdt_left = self._near_interface_dcdt_flux_form(
+                    c_old,
+                    diffusivity_nodes,
+                    geom,
+                    "A",
+                    (c_left_int, c_right_int),
+                    (D_left_int, D_right_int),
+                )
+                c_new[idx] = c_old[idx] + self._currdt * dcdt_left
         if right_near_active:
-            self._update_near_interface_node(
-                c_old,
-                c_new,
-                geom.right_near_index,
-                s_old,
-                "B",
-                (c_left_int, c_right_int),
-                diffusivity_nodes[geom.right_near_index],
-            )
+            if self.bulkUpdateScheme == "legacy":
+                self._update_near_interface_node(
+                    c_old,
+                    c_new,
+                    geom.right_near_index,
+                    s_old,
+                    "B",
+                    (c_left_int, c_right_int),
+                    diffusivity_nodes[geom.right_near_index],
+                )
+            else:
+                idx, dcdt_right = self._near_interface_dcdt_flux_form(
+                    c_old,
+                    diffusivity_nodes,
+                    geom,
+                    "B",
+                    (c_left_int, c_right_int),
+                    (D_left_int, D_right_int),
+                )
+                c_new[idx] = c_old[idx] + self._currdt * dcdt_right
 
         c_stage = np.asarray(
             interpolate_previous_ignored_composition(

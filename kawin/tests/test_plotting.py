@@ -537,7 +537,7 @@ def test_moving_boundary_fdm_analytic_comparison_plot():
     # ax.set_ylim(-0.007, 0.0015)
     # ax.set_xlim(0, 0.012)
     ax.legend()
-    plt.show()
+    plt.show(block=False)
     
     idealized_mass_funcOfStartingInterfacePosition = lambda startingInterfacePosition: (c_a0 * startingInterfacePosition) + (c_b0 * (L - startingInterfacePosition))
     idealized_mass = idealized_mass_funcOfStartingInterfacePosition(interface_position)
