@@ -166,7 +166,7 @@ def solve_beta(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b):
 l_a = 374.5
 l_b = 190.5
 L= l_a + l_b
-N=80
+N=100
 interface_position = l_a
 c_a_eq = 0.325
 c_b_eq = 0.369
@@ -408,9 +408,13 @@ def run_cached_case(case_overrides=None):
             case_model.load(case_save_path)
             print(f"Loaded {model_config['cache_label']} from cache: {case_save_path.name}")
         else:
-            case_model.solve(config['t_end'], iterator=explicitEulerIterator, vIt=vIt_input, verbose=verbose_input)
-            case_model.save(case_save_path)
-            print(f"Saved {model_config['cache_label']} to cache: {case_save_path.name}")
+            try:
+                case_model.solve(config['t_end'], iterator=explicitEulerIterator, vIt=vIt_input, verbose=verbose_input)
+                case_model.save(case_save_path)
+                print(f"Saved {model_config['cache_label']} to cache: {case_save_path.name}")
+            except Exception as e:
+                print(f"Error running {model_config['cache_label']}: {e}")
+                continue
 
         time_arr = np.array(case_model.interfaceData._time[:case_model.interfaceData.N+1], dtype=np.float64)
         position_arr = np.array(case_model.interfaceData._y[:case_model.interfaceData.N+1], dtype=np.float64)
@@ -811,7 +815,17 @@ parameterSweepConfigs = [
     {'N': 100, 'movingBoundaryThreshold': 0.3},
     {'N': 150, 'movingBoundaryThreshold': 0.3},
     {'N': 100, 'movingBoundaryThreshold': 0.25},
+    {'N': 100, 'movingBoundaryThreshold': 0.25, 'fluxGradientMode':'pre_diffusion'},
     {'N': 100, 'movingBoundaryThreshold': 0.4},
+    {'N': 100, 'movingBoundaryThreshold': 0.4, 'pstar':0.45},
+    # {'N': 100, 'movingBoundaryThreshold': 0.4, 'pstar':0.1},
+    {'N': 100, 'movingBoundaryThreshold': 0.25, 'pstar':0.45},
+    # {'N': 100, 'movingBoundaryThreshold': 0.25, 'pstar':0.7},
+    # {'N': 100, 'movingBoundaryThreshold': 0.4, 'pstar':0.7},
+    # {'N': 150, 'movingBoundaryThreshold': 0.4, 'pstar':0.1},
+    # {'N': 150, 'movingBoundaryThreshold': 0.4, 'pstar':0.3},
+    {'N': 100, 'movingBoundaryThreshold': 0.2},
+    {'N': 100, 'movingBoundaryThreshold': 0.15},
     {'N': 150, 'movingBoundaryThreshold': 0.4},
     {'N': 175, 'movingBoundaryThreshold': 0.4},
     {'N': 200, 'movingBoundaryThreshold': 0.4},
@@ -838,6 +852,21 @@ fig8_presentMethod_df.plot(x='t', y='normalized_thickness', ax=ax4, label='Lee a
 figure8_presentMethod_oldExtract_df = pd.read_csv(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\finiteDifference\LeeAndOh_figure8_presentMethod.csv", low_memory=False, names=['t', 'normalized_thickness'])
 figure8_presentMethod_oldExtract_df = figure8_presentMethod_oldExtract_df.sort_values(by=['t'])
 figure8_presentMethod_oldExtract_df.plot(x='t', y='normalized_thickness', ax=ax4, label='Lee and Oh 1996 Fig. 8 Present Method Curve (OLD EXTRACTION)', color='dimgray', zorder=-1)
+fig4_mass_summary_lines = [f"Idealized mass: {idealized_mass:.12g}"]
+for model_name, model_obj, _, _, _, _ in selected_models:
+    fig4_mass_summary_lines.append(
+        f"{model_name}: init={model_obj._initialInventory:.12g}, current={model_obj.getTotalMass():.12g}"
+    )
+ax4.text(
+    0.02,
+    0.98,
+    '\n'.join(fig4_mass_summary_lines),
+    transform=ax4.transAxes,
+    va='top',
+    ha='left',
+    fontsize=8,
+    bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.85, 'edgecolor': '0.7'},
+)
 
 ax4.legend()
 ax4.set_xscale('log')
