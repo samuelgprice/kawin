@@ -11,7 +11,7 @@ from kawin.diffusion.mesh import get_moving_boundary_fd_geometry
 from kawin.diffusion.mesh.MovingBoundaryFD1D import quad_fit_derivs
 from kawin.diffusion.DiffusionParameters import computeMobility, _computeSingleMobility, TemperatureParameters, HashTable
 from kawin.diffusion.HomogenizationParameters import HomogenizationParameters, computeHomogenizationFunction
-from kawin.thermo import GeneralThermodynamics
+from kawin.thermo import GeneralThermodynamics, MulticomponentThermodynamics
 from kawin.tests.datasets import *
 from kawin.solver import explicitEulerIterator
 
@@ -47,6 +47,52 @@ class VariableBinaryThermodynamics(ConstantBinaryThermodynamics):
         composition = np.asarray(x, dtype=np.float64)
         base = float(self.diffusivities[phase])
         return np.squeeze(base * (1.0 + 0.5 * composition))
+
+
+class MockTernaryTieLineThermodynamics:
+    def __init__(self, phases, left_probe, right_probe):
+        self.phases = phases
+        self.left_probe = np.asarray(left_probe, dtype=np.float64)
+        self.right_probe = np.asarray(right_probe, dtype=np.float64)
+        self.probe_direction = self.right_probe - self.left_probe
+        self.base_left = np.array([0.29, 0.0565], dtype=np.float64)
+        self.base_right = np.array([0.185, 0.12475], dtype=np.float64)
+        self.left_slope = np.array([-0.04, 0.01], dtype=np.float64)
+        self.right_slope = np.array([0.03, 0.04], dtype=np.float64)
+        self.diffusivities = {
+            phases[0]: 0.8 * np.eye(2, dtype=np.float64),
+            phases[1]: 0.4 * np.eye(2, dtype=np.float64),
+        }
+
+    def clearCache(self):
+        return
+
+    def _lambda_from_probe(self, x):
+        probe = np.asarray(x, dtype=np.float64).reshape(-1)
+        denom = float(np.dot(self.probe_direction, self.probe_direction))
+        lam = 0.0 if denom == 0 else float(np.dot(probe - self.left_probe, self.probe_direction) / denom)
+        return float(np.clip(lam, 0.0, 1.0))
+
+    def _interface_from_lambda(self, lam):
+        effective_lam = lam + 0.1
+        left = self.base_left + effective_lam * self.left_slope
+        right = self.base_right + effective_lam * self.right_slope
+        return left, right
+
+    def getInterfacialComposition(self, x, T, gExtra=0, precPhase=None):
+        values = np.asarray(x, dtype=np.float64)
+        if values.ndim == 1:
+            return self._interface_from_lambda(self._lambda_from_probe(values))
+        pairs = [self._interface_from_lambda(self._lambda_from_probe(v)) for v in values]
+        left, right = zip(*pairs)
+        return np.asarray(left, dtype=np.float64), np.asarray(right, dtype=np.float64)
+
+    def getInterdiffusivity(self, x, T, removeCache=True, phase=None):
+        values = np.asarray(x, dtype=np.float64)
+        base = np.asarray(self.diffusivities[phase], dtype=np.float64)
+        if values.ndim == 1:
+            return base
+        return np.tile(base, (len(values), 1, 1))
 
 def test_compositionInput():
     '''
@@ -1614,6 +1660,152 @@ def test_moving_boundary_fdm_flux_form_right_near_node_matches_cut_cell_formula(
     assert idx == geom.right_near_index
     assert_allclose(flux_dXdt[0][idx, 0], expected, rtol=1e-12, atol=1e-12)
     assert not np.isclose(flux_dXdt[0][idx, 0], legacy_dXdt[0][idx, 0], rtol=1e-10, atol=1e-12)
+
+
+def _make_mock_ternary_moving_boundary_model(interface_update="basic", balance_element=None, record=False):
+    interface_position = 0.515
+    left_comp = np.array([0.30, 0.05], dtype=np.float64)
+    right_comp = np.array([0.10, 0.18], dtype=np.float64)
+    profile = ProfileBuilder(
+        [
+            (StepProfile1D(interface_position, left_comp[0], right_comp[0]), 'CR'),
+            (StepProfile1D(interface_position, left_comp[1], right_comp[1]), 'NI'),
+        ]
+    )
+    mesh = CartesianFD1D(['CR', 'NI'], [0, 1], 41)
+    mesh.setResponseProfile(profile)
+    therm = MockTernaryTieLineThermodynamics(['ALPHA', 'BETA'], left_probe=left_comp, right_probe=right_comp)
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR', 'NI'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interface_position,
+        bulkUpdateScheme='flux_form',
+        integrationMode='weighted',
+        interfaceUpdate=interface_update,
+        fluxGradientMode='pre_diffusion',
+        balanceElement=balance_element,
+        record=record,
+    )
+    model.setup()
+    return model
+
+
+def test_moving_boundary_fdm_ternary_requires_balance_element_for_corrected_mode():
+    with pytest.raises(ValueError, match="balanceElement"):
+        _make_mock_ternary_moving_boundary_model(interface_update="lee_oh_corrected")
+
+
+def test_moving_boundary_fdm_ternary_rejects_invalid_balance_element():
+    with pytest.raises(ValueError, match="balanceElement"):
+        _make_mock_ternary_moving_boundary_model(interface_update="lee_oh_corrected", balance_element="AL")
+
+
+def test_moving_boundary_fdm_ternary_interface_state_matches_component_velocities():
+    model = _make_mock_ternary_moving_boundary_model(interface_update="basic")
+    x_curr = model.getCurrentX()
+    composition = np.asarray(x_curr[0], dtype=np.float64)
+    interface_position = float(x_curr[1])
+
+    state = model._solveMulticomponentInterfaceState(model.currentTime, composition, interface_position)
+    dXdt = model.getdXdt(model.currentTime, x_curr)
+    fluxes = model.getFluxes(model.currentTime, x_curr)
+
+    assert state["interface_compositions"][0].shape == (2,)
+    assert state["interface_compositions"][1].shape == (2,)
+    assert state["interface_diffusivities"][0].shape == (2, 2)
+    assert state["interface_diffusivities"][1].shape == (2, 2)
+    assert abs(state["component_velocities"][0] - state["component_velocities"][1]) <= state["tolerance"]
+    assert dXdt[0].shape == (41, 2)
+    assert fluxes.shape == (42, 2)
+    assert np.isfinite(dXdt[1])
+    assert np.all(np.isfinite(model.getTotalInventory()))
+
+
+def test_moving_boundary_fdm_ternary_balance_element_changes_corrected_trajectory():
+    basic = _make_mock_ternary_moving_boundary_model(interface_update="basic", record=True)
+    corrected_cr = _make_mock_ternary_moving_boundary_model(interface_update="lee_oh_corrected", balance_element="CR", record=True)
+    corrected_ni = _make_mock_ternary_moving_boundary_model(interface_update="lee_oh_corrected", balance_element="NI", record=True)
+
+    basic.solve(5e-5, iterator=explicitEulerIterator)
+    corrected_cr.solve(5e-5, iterator=explicitEulerIterator)
+    corrected_ni.solve(5e-5, iterator=explicitEulerIterator)
+
+    basic_residual = np.abs(basic.getTotalInventory() - basic._initialInventory)
+    corrected_cr_residual = np.abs(corrected_cr.getTotalInventory() - corrected_cr._initialInventory)
+    corrected_ni_residual = np.abs(corrected_ni.getTotalInventory() - corrected_ni._initialInventory)
+
+    assert corrected_cr_residual[0] <= basic_residual[0] + 1e-10
+    assert corrected_ni_residual[1] <= basic_residual[1] + 1e-10
+    assert abs(corrected_cr.getInterfacePosition() - corrected_ni.getInterfacePosition()) > 1e-10
+
+
+def test_moving_boundary_fdm_ternary_saving_loading_preserves_balance_element():
+    model = _make_mock_ternary_moving_boundary_model(
+        interface_update="lee_oh_corrected",
+        balance_element="CR",
+        record=True,
+    )
+    model.solve(5e-5, iterator=explicitEulerIterator)
+    os.makedirs('.pytest_tmp', exist_ok=True)
+    save_path = os.path.join('.pytest_tmp', f'moving_boundary_fdm_ternary_{os.getpid()}.npz')
+    model.save(save_path)
+
+    new_model = _make_mock_ternary_moving_boundary_model(
+        interface_update="lee_oh_corrected",
+        balance_element="CR",
+        record=True,
+    )
+    new_model.load(save_path)
+
+    assert new_model.balanceElement == "CR"
+    assert_allclose(new_model.data.currentY, model.data.currentY)
+    assert_allclose(new_model.getInterfacePosition(), model.getInterfacePosition())
+    assert_allclose(new_model.getTotalInventory(), model.getTotalInventory())
+    try:
+        os.remove(save_path)
+    except PermissionError:
+        pass
+
+
+def test_moving_boundary_fdm_ternary_real_thermo_smoke():
+    interface_position = 15.25
+    profile = ProfileBuilder(
+        [
+            (StepProfile1D(interface_position, 0.30, 0.26), 'CR'),
+            (StepProfile1D(interface_position, 0.085, 0.0575), 'NI'),
+        ]
+    )
+    mesh = CartesianFD1D(['CR', 'NI'], [0, 30], 61)
+    mesh.setResponseProfile(profile)
+    therm = MulticomponentThermodynamics(FECRNI_DB, ['FE', 'CR', 'NI'], ['FCC_A1', 'BCC_A2'])
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR', 'NI'],
+        ['FCC_A1', 'BCC_A2'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1373),
+        interfacePosition=interface_position,
+        bulkUpdateScheme='flux_form',
+        integrationMode='weighted',
+        interfaceUpdate='basic',
+        balanceElement='CR',
+        fluxGradientMode='pre_diffusion',
+    )
+    model.setup()
+
+    dXdt = model.getdXdt(model.currentTime, model.getCurrentX())
+    fluxes = model.getFluxes(model.currentTime, model.getCurrentX())
+    interface_compositions = model.getInterfaceCompositions()
+
+    assert dXdt[0].shape == (61, 2)
+    assert fluxes.shape == (62, 2)
+    assert np.isfinite(dXdt[1])
+    assert np.all(np.isfinite(interface_compositions[0]))
+    assert np.all(np.isfinite(interface_compositions[1]))
+    assert np.all(np.isfinite(model.getTotalInventory()))
 
 
 def test_moving_boundary_dXdt():
