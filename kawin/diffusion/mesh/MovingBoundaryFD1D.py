@@ -106,13 +106,39 @@ def _geometry_from_z(z, interface_position: float, pstar: float) -> MovingBounda
     left_index = right_index - 1
     if left_index < 0 or right_index >= len(z):
         raise ValueError("Interface position must lie between two adjacent nodes.")
+    
 
+    
     dx = float(z[1] - z[0])
     p = float((interface_position - z[left_index]) / dx)
     p = float(np.clip(p, 0.0, 1.0))
+
+    if p < pstar:
+        i1, i2 = left_index - 2, left_index - 1
+        j1, j2 = right_index, right_index + 1
+    else:
+        i1, i2 = left_index - 1, left_index
+        j1, j2 = right_index + 1, right_index + 2
+    minIndx=0; maxIndx=len(z)-1
+    validIndx = lambda i: i>=minIndx and i<=maxIndx
+    # if (validIndx(left_index-2)!=True) or (validIndx(left_index+3)!=True):
+    # if (i1<0) or (i2<0) or (j1>(len(z)-1)) or (j2>(len(z)-1)):
+    if all([validIndx(i) for i in [i1, i2, j1, j2]])!=True:
+        try:
+            import debugpy
+            # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+            debugpy.listen(5678)
+            print("Waiting for debugger attach")
+            debugpy.wait_for_client()
+            debugpy.breakpoint()
+            print('break on this line')
+        except:
+            pass
+        # raise ValueError("Interface position is too close to the domain boundary.")
+
     ignored_index = left_index if p < pstar else right_index
-    left_near_index = max(0, left_index - 1) if p < pstar else left_index
-    right_near_index = right_index if p < pstar else min(right_index + 1, len(z) - 1)
+    left_near_index = left_index - 1 if p < pstar else left_index # left_near_index = max(0, left_index - 1) if p < pstar else left_index
+    right_near_index = right_index if p < pstar else right_index + 1 # right_near_index = right_index if p < pstar else min(right_index + 1, len(z) - 1)
     return MovingBoundaryFDGeometry(
         left_index=left_index,
         right_index=right_index,
@@ -209,8 +235,10 @@ def interpolate_previous_ignored_composition(z, composition, s_old, p_old, s_new
                 xi=[z[geom_new.left_index - 2], z[geom_new.left_index - 1], s_new],
                 yi=[c[geom_new.left_index - 2], c[geom_new.left_index - 1], interface_compositions[0]],
             )
-        elif geom_new.left_index >= 0:
+        elif geom_new.left_index - 1 >= 0:
             c[index] = c[geom_new.left_index - 1] + (interface_compositions[0] - c[geom_new.left_index - 1]) / (geom_new.p + 1.0)
+        else:
+            raise ValueError(f"geom_new.left_index ({geom_new.left_index}) is too close to the left boundary to reconstruct the ignored node composition.")
     else:
         if index != geom_new.right_index:
             raise ValueError("Unexpected geometry change: ignored node moved more than one position to the right.")
@@ -221,8 +249,10 @@ def interpolate_previous_ignored_composition(z, composition, s_old, p_old, s_new
                 xi=[s_new, z[geom_new.right_index + 1], z[geom_new.right_index + 2]],
                 yi=[interface_compositions[1], c[geom_new.right_index + 1], c[geom_new.right_index + 2]],
             )
-        elif geom_new.right_index < len(z):
+        elif geom_new.right_index + 1 < len(z):
             c[index] = c[geom_new.right_index + 1] - (c[geom_new.right_index + 1] - interface_compositions[1]) / (2.0 - geom_new.p)
+        else:
+            raise ValueError(f"geom_new.right_index ({geom_new.right_index}) is too close to the right boundary to reconstruct the ignored node composition.")
     return c
 
 
@@ -251,7 +281,7 @@ def integrate_binary_fd_profile(
     pstar,
     interface_compositions,
     integration_mode="weighted",
-    s_for_interp="new",
+    s_for_interp='none',
 ):
     """
     Integrates a binary FDM composition profile that contains a sharp interface.

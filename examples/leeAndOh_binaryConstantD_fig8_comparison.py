@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import math
 import hashlib
 import json
+from matplotlib.patches import Rectangle
 from scipy import optimize
 import pathlib
 
@@ -53,7 +54,7 @@ class ConstantBinaryThermodynamics:
         return np.squeeze(left), np.squeeze(right)
 
 
-MODEL_CACHE_VERSION = "v1"
+MODEL_CACHE_VERSION = "idealizedMass"
 
 
 def _normalize_cache_value(value):
@@ -123,6 +124,7 @@ def diffusion_constraints_to_cache_dict(constraints):
         'movingBoundaryMassAction': constraints.movingBoundaryMassAction,
     }
 
+
 #%%
 
 def equation_a11(beta, c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b):
@@ -174,12 +176,12 @@ c_a0 = 0.291
 c_b0 = 0.394
 d_a = 5.0
 d_b = 100.0
-t_end = 3e5
+t_end = 1.2e5 #1e4
 
 average_comp = ( (l_a*c_a0)+(l_b*c_b0) ) / (l_a + l_b)
 print(f"average_comp: {average_comp}")
-final_a_fraction = (average_comp - c_a_eq) / (c_b_eq - c_a_eq)
-final_b_fraction = (c_b_eq - average_comp) / (c_b_eq - c_a_eq)
+final_a_fraction = (c_b_eq - average_comp) / (c_b_eq - c_a_eq)
+final_b_fraction = (average_comp - c_a_eq ) / (c_b_eq - c_a_eq)
 print(f"final_a_fraction: {final_a_fraction}")
 print(f"final_b_fraction: {final_b_fraction}")
 
@@ -188,12 +190,20 @@ final_l_b = final_b_fraction * L
 print(f"final_l_a: {final_l_a}")
 print(f"final_l_b: {final_l_b}")
 
-record_input=100
+z = np.linspace(0.0, L, N + 1)
+print(f"(z>final_l_a).sum(): {(z>final_l_a).sum()}")
+dz = float(z[1] - z[0])
+m_final = np.searchsorted(z, final_l_a)-1
+pfrac_final  = float((final_l_a - z[m_final]) / dz)
+print(f"pfrac_final: {pfrac_final}")
+
+record_input=1
 vIt_input=5000
 verbose_input = False if record_input == False else True
 bulkUpdateScheme_input= ['legacy', 'flux_form'][0]
+integrationMode_input = 'weighted'
 modelsToUse = ['post_corr'] #, 'pre_basic', 'post_corr', 'pre_corr']
-valid_models = {'post_basic', 'pre_basic', 'post_corr', 'pre_corr'}
+valid_models = {'post_basic', 'pre_basic', 'post_corr', 'pre_corr', 'post_my'}
 unknown_models = sorted(set(modelsToUse) - valid_models)
 if unknown_models:
     raise ValueError(f"Unknown model names in modelsToUse: {unknown_models}")
@@ -214,7 +224,7 @@ therm = ConstantBinaryThermodynamics(
 
 from kawin.diffusion.DiffusionParameters import DiffusionConstraints
 constraints = DiffusionConstraints()
-constraints.movingBoundaryThreshold = 0.3
+constraints.movingBoundaryThreshold = 0.5-1e-8
 
 save_basePath = pathlib.Path(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\modelSaves")
 save_basePath.mkdir(parents=True, exist_ok=True)
@@ -252,6 +262,14 @@ MODEL_CONFIGURATION_LOOKUP = {
         'color': 'tab:red',
         'marker': 'x',
     },
+    'post_my': {
+        'cache_label': 'post_model_myCorr',
+        'fluxGradientMode': 'post_diffusion',
+        'interfaceUpdate': 'my_corrected',
+        'plot_label': 'Post-Diffusion Corrected',
+        'color': 'tab:purple',
+        'marker': 'o',
+    },
 }
 common_cache_params = {
     'cache_version': MODEL_CACHE_VERSION,
@@ -262,6 +280,7 @@ common_cache_params = {
     'pstar': 0.5,
     'record': record_input,
     'iterator': 'explicitEulerIterator',
+    'integrationMode': integrationMode_input,
     't_end': t_end,
     'L': L,
     'N': N,
@@ -290,12 +309,11 @@ def build_case_constraints(constraint_params):
     return case_constraints
 
 
-def build_case_config(case_overrides=None):
+def _get_default_case_config():
     '''
-    Creates a simulation configuration for a parameter sweep case.
+    Returns the default parameter-sweep configuration for one case.
     '''
-    case_overrides = {} if case_overrides is None else dict(case_overrides)
-    config = {
+    return {
         'temperature': 1000,
         'L': L,
         'N': N,
@@ -309,32 +327,85 @@ def build_case_config(case_overrides=None):
         't_end': t_end,
         'record': record_input,
         'bulkUpdateScheme': bulkUpdateScheme_input,
+        'integrationMode': integrationMode_input,
         'pstar': 0.5,
-        'modelsToUse': list(modelsToUse),
         'constraints': diffusion_constraints_to_cache_dict(constraints),
+        'color': None,
     }
+
+
+def build_case_config(case_overrides=None):
+    '''
+    Creates a simulation configuration for a parameter sweep case.
+    '''
+    case_overrides = {} if case_overrides is None else dict(case_overrides)
+    config = _get_default_case_config()
     explicit_label = case_overrides.pop('label', None)
-    constraint_override_keys = set(diffusion_constraints_to_cache_dict(constraints).keys())
-    if 'constraints' in case_overrides:
+    constraint_override_keys = set(config['constraints'].keys())
+    required_model_spec_keys = {
+        'cache_label',
+        'fluxGradientMode',
+        'interfaceUpdate',
+        'plot_label',
+    }
+    allowed_override_keys = set(config.keys()) | {
+        'label',
+    } | required_model_spec_keys
+
+    unknown_keys = sorted(set(case_overrides) - allowed_override_keys - constraint_override_keys)
+    if unknown_keys:
+        raise KeyError(
+            f"Unsupported parameterSweepConfigs key(s): {unknown_keys}. "
+            f"Allowed keys are: {sorted(allowed_override_keys | constraint_override_keys)}"
+        )
+
+    nested_constraint_overrides = case_overrides.pop('constraints', None)
+    if nested_constraint_overrides is not None:
+        if not isinstance(nested_constraint_overrides, dict):
+            raise TypeError("The 'constraints' override must be a dictionary.")
+        unknown_constraint_keys = sorted(set(nested_constraint_overrides) - constraint_override_keys)
+        if unknown_constraint_keys:
+            raise KeyError(
+                f"Unsupported DiffusionConstraints key(s): {unknown_constraint_keys}. "
+                f"Allowed constraint keys are: {sorted(constraint_override_keys)}"
+            )
+        duplicate_constraint_keys = sorted(set(nested_constraint_overrides) & set(case_overrides))
+        if duplicate_constraint_keys:
+            raise ValueError(
+                f"Constraint override(s) specified twice (top-level and in 'constraints'): {duplicate_constraint_keys}"
+            )
         config['constraints'] = {
             **config['constraints'],
-            **case_overrides.pop('constraints'),
+            **nested_constraint_overrides,
         }
+
+    consumed_case_overrides = {}
     for key in list(case_overrides.keys()):
         if key in constraint_override_keys:
             config['constraints'][key] = case_overrides.pop(key)
-    config.update(case_overrides)
+            consumed_case_overrides[key] = config['constraints'][key]
+
+    for key, value in case_overrides.items():
+        config[key] = value
+        consumed_case_overrides[key] = value
+
+    missing_required_model_spec_keys = sorted(
+        key for key in required_model_spec_keys if key not in consumed_case_overrides
+    )
+    if missing_required_model_spec_keys:
+        raise KeyError(
+            "parameterSweepConfigs must explicitly define the model configuration keys "
+            f"{missing_required_model_spec_keys}; these are no longer inferred from modelsToUse or MODEL_CONFIGURATION_LOOKUP."
+        )
+
     if explicit_label is not None:
         config['label'] = explicit_label
     else:
         label_items = []
-        for key, value in case_overrides.items():
-            if key in {'modelsToUse', 'color'}:
+        for key, value in consumed_case_overrides.items():
+            if key in {'color', 'constraints', 'cache_label', 'plot_label'}:
                 continue
             label_items.append(f"{key}={value}")
-        for key, value in config['constraints'].items():
-            if key in constraint_override_keys and value != diffusion_constraints_to_cache_dict(constraints)[key]:
-                label_items.append(f"{key}={value}")
         config['label'] = ', '.join(label_items) if label_items else 'base case'
     return config
 
@@ -362,6 +433,7 @@ def run_cached_case(case_overrides=None):
         'pstar': config['pstar'],
         'record': config['record'],
         'iterator': 'explicitEulerIterator',
+        'integrationMode': config['integrationMode'],
         't_end': config['t_end'],
         'L': config['L'],
         'N': config['N'],
@@ -376,54 +448,61 @@ def run_cached_case(case_overrides=None):
     }
 
     results = {}
-    for model_name in config['modelsToUse']:
-        model_config = MODEL_CONFIGURATION_LOOKUP[model_name]
-        case_model = MovingBoundaryFD1DModel(
-            case_mesh,
-            ['FE', 'CR'],
-            ['ALPHA', 'BETA'],
-            case_therm,
-            temperature=config['temperature'],
-            interfacePosition=config['interface_position'],
-            bulkUpdateScheme=config['bulkUpdateScheme'],
-            fluxGradientMode=model_config['fluxGradientMode'],
-            interfaceUpdate=model_config['interfaceUpdate'],
-            pstar=config['pstar'],
-            constraints=case_constraints,
-            record=config['record'],
-        )
-        case_cache_params = {
-            **case_common_cache_params,
-            'cache_label': model_config['cache_label'],
-            'bulkUpdateScheme': config['bulkUpdateScheme'],
-            'fluxGradientMode': model_config['fluxGradientMode'],
-            'interfaceUpdate': model_config['interfaceUpdate'],
-        }
-        case_save_path = save_basePath / register_cache_metadata(
-            cache_metadata_path,
-            model_config['cache_label'],
-            case_cache_params,
-        )
-        if case_save_path.exists():
-            case_model.load(case_save_path)
-            print(f"Loaded {model_config['cache_label']} from cache: {case_save_path.name}")
-        else:
-            try:
-                case_model.solve(config['t_end'], iterator=explicitEulerIterator, vIt=vIt_input, verbose=verbose_input)
-                case_model.save(case_save_path)
-                print(f"Saved {model_config['cache_label']} to cache: {case_save_path.name}")
-            except Exception as e:
-                print(f"Error running {model_config['cache_label']}: {e}")
-                continue
+    case_model = MovingBoundaryFD1DModel(
+        case_mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        case_therm,
+        temperature=config['temperature'],
+        interfacePosition=config['interface_position'],
+        bulkUpdateScheme=config['bulkUpdateScheme'],
+        integrationMode=config['integrationMode'],
+        fluxGradientMode=config['fluxGradientMode'],
+        interfaceUpdate=config['interfaceUpdate'],
+        pstar=config['pstar'],
+        constraints=case_constraints,
+        record=config['record'],
+    )
+    case_cache_params = {
+        **case_common_cache_params,
+        'cache_label': config['cache_label'],
+        'bulkUpdateScheme': config['bulkUpdateScheme'],
+        'integrationMode': config['integrationMode'],
+        'fluxGradientMode': config['fluxGradientMode'],
+        'interfaceUpdate': config['interfaceUpdate'],
+    }
+    case_save_path = save_basePath / register_cache_metadata(
+        cache_metadata_path,
+        config['cache_label'],
+        case_cache_params,
+    )
+    if case_save_path.exists():
+        case_model.load(case_save_path)
+        print(f"Loaded {config['cache_label']} from cache: {case_save_path.name}")
+    else:
+        try:
+            case_model.solve(config['t_end'], iterator=explicitEulerIterator, vIt=vIt_input, verbose=verbose_input)
+            case_model.save(case_save_path)
+            print(f"Saved {config['cache_label']} to cache: {case_save_path.name}")
+        except Exception as e:
+            print(f"Error running {config['cache_label']}: {e}")
+            return {
+                'label': config['label'],
+                'config': config,
+                'results': {},
+            }
 
-        time_arr = np.array(case_model.interfaceData._time[:case_model.interfaceData.N+1], dtype=np.float64)
-        position_arr = np.array(case_model.interfaceData._y[:case_model.interfaceData.N+1], dtype=np.float64)
-        results[model_name] = {
-            'model': case_model,
-            't': time_arr,
-            's': position_arr,
-            'normalized_thickness': (config['L'] - position_arr) / (config['L'] - position_arr[0]),
-        }
+    time_arr = np.array(case_model.interfaceData._time[:case_model.interfaceData.N+1], dtype=np.float64)
+    position_arr = np.array(case_model.interfaceData._y[:case_model.interfaceData.N+1], dtype=np.float64)
+    results[config['cache_label']] = {
+        'model': case_model,
+        't': time_arr,
+        's': position_arr,
+        'normalized_thickness': (config['L'] - position_arr) / (config['L'] - position_arr[0]),
+        'sqrt_t': np.sqrt(time_arr),
+        'delta_s': position_arr - position_arr[0],
+        'plot_label': config['plot_label'],
+    }
 
     return {
         'label': config['label'],
@@ -466,6 +545,493 @@ def run_cached_case(case_overrides=None):
 # subprocess.run("gprof2dot -f pstats mbfdm_profile.pstats | dot -Tpng -o output.png", shell=True, check=True)
 
 
+#%%
+parm_dict = {}
+parameterSweepCommonParams = {
+    't_end': 1e2,
+    'N': 200,
+}
+parameterSweepConfigs = [
+    {
+        **parameterSweepCommonParams,
+        'integrationMode': integration_mode,
+        'fluxGradientMode': flux_gradient_mode,
+        'interfaceUpdate': interface_update,
+        'cache_label': cache_label,
+        'plot_label': plot_label,
+    }
+    for integration_mode in ['weighted', 'ignore', 'noIgnore']
+    for interface_update, flux_gradient_mode, cache_label, plot_label in [
+        ('basic', 'post_diffusion', '', 'Post-Diffusion Basic'),
+        ('lee_oh_corrected', 'post_diffusion', '', 'Post-Diffusion Corrected'),
+        ('my_corrected', 'post_diffusion', '', 'Post-Diffusion My Corrected'),
+    ]
+]
+parameter_sweep_results = [run_cached_case(case_config) for case_config in parameterSweepConfigs]
+# results = run_cached_case()
+def plot_comparisonToAnalyticSolution(
+    parameter_sweep_results,
+    c_a0,
+    c_b0,
+    c_a_eq,
+    c_b_eq,
+    d_a,
+    d_b,
+    sweep_marker_lookup,
+    sweep_color_lookup,
+    analytic_save_path,
+):
+    '''
+    Plots swept moving-boundary simulations against the analytic solution.
+    '''
+    sweep_beta = solve_beta(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b)
+    sweep_analytic_delta_s = lambda sqrt_t: 2.0 * sweep_beta * sqrt_t
+
+    parameter_sweep_num_points_lookup = {}
+    parameter_sweep_t_sub_lookup = {}
+    parameter_sweep_sqrt_t_sub_lookup = {}
+    parameter_sweep_delta_s_sub_lookup = {}
+    parameter_sweep_analytic_sub_lookup = {}
+    for case_result in parameter_sweep_results:
+        case_label = case_result['label']
+        case_config = case_result['config']
+        for result_key, series in case_result['results'].items():
+            series_key = f"{case_label} | {result_key}"
+            case_N = case_config['N']
+            num_points = max(
+                5,
+                min(
+                    len(series['sqrt_t']),
+                    math.floor(min(case_config['interface_position'], case_config['L'] - case_config['interface_position']) / (case_config['L'] / case_N)) - 5,
+                ),
+            )
+            num_points=num_points*3
+            parameter_sweep_num_points_lookup[series_key] = num_points
+            parameter_sweep_sqrt_t_sub_lookup[series_key] = series['sqrt_t'][:num_points]
+            parameter_sweep_t_sub_lookup[series_key] = series['t'][:num_points]
+            parameter_sweep_delta_s_sub_lookup[series_key] = series['delta_s'][:num_points]
+            parameter_sweep_analytic_sub_lookup[series_key] = sweep_analytic_delta_s(parameter_sweep_sqrt_t_sub_lookup[series_key])[:num_points]
+
+    fig_sweep_delta_s = None
+    SEMIINFINITE_ASSUMPTION_VIOLATED = None
+    if parameter_sweep_results:
+        fig_sweep_delta_s, ax_sweep_delta_s = plt.subplots()
+        sweep_parameter_text_lines = []
+        max_sqrt_t_sub = [-1, None]
+        for case_result in parameter_sweep_results:
+            case_label = case_result['label']
+            case_config = case_result['config']
+            case_color = sweep_color_lookup[case_config['interfaceUpdate']]
+            case_marker = sweep_marker_lookup[case_config['integrationMode']]
+            sweep_parameter_text_lines.append(case_label)
+            for result_key, series in case_result['results'].items():
+                series_key = f"{case_label} | {result_key}"
+                ax_sweep_delta_s.plot(
+                    parameter_sweep_sqrt_t_sub_lookup[series_key],
+                    parameter_sweep_delta_s_sub_lookup[series_key],
+                    case_marker,
+                    label=series_key,
+                    color=case_color,
+                    fillstyle='none',
+                    alpha=0.8,
+                )
+                if max(parameter_sweep_sqrt_t_sub_lookup[series_key]) > max_sqrt_t_sub[0]:
+                    max_sqrt_t_sub[1] = series_key
+                    max_sqrt_t_sub[0] = max(parameter_sweep_sqrt_t_sub_lookup[series_key])
+
+        if max_sqrt_t_sub[-1] is not None:
+            ax_sweep_delta_s.plot(
+                parameter_sweep_sqrt_t_sub_lookup[max_sqrt_t_sub[-1]],
+                parameter_sweep_analytic_sub_lookup[max_sqrt_t_sub[-1]],
+                label='Analytic',
+                color='k',
+            )
+        ax_sweep_delta_s.set_xlabel('sqrt(t)')
+        ax_sweep_delta_s.set_ylabel('Change in interface position')
+        ax_sweep_delta_s.legend(fontsize=4)
+        marker_legend_y = 0.4
+        marker_legend_x = 0.05
+        ax_sweep_delta_s.text(
+            marker_legend_x,
+            marker_legend_y,
+            "Markers = integrationMode",
+            transform=ax_sweep_delta_s.transAxes,
+            va='top',
+            ha='left',
+            fontsize=8,
+            bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.85, 'edgecolor': '0.7'},
+        )
+        for idx, integration_mode in enumerate(sweep_marker_lookup):
+            y = marker_legend_y - 0.06 - idx * 0.05
+            ax_sweep_delta_s.plot(
+                [marker_legend_x+0.025],
+                [y],
+                marker=sweep_marker_lookup[integration_mode],
+                color='k',
+                linestyle='None',
+                transform=ax_sweep_delta_s.transAxes,
+                clip_on=False,
+            )
+            ax_sweep_delta_s.text(
+                marker_legend_x+0.05,
+                y,
+                integration_mode,
+                transform=ax_sweep_delta_s.transAxes,
+                va='center',
+                ha='left',
+                fontsize=8,
+            )
+
+        color_legend_y = marker_legend_y-0.2
+        color_legend_x = 0.05
+        ax_sweep_delta_s.text(
+            color_legend_x,
+            color_legend_y,
+            "Colors = interfaceUpdate",
+            transform=ax_sweep_delta_s.transAxes,
+            va='top',
+            ha='left',
+            fontsize=8,
+            bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.85, 'edgecolor': '0.7'},
+        )
+        for idx, interface_update in enumerate(sweep_color_lookup):
+            y = color_legend_y - 0.06 - idx * 0.05
+            ax_sweep_delta_s.add_patch(
+                Rectangle(
+                    (color_legend_x + 0.01, y - 0.015),
+                    0.025,
+                    0.03,
+                    transform=ax_sweep_delta_s.transAxes,
+                    facecolor=sweep_color_lookup[interface_update],
+                    edgecolor='k',
+                    linewidth=0.5,
+                    clip_on=False,
+                )
+            )
+            ax_sweep_delta_s.text(
+                color_legend_x + 0.04,
+                y,
+                interface_update,
+                transform=ax_sweep_delta_s.transAxes,
+                va='center',
+                ha='left',
+                fontsize=8,
+            )
+        plt.tight_layout()
+        plt.show()
+
+    if parameter_sweep_results:
+        for case_result in parameter_sweep_results:
+            case_label = case_result['label']
+            [uniqueKey] = list(case_result['results'].keys())
+            case_model = case_result['results'][uniqueKey]['model']
+            for result_key, series in case_result['results'].items():
+                series_key = f"{case_label} | {result_key}"
+                t_sub = parameter_sweep_t_sub_lookup[series_key]
+                if (np.ravel(case_model.data.y(t_sub[-1]))[[0,-1]]==np.array([c_a0, c_b0])).all()!=True:
+                    np.ravel(case_model.data.y(t_sub[-1]))
+                    SEMIINFINITE_ASSUMPTION_VIOLATED=True
+                    print("WARNING: SEMIINFINITE ASSUMPTION MAY BE VIOLATED")
+
+    if fig_sweep_delta_s is not None:
+        fig_sweep_delta_s.savefig(analytic_save_path)
+
+    return SEMIINFINITE_ASSUMPTION_VIOLATED
+
+
+sweep_marker_lookup = {
+    'weighted': 'o',
+    'ignore': 'x',
+    'noIgnore': '*',
+}
+sweep_color_lookup = {
+    'basic': 'tab:blue',
+    'lee_oh_corrected': 'tab:orange',
+    'my_corrected': 'tab:green',
+}
+SEMIINFINITE_ASSUMPTION_VIOLATED = plot_comparisonToAnalyticSolution(
+    parameter_sweep_results=parameter_sweep_results,
+    c_a0=c_a0,
+    c_b0=c_b0,
+    c_a_eq=c_a_eq,
+    c_b_eq=c_b_eq,
+    d_a=d_a,
+    d_b=d_b,
+    sweep_marker_lookup=sweep_marker_lookup,
+    sweep_color_lookup=sweep_color_lookup,
+    analytic_save_path=r"C:\Users\samth\Downloads\fdm_mb_npz_saves\analytic_comparison.svg",
+)
+
+#%%
+parm_dict = {}
+parameterSweepCommonParams = {
+    't_end': 3e5,
+    'N': 100,
+    'record':100,
+}
+parameterSweepConfigs = [
+    {
+        **parameterSweepCommonParams,
+        'integrationMode': integration_mode,
+        'fluxGradientMode': flux_gradient_mode,
+        'interfaceUpdate': interface_update,
+        'cache_label': cache_label,
+        'plot_label': plot_label,
+    }
+    for integration_mode in ['weighted']#, 'ignore', 'noIgnore']
+    for interface_update, flux_gradient_mode, cache_label, plot_label in [
+        # ('basic', 'post_diffusion', '', 'Post-Diffusion Basic'),
+        ('lee_oh_corrected', 'post_diffusion', '', 'Post-Diffusion Corrected'),
+        ('my_corrected', 'post_diffusion', '', 'Post-Diffusion My Corrected'),
+    ]
+]
+parameter_sweep_results = [run_cached_case(case_config) for case_config in parameterSweepConfigs]
+
+
+def plot_comparisonToFig8PresentMethod(
+    parameter_sweep_results,
+    fig8_presentMethod_df,
+    figure8_presentMethod_oldExtract_df,
+    L,
+    idealized_mass,
+    fig4_save_path,
+    fig4_sweep_save_path,
+    downSample_fig8Rep=True,
+    markersize=3,
+    parameter_set_colors=None,
+    line_styles=None,
+):
+    '''
+    Plots normalized-thickness comparisons against the Fig. 8 extracted curves.
+    '''
+    def _flatten_case_parameters(case_config):
+        flattened = {}
+        for key, value in case_config.items():
+            if key in {'color', 'cache_label', 'plot_label', 'label'}:
+                continue
+            if key == 'constraints':
+                for constraint_key, constraint_value in value.items():
+                    flattened[f"constraints.{constraint_key}"] = constraint_value
+            else:
+                flattened[key] = value
+        return flattened
+
+    def _format_parameter_value(value):
+        if isinstance(value, float):
+            return f"{value:.12g}"
+        return str(value)
+
+    def _format_parameter_lines(parameter_dict):
+        return [f"{key}={_format_parameter_value(value)}" for key, value in parameter_dict.items()]
+
+    if parameter_set_colors is None:
+        parameter_set_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:brown', 'tab:pink']
+    if line_styles is None:
+        line_styles = ['-', '--', ':', '-.']
+
+    if downSample_fig8Rep:
+        log_indices = lambda arr: np.unique(np.logspace(0, np.log10(len(arr)-1), num=2000).astype(int))
+    else:
+        log_indices = lambda arr: np.arange(len(arr))
+
+    flattened_case_parameters = [_flatten_case_parameters(case_result['config']) for case_result in parameter_sweep_results]
+    common_case_parameters = {}
+    if flattened_case_parameters:
+        common_keys = set(flattened_case_parameters[0])
+        for flattened_parameters in flattened_case_parameters[1:]:
+            common_keys &= set(flattened_parameters)
+        for key in sorted(common_keys):
+            reference_value = flattened_case_parameters[0][key]
+            if all(flattened_parameters[key] == reference_value for flattened_parameters in flattened_case_parameters[1:]):
+                common_case_parameters[key] = reference_value
+
+    differing_case_parameters_lookup = {}
+    differing_case_label_lookup = {}
+    for case_result, flattened_parameters in zip(parameter_sweep_results, flattened_case_parameters):
+        differing_parameters = {
+            key: value
+            for key, value in flattened_parameters.items()
+            if common_case_parameters.get(key, object()) != value
+        }
+        differing_case_parameters_lookup[case_result['label']] = differing_parameters
+        differing_case_label_lookup[case_result['label']] = (
+            ', '.join(_format_parameter_lines(differing_parameters)) if differing_parameters else 'common case'
+        )
+
+    common_parameter_text = "Common parameters\n" + '\n'.join(_format_parameter_lines(common_case_parameters))
+
+    fig4, ax4 = plt.subplots(figsize=(12, 10))
+    fig4_mass_summary_lines = [f"Idealized mass: {idealized_mass:.12g}"]
+    for case_result in parameter_sweep_results:
+        case_label = case_result['label']
+        for result_key, series in case_result['results'].items():
+            model_obj = series['model']
+            t_arr = series['t']
+            s_arr = series['s']
+            sample_indices = log_indices(t_arr)
+            ax4.plot(
+                t_arr[sample_indices],
+                (L - s_arr[sample_indices]) / (L - s_arr[0]),
+                'o-',
+                markersize=markersize,
+                fillstyle='none',
+                label=differing_case_label_lookup[case_label],
+            )
+            fig4_mass_summary_lines.append(
+                f"{differing_case_label_lookup[case_label]}: init={model_obj._initialInventory:.12g}, current={model_obj.getTotalMass():.12g}"
+            )
+
+    fig8_presentMethod_df.plot(
+        x='t',
+        y='normalized_thickness',
+        ax=ax4,
+        label='Lee and Oh 1996 Fig. 8 Present Method Curve',
+        color='k',
+    )
+    figure8_presentMethod_oldExtract_df.plot(
+        x='t',
+        y='normalized_thickness',
+        ax=ax4,
+        label='Lee and Oh 1996 Fig. 8 Present Method Curve (OLD EXTRACTION)',
+        color='dimgray',
+        zorder=-1,
+    )
+    x_text_1 = 0.02
+    x_text_2 = 0.02
+    y_text_1 = 0.55
+    y_text_2 = 0.17
+    ax4.text(
+        x_text_1,
+        y_text_1,
+        common_parameter_text,
+        transform=ax4.transAxes,
+        va='top',
+        ha='left',
+        fontsize=8,
+        bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.85, 'edgecolor': '0.7'},
+    )
+    ax4.text(
+        x_text_2,
+        y_text_2,
+        '\n'.join(fig4_mass_summary_lines),
+        transform=ax4.transAxes,
+        va='top',
+        ha='left',
+        fontsize=8,
+        bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.85, 'edgecolor': '0.7'},
+    )
+    ax4.legend(loc='upper right')
+    ax4.set_xscale('log')
+    ax4.set_xlim(5, 1e6)
+    ax4.set_ylim(0, 1.4)
+    fig4.savefig(fig4_save_path)
+
+    fig4_sweep, ax4_sweep = plt.subplots(figsize=(12, 10))
+    final_thickness_summary_lines = []
+    for case_index, case_result in enumerate(parameter_sweep_results):
+        case_config = case_result['config']
+        case_label = case_result['label']
+        line_style = line_styles[case_index % len(line_styles)]
+        case_color = case_config['color'] if case_config['color'] is not None else parameter_set_colors[case_index % len(parameter_set_colors)]
+        for _, series in case_result['results'].items():
+            sample_indices = log_indices(series['t'])
+            ax4_sweep.plot(
+                series['t'][sample_indices],
+                series['normalized_thickness'][sample_indices],
+                linestyle=line_style,
+                marker='o',
+                markersize=markersize,
+                fillstyle='none',
+                color=case_color,
+                label=differing_case_label_lookup[case_label],
+                alpha=0.5,
+            )
+            final_thickness_summary_lines.append(
+                f"{differing_case_label_lookup[case_label]}: {series['normalized_thickness'][-1]:.6f}"
+            )
+
+    fig8_presentMethod_df.plot(
+        x='t',
+        y='normalized_thickness',
+        ax=ax4_sweep,
+        label='Lee and Oh 1996 Fig. 8 Present Method Curve',
+        color='k',
+        linewidth=1.5,
+    )
+    figure8_presentMethod_oldExtract_df.plot(
+        x='t',
+        y='normalized_thickness',
+        ax=ax4_sweep,
+        label='Lee and Oh 1996 Fig. 8 Present Method Curve (OLD EXTRACTION)',
+        color='dimgray',
+        zorder=-1,
+    )
+    ax4_sweep.text(
+        x_text_1,
+        y_text_1,
+        common_parameter_text,
+        transform=ax4_sweep.transAxes,
+        va='top',
+        ha='left',
+        fontsize=8,
+        bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.85, 'edgecolor': '0.7'},
+    )
+    ax4_sweep.text(
+        x_text_2,
+        y_text_2,
+        "Differing parameters / final normalized thickness\n" + '\n'.join(final_thickness_summary_lines),
+        transform=ax4_sweep.transAxes,
+        va='top',
+        ha='left',
+        fontsize=8,
+        bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.85, 'edgecolor': '0.7'},
+    )
+    ax4_sweep.legend()
+    ax4_sweep.set_xscale('log')
+    ax4_sweep.set_xlim(5, 1e6)
+    ax4_sweep.set_ylim(0, 1.4)
+    ax4_sweep.set_xlabel('Time')
+    ax4_sweep.set_ylabel('Normalized thickness')
+    fig4_sweep.tight_layout()
+    fig4_sweep.savefig(fig4_sweep_save_path)
+
+    return fig4, ax4, fig4_sweep, ax4_sweep
+
+
+
+import pandas as pd
+fig8_presentMethod_df = pd.read_csv(r'C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\leeAndOh1996_data\fig8_presentMethodCurve.csv', names=['t', 'normalized_thickness'])
+fig8_presentMethod_df = fig8_presentMethod_df.sort_values(by=['t'])
+parameterSweepCommonModelConfig = {
+    'cache_label': 'post_model_corr',
+    'fluxGradientMode': 'post_diffusion',
+    'interfaceUpdate': 'lee_oh_corrected',
+    'plot_label': 'Post-Diffusion Corrected',
+}
+figure8_presentMethod_oldExtract_df = pd.read_csv(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\finiteDifference\LeeAndOh_figure8_presentMethod.csv", low_memory=False, names=['t', 'normalized_thickness'])
+figure8_presentMethod_oldExtract_df = figure8_presentMethod_oldExtract_df.sort_values(by=['t'])
+
+
+parameter_sweep_results = [run_cached_case(case_config) for case_config in parameterSweepConfigs]
+
+idealized_mass_funcOfStartingInterfacePosition = lambda startingInterfacePosition: (c_a0 * startingInterfacePosition) + (c_b0 * (L - startingInterfacePosition))
+idealized_mass = idealized_mass_funcOfStartingInterfacePosition(interface_position)
+
+fig4, ax4, fig4_sweep, ax4_sweep = plot_comparisonToFig8PresentMethod(
+    parameter_sweep_results=parameter_sweep_results,
+    fig8_presentMethod_df=fig8_presentMethod_df,
+    figure8_presentMethod_oldExtract_df=figure8_presentMethod_oldExtract_df,
+    L=L,
+    idealized_mass=idealized_mass,
+    fig4_save_path=rf"C:\Users\samth\Downloads\fdm_mb_npz_saves\replicationOfFig8_downSampled.svg",
+    fig4_sweep_save_path=rf"C:\Users\samth\Downloads\fdm_mb_npz_saves\replicationOfFig8_parameterSweep_downSampled.svg",
+    # fig4_save_path=rf"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\replicationOfFig8_downSampled.svg",
+    # fig4_sweep_save_path=rf"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\replicationOfFig8_parameterSweep_downSampled.svg",
+    downSample_fig8Rep=True,
+    markersize=3,
+)
+
+#%%
 
 if use_post_basic:
     post_model_basic = MovingBoundaryFD1DModel(
@@ -476,6 +1042,7 @@ if use_post_basic:
         temperature=1000,
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
+        integrationMode=integrationMode_input,
         fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
         pstar=0.5,
@@ -486,6 +1053,7 @@ if use_post_basic:
         **common_cache_params,
         'cache_label': 'post_model_basic',
         'bulkUpdateScheme': bulkUpdateScheme_input,
+        'integrationMode': integrationMode_input,
         'fluxGradientMode': 'post_diffusion',
         'interfaceUpdate': 'basic',
     }
@@ -509,6 +1077,7 @@ if use_pre_basic:
         temperature=1000,
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
+        integrationMode=integrationMode_input,
         fluxGradientMode='pre_diffusion',
         interfaceUpdate='basic',
         pstar=0.5,
@@ -519,6 +1088,7 @@ if use_pre_basic:
         **common_cache_params,
         'cache_label': 'pre_model_basic',
         'bulkUpdateScheme': bulkUpdateScheme_input,
+        'integrationMode': integrationMode_input,
         'fluxGradientMode': 'pre_diffusion',
         'interfaceUpdate': 'basic',
     }
@@ -540,6 +1110,7 @@ if use_post_corr:
         temperature=1000,
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
+        integrationMode=integrationMode_input,
         fluxGradientMode='post_diffusion',
         interfaceUpdate='lee_oh_corrected',
         pstar=0.5,
@@ -550,6 +1121,7 @@ if use_post_corr:
         **common_cache_params,
         'cache_label': 'post_model_corr',
         'bulkUpdateScheme': bulkUpdateScheme_input,
+        'integrationMode': integrationMode_input,
         'fluxGradientMode': 'post_diffusion',
         'interfaceUpdate': 'lee_oh_corrected',
     }
@@ -573,6 +1145,7 @@ if use_pre_corr:
         temperature=1000,
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
+        integrationMode=integrationMode_input,
         fluxGradientMode='pre_diffusion',
         interfaceUpdate='lee_oh_corrected',
         pstar=0.5,
@@ -583,6 +1156,7 @@ if use_pre_corr:
         **common_cache_params,
         'cache_label': 'pre_model_corr',
         'bulkUpdateScheme': bulkUpdateScheme_input,
+        'integrationMode': integrationMode_input,
         'fluxGradientMode': 'pre_diffusion',
         'interfaceUpdate': 'lee_oh_corrected',
     }
@@ -780,6 +1354,7 @@ def initial_mass_funcOfStartingInterfacePosition(startingInterfacePosition):
         temperature=1000,
         interfacePosition=startingInterfacePosition,
         bulkUpdateScheme=bulkUpdateScheme_input,
+        integrationMode=integrationMode_input,
         fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
         pstar=0.5,
@@ -810,144 +1385,47 @@ ax3.vlines(interface_position, initial_mass_funcOfStartingInterfacePosition(star
 import pandas as pd
 fig8_presentMethod_df = pd.read_csv(r'C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\leeAndOh1996_data\fig8_presentMethodCurve.csv', names=['t', 'normalized_thickness'])
 fig8_presentMethod_df = fig8_presentMethod_df.sort_values(by=['t'])
+parameterSweepCommonModelConfig = {
+    'cache_label': 'post_model_corr',
+    'fluxGradientMode': 'post_diffusion',
+    'interfaceUpdate': 'lee_oh_corrected',
+    'plot_label': 'Post-Diffusion Corrected',
+}
 parameterSweepConfigs = [
-    {'N': 90, 'movingBoundaryThreshold': 0.3},
-    {'N': 100, 'movingBoundaryThreshold': 0.3},
-    {'N': 150, 'movingBoundaryThreshold': 0.3},
-    {'N': 100, 'movingBoundaryThreshold': 0.25},
-    {'N': 100, 'movingBoundaryThreshold': 0.25, 'fluxGradientMode':'pre_diffusion'},
-    {'N': 100, 'movingBoundaryThreshold': 0.4},
-    {'N': 100, 'movingBoundaryThreshold': 0.4, 'pstar':0.45},
+    {**parameterSweepCommonModelConfig, 'N': 90, 'movingBoundaryThreshold': 0.3},
+    {**parameterSweepCommonModelConfig, 'N': 100, 'movingBoundaryThreshold': 0.3},
+    {**parameterSweepCommonModelConfig, 'N': 150, 'movingBoundaryThreshold': 0.3},
+    {**parameterSweepCommonModelConfig, 'N': 100, 'movingBoundaryThreshold': 0.25},
+    {**parameterSweepCommonModelConfig, 'N': 100, 'movingBoundaryThreshold': 0.25, 'fluxGradientMode':'pre_diffusion'},
+    {**parameterSweepCommonModelConfig, 'N': 100, 'movingBoundaryThreshold': 0.4},
+    {**parameterSweepCommonModelConfig, 'N': 100, 'movingBoundaryThreshold': 0.4, 'pstar':0.45},
     # {'N': 100, 'movingBoundaryThreshold': 0.4, 'pstar':0.1},
-    {'N': 100, 'movingBoundaryThreshold': 0.25, 'pstar':0.45},
+    {**parameterSweepCommonModelConfig, 'N': 100, 'movingBoundaryThreshold': 0.25, 'pstar':0.45},
     # {'N': 100, 'movingBoundaryThreshold': 0.25, 'pstar':0.7},
     # {'N': 100, 'movingBoundaryThreshold': 0.4, 'pstar':0.7},
     # {'N': 150, 'movingBoundaryThreshold': 0.4, 'pstar':0.1},
     # {'N': 150, 'movingBoundaryThreshold': 0.4, 'pstar':0.3},
-    {'N': 100, 'movingBoundaryThreshold': 0.2},
-    {'N': 100, 'movingBoundaryThreshold': 0.15},
-    {'N': 150, 'movingBoundaryThreshold': 0.4},
-    {'N': 175, 'movingBoundaryThreshold': 0.4},
-    {'N': 200, 'movingBoundaryThreshold': 0.4},
-    {'N': 250, 'movingBoundaryThreshold': 0.4},
+    {**parameterSweepCommonModelConfig, 'N': 100, 'movingBoundaryThreshold': 0.2},
+    {**parameterSweepCommonModelConfig, 'N': 100, 'movingBoundaryThreshold': 0.15},
+    {**parameterSweepCommonModelConfig, 'N': 150, 'movingBoundaryThreshold': 0.4},
+    {**parameterSweepCommonModelConfig, 'N': 175, 'movingBoundaryThreshold': 0.4},
+    {**parameterSweepCommonModelConfig, 'N': 200, 'movingBoundaryThreshold': 0.4},
+    {**parameterSweepCommonModelConfig, 'N': 250, 'movingBoundaryThreshold': 0.4},
 ]
 
-fig4, ax4 = plt.subplots(figsize=(12, 10))
-downSample_fig8Rep=True
-markersize=3
-if downSample_fig8Rep==True:
-    log_indices = lambda arr: np.unique(np.logspace(0, np.log10(len(arr)-1), num=2000).astype(int))
-else:
-    log_indices = lambda arr: np.arange(len(arr))
-if use_post_basic:
-    ax4.plot(t_post_basic[log_indices(t_post_basic)], (L-s_post_basic[log_indices(t_post_basic)])/(L-s_post_basic[0]), 'o-', markersize=markersize, fillstyle='none', label='Post-Diffusion Basic', color='tab:blue')
-if use_pre_basic:
-    ax4.plot(t_pre_basic[log_indices(t_pre_basic)], (L-s_pre_basic[log_indices(t_pre_basic)])/(L-s_pre_basic[0]), 'x-', markersize=markersize, fillstyle='none', label='Pre-Diffusion Basic', color='tab:orange')
-if use_post_corr:
-    ax4.plot(t_post_corr[log_indices(t_post_corr)], (L-s_post_corr[log_indices(t_post_corr)])/(L-s_post_corr[0]), 'o-', markersize=markersize, fillstyle='none', label='Post-Diffusion Corrected', color='tab:green')
-if use_pre_corr:
-    ax4.plot(t_pre_corr[log_indices(t_pre_corr)], (L-s_pre_corr[log_indices(t_pre_corr)])/(L-s_pre_corr[0]), 'x-', markersize=markersize, fillstyle='none', label='Pre-Diffusion Corrected', color='tab:red')
-
-fig8_presentMethod_df.plot(x='t', y='normalized_thickness', ax=ax4, label='Lee and Oh 1996 Fig. 8 Present Method Curve', color='k')
 figure8_presentMethod_oldExtract_df = pd.read_csv(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\finiteDifference\LeeAndOh_figure8_presentMethod.csv", low_memory=False, names=['t', 'normalized_thickness'])
 figure8_presentMethod_oldExtract_df = figure8_presentMethod_oldExtract_df.sort_values(by=['t'])
-figure8_presentMethod_oldExtract_df.plot(x='t', y='normalized_thickness', ax=ax4, label='Lee and Oh 1996 Fig. 8 Present Method Curve (OLD EXTRACTION)', color='dimgray', zorder=-1)
-fig4_mass_summary_lines = [f"Idealized mass: {idealized_mass:.12g}"]
-for model_name, model_obj, _, _, _, _ in selected_models:
-    fig4_mass_summary_lines.append(
-        f"{model_name}: init={model_obj._initialInventory:.12g}, current={model_obj.getTotalMass():.12g}"
-    )
-ax4.text(
-    0.02,
-    0.98,
-    '\n'.join(fig4_mass_summary_lines),
-    transform=ax4.transAxes,
-    va='top',
-    ha='left',
-    fontsize=8,
-    bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.85, 'edgecolor': '0.7'},
-)
-
-ax4.legend()
-ax4.set_xscale('log')
-ax4.set_xlim(5, 1e6)
-ax4.set_ylim(0, 1.4)
-fig4.savefig(rf"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\replicationOfFig8_{'downSampled' if downSample_fig8Rep==True else 'full'}.svg")
-
 parameter_sweep_results = [run_cached_case(case_config) for case_config in parameterSweepConfigs]
-fig4_sweep, ax4_sweep = plt.subplots(figsize=(12, 10))
-line_styles = ['-', '--', ':', '-.']
-parameter_set_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:brown', 'tab:pink']
-final_thickness_summary_lines = []
-for case_index, case_result in enumerate(parameter_sweep_results):
-    case_config = case_result['config']
-    case_label = case_result['label']
-    line_style = line_styles[case_index % len(line_styles)]
-    case_color = parameter_set_colors[case_index % len(parameter_set_colors)]
-    for model_name, series in case_result['results'].items():
-        model_plot_config = MODEL_CONFIGURATION_LOOKUP[model_name]
-        sample_indices = log_indices(series['t'])
-        ax4_sweep.plot(
-            series['t'][sample_indices],
-            series['normalized_thickness'][sample_indices],
-            linestyle=line_style,
-            marker=model_plot_config['marker'],
-            markersize=markersize,
-            fillstyle='none',
-            color=case_color,
-            label=f"{model_plot_config['plot_label']} ({case_label})",
-            alpha=0.5
-        )
-        final_thickness_summary_lines.append(
-            f"{case_label} | {model_plot_config['plot_label']}: {series['normalized_thickness'][-1]:.6f}"
-        )
-
-fig8_presentMethod_df.plot(
-    x='t',
-    y='normalized_thickness',
-    ax=ax4_sweep,
-    label='Lee and Oh 1996 Fig. 8 Present Method Curve',
-    color='k',
-    linewidth=1.5,
-)
-figure8_presentMethod_oldExtract_df.plot(
-    x='t',
-    y='normalized_thickness',
-    ax=ax4_sweep,
-    label='Lee and Oh 1996 Fig. 8 Present Method Curve (OLD EXTRACTION)',
-    color='dimgray',
-    zorder=-1,
-)
-parameter_sweep_text = '\n'.join([case_result['label'] for case_result in parameter_sweep_results])
-ax4_sweep.text(
-    0.02,
-    0.98,
-    f"Parameter sweep\n{parameter_sweep_text}",
-    transform=ax4_sweep.transAxes,
-    va='top',
-    ha='left',
-    fontsize=9,
-    bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.85, 'edgecolor': '0.7'},
-)
-ax4_sweep.text(
-    0.02,
-    0.72,
-    "Final normalized thickness\n" + '\n'.join(final_thickness_summary_lines),
-    transform=ax4_sweep.transAxes,
-    va='top',
-    ha='left',
-    fontsize=8,
-    bbox={'boxstyle': 'round', 'facecolor': 'white', 'alpha': 0.85, 'edgecolor': '0.7'},
-)
-ax4_sweep.legend()
-ax4_sweep.set_xscale('log')
-ax4_sweep.set_xlim(5, 1e6)
-ax4_sweep.set_ylim(0, 1.4)
-ax4_sweep.set_xlabel('Time')
-ax4_sweep.set_ylabel('Normalized thickness')
-fig4_sweep.tight_layout()
-fig4_sweep.savefig(
-    rf"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\replicationOfFig8_parameterSweep_{'downSampled' if downSample_fig8Rep==True else 'full'}.svg"
+fig4, ax4, fig4_sweep, ax4_sweep = plot_comparisonToFig8PresentMethod(
+    parameter_sweep_results=parameter_sweep_results,
+    fig8_presentMethod_df=fig8_presentMethod_df,
+    figure8_presentMethod_oldExtract_df=figure8_presentMethod_oldExtract_df,
+    L=L,
+    idealized_mass=idealized_mass,
+    fig4_save_path=rf"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\replicationOfFig8_downSampled.svg",
+    fig4_sweep_save_path=rf"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\replicationOfFig8_parameterSweep_downSampled.svg",
+    downSample_fig8Rep=True,
+    markersize=3,
 )
 
 if use_post_basic:

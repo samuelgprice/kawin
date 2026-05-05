@@ -1005,6 +1005,7 @@ def test_moving_boundary_fdm_dXdt_and_fluxes():
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
     )
@@ -1037,6 +1038,7 @@ def test_moving_boundary_fdm_left_near_node_uses_quadratic_update_for_p_less_tha
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
         pstar=0.5,
@@ -1085,6 +1087,7 @@ def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
     )
@@ -1103,6 +1106,7 @@ def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         fluxGradientMode='post_diffusion',
         interfaceUpdate='lee_oh_corrected',
     )
@@ -1164,6 +1168,7 @@ def test_moving_boundary_fdm_flux_gradient_mode_switches_interface_flux_source()
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
     )
@@ -1179,6 +1184,7 @@ def test_moving_boundary_fdm_flux_gradient_mode_switches_interface_flux_source()
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='pre_diffusion',
     )
@@ -1209,6 +1215,7 @@ def test_moving_boundary_fdm_saving_loading():
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         interfaceUpdate='lee_oh_corrected',
         fluxGradientMode='pre_diffusion',
         record=True,
@@ -1228,6 +1235,7 @@ def test_moving_boundary_fdm_saving_loading():
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         interfaceUpdate='lee_oh_corrected',
         fluxGradientMode='post_diffusion',
         record=True,
@@ -1267,6 +1275,42 @@ def test_moving_boundary_fdm_requires_valid_bulk_update_scheme():
             interfacePosition=interfacePosition,
         )
 
+    with pytest.raises(ValueError, match="interfaceUpdate must be specified explicitly"):
+        MovingBoundaryFD1DModel(
+            mesh,
+            ['FE', 'CR'],
+            ['ALPHA', 'BETA'],
+            thermodynamics=therm,
+            temperature=TemperatureParameters(1000),
+            interfacePosition=interfacePosition,
+            bulkUpdateScheme='legacy',
+        )
+
+    with pytest.raises(ValueError, match="integrationMode must be specified explicitly"):
+        MovingBoundaryFD1DModel(
+            mesh,
+            ['FE', 'CR'],
+            ['ALPHA', 'BETA'],
+            thermodynamics=therm,
+            temperature=TemperatureParameters(1000),
+            interfacePosition=interfacePosition,
+            bulkUpdateScheme='legacy',
+            interfaceUpdate='basic',
+        )
+
+    with pytest.raises(ValueError, match="fluxGradientMode must be specified explicitly"):
+        MovingBoundaryFD1DModel(
+            mesh,
+            ['FE', 'CR'],
+            ['ALPHA', 'BETA'],
+            thermodynamics=therm,
+            temperature=TemperatureParameters(1000),
+            interfacePosition=interfacePosition,
+            bulkUpdateScheme='legacy',
+            interfaceUpdate='basic',
+            integrationMode='weighted',
+        )
+
     with pytest.raises(ValueError, match="bulkUpdateScheme"):
         MovingBoundaryFD1DModel(
             mesh,
@@ -1276,7 +1320,8 @@ def test_moving_boundary_fdm_requires_valid_bulk_update_scheme():
             temperature=TemperatureParameters(1000),
             interfacePosition=interfacePosition,
             bulkUpdateScheme='invalid',
-                interfaceUpdate='basic',
+            integrationMode='weighted',
+            interfaceUpdate='basic',
             fluxGradientMode='post_diffusion',
         )
 
@@ -1300,6 +1345,7 @@ def test_moving_boundary_fdm_bulk_update_scheme_matches_for_constant_diffusivity
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         interfaceUpdate='lee_oh_corrected',
         fluxGradientMode='post_diffusion',
         record=True,
@@ -1315,6 +1361,7 @@ def test_moving_boundary_fdm_bulk_update_scheme_matches_for_constant_diffusivity
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='flux_form',
+        integrationMode='weighted',
         interfaceUpdate='lee_oh_corrected',
         fluxGradientMode='post_diffusion',
         record=True,
@@ -1351,6 +1398,7 @@ def test_moving_boundary_fdm_flux_form_uses_variable_diffusivity_bulk_update():
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
     )
@@ -1366,6 +1414,7 @@ def test_moving_boundary_fdm_flux_form_uses_variable_diffusivity_bulk_update():
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='flux_form',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
     )
@@ -1415,6 +1464,7 @@ def test_moving_boundary_fdm_bulk_update_switch_only_changes_ordinary_bulk_nodes
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
     )
@@ -1430,6 +1480,7 @@ def test_moving_boundary_fdm_bulk_update_switch_only_changes_ordinary_bulk_nodes
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='flux_form',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
     )
@@ -1473,6 +1524,7 @@ def test_moving_boundary_fdm_flux_form_matches_legacy_at_left_near_node_for_cons
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
         record=True,
@@ -1488,6 +1540,7 @@ def test_moving_boundary_fdm_flux_form_matches_legacy_at_left_near_node_for_cons
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='flux_form',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
         record=True,
@@ -1534,6 +1587,7 @@ def test_moving_boundary_fdm_flux_form_matches_legacy_at_right_near_node_for_con
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
         record=True,
@@ -1549,6 +1603,7 @@ def test_moving_boundary_fdm_flux_form_matches_legacy_at_right_near_node_for_con
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='flux_form',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
         record=True,
@@ -1595,6 +1650,7 @@ def test_moving_boundary_fdm_flux_form_left_near_node_matches_cut_cell_formula()
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
     )
@@ -1610,6 +1666,7 @@ def test_moving_boundary_fdm_flux_form_left_near_node_matches_cut_cell_formula()
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='flux_form',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
     )
@@ -1654,6 +1711,7 @@ def test_moving_boundary_fdm_flux_form_right_near_node_matches_cut_cell_formula(
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='legacy',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
     )
@@ -1669,6 +1727,7 @@ def test_moving_boundary_fdm_flux_form_right_near_node_matches_cut_cell_formula(
         temperature=TemperatureParameters(1000),
         interfacePosition=interfacePosition,
         bulkUpdateScheme='flux_form',
+        integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
     )

@@ -19,6 +19,18 @@ from kawin.diffusion.mesh.MovingBoundaryFD1D import (
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
 
+def debugInPlace():
+    try:
+        import debugpy
+        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+        debugpy.listen(5678)
+        print("Waiting for debugger attach")
+        debugpy.wait_for_client()
+        debugpy.breakpoint()
+        print('break on this line')
+    except:
+        pass
+
 class _ScalarHistory:
     def __init__(self, record: bool | int = False):
         if isinstance(record, bool):
@@ -119,13 +131,21 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         ``"flux_form"`` uses the node-centered flux-form discretization from
         the fixed-grid FDM implementation. This argument is required so that
         comparisons between the two schemes are explicit.
-    fluxGradientMode : {"pre_diffusion", "post_diffusion"}, optional
+    interfaceUpdate : {"basic", "lee_oh_corrected", "my_corrected"}
+        Interface motion update used after the explicit diffusion stage.
+        This argument must be specified explicitly so the chosen mass-balance
+        strategy is always visible at the call site.
+    integrationMode : {"ignore", "noIgnore", "weighted"}
+        Interface-aware inventory integration rule used by mass accounting and
+        corrected interface updates. This argument must be specified
+        explicitly.
+    fluxGradientMode : {"pre_diffusion", "post_diffusion"}
         Selects which interface gradients are used when computing the
         interfacial fluxes for the Stefan update. ``"pre_diffusion"`` uses
         gradients reconstructed from the profile before the bulk diffusion
         update, while ``"post_diffusion"`` uses gradients from the profile
-        after that explicit diffusion stage. The default is
-        ``"post_diffusion"``.
+        after that explicit diffusion stage. This argument must be specified
+        explicitly.
     """
 
     def __init__(
@@ -139,18 +159,18 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         bulkUpdateScheme: str,
         constraints=None,
         record=False,
-        interfaceUpdate: str = "basic",
+        interfaceUpdate: str | None = None,
         pstar: float = 0.5,
-        integrationMode: str = "weighted",
-        fluxGradientMode: str = "post_diffusion",
+        integrationMode: str | None = None,
+        fluxGradientMode: str | None = None,
         balanceElement: str | None = None,
     ):
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceData = _ScalarHistory(record)
-        self.interfaceUpdate = str(interfaceUpdate)
+        self.interfaceUpdate = None if interfaceUpdate is None else str(interfaceUpdate)
         self.pstar = float(pstar)
-        self.integrationMode = str(integrationMode)
-        self.fluxGradientMode = str(fluxGradientMode)
+        self.integrationMode = None if integrationMode is None else str(integrationMode)
+        self.fluxGradientMode = None if fluxGradientMode is None else str(fluxGradientMode)
         self.bulkUpdateScheme = str(bulkUpdateScheme)
         self.balanceElement = None if balanceElement is None else str(balanceElement)
         self._balanceElementIndex = None
@@ -187,16 +207,24 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             raise TypeError("Thermodynamics object must implement interface composition and interdiffusivity methods.")
         if isinstance(getattr(self.mesh, "boundaryConditions", None), PeriodicBoundary1D):
             raise ValueError("Periodic boundary conditions are not supported for MovingBoundaryFD1DModel.")
+        if self.interfaceUpdate is None:
+            raise ValueError("interfaceUpdate must be specified explicitly.")
         if self.interfaceUpdate not in {"basic", "lee_oh_corrected", "my_corrected"}:
             raise ValueError("interfaceUpdate must be one of ['basic', 'lee_oh_corrected', 'my_corrected'].")
+        if self.integrationMode is None:
+            raise ValueError("integrationMode must be specified explicitly.")
         if self.integrationMode not in {"ignore", "noIgnore", "weighted"}:
             raise ValueError("integrationMode must be one of ['ignore', 'noIgnore', 'weighted'].")
+        if self.fluxGradientMode is None:
+            raise ValueError("fluxGradientMode must be specified explicitly.")
         if self.fluxGradientMode not in {"pre_diffusion", "post_diffusion"}:
             raise ValueError("fluxGradientMode must be one of ['pre_diffusion', 'post_diffusion'].")
         if self.bulkUpdateScheme not in {"legacy", "flux_form"}:
             raise ValueError("bulkUpdateScheme must be one of ['legacy', 'flux_form'].")
         if not (0 < self.pstar < 1):
             raise ValueError("pstar must lie strictly between 0 and 1.")
+        if self.constraints.movingBoundaryThreshold>=min(self.pstar, 1-self.pstar):
+            raise ValueError("movingBoundaryThreshold must be less than the minimum of pstar and 1-pstar.")
         if self._isBinarySystem():
             if self.mesh.numResponses != 1:
                 raise ValueError("MovingBoundaryFD1DModel requires one response variable for binary systems.")
@@ -302,6 +330,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         Clips the interface to the open domain and nudges it off exact node locations
         '''
         z = np.ravel(self.mesh.z)
+        assert z[0] < interface_position < z[-1], "Interface position is outside the domain."
         return interface_position ##NOTE: Bypassing this for now as it is unlikely that the interface will need to be nudged and this function is slow (mostly due to calling np.isclose() on entire array)
         eps = max(float(self.mesh.dz) * 1e-8, 1e-14)
         lower = float(z[0] + eps)
@@ -899,6 +928,17 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         Computes composition rates and interface velocity for one binary explicit FDM step.
         '''
         c_old = np.asarray(xCurr[0], dtype=np.float64).reshape(-1)
+        # if 94341.92<t<94341.94:
+        #     try:
+        #         import debugpy
+        #         # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+        #         debugpy.listen(5678)
+        #         print("Waiting for debugger attach")
+        #         debugpy.wait_for_client()
+        #         debugpy.breakpoint()
+        #         print('break on this line')
+        #     except:
+        #         pass
         s_old = self._clipInterfacePosition(float(xCurr[1]))
         geom, _, c_left_int, c_right_int, D_left_int, D_right_int = self._getInterfaceState(t, c_old, s_old)
         diffusivity_nodes = self._bulk_diffusivity_nodes(c_old, t, geom)
@@ -939,6 +979,17 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             bulk_mask[geom.left_near_index] = False
         if right_near_active:
             bulk_mask[geom.right_near_index] = False
+        if (left_near_active!=True) or (right_near_active!=True):
+            try:
+                import debugpy
+                # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+                debugpy.listen(5678)
+                print("Waiting for debugger attach")
+                debugpy.wait_for_client()
+                debugpy.breakpoint()
+                print('break on this line')
+            except:
+                pass
 
         c_new = c_old.copy()
         c_new[bulk_mask] = c_old[bulk_mask] + self._currdt * bulk_dcdt[bulk_mask]
@@ -1033,38 +1084,55 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             #     )
             #     doubleCheck_massDiff = doubleCheck_mass - self._initialInventory
         elif self.interfaceUpdate == "my_corrected":
-            mass_func = lambda s: integrate_binary_fd_profile(self.mesh.z, c_stage, s_old=s_old, p_old=geom.p, s_new=s, pstar=self.pstar, interface_compositions=(c_left_int, c_right_int), integration_mode=self.integrationMode, s_for_interp="new")
-            massDiff_func = lambda s: mass_func(s)-self._initialInventory
-            bracket_halfWidth = self.mesh.dz * self.constraints.movingBoundaryThreshold
-            bracket = [s_old-bracket_halfWidth, s_old+bracket_halfWidth]
-            bracket = np.clip(bracket, 1.5 * self.mesh.dz, self.mesh.zlim[0][-1] - (1.5 * self.mesh.dz)).tolist()
-            sol = optimize.root_scalar(
-                massDiff_func,
-                bracket=bracket,
-                method='brentq',
-                rtol=1e-14,
-                xtol=1e-14,
-            )
-            ds = sol.root-s_old
-            velocity = ds / self._currdt if self._currdt > 0 else 0.0
+            try:
+                mass_func = lambda s: integrate_binary_fd_profile(self.mesh.z, c_stage, s_old=s_old, p_old=geom.p, s_new=s, pstar=self.pstar, interface_compositions=(c_left_int, c_right_int), integration_mode=self.integrationMode, s_for_interp="new")
+                massDiff_func = lambda s: mass_func(s)-self._initialInventory
+                
+                # massDiff_func = lambda s: mass_func(s)-((374.5 * 0.291) + (190.5 * 0.394))
+                bracket_halfWidth = self.mesh.dz * self.constraints.movingBoundaryThreshold
+                # bracket_halfWidth = self.mesh.dz * 0.5
+                bracket = [s_old-bracket_halfWidth, s_old+bracket_halfWidth]
+                bracket = np.clip(bracket, 1.5 * self.mesh.dz, self.mesh.zlim[0][-1] - (1.5 * self.mesh.dz)).tolist()
+                sol = optimize.root_scalar(
+                    massDiff_func,
+                    # bracket=[np.ravel(self.mesh.z)[geom.left_index-1], np.ravel(self.mesh.z)[geom.right_index+1]],
+                    bracket=bracket,
+                    method='brentq',
+                    rtol=1e-14,
+                    xtol=1e-14,
+                )
+                # debugInPlace()
+                ds = sol.root-s_old
+                velocity = ds / self._currdt if self._currdt > 0 else 0.0
+            except:
+                debugInPlace()
+
+
         else:
             raise ValueError("Should be one of above options")
-        max_fraction = self.constraints.movingBoundaryThreshold #self._max_interface_step_fraction(geom, velocity)
+
+
+
+
+        max_fraction = self.constraints.movingBoundaryThreshold #self._max_interface_step_fraction(geom, velocity) # this was removed since _max_interface_step_fraction() will prevent interface from ever crossing node
+        if (t==0) and (self.interfaceUpdate == "my_corrected"):
+            max_fraction=0.5
         requested_fraction = abs(ds) / self.mesh.dz
         if not np.isfinite(requested_fraction):
             raise ValueError("MovingBoundaryFD1DModel produced a non-finite interface increment.")
         max_fraction = max(max_fraction, 1e-12)
         if requested_fraction > max_fraction:
-            raise ValueError("MovingBoundaryFD1DModel requested_fraction is greater than max_fraction") #ds = np.sign(ds) * 0.95 * max_fraction * self.mesh.dz
-            velocity = ds / self._currdt if self._currdt > 0 else 0.0
+            print(f"(max_fraction, requested_fraction): {(max_fraction, requested_fraction)}")
+            debugInPlace()
+            raise ValueError("MovingBoundaryFD1DModel requested_fraction is greater than max_fraction")
 
         s_new = self._clipInterfacePosition(s_old + ds, strict=True)
         c_final = self._reconstructIgnoredComposition(c_new, s_old, geom.p, s_new, (c_left_int, c_right_int))
         dcdt = (c_final - c_old) / self._currdt
-        fluxes, left_flux, right_flux = self._compute_fluxes(c_final, diffusivity_nodes, s_old, (c_left_int, c_right_int), (D_left_int, D_right_int))
-        self._lastFluxes = fluxes
-        self._lastInterfaceFluxes = (float(left_flux), float(right_flux))
-        self._lastInterfaceVelocity = float(velocity)
+        # fluxes, left_flux, right_flux = self._compute_fluxes(c_final, diffusivity_nodes, s_old, (c_left_int, c_right_int), (D_left_int, D_right_int)) ## This compute_fluxes seems unnecessary and possibly even wrong?
+        self._lastFluxes = None # fluxes
+        self._lastInterfaceFluxes = None # (float(left_flux), float(right_flux))
+        self._lastInterfaceVelocity = None # float(velocity)
         return dcdt[:, np.newaxis], float(velocity)
 
     def _computeStateTernary(self, t, xCurr):
@@ -1171,10 +1239,10 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         s_new = self._clipInterfacePosition(s_old + ds, strict=True)
         c_final = self._reconstructIgnoredComposition(c_new, s_old, geom.p, s_new, interface_compositions)
         dcdt = (c_final - c_old) / self._currdt
-        fluxes, left_flux, right_flux = self._compute_fluxes(c_final, diffusivity_nodes, s_old, interface_compositions, interface_diffusivities)
-        self._lastFluxes = fluxes
-        self._lastInterfaceFluxes = (np.asarray(left_flux, dtype=np.float64), np.asarray(right_flux, dtype=np.float64))
-        self._lastInterfaceVelocity = float(velocity)
+        # fluxes, left_flux, right_flux = self._compute_fluxes(c_final, diffusivity_nodes, s_old, interface_compositions, interface_diffusivities) ## This compute_fluxes seems unnecessary and possibly even wrong?
+        self._lastFluxes = None # fluxes
+        self._lastInterfaceFluxes = None # (np.asarray(left_flux, dtype=np.float64), np.asarray(right_flux, dtype=np.float64))
+        self._lastInterfaceVelocity = None # float(velocity)
         return dcdt, float(velocity)
 
     def _computeState(self, t, xCurr):
@@ -1230,7 +1298,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             return
 
         geom = get_moving_boundary_fd_geometry(self.mesh, interface_position, self.pstar)
-        max_fraction = self.constraints.movingBoundaryThreshold #max(1e-12, 0.95 * self._max_interface_step_fraction(geom, velocity))
+        max_fraction = self.constraints.movingBoundaryThreshold #max(1e-12, 0.95 * self._max_interface_step_fraction(geom, velocity)) # this was removed since _max_interface_step_fraction() will prevent interface from ever crossing node
         max_ds = max_fraction * self.mesh.dz
         z = np.ravel(self.mesh.z)
         eps = max(float(self.mesh.dz) * 1e-8, 1e-14)
