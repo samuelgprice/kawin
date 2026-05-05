@@ -1114,6 +1114,35 @@ def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
     assert ideal_mass==initial_mass ##This is supposed to fail for non-symmetric interface/far-field compositions
 
 
+def test_moving_boundary_fdm_accepts_my_corrected_option_for_binary():
+    interfacePosition = 0.5125
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
+        interface_compositions=(0.35, 0.65),
+    )
+
+    mesh_corrected = CartesianFD1D(['CR'], [0, 1], 41)
+    mesh_corrected.setResponseProfile(profile)
+    corrected = MovingBoundaryFD1DModel(
+        mesh_corrected,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        fluxGradientMode='post_diffusion',
+        interfaceUpdate='my_corrected',
+    )
+    corrected.setup()
+
+    assert corrected.interfaceUpdate == 'my_corrected'
+    assert np.isfinite(corrected.getTotalMass())
+
+
 def test_moving_boundary_fdm_flux_gradient_mode_switches_interface_flux_source():
     interfacePosition = 0.515
     profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
@@ -1210,6 +1239,7 @@ def test_moving_boundary_fdm_saving_loading():
     assert_allclose(new_model.currentTime, model.currentTime)
     assert new_model.fluxGradientMode == model.fluxGradientMode
     assert new_model.bulkUpdateScheme == model.bulkUpdateScheme
+    assert new_model.interfaceUpdate == model.interfaceUpdate
     try:
         os.remove(save_path)
     except PermissionError:
@@ -1246,6 +1276,8 @@ def test_moving_boundary_fdm_requires_valid_bulk_update_scheme():
             temperature=TemperatureParameters(1000),
             interfacePosition=interfacePosition,
             bulkUpdateScheme='invalid',
+                interfaceUpdate='basic',
+            fluxGradientMode='post_diffusion',
         )
 
 
@@ -1696,6 +1728,11 @@ def _make_mock_ternary_moving_boundary_model(interface_update="basic", balance_e
 def test_moving_boundary_fdm_ternary_requires_balance_element_for_corrected_mode():
     with pytest.raises(ValueError, match="balanceElement"):
         _make_mock_ternary_moving_boundary_model(interface_update="lee_oh_corrected")
+
+
+def test_moving_boundary_fdm_ternary_rejects_my_corrected_mode():
+    with pytest.raises(ValueError, match="does not support interfaceUpdate='my_corrected'"):
+        _make_mock_ternary_moving_boundary_model(interface_update="my_corrected")
 
 
 def test_moving_boundary_fdm_ternary_rejects_invalid_balance_element():

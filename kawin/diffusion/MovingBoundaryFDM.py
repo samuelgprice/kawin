@@ -1,6 +1,7 @@
 import warnings
 
 import numpy as np
+from scipy import optimize
 
 from kawin.GenericModel import GenericModel
 from kawin.diffusion.Diffusion import DiffusionModel
@@ -101,7 +102,9 @@ class MovingBoundaryFD1DModel(DiffusionModel):
     The composition field evolves on a fixed ``CartesianFD1D`` grid while the
     planar interface position is tracked as a separate scalar state. Interface
     motion uses an explicit Lee/Oh-style interpolation treatment with either a
-    basic Stefan update or the corrected ``lee_oh_corrected`` update. Bulk
+    basic Stefan update, the corrected ``lee_oh_corrected`` update, or the
+    binary-only ``my_corrected`` update that solves for the interface position
+    producing zero net mass change after the explicit diffusion stage. Bulk
     nodes away from the interface can use either the legacy ``D c_xx`` update
     or a flux-form finite-difference update that matches ``CartesianFD1D``.
     In ``flux_form`` mode, the near-interface nodes also use conservative
@@ -184,8 +187,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             raise TypeError("Thermodynamics object must implement interface composition and interdiffusivity methods.")
         if isinstance(getattr(self.mesh, "boundaryConditions", None), PeriodicBoundary1D):
             raise ValueError("Periodic boundary conditions are not supported for MovingBoundaryFD1DModel.")
-        if self.interfaceUpdate not in {"basic", "lee_oh_corrected"}:
-            raise ValueError("interfaceUpdate must be one of ['basic', 'lee_oh_corrected'].")
+        if self.interfaceUpdate not in {"basic", "lee_oh_corrected", "my_corrected"}:
+            raise ValueError("interfaceUpdate must be one of ['basic', 'lee_oh_corrected', 'my_corrected'].")
         if self.integrationMode not in {"ignore", "noIgnore", "weighted"}:
             raise ValueError("integrationMode must be one of ['ignore', 'noIgnore', 'weighted'].")
         if self.fluxGradientMode not in {"pre_diffusion", "post_diffusion"}:
@@ -205,6 +208,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 raise ValueError("Ternary MovingBoundaryFD1DModel currently requires bulkUpdateScheme='flux_form'.")
             if self.balanceElement is not None and self.balanceElement not in self.elements:
                 raise ValueError(f"balanceElement must be one of {self.elements}.")
+            if self.interfaceUpdate == "my_corrected":
+                raise ValueError("Ternary MovingBoundaryFD1DModel does not support interfaceUpdate='my_corrected'.")
             if self.interfaceUpdate == "lee_oh_corrected":
                 if self.balanceElement is None:
                     raise ValueError("Ternary MovingBoundaryFD1DModel requires balanceElement for interfaceUpdate='lee_oh_corrected'.")
@@ -235,6 +240,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 "interface_time": self.interfaceData._time,
                 "interface_interval": self.interfaceData.recordInterval,
                 "interface_index": self.interfaceData.N,
+                "interface_update": self.interfaceUpdate,
                 "flux_gradient_mode": self.fluxGradientMode,
                 "bulk_update_scheme": self.bulkUpdateScheme,
                 "balance_element": "" if self.balanceElement is None else self.balanceElement,
@@ -244,6 +250,10 @@ class MovingBoundaryFD1DModel(DiffusionModel):
 
     def fromDict(self, data):
         super().fromDict(data)
+        interface_update = data.get("interface_update", self.interfaceUpdate)
+        if isinstance(interface_update, np.ndarray):
+            interface_update = interface_update.item()
+        self.interfaceUpdate = str(interface_update)
         self.fluxGradientMode = str(data.get("flux_gradient_mode", "post_diffusion"))
         self.bulkUpdateScheme = str(data["bulk_update_scheme"])
         balance_element = data.get("balance_element", "")
@@ -1022,6 +1032,23 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             #         s_for_interp="new",
             #     )
             #     doubleCheck_massDiff = doubleCheck_mass - self._initialInventory
+        elif self.interfaceUpdate == "my_corrected":
+            mass_func = lambda s: integrate_binary_fd_profile(self.mesh.z, c_stage, s_old=s_old, p_old=geom.p, s_new=s, pstar=self.pstar, interface_compositions=(c_left_int, c_right_int), integration_mode=self.integrationMode, s_for_interp="new")
+            massDiff_func = lambda s: mass_func(s)-self._initialInventory
+            bracket_halfWidth = self.mesh.dz * self.constraints.movingBoundaryThreshold
+            bracket = [s_old-bracket_halfWidth, s_old+bracket_halfWidth]
+            bracket = np.clip(bracket, 1.5 * self.mesh.dz, self.mesh.zlim[0][-1] - (1.5 * self.mesh.dz)).tolist()
+            sol = optimize.root_scalar(
+                massDiff_func,
+                bracket=bracket,
+                method='brentq',
+                rtol=1e-14,
+                xtol=1e-14,
+            )
+            ds = sol.root-s_old
+            velocity = ds / self._currdt if self._currdt > 0 else 0.0
+        else:
+            raise ValueError("Should be one of above options")
         max_fraction = self.constraints.movingBoundaryThreshold #self._max_interface_step_fraction(geom, velocity)
         requested_fraction = abs(ds) / self.mesh.dz
         if not np.isfinite(requested_fraction):
