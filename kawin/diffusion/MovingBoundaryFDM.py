@@ -146,6 +146,13 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         update, while ``"post_diffusion"`` uses gradients from the profile
         after that explicit diffusion stage. This argument must be specified
         explicitly.
+    initialInventoryMode : {"integrated", "phase_length_idealized"}
+        Rule used to compute the stored initial inventory ``_initialInventory``.
+        ``"integrated"`` uses the interface-aware integration currently used by
+        ``getTotalMass`` and ``getTotalInventory``. ``"phase_length_idealized"``
+        uses constant composition in each phase multiplied by each phase length
+        and raises an error if either phase is not constant. This argument must
+        be specified explicitly and affects only the stored initial inventory.
     """
 
     def __init__(
@@ -163,6 +170,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         pstar: float = 0.5,
         integrationMode: str | None = None,
         fluxGradientMode: str | None = None,
+        initialInventoryMode: str | None = None,
         balanceElement: str | None = None,
     ):
         self.initialInterfacePosition = float(interfacePosition)
@@ -171,6 +179,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         self.pstar = float(pstar)
         self.integrationMode = None if integrationMode is None else str(integrationMode)
         self.fluxGradientMode = None if fluxGradientMode is None else str(fluxGradientMode)
+        self.initialInventoryMode = None if initialInventoryMode is None else str(initialInventoryMode)
         self.bulkUpdateScheme = str(bulkUpdateScheme)
         self.balanceElement = None if balanceElement is None else str(balanceElement)
         self._balanceElementIndex = None
@@ -219,6 +228,10 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             raise ValueError("fluxGradientMode must be specified explicitly.")
         if self.fluxGradientMode not in {"pre_diffusion", "post_diffusion"}:
             raise ValueError("fluxGradientMode must be one of ['pre_diffusion', 'post_diffusion'].")
+        if self.initialInventoryMode is None:
+            raise ValueError("initialInventoryMode must be specified explicitly.")
+        if self.initialInventoryMode not in {"integrated", "phase_length_idealized"}:
+            raise ValueError("initialInventoryMode must be one of ['integrated', 'phase_length_idealized'].")
         if self.bulkUpdateScheme not in {"legacy", "flux_form"}:
             raise ValueError("bulkUpdateScheme must be one of ['legacy', 'flux_form'].")
         if not (0 < self.pstar < 1):
@@ -270,6 +283,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 "interface_index": self.interfaceData.N,
                 "interface_update": self.interfaceUpdate,
                 "flux_gradient_mode": self.fluxGradientMode,
+                "initial_inventory_mode": self.initialInventoryMode,
                 "bulk_update_scheme": self.bulkUpdateScheme,
                 "balance_element": "" if self.balanceElement is None else self.balanceElement,
             }
@@ -283,6 +297,12 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             interface_update = interface_update.item()
         self.interfaceUpdate = str(interface_update)
         self.fluxGradientMode = str(data.get("flux_gradient_mode", "post_diffusion"))
+        if "initial_inventory_mode" not in data:
+            raise ValueError(
+                "Saved MovingBoundaryFD1DModel data does not include 'initial_inventory_mode'. "
+                "Please set initialInventoryMode explicitly before loading legacy data."
+            )
+        self.initialInventoryMode = str(data["initial_inventory_mode"])
         self.bulkUpdateScheme = str(data["bulk_update_scheme"])
         balance_element = data.get("balance_element", "")
         if isinstance(balance_element, np.ndarray):
@@ -398,11 +418,76 @@ class MovingBoundaryFD1DModel(DiffusionModel):
 
     def _getStoredInventory(self, time = None):
         '''
-        Returns the scalar or vector inventory appropriate for the current system.
+        Returns stored initial inventory using the configured initialization mode.
+
+        This helper is used only to seed ``self._initialInventory`` at
+        initialization/reset/load. Runtime mass and inventory checks still use
+        the standard interface-aware integration paths.
         '''
-        if self._isBinarySystem():
-            return self.getTotalMass(time)
-        return self.getTotalInventory(time)
+        if self.initialInventoryMode == "integrated":
+            if self._isBinarySystem():
+                return self.getTotalMass(time)
+            return self.getTotalInventory(time)
+        if self.initialInventoryMode == "phase_length_idealized":
+            initInventory = self._getPhaseLengthIdealizedInitialInventory(time)
+            print(f"Initial mass: {initInventory}")
+            return initInventory
+        raise ValueError("initialInventoryMode must be one of ['integrated', 'phase_length_idealized'].")
+
+    def _getPhaseLengthIdealizedInitialInventory(self, time=None):
+        '''
+        Computes initial inventory from phase lengths times constant phase composition.
+
+        The left phase is defined over nodes ``[:geometry.right_index]`` and the
+        right phase over ``[geometry.right_index:]``. Each phase must be
+        compositionally constant (within ``atol=self.constraints.minComposition``).
+        '''
+        composition = np.asarray(self.data.y(time), dtype=np.float64)
+        interface_position = self.getInterfacePosition(time)
+        geometry = get_moving_boundary_fd_geometry(self.mesh, interface_position, self.pstar)
+        z = np.asarray(self.mesh.z, dtype=np.float64).reshape(-1)
+        left_slice = slice(0, geometry.right_index)
+        right_slice = slice(geometry.right_index, composition.shape[0])
+
+        if self._isBinarySystem() or (composition.ndim > 1 and composition.shape[1] == 1):
+            composition = composition.reshape(-1)
+            left_phase = composition[left_slice]
+            right_phase = composition[right_slice]
+            left_value = self._requireConstantPhaseComposition(left_phase, "left", None)
+            right_value = self._requireConstantPhaseComposition(right_phase, "right", None)
+            left_length = float(interface_position - z[0])
+            right_length = float(z[-1] - interface_position)
+            return float(left_value * left_length + right_value * right_length)
+
+        left_phase = composition[left_slice, :]
+        right_phase = composition[right_slice, :]
+        left_values = np.zeros(composition.shape[1], dtype=np.float64)
+        right_values = np.zeros(composition.shape[1], dtype=np.float64)
+        for i in range(composition.shape[1]):
+            left_values[i] = self._requireConstantPhaseComposition(left_phase[:, i], "left", i)
+            right_values[i] = self._requireConstantPhaseComposition(right_phase[:, i], "right", i)
+        left_length = float(interface_position - z[0])
+        right_length = float(z[-1] - interface_position)
+        return left_values * left_length + right_values * right_length
+
+    def _requireConstantPhaseComposition(self, phase_values, phase_name, component_index):
+        '''
+        Validates that a 1D phase composition array is constant and returns its value.
+        '''
+        values = np.asarray(phase_values, dtype=np.float64).reshape(-1)
+        if values.size == 0:
+            raise ValueError(f"Cannot evaluate {phase_name} phase constancy because it contains no nodes.")
+        reference = float(values[0])
+        if not np.allclose(values, reference, rtol=0.0, atol=self.constraints.minComposition):
+            if component_index is None:
+                component_label = self.elements[0] if len(self.elements) > 0 else "independent component"
+            else:
+                component_label = self.elements[component_index]
+            raise ValueError(
+                f"phase_length_idealized initial inventory requires constant composition in each phase; "
+                f"{phase_name} phase is not constant for component '{component_label}'."
+            )
+        return reference
 
     def _integrateComponentInventory(self, composition, interface_position, interface_compositions, component_index, s_for_interp, s_old=None, p_old=None, s_new=None):
         '''

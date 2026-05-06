@@ -54,7 +54,7 @@ class ConstantBinaryThermodynamics:
         return np.squeeze(left), np.squeeze(right)
 
 
-MODEL_CACHE_VERSION = "idealizedMass"
+MODEL_CACHE_VERSION = "v2"
 
 
 def _normalize_cache_value(value):
@@ -281,6 +281,7 @@ common_cache_params = {
     'record': record_input,
     'iterator': 'explicitEulerIterator',
     'integrationMode': integrationMode_input,
+    'initialInventoryMode': 'integrated',
     't_end': t_end,
     'L': L,
     'N': N,
@@ -434,6 +435,7 @@ def run_cached_case(case_overrides=None):
         'record': config['record'],
         'iterator': 'explicitEulerIterator',
         'integrationMode': config['integrationMode'],
+        'initialInventoryMode': 'integrated',
         't_end': config['t_end'],
         'L': config['L'],
         'N': config['N'],
@@ -457,6 +459,7 @@ def run_cached_case(case_overrides=None):
         interfacePosition=config['interface_position'],
         bulkUpdateScheme=config['bulkUpdateScheme'],
         integrationMode=config['integrationMode'],
+        initialInventoryMode='integrated',
         fluxGradientMode=config['fluxGradientMode'],
         interfaceUpdate=config['interfaceUpdate'],
         pstar=config['pstar'],
@@ -1043,6 +1046,7 @@ if use_post_basic:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
+        initialInventoryMode='integrated',
         fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
         pstar=0.5,
@@ -1078,6 +1082,7 @@ if use_pre_basic:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
+        initialInventoryMode='integrated',
         fluxGradientMode='pre_diffusion',
         interfaceUpdate='basic',
         pstar=0.5,
@@ -1111,6 +1116,7 @@ if use_post_corr:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
+        initialInventoryMode='integrated',
         fluxGradientMode='post_diffusion',
         interfaceUpdate='lee_oh_corrected',
         pstar=0.5,
@@ -1146,6 +1152,7 @@ if use_pre_corr:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
+        initialInventoryMode='integrated',
         fluxGradientMode='pre_diffusion',
         interfaceUpdate='lee_oh_corrected',
         pstar=0.5,
@@ -1355,6 +1362,7 @@ def initial_mass_funcOfStartingInterfacePosition(startingInterfacePosition):
         interfacePosition=startingInterfacePosition,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
+        initialInventoryMode='integrated',
         fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
         pstar=0.5,

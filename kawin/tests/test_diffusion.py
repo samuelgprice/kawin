@@ -1007,6 +1007,7 @@ def test_moving_boundary_fdm_dXdt_and_fluxes():
         bulkUpdateScheme='legacy',
         integrationMode='weighted',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         interfaceUpdate='basic',
     )
     model.setup()
@@ -1040,6 +1041,7 @@ def test_moving_boundary_fdm_left_near_node_uses_quadratic_update_for_p_less_tha
         bulkUpdateScheme='legacy',
         integrationMode='weighted',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         interfaceUpdate='basic',
         pstar=0.5,
     )
@@ -1089,6 +1091,7 @@ def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
         bulkUpdateScheme='legacy',
         integrationMode='weighted',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         interfaceUpdate='basic',
     )
     ideal_mass = 0.5125*0.1 + (1-0.5125)*0.8
@@ -1108,6 +1111,7 @@ def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
         bulkUpdateScheme='legacy',
         integrationMode='weighted',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         interfaceUpdate='lee_oh_corrected',
     )
     initial_mass_corrected = corrected.getTotalMass()
@@ -1139,6 +1143,7 @@ def test_moving_boundary_fdm_accepts_my_corrected_option_for_binary():
         bulkUpdateScheme='legacy',
         integrationMode='weighted',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         interfaceUpdate='my_corrected',
     )
     corrected.setup()
@@ -1171,6 +1176,7 @@ def test_moving_boundary_fdm_flux_gradient_mode_switches_interface_flux_source()
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
     )
     post_model.setup()
 
@@ -1187,6 +1193,7 @@ def test_moving_boundary_fdm_flux_gradient_mode_switches_interface_flux_source()
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='pre_diffusion',
+        initialInventoryMode='integrated',
     )
     pre_model.setup()
 
@@ -1218,6 +1225,7 @@ def test_moving_boundary_fdm_saving_loading():
         integrationMode='weighted',
         interfaceUpdate='lee_oh_corrected',
         fluxGradientMode='pre_diffusion',
+        initialInventoryMode='integrated',
         record=True,
     )
     model.solve(0.002, iterator=explicitEulerIterator)
@@ -1238,6 +1246,7 @@ def test_moving_boundary_fdm_saving_loading():
         integrationMode='weighted',
         interfaceUpdate='lee_oh_corrected',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         record=True,
     )
     new_model.load(save_path)
@@ -1252,6 +1261,107 @@ def test_moving_boundary_fdm_saving_loading():
         os.remove(save_path)
     except PermissionError:
         pass
+
+
+def test_moving_boundary_fdm_phase_length_idealized_initial_inventory_binary():
+    interfacePosition = 0.525
+    c_left = 0.1
+    c_right = 0.8
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, c_left, c_right), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='phase_length_idealized',
+    )
+    expected = c_left * interfacePosition + c_right * (1.0 - interfacePosition)
+    assert np.isscalar(model._initialInventory)
+    assert_allclose(model._initialInventory, expected, rtol=0, atol=1e-12)
+
+
+def test_moving_boundary_fdm_phase_length_idealized_requires_constant_phase_composition():
+    interfacePosition = 0.525
+    profile = ProfileBuilder([(LinearProfile1D(0, 0.1, 1, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    with pytest.raises(ValueError, match="phase_length_idealized initial inventory requires constant composition"):
+        MovingBoundaryFD1DModel(
+            mesh,
+            ['FE', 'CR'],
+            ['ALPHA', 'BETA'],
+            thermodynamics=therm,
+            temperature=TemperatureParameters(1000),
+            interfacePosition=interfacePosition,
+            bulkUpdateScheme='legacy',
+            integrationMode='weighted',
+            interfaceUpdate='basic',
+            fluxGradientMode='post_diffusion',
+            initialInventoryMode='phase_length_idealized',
+        )
+
+
+def test_moving_boundary_fdm_from_dict_requires_initial_inventory_mode():
+    interfacePosition = 0.525
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
+    )
+    data = model.toDict()
+    data.pop("initial_inventory_mode")
+
+    new_mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    new_mesh.setResponseProfile(profile)
+    new_model = MovingBoundaryFD1DModel(
+        new_mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
+    )
+    with pytest.raises(ValueError, match="does not include 'initial_inventory_mode'"):
+        new_model.fromDict(data)
 
 
 def test_moving_boundary_fdm_requires_valid_bulk_update_scheme():
@@ -1311,6 +1421,20 @@ def test_moving_boundary_fdm_requires_valid_bulk_update_scheme():
             integrationMode='weighted',
         )
 
+    with pytest.raises(ValueError, match="initialInventoryMode must be specified explicitly"):
+        MovingBoundaryFD1DModel(
+            mesh,
+            ['FE', 'CR'],
+            ['ALPHA', 'BETA'],
+            thermodynamics=therm,
+            temperature=TemperatureParameters(1000),
+            interfacePosition=interfacePosition,
+            bulkUpdateScheme='legacy',
+            interfaceUpdate='basic',
+            integrationMode='weighted',
+            fluxGradientMode='post_diffusion',
+        )
+
     with pytest.raises(ValueError, match="bulkUpdateScheme"):
         MovingBoundaryFD1DModel(
             mesh,
@@ -1323,6 +1447,7 @@ def test_moving_boundary_fdm_requires_valid_bulk_update_scheme():
             integrationMode='weighted',
             interfaceUpdate='basic',
             fluxGradientMode='post_diffusion',
+            initialInventoryMode='integrated',
         )
 
 
@@ -1348,6 +1473,7 @@ def test_moving_boundary_fdm_bulk_update_scheme_matches_for_constant_diffusivity
         integrationMode='weighted',
         interfaceUpdate='lee_oh_corrected',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         record=True,
     )
 
@@ -1364,6 +1490,7 @@ def test_moving_boundary_fdm_bulk_update_scheme_matches_for_constant_diffusivity
         integrationMode='weighted',
         interfaceUpdate='lee_oh_corrected',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         record=True,
     )
 
@@ -1401,6 +1528,7 @@ def test_moving_boundary_fdm_flux_form_uses_variable_diffusivity_bulk_update():
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
     )
     legacy.setup()
 
@@ -1417,6 +1545,7 @@ def test_moving_boundary_fdm_flux_form_uses_variable_diffusivity_bulk_update():
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
     )
     flux_form.setup()
 
@@ -1467,6 +1596,7 @@ def test_moving_boundary_fdm_bulk_update_switch_only_changes_ordinary_bulk_nodes
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
     )
     legacy.setup()
 
@@ -1483,6 +1613,7 @@ def test_moving_boundary_fdm_bulk_update_switch_only_changes_ordinary_bulk_nodes
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
     )
     flux_form.setup()
 
@@ -1527,6 +1658,7 @@ def test_moving_boundary_fdm_flux_form_matches_legacy_at_left_near_node_for_cons
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         record=True,
     )
 
@@ -1543,6 +1675,7 @@ def test_moving_boundary_fdm_flux_form_matches_legacy_at_left_near_node_for_cons
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         record=True,
     )
 
@@ -1590,6 +1723,7 @@ def test_moving_boundary_fdm_flux_form_matches_legacy_at_right_near_node_for_con
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         record=True,
     )
 
@@ -1606,6 +1740,7 @@ def test_moving_boundary_fdm_flux_form_matches_legacy_at_right_near_node_for_con
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         record=True,
     )
 
@@ -1653,6 +1788,7 @@ def test_moving_boundary_fdm_flux_form_left_near_node_matches_cut_cell_formula()
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
     )
     legacy.setup()
 
@@ -1669,6 +1805,7 @@ def test_moving_boundary_fdm_flux_form_left_near_node_matches_cut_cell_formula()
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
     )
     flux_form.setup()
 
@@ -1714,6 +1851,7 @@ def test_moving_boundary_fdm_flux_form_right_near_node_matches_cut_cell_formula(
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
     )
     legacy.setup()
 
@@ -1730,6 +1868,7 @@ def test_moving_boundary_fdm_flux_form_right_near_node_matches_cut_cell_formula(
         integrationMode='weighted',
         interfaceUpdate='basic',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
     )
     flux_form.setup()
 
@@ -1777,6 +1916,7 @@ def _make_mock_ternary_moving_boundary_model(interface_update="basic", balance_e
         integrationMode='weighted',
         interfaceUpdate=interface_update,
         fluxGradientMode='pre_diffusion',
+        initialInventoryMode='integrated',
         balanceElement=balance_element,
         record=record,
     )
@@ -1889,6 +2029,7 @@ def test_moving_boundary_fdm_ternary_real_thermo_smoke():
         interfaceUpdate='basic',
         balanceElement='CR',
         fluxGradientMode='pre_diffusion',
+        initialInventoryMode='integrated',
     )
     model.setup()
 
@@ -2064,3 +2205,4 @@ def test_moving_boundary_mass_check_raises():
 
     with pytest.raises(ValueError, match='mass correction residual'):
         model._checkMassCorrection(model.data.currentY[:,0], model.getInterfacePosition())
+
