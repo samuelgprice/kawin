@@ -12,6 +12,7 @@ from kawin.diffusion.mesh.MovingBoundaryFD1D import quad_fit_derivs
 from kawin.diffusion.DiffusionParameters import computeMobility, _computeSingleMobility, TemperatureParameters, HashTable
 from kawin.diffusion.HomogenizationParameters import HomogenizationParameters, computeHomogenizationFunction
 from kawin.thermo import GeneralThermodynamics, MulticomponentThermodynamics
+from kawin.thermo.Surrogate import GeneralSurrogate, BinarySurrogate
 from kawin.tests.datasets import *
 from kawin.solver import explicitEulerIterator
 
@@ -50,10 +51,12 @@ class VariableBinaryThermodynamics(ConstantBinaryThermodynamics):
 
 
 class MockTernaryTieLineThermodynamics:
-    def __init__(self, phases, left_probe, right_probe):
+    def __init__(self, phases, left_probe, right_probe, reverse_endpoint_order=False, ambiguous_endpoint_phases=False):
         self.phases = phases
         self.left_probe = np.asarray(left_probe, dtype=np.float64)
         self.right_probe = np.asarray(right_probe, dtype=np.float64)
+        self.reverse_endpoint_order = bool(reverse_endpoint_order)
+        self.ambiguous_endpoint_phases = bool(ambiguous_endpoint_phases)
         self.probe_direction = self.right_probe - self.left_probe
         self.base_left = np.array([0.29, 0.0565], dtype=np.float64)
         self.base_right = np.array([0.185, 0.12475], dtype=np.float64)
@@ -67,6 +70,14 @@ class MockTernaryTieLineThermodynamics:
     def clearCache(self):
         return
 
+    def _check_side_of_probe(self, values):
+        perp = np.array([-self.probe_direction[1], self.probe_direction[0]], dtype=np.float64)
+        sides = []
+        for x in values:
+            d = np.asarray(x, dtype=np.float64).reshape(-1) - self.right_probe
+            sides.append(np.sign(np.dot(d, perp)))
+        return sides
+
     def _lambda_from_probe(self, x):
         probe = np.asarray(x, dtype=np.float64).reshape(-1)
         denom = float(np.dot(self.probe_direction, self.probe_direction))
@@ -79,13 +90,46 @@ class MockTernaryTieLineThermodynamics:
         right = self.base_right + effective_lam * self.right_slope
         return left, right
 
-    def getInterfacialComposition(self, x, T, gExtra=0, precPhase=None):
+    def getInterfacialComposition(self, x, T, gExtra=0, precPhase=None, returnMeta=False):
         values = np.asarray(x, dtype=np.float64)
         if values.ndim == 1:
-            return self._interface_from_lambda(self._lambda_from_probe(values))
+            left, right = self._interface_from_lambda(self._lambda_from_probe(values))
+            phase_left = self.phases[0]
+            phase_right = self.phases[1] if precPhase is None else precPhase
+            if self.ambiguous_endpoint_phases:
+                phase_right = phase_left
+            if self.reverse_endpoint_order:
+                left, right = right, left
+                phase_left, phase_right = phase_right, phase_left
+            if returnMeta:
+                return left, right, {
+                    "endpoint_phases": (phase_left, phase_right),
+                    "endpoints": (
+                        {"phase": phase_left, "composition": left},
+                        {"phase": phase_right, "composition": right},
+                    ),
+                }
+            return left, right
         pairs = [self._interface_from_lambda(self._lambda_from_probe(v)) for v in values]
         left, right = zip(*pairs)
-        return np.asarray(left, dtype=np.float64), np.asarray(right, dtype=np.float64)
+        left = np.asarray(left, dtype=np.float64)
+        right = np.asarray(right, dtype=np.float64)
+        phase_left = self.phases[0]
+        phase_right = self.phases[1] if precPhase is None else precPhase
+        if self.ambiguous_endpoint_phases:
+            phase_right = phase_left
+        if self.reverse_endpoint_order:
+            left, right = right, left
+            phase_left, phase_right = phase_right, phase_left
+        if returnMeta:
+            return left, right, {
+                "endpoint_phases": (phase_left, phase_right),
+                "endpoints": (
+                    {"phase": phase_left, "composition": left},
+                    {"phase": phase_right, "composition": right},
+                ),
+            }
+        return left, right
 
     def getInterdiffusivity(self, x, T, removeCache=True, phase=None):
         values = np.asarray(x, dtype=np.float64)
@@ -93,6 +137,30 @@ class MockTernaryTieLineThermodynamics:
         if values.ndim == 1:
             return base
         return np.tile(base, (len(values), 1, 1))
+
+
+class MockBinaryInterfaceThermo:
+    def __init__(self):
+        self.phases = ['ALPHA', 'BETA']
+        self.elements = ['FE', 'CR']
+        self.numElements = 2
+
+    def getInterfacialComposition(self, T, gExtra=0, precPhase=None, returnMeta=False):
+        T_arr = np.atleast_1d(T).astype(np.float64)
+        xa = 0.30 + 1e-4 * (T_arr - T_arr.min())
+        xb = 0.70 - 1e-4 * (T_arr - T_arr.min())
+        xa = np.squeeze(xa)
+        xb = np.squeeze(xb)
+        if not returnMeta:
+            return xa, xb
+        p_beta = self.phases[1] if precPhase is None else precPhase
+        return xa, xb, {
+            "endpoint_phases": (self.phases[0], p_beta),
+            "endpoints": (
+                {"phase": self.phases[0], "composition": xa},
+                {"phase": p_beta, "composition": xb},
+            ),
+        }
 
 def test_compositionInput():
     '''
@@ -1892,7 +1960,14 @@ def test_moving_boundary_fdm_flux_form_right_near_node_matches_cut_cell_formula(
     assert not np.isclose(flux_dXdt[0][idx, 0], legacy_dXdt[0][idx, 0], rtol=1e-10, atol=1e-12)
 
 
-def _make_mock_ternary_moving_boundary_model(interface_update="basic", balance_element=None, record=False):
+def _make_mock_ternary_moving_boundary_model(
+    interface_update="basic",
+    balance_element=None,
+    record=False,
+    multicomponent_interface_state_update="pre_diffusion_only",
+    reverse_endpoint_order=False,
+    ambiguous_endpoint_phases=False,
+):
     interface_position = 0.515
     left_comp = np.array([0.30, 0.05], dtype=np.float64)
     right_comp = np.array([0.10, 0.18], dtype=np.float64)
@@ -1904,7 +1979,13 @@ def _make_mock_ternary_moving_boundary_model(interface_update="basic", balance_e
     )
     mesh = CartesianFD1D(['CR', 'NI'], [0, 1], 41)
     mesh.setResponseProfile(profile)
-    therm = MockTernaryTieLineThermodynamics(['ALPHA', 'BETA'], left_probe=left_comp, right_probe=right_comp)
+    therm = MockTernaryTieLineThermodynamics(
+        ['ALPHA', 'BETA'],
+        left_probe=left_comp,
+        right_probe=right_comp,
+        reverse_endpoint_order=reverse_endpoint_order,
+        ambiguous_endpoint_phases=ambiguous_endpoint_phases,
+    )
     model = MovingBoundaryFD1DModel(
         mesh,
         ['FE', 'CR', 'NI'],
@@ -1918,6 +1999,7 @@ def _make_mock_ternary_moving_boundary_model(interface_update="basic", balance_e
         fluxGradientMode='pre_diffusion',
         initialInventoryMode='integrated',
         balanceElement=balance_element,
+        multicomponentInterfaceStateUpdate=multicomponent_interface_state_update,
         record=record,
     )
     model.setup()
@@ -1929,8 +2011,8 @@ def test_moving_boundary_fdm_ternary_requires_balance_element_for_corrected_mode
         _make_mock_ternary_moving_boundary_model(interface_update="lee_oh_corrected")
 
 
-def test_moving_boundary_fdm_ternary_rejects_my_corrected_mode():
-    with pytest.raises(ValueError, match="does not support interfaceUpdate='my_corrected'"):
+def test_moving_boundary_fdm_ternary_requires_balance_element_for_my_corrected_mode():
+    with pytest.raises(ValueError, match="balanceElement"):
         _make_mock_ternary_moving_boundary_model(interface_update="my_corrected")
 
 
@@ -1960,6 +2042,240 @@ def test_moving_boundary_fdm_ternary_interface_state_matches_component_velocitie
     assert np.all(np.isfinite(model.getTotalInventory()))
 
 
+def test_multicomponent_thermo_interface_metadata_supported():
+    therm = MulticomponentThermodynamics(FECRNI_DB, ['FE', 'CR', 'NI'], ['FCC_A1', 'BCC_A2'])
+    c_left, c_right, meta = therm.getInterfacialComposition(
+        np.array([0.30, 0.085], dtype=np.float64),
+        1373,
+        0,
+        precPhase='BCC_A2',
+        returnMeta=True,
+    )
+    assert np.asarray(c_left, dtype=np.float64).ndim == 1
+    assert np.asarray(c_right, dtype=np.float64).ndim == 1
+    assert np.asarray(c_left, dtype=np.float64).size >= 2
+    assert np.asarray(c_right, dtype=np.float64).size >= 2
+    assert isinstance(meta, dict)
+    assert "endpoints" in meta
+    assert len(meta["endpoints"]) == 2
+
+
+def test_surrogate_untrained_interface_metadata_passthrough():
+    therm = MulticomponentThermodynamics(FECRNI_DB, ['FE', 'CR', 'NI'], ['FCC_A1', 'BCC_A2'])
+    surrogate = GeneralSurrogate(therm)
+    _, _, meta_therm = therm.getInterfacialComposition(
+        np.array([0.30, 0.085], dtype=np.float64),
+        1373,
+        0,
+        precPhase='BCC_A2',
+        returnMeta=True,
+    )
+    _, _, meta_sur = surrogate.getInterfacialComposition(
+        np.array([0.30, 0.085], dtype=np.float64),
+        1373,
+        0,
+        precPhase='BCC_A2',
+        returnMeta=True,
+    )
+    assert meta_sur["endpoint_phases"] == meta_therm["endpoint_phases"]
+
+
+def test_binary_surrogate_trained_interface_metadata_supported():
+    surrogate = BinarySurrogate(MockBinaryInterfaceThermo())
+    surrogate.trainInterfacialComposition(
+        T=np.array([1000.0, 1050.0, 1100.0], dtype=np.float64),
+        gExtra=np.array([0.1, 0.2, 0.3], dtype=np.float64),
+        precPhase='BETA',
+        broadcast=False,
+    )
+    _, _, meta = surrogate.getInterfacialComposition(1075.0, 0.15, precPhase='BETA', returnMeta=True)
+    assert meta["endpoint_phases"] == ('ALPHA', 'BETA')
+    assert meta["endpoints"][0]["phase"] == 'ALPHA'
+    assert meta["endpoints"][1]["phase"] == 'BETA'
+
+
+def test_moving_boundary_fdm_ternary_pre_diffusion_only_solves_once_per_step():
+    model = _make_mock_ternary_moving_boundary_model(
+        interface_update="basic",
+        multicomponent_interface_state_update="pre_diffusion_only",
+    )
+    solve_count = {"n": 0}
+    original = model._solveMulticomponentInterfaceState
+
+    def counted(*args, **kwargs):
+        solve_count["n"] += 1
+        return original(*args, **kwargs)
+
+    model._solveMulticomponentInterfaceState = counted
+    model.getdXdt(model.currentTime, model.getCurrentX())
+
+    assert solve_count["n"] == 1
+
+
+def test_moving_boundary_fdm_ternary_phase_ordering_swaps_reversed_endpoints():
+    model_nominal = _make_mock_ternary_moving_boundary_model(interface_update="basic", reverse_endpoint_order=False)
+    model_reversed = _make_mock_ternary_moving_boundary_model(interface_update="basic", reverse_endpoint_order=True)
+    state_nominal = model_nominal._solveMulticomponentInterfaceState(
+        model_nominal.currentTime,
+        np.asarray(model_nominal.getCurrentX()[0], dtype=np.float64),
+        float(model_nominal.getCurrentX()[1]),
+    )
+    state_reversed = model_reversed._solveMulticomponentInterfaceState(
+        model_reversed.currentTime,
+        np.asarray(model_reversed.getCurrentX()[0], dtype=np.float64),
+        float(model_reversed.getCurrentX()[1]),
+    )
+    assert_allclose(state_reversed["interface_compositions"][0], state_nominal["interface_compositions"][0], atol=1e-12, rtol=1e-12)
+    assert_allclose(state_reversed["interface_compositions"][1], state_nominal["interface_compositions"][1], atol=1e-12, rtol=1e-12)
+
+
+def test_moving_boundary_fdm_ternary_phase_ordering_raises_on_ambiguous_metadata():
+    with pytest.raises(ValueError, match="Ambiguous interface endpoint phases"):
+        _make_mock_ternary_moving_boundary_model(interface_update="basic", ambiguous_endpoint_phases=True)
+
+
+def test_moving_boundary_fdm_ternary_pre_and_post_diffusion_solves_twice_per_step():
+    model = _make_mock_ternary_moving_boundary_model(
+        interface_update="basic",
+        multicomponent_interface_state_update="pre_and_post_diffusion",
+    )
+    solve_count = {"n": 0}
+    original = model._solveMulticomponentInterfaceState
+
+    def counted(*args, **kwargs):
+        solve_count["n"] += 1
+        return original(*args, **kwargs)
+
+    model._solveMulticomponentInterfaceState = counted
+    model.getdXdt(model.currentTime, model.getCurrentX())
+
+    assert solve_count["n"] == 2
+
+
+def test_moving_boundary_fdm_ternary_cached_only_interface_state_raises_before_first_step():
+    model = _make_mock_ternary_moving_boundary_model(interface_update="basic")
+    composition = np.asarray(model.getCurrentX()[0], dtype=np.float64)
+    interface_position = float(model.getCurrentX()[1])
+
+    with pytest.raises(ValueError, match="No cached ternary interface state"):
+        model._getInterfaceState(model.currentTime, composition, interface_position)
+
+
+def test_moving_boundary_fdm_ternary_get_interface_compositions_uses_cache_after_step():
+    model = _make_mock_ternary_moving_boundary_model(interface_update="basic")
+    model.solve(5e-5, iterator=explicitEulerIterator)
+
+    solve_count = {"n": 0}
+    original = model._solveMulticomponentInterfaceState
+
+    def counted(*args, **kwargs):
+        solve_count["n"] += 1
+        return original(*args, **kwargs)
+
+    model._solveMulticomponentInterfaceState = counted
+    left, right = model.getInterfaceCompositions()
+
+    assert left.shape == (2,)
+    assert right.shape == (2,)
+    assert solve_count["n"] == 0
+
+
+def test_moving_boundary_fdm_ternary_interface_composition_history_shapes():
+    model = _make_mock_ternary_moving_boundary_model(interface_update="basic", record=True)
+    model.solve(5e-5, iterator=explicitEulerIterator)
+    history = model._interfaceCompositionHistory
+
+    assert history is not None
+    assert history["pre_left"]._y.ndim == 2
+    assert history["pre_left"]._y.shape[1] == 2
+    assert history["pre_right"]._y.shape[1] == 2
+    assert history["post_left"]._y.shape[1] == 2
+    assert history["post_right"]._y.shape[1] == 2
+    assert history["time"]._time.shape[0] == history["pre_left"]._y.shape[0]
+
+
+def test_moving_boundary_fdm_ternary_pre_only_post_equals_pre_history():
+    model = _make_mock_ternary_moving_boundary_model(
+        interface_update="basic",
+        record=True,
+        multicomponent_interface_state_update="pre_diffusion_only",
+    )
+    model.solve(5e-5, iterator=explicitEulerIterator)
+    history = model._interfaceCompositionHistory
+
+    assert_allclose(history["pre_left"]._y, history["post_left"]._y)
+    assert_allclose(history["pre_right"]._y, history["post_right"]._y)
+
+
+def test_moving_boundary_fdm_ternary_exact_time_interface_composition_retrieval():
+    model = _make_mock_ternary_moving_boundary_model(interface_update="basic", record=True)
+    model.solve(5e-5, iterator=explicitEulerIterator)
+    t_exact = float(model._interfaceCompositionHistory["time"]._time[0])
+
+    left_pre, right_pre = model.getInterfaceCompositions(time=t_exact, stage="pre")
+    left_post, right_post = model.getInterfaceCompositions(time=t_exact, stage="post")
+
+    assert left_pre.shape == (2,)
+    assert right_pre.shape == (2,)
+    assert left_post.shape == (2,)
+    assert right_post.shape == (2,)
+
+    with pytest.raises(ValueError, match="exact recorded interface composition times"):
+        model.getInterfaceCompositions(time=t_exact + 1e-6, stage="pre")
+
+
+def test_moving_boundary_fdm_ternary_stage_selection_used_maps_to_policy():
+    model_pre = _make_mock_ternary_moving_boundary_model(
+        interface_update="basic",
+        record=True,
+        multicomponent_interface_state_update="pre_diffusion_only",
+    )
+    model_pre.solve(5e-5, iterator=explicitEulerIterator)
+    used_left_pre, used_right_pre = model_pre.getInterfaceCompositions(stage="used")
+    pre_left, pre_right = model_pre.getInterfaceCompositions(stage="pre")
+    assert_allclose(used_left_pre, pre_left)
+    assert_allclose(used_right_pre, pre_right)
+
+    model_post = _make_mock_ternary_moving_boundary_model(
+        interface_update="basic",
+        record=True,
+        multicomponent_interface_state_update="pre_and_post_diffusion",
+    )
+    model_post.solve(5e-5, iterator=explicitEulerIterator)
+    used_left_post, used_right_post = model_post.getInterfaceCompositions(stage="used")
+    post_left, post_right = model_post.getInterfaceCompositions(stage="post")
+    assert_allclose(used_left_post, post_left)
+    assert_allclose(used_right_post, post_right)
+
+
+def test_moving_boundary_fdm_binary_stage_request_raises_for_interface_compositions():
+    interfacePosition = 0.525
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
+        interface_compositions=(0.3, 0.7),
+    )
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
+    )
+    model.setup()
+    with pytest.raises(ValueError, match="does not record ternary interface composition stages"):
+        model.getInterfaceCompositions(stage="pre")
+
+
 def test_moving_boundary_fdm_ternary_balance_element_changes_corrected_trajectory():
     basic = _make_mock_ternary_moving_boundary_model(interface_update="basic", record=True)
     corrected_cr = _make_mock_ternary_moving_boundary_model(interface_update="lee_oh_corrected", balance_element="CR", record=True)
@@ -1976,6 +2292,27 @@ def test_moving_boundary_fdm_ternary_balance_element_changes_corrected_trajector
     assert corrected_cr_residual[0] <= basic_residual[0] + 1e-10
     assert corrected_ni_residual[1] <= basic_residual[1] + 1e-10
     assert abs(corrected_cr.getInterfacePosition() - corrected_ni.getInterfacePosition()) > 1e-10
+
+
+def test_moving_boundary_fdm_ternary_my_corrected_runs_and_targets_balance_element():
+    basic = _make_mock_ternary_moving_boundary_model(interface_update="basic", record=True)
+    corrected = _make_mock_ternary_moving_boundary_model(
+        interface_update="my_corrected",
+        balance_element="CR",
+        record=True,
+    )
+    basic.therm._check_side_of_probe = lambda values: [1.0, -1.0, 1.0, -1.0]
+    corrected.therm._check_side_of_probe = lambda values: [1.0, -1.0, 1.0, -1.0]
+
+    basic.solve(5e-5, iterator=explicitEulerIterator)
+    corrected.solve(5e-5, iterator=explicitEulerIterator)
+
+    basic_residual = np.abs(basic.getTotalInventory() - basic._initialInventory)
+    corrected_residual = np.abs(corrected.getTotalInventory() - corrected._initialInventory)
+
+    assert np.isfinite(corrected.getInterfacePosition())
+    assert np.all(np.isfinite(corrected.getTotalInventory()))
+    assert corrected_residual[0] <= basic_residual[0] + 1e-10
 
 
 def test_moving_boundary_fdm_ternary_saving_loading_preserves_balance_element():
@@ -1997,9 +2334,13 @@ def test_moving_boundary_fdm_ternary_saving_loading_preserves_balance_element():
     new_model.load(save_path)
 
     assert new_model.balanceElement == "CR"
+    assert new_model.multicomponentInterfaceStateUpdate == model.multicomponentInterfaceStateUpdate
     assert_allclose(new_model.data.currentY, model.data.currentY)
     assert_allclose(new_model.getInterfacePosition(), model.getInterfacePosition())
-    assert_allclose(new_model.getTotalInventory(), model.getTotalInventory())
+    assert_allclose(new_model.getInterfaceCompositions(stage="pre")[0], model.getInterfaceCompositions(stage="pre")[0])
+    assert_allclose(new_model.getInterfaceCompositions(stage="pre")[1], model.getInterfaceCompositions(stage="pre")[1])
+    assert_allclose(new_model.getInterfaceCompositions(stage="post")[0], model.getInterfaceCompositions(stage="post")[0])
+    assert_allclose(new_model.getInterfaceCompositions(stage="post")[1], model.getInterfaceCompositions(stage="post")[1])
     try:
         os.remove(save_path)
     except PermissionError:

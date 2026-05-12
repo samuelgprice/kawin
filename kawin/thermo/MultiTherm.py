@@ -90,7 +90,7 @@ class MulticomponentThermodynamics (GeneralThermodynamics):
         super().clearCache()
         self._compset_cache_curvature = {}
 
-    def getInterfacialComposition(self, x, T, gExtra = 0, precPhase = None):
+    def getInterfacialComposition(self, x, T, gExtra = 0, precPhase = None, returnMeta = False):
         '''
         Gets interfacial composition by calculating equilibrum with Gibbs-Thomson effect
 
@@ -111,22 +111,49 @@ class MulticomponentThermodynamics (GeneralThermodynamics):
             If T is also an array, then T and gExtra must be the same length
             where each index will pertain to a single condition
 
+        returnMeta : bool (optional)
+            Defaults to False.
+            If True, returns endpoint metadata including phase labels aligned with
+            the returned interface compositions.
+
         Returns
         -------
-        (parent composition, precipitate composition)
-        Both will be either float or array based off shape of gExtra
-        Will return (None, None) if precipitate is unstable
+        If returnMeta is False:
+            (parent composition, precipitate composition)
+            Both will be either float or array based off shape of gExtra
+            Will return (None, None) if precipitate is unstable
+        If returnMeta is True:
+            (parent composition, precipitate composition, metadata)
+            metadata contains:
+                - endpoint_phases: tuple(str, str)
+                - endpoints: tuple(dict, dict) with keys {"phase", "composition"}
         '''
         gExtra = np.atleast_1d(gExtra)
         T = np.atleast_1d(T)
         precPhase = _getPrecipitatePhase(self.phases, precPhase)
         if len(T) == 1:
             T = T*np.ones(gExtra.shape, dtype=np.float64)
-        
+
+        if returnMeta:
+            outputs = [self._interfacialComposition(x, T[i], gExtra[i], precPhase, returnMeta=True) for i in range(len(gExtra))]
+            caArray, cbArray, metaArray = zip(*outputs)
+            ca = np.squeeze(caArray)
+            cb = np.squeeze(cbArray)
+            if len(metaArray) == 1:
+                return ca, cb, metaArray[0]
+            metadata = {
+                "endpoint_phases": tuple(metaArray[0]["endpoint_phases"]),
+                "endpoints": (
+                    {"phase": metaArray[0]["endpoints"][0]["phase"], "composition": ca},
+                    {"phase": metaArray[0]["endpoints"][1]["phase"], "composition": cb},
+                ),
+            }
+            return ca, cb, metadata
+
         caArray, cbArray = zip(*[self._interfacialComposition(x, T[i], gExtra[i], precPhase) for i in range(len(gExtra))])
         return np.squeeze(caArray), np.squeeze(cbArray)
 
-    def _interfacialComposition(self, x, T, gExtra, precPhase):
+    def _interfacialComposition(self, x, T, gExtra, precPhase, returnMeta=False):
         '''
         Gets interfacial composition, will return None, None if composition is in single phase region
 
@@ -141,18 +168,28 @@ class MulticomponentThermodynamics (GeneralThermodynamics):
         precPhase : str
             Precipitate phase to consider (default is first precipitate in list)
 
+        returnMeta : bool (optional)
+            If True, also returns endpoint phase metadata.
+
         Returns
         -------
-        (parent composition, precipitate composition)
-        Both will be either float or array based off shape of gExtra
-        Will return (None, None) if precipitate is unstable
+        If returnMeta is False:
+            (parent composition, precipitate composition)
+            Both will be either float or array based off shape of gExtra
+            Will return (None, None) if precipitate is unstable
+        If returnMeta is True:
+            (parent composition, precipitate composition, metadata)
         '''
         wks = self.getEq(x, T, gExtra, precPhase)
         mu = np.squeeze(wks.eq.MU)
 
         #Check for convergence, return None if not converged
         if np.any(np.isnan(mu)):
-            return -1*np.ones(len(self.elements[:-1]), dtype=np.float64), -1*np.ones(len(self.elements[:-1]), dtype=np.float64)
+            ca = -1*np.ones(len(self.elements[:-1]), dtype=np.float64)
+            cb = -1*np.ones(len(self.elements[:-1]), dtype=np.float64)
+            if returnMeta:
+                return ca, cb, {"endpoint_phases": (None, None), "endpoints": ({"phase": None, "composition": ca}, {"phase": None, "composition": cb})}
+            return ca, cb
         
         cs_list = wks.get_composition_sets()
         ph = [cs.phase_record.phase_name for cs in cs_list]
@@ -167,9 +204,23 @@ class MulticomponentThermodynamics (GeneralThermodynamics):
 
             sortIndices = np.argsort(self.elements[:-1])
             unsortIndices = np.argsort(sortIndices)
-            return xM[unsortIndices], xP[unsortIndices]
+            ca = xM[unsortIndices]
+            cb = xP[unsortIndices]
+            if returnMeta:
+                return ca, cb, {
+                    "endpoint_phases": (self.phases[0], precPhase),
+                    "endpoints": (
+                        {"phase": self.phases[0], "composition": ca},
+                        {"phase": precPhase, "composition": cb},
+                    ),
+                }
+            return ca, cb
 
-        return -1*np.ones(len(self.elements[:-1]), dtype=np.float64), -1*np.ones(len(self.elements[:-1]), dtype=np.float64)
+        ca = -1*np.ones(len(self.elements[:-1]), dtype=np.float64)
+        cb = -1*np.ones(len(self.elements[:-1]), dtype=np.float64)
+        if returnMeta:
+            return ca, cb, {"endpoint_phases": (None, None), "endpoints": ({"phase": None, "composition": ca}, {"phase": None, "composition": cb})}
+        return ca, cb
     
     def _curvatureFactorFromEq(self, chemical_potentials, cs_matrix, cs_precip, precPhase):
         '''

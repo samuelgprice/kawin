@@ -412,6 +412,15 @@ class GeneralSurrogate:
         else:
             return self.therm.getInterdiffusivity(x, T, phase=phase, *args, **kwargs)
 
+    def getInterfacialComposition(self, *args, **kwargs):
+        '''
+        Pass-through interfacial composition call for surrogate wrappers that do
+        not provide a trained interfacial-composition model.
+        '''
+        if not hasattr(self.therm, "getInterfacialComposition"):
+            raise ValueError("Underlying thermodynamics object does not implement getInterfacialComposition.")
+        return self.therm.getInterfacialComposition(*args, **kwargs)
+
     def _collectSurrogateData(self):
         '''
         Creates dictionary of surrogate training data
@@ -531,7 +540,7 @@ class BinarySurrogate(GeneralSurrogate):
         yTrain = np.concatenate((xpalpha, xpbeta), axis=1)
         self.interfacialCompositionModels[phase] = self.kernel(xTrain, yTrain, **self.kernelKwargs)
 
-    def getInterfacialComposition(self, T, gExtra=0, precPhase=None):
+    def getInterfacialComposition(self, T, gExtra=0, precPhase=None, returnMeta=False):
         '''
         Computes interfacial composition
 
@@ -558,11 +567,31 @@ class BinarySurrogate(GeneralSurrogate):
             output = self.interfacialCompositionModels[precPhase].predict(xIn)
             if trainingData['logY']:
                 output[:,0] = np.exp(output[:,0])
-            return np.squeeze(output[:,0]), np.squeeze(output[:,1])
+            x_alpha = np.squeeze(output[:,0])
+            x_beta = np.squeeze(output[:,1])
+            if not returnMeta:
+                return x_alpha, x_beta
+            metadata = {
+                "endpoint_phases": (self.phases[0], precPhase),
+                "endpoints": (
+                    {"phase": self.phases[0], "composition": x_alpha},
+                    {"phase": precPhase, "composition": x_beta},
+                ),
+            }
+            return x_alpha, x_beta, metadata
 
         # If precipitate phase has not been trained, used underlying thermodynamics function
         else:
-            return self.therm.getInterfacialComposition(T, gExtra, precPhase=precPhase)
+            return self.therm.getInterfacialComposition(T, gExtra, precPhase=precPhase, returnMeta=returnMeta)
+
+    def getInterfacialCompositionFromComposition(self, x, T, gExtra=0, precPhase=None, returnMeta=False):
+        '''
+        Pass-through method for composition-dependent interfacial compositions
+        used by multicomponent diffusion workflows.
+        '''
+        if not hasattr(self.therm, "getInterfacialComposition"):
+            raise ValueError("Underlying thermodynamics object does not implement getInterfacialComposition.")
+        return self.therm.getInterfacialComposition(x, T, gExtra=gExtra, precPhase=precPhase, returnMeta=returnMeta)
 
     def _collectSurrogateData(self):
         '''

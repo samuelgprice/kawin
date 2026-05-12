@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 from scipy import optimize
+import pytest
 
 from kawin.thermo import BinaryThermodynamics, MulticomponentThermodynamics, GeneralThermodynamics
 from kawin.precipitation import PrecipitateModel, MatrixParameters, PrecipitateParameters
@@ -44,6 +45,109 @@ class ConstantBinaryThermodynamics:
         left = np.ones(values.shape, dtype=np.float64) * self.interface_compositions[0]
         right = np.ones(values.shape, dtype=np.float64) * self.interface_compositions[1]
         return np.squeeze(left), np.squeeze(right)
+
+
+class MockTernaryTieLineThermodynamics:
+    def __init__(self, phases, left_probe, right_probe):
+        self.phases = phases
+        self.left_probe = np.asarray(left_probe, dtype=np.float64)
+        self.right_probe = np.asarray(right_probe, dtype=np.float64)
+        self.probe_direction = self.right_probe - self.left_probe
+        self.base_left = np.array([0.29, 0.0565], dtype=np.float64)
+        self.base_right = np.array([0.185, 0.12475], dtype=np.float64)
+        self.left_slope = np.array([-0.04, 0.01], dtype=np.float64)
+        self.right_slope = np.array([0.03, 0.04], dtype=np.float64)
+        self.diffusivities = {
+            phases[0]: 0.8 * np.eye(2, dtype=np.float64),
+            phases[1]: 0.4 * np.eye(2, dtype=np.float64),
+        }
+        self.db = object()
+
+    def clearCache(self):
+        return
+
+    def _check_side_of_probe(self, values):
+        return
+
+    def _lambda_from_probe(self, x):
+        probe = np.asarray(x, dtype=np.float64).reshape(-1)
+        denom = float(np.dot(self.probe_direction, self.probe_direction))
+        lam = 0.0 if denom == 0 else float(np.dot(probe - self.left_probe, self.probe_direction) / denom)
+        return float(np.clip(lam, 0.0, 1.0))
+
+    def _interface_from_lambda(self, lam):
+        effective_lam = lam + 0.1
+        left = self.base_left + effective_lam * self.left_slope
+        right = self.base_right + effective_lam * self.right_slope
+        return left, right
+
+    def getInterfacialComposition(self, x, T, gExtra=0, precPhase=None, returnMeta=False):
+        values = np.asarray(x, dtype=np.float64)
+        if values.ndim == 1:
+            left, right = self._interface_from_lambda(self._lambda_from_probe(values))
+            if returnMeta:
+                phase_right = self.phases[1] if precPhase is None else precPhase
+                return left, right, {
+                    "endpoint_phases": (self.phases[0], phase_right),
+                    "endpoints": (
+                        {"phase": self.phases[0], "composition": left},
+                        {"phase": phase_right, "composition": right},
+                    ),
+                }
+            return left, right
+        pairs = [self._interface_from_lambda(self._lambda_from_probe(v)) for v in values]
+        left, right = zip(*pairs)
+        left = np.asarray(left, dtype=np.float64)
+        right = np.asarray(right, dtype=np.float64)
+        if returnMeta:
+            phase_right = self.phases[1] if precPhase is None else precPhase
+            return left, right, {
+                "endpoint_phases": (self.phases[0], phase_right),
+                "endpoints": (
+                    {"phase": self.phases[0], "composition": left},
+                    {"phase": phase_right, "composition": right},
+                ),
+            }
+        return left, right
+
+    def getInterdiffusivity(self, x, T, removeCache=True, phase=None):
+        values = np.asarray(x, dtype=np.float64)
+        base = np.asarray(self.diffusivities[phase], dtype=np.float64)
+        if values.ndim == 1:
+            return base
+        return np.tile(base, (len(values), 1, 1))
+
+
+def _make_mock_ternary_moving_boundary_fdm_plot_model(record=False):
+    interface_position = 0.515
+    left_comp = np.array([0.30, 0.05], dtype=np.float64)
+    right_comp = np.array([0.10, 0.18], dtype=np.float64)
+    profile = ProfileBuilder(
+        [
+            (StepProfile1D(interface_position, left_comp[0], right_comp[0]), 'CR'),
+            (StepProfile1D(interface_position, left_comp[1], right_comp[1]), 'NI'),
+        ]
+    )
+    mesh = CartesianFD1D(['CR', 'NI'], [0, 1], 41)
+    mesh.setResponseProfile(profile)
+    therm = MockTernaryTieLineThermodynamics(['ALPHA', 'BETA'], left_probe=left_comp, right_probe=right_comp)
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR', 'NI'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=1000,
+        interfacePosition=interface_position,
+        bulkUpdateScheme='flux_form',
+        integrationMode='weighted',
+        interfaceUpdate='basic',
+        fluxGradientMode='pre_diffusion',
+        initialInventoryMode='integrated',
+        multicomponentInterfaceStateUpdate='pre_and_post_diffusion',
+        record=record,
+    )
+    model.setup()
+    return model
 
 def test_precipitate_plotting():
     binary_matrix = MatrixParameters(['AL'])
@@ -250,6 +354,7 @@ def test_moving_boundary_fdm_state_plot_and_summary():
         bulkUpdateScheme='legacy',
         integrationMode='weighted',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         interfaceUpdate='basic',
         pstar=0.5,
     )
@@ -280,6 +385,70 @@ def test_moving_boundary_fdm_state_plot_and_summary():
         window=1,
     )
     assert 'interface_position' in summary2
+
+
+def test_moving_boundary_fdm_plot_ternary_state_layers(monkeypatch):
+    model = _make_mock_ternary_moving_boundary_fdm_plot_model(record=True)
+    model.solve(5e-5, iterator=explicitEulerIterator)
+    called = {"n": 0}
+
+    def fake_ternplot(*args, **kwargs):
+        called["n"] += 1
+        return kwargs.get("ax")
+
+    import pycalphad
+    monkeypatch.setattr(pycalphad, "ternplot", fake_ternplot)
+
+    fig, ax = model.plotTernaryState(show_background=True, show_scatter=True, show_path=True, show_interface=True)
+    assert called["n"] == 1
+    assert len(ax.lines) >= 1
+    assert len(ax.collections) >= 3
+    plt.close(fig)
+
+
+def test_moving_boundary_fdm_plot_ternary_state_raises_for_binary():
+    profile = ProfileBuilder([(StepProfile1D(0, 0.2, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [-1, 1], 9)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        ['FCC_A1', 'BCC_A2'],
+        {'FCC_A1': 1e-15, 'BCC_A2': 2e-15},
+        (0.3, 0.7),
+    )
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['NI', 'CR'],
+        ['FCC_A1', 'BCC_A2'],
+        therm,
+        1000,
+        interfacePosition=0.15,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
+        interfaceUpdate='basic',
+        pstar=0.5,
+    )
+    with pytest.raises(ValueError, match="only available for ternary"):
+        model.plotTernaryState(show_background=False)
+
+
+def test_moving_boundary_fdm_plot_ternary_state_accepts_overrides_and_ax():
+    model = _make_mock_ternary_moving_boundary_fdm_plot_model(record=False)
+    composition = np.asarray(model.getCurrentX()[0], dtype=np.float64)
+    interface_compositions = (np.array([0.28, 0.06]), np.array([0.19, 0.12]))
+    fig, ax = plt.subplots()
+    fig_out, ax_out = model.plotTernaryState(
+        composition=composition,
+        interface_compositions=interface_compositions,
+        ax=ax,
+        show_background=False,
+    )
+    assert ax_out is ax
+    assert fig_out is fig
+    assert len(ax_out.lines) >= 1
+    assert len(ax_out.collections) >= 3
+    plt.close(fig)
 
 
 def test_moving_boundary_fdm_analytic_comparison_plot():

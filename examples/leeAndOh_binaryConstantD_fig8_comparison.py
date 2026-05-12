@@ -202,6 +202,7 @@ vIt_input=5000
 verbose_input = False if record_input == False else True
 bulkUpdateScheme_input= ['legacy', 'flux_form'][0]
 integrationMode_input = 'weighted'
+initialInventoryMode_input = ['integrated', 'phase_length_idealized'][1]
 modelsToUse = ['post_corr'] #, 'pre_basic', 'post_corr', 'pre_corr']
 valid_models = {'post_basic', 'pre_basic', 'post_corr', 'pre_corr', 'post_my'}
 unknown_models = sorted(set(modelsToUse) - valid_models)
@@ -281,7 +282,7 @@ common_cache_params = {
     'record': record_input,
     'iterator': 'explicitEulerIterator',
     'integrationMode': integrationMode_input,
-    'initialInventoryMode': 'integrated',
+    'initialInventoryMode': initialInventoryMode_input,
     't_end': t_end,
     'L': L,
     'N': N,
@@ -347,6 +348,7 @@ def build_case_config(case_overrides=None):
         'cache_label',
         'fluxGradientMode',
         'interfaceUpdate',
+        'initialInventoryMode',
         'plot_label',
     }
     allowed_override_keys = set(config.keys()) | {
@@ -435,7 +437,7 @@ def run_cached_case(case_overrides=None):
         'record': config['record'],
         'iterator': 'explicitEulerIterator',
         'integrationMode': config['integrationMode'],
-        'initialInventoryMode': 'integrated',
+        'initialInventoryMode': config['initialInventoryMode'],
         't_end': config['t_end'],
         'L': config['L'],
         'N': config['N'],
@@ -459,7 +461,7 @@ def run_cached_case(case_overrides=None):
         interfacePosition=config['interface_position'],
         bulkUpdateScheme=config['bulkUpdateScheme'],
         integrationMode=config['integrationMode'],
-        initialInventoryMode='integrated',
+        initialInventoryMode=config['initialInventoryMode'],
         fluxGradientMode=config['fluxGradientMode'],
         interfaceUpdate=config['interfaceUpdate'],
         pstar=config['pstar'],
@@ -560,14 +562,15 @@ parameterSweepConfigs = [
         'integrationMode': integration_mode,
         'fluxGradientMode': flux_gradient_mode,
         'interfaceUpdate': interface_update,
+        'initialInventoryMode': initialInventory_mode,
         'cache_label': cache_label,
         'plot_label': plot_label,
     }
     for integration_mode in ['weighted', 'ignore', 'noIgnore']
-    for interface_update, flux_gradient_mode, cache_label, plot_label in [
-        ('basic', 'post_diffusion', '', 'Post-Diffusion Basic'),
-        ('lee_oh_corrected', 'post_diffusion', '', 'Post-Diffusion Corrected'),
-        ('my_corrected', 'post_diffusion', '', 'Post-Diffusion My Corrected'),
+    for interface_update, flux_gradient_mode, initialInventory_mode, cache_label, plot_label in [
+        # ('basic', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion Basic'),
+        ('lee_oh_corrected', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion Corrected'),
+        ('my_corrected', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion My Corrected'),
     ]
 ]
 parameter_sweep_results = [run_cached_case(case_config) for case_config in parameterSweepConfigs]
@@ -778,14 +781,15 @@ parameterSweepConfigs = [
         'integrationMode': integration_mode,
         'fluxGradientMode': flux_gradient_mode,
         'interfaceUpdate': interface_update,
+        'initialInventoryMode': initialInventory_mode,
         'cache_label': cache_label,
         'plot_label': plot_label,
     }
     for integration_mode in ['weighted']#, 'ignore', 'noIgnore']
-    for interface_update, flux_gradient_mode, cache_label, plot_label in [
-        # ('basic', 'post_diffusion', '', 'Post-Diffusion Basic'),
-        ('lee_oh_corrected', 'post_diffusion', '', 'Post-Diffusion Corrected'),
-        ('my_corrected', 'post_diffusion', '', 'Post-Diffusion My Corrected'),
+    for interface_update, flux_gradient_mode, initialInventory_mode, cache_label, plot_label in [
+        # ('basic', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion Basic'),
+        ('lee_oh_corrected', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion Corrected'),
+        ('my_corrected', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion My Corrected'),
     ]
 ]
 parameter_sweep_results = [run_cached_case(case_config) for case_config in parameterSweepConfigs]
@@ -1046,7 +1050,7 @@ if use_post_basic:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
-        initialInventoryMode='integrated',
+        initialInventoryMode=initialInventoryMode_input,
         fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
         pstar=0.5,
@@ -1082,7 +1086,7 @@ if use_pre_basic:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
-        initialInventoryMode='integrated',
+        initialInventoryMode=initialInventoryMode_input,
         fluxGradientMode='pre_diffusion',
         interfaceUpdate='basic',
         pstar=0.5,
@@ -1116,7 +1120,7 @@ if use_post_corr:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
-        initialInventoryMode='integrated',
+        initialInventoryMode=initialInventoryMode_input,
         fluxGradientMode='post_diffusion',
         interfaceUpdate='lee_oh_corrected',
         pstar=0.5,
@@ -1152,7 +1156,7 @@ if use_pre_corr:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
-        initialInventoryMode='integrated',
+        initialInventoryMode=initialInventoryMode_input,
         fluxGradientMode='pre_diffusion',
         interfaceUpdate='lee_oh_corrected',
         pstar=0.5,
