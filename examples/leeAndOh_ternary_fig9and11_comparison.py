@@ -520,8 +520,8 @@ def build_ternary_case():
         "phases": ["BCC_A2", "FCC_A1"],
         "temperature": 1373.0,
         "length": [1.0, 30e-6, 30e-6, 62.05e-6+2000e-6][2],
-        "nodes": [30+1, 1000+1, 121+1][-1],
-        "interface_position": [0.515, 18e-6, 18e-6+1e-8, 62.05e-6, 12e-6+1e-9, 12e-6-1e-9][-1], 
+        "nodes": [30+1, 1000+1, 121+1][0],
+        "interface_position": [0.515, 18e-6, 18e-6+1e-8, 62.05e-6, 12e-6+1e-9, 12e-6-1e-9][-2], 
         "left_bulk": [np.array([0.38, 0.001], dtype=np.float64), np.array([0.39696, 0.0001], dtype=np.float64)][0],
         "right_bulk": [np.array([0.13, 0.15], dtype=np.float64), np.array([0.139297, 0.142387], dtype=np.float64)][0],
         "probe_left": np.array([0.1233, 0.0001], dtype=np.float64),
@@ -537,7 +537,7 @@ def build_ternary_case():
         "solve_time": [5.0e-5, 3600*1e0][1],
         "record": True,
         "vIt": 250,
-        "moving_boundary_threshold": min(pstar_input, (1-pstar_input))-0.01,
+        "moving_boundary_threshold": min(pstar_input, (1-pstar_input))*0.98,
         "database_approximation": {
             "enabled": True,
             "tdb_path": EXAMPLES_DIR / "FeCrNi_Lee1993_L_style_ternary_checked_withMobility.tdb",
@@ -836,13 +836,13 @@ def _build_model(case, interface_update, balance_element, use_surrogate=True):
         temperature=TemperatureParameters(case["temperature"]),
         interfacePosition=case["interface_position"],
         bulkUpdateScheme="flux_form",
-        integrationMode= "weighted", #"noIgnore", "ignore", "weighted",
-        initialInventoryMode="phase_length_idealized", # "phase_length_idealized", "integrated"
+        integrationMode= "ignore", #"noIgnore", "ignore", "weighted",
+        initialInventoryMode="integrated", # "phase_length_idealized", "integrated"
         interfaceUpdate=interface_update,
         pstar=pstar_input,
-        fluxGradientMode="post_diffusion",
+        fluxGradientMode="post_diffusion", #"pre_diffusion", "post_diffusion"
         balanceElement=balance_element,
-        multicomponentInterfaceStateUpdate="pre_and_post_diffusion", #"pre_diffusion_only", "pre_and_post_diffusion",
+        multicomponentInterfaceStateUpdate="pre_diffusion_only", #"pre_diffusion_only", "pre_and_post_diffusion",
         constraints=constraints,
         record=case["record"],
     )
@@ -868,16 +868,21 @@ def solve_models(case):
         #     "balance_element": "NI",
         #     "use_surrogate": True,
         # },
-        "corrected_my_CR": {
-            "interface_update": "my_corrected",
-            "balance_element": "CR",
-            "use_surrogate": True,
-        },
+        # "corrected_my_CR": {
+        #     "interface_update": "my_corrected",
+        #     "balance_element": "CR",
+        #     "use_surrogate": True,
+        # },
         # "corrected_my_NI": {
         #     "interface_update": "my_corrected",
         #     "balance_element": "NI",
         #     "use_surrogate": True,
         # },
+        "corrected_allSolute": {
+            "interface_update": "1999_lee_allSolute_corrected",
+            "balance_element": None,
+            "use_surrogate": True,
+        },
     }
     actual_config = case.get("actual_database_models", {})
     if actual_config.get("enabled", False):
@@ -901,6 +906,7 @@ def solve_models(case):
             models[name] = model
         except Exception as exc:
             failures[name] = str(exc)
+            raise exc
     if len(models) == 0:
         failure_text = "; ".join(f"{name}: {message}" for name, message in failures.items())
         raise RuntimeError(f"No model variant completed successfully. Failures: {failure_text}")
@@ -925,6 +931,7 @@ def plot_results(case, models):
         "actual_corrected_CR": "tab:purple",
         "actual_corrected_NI": "tab:brown",
         "actual_my_corrected_CR": "tab:pink",
+        "corrected_allSolute": "tab:pink",
     }
     linestyle = {
         "corrected_CR": "solid",
@@ -934,6 +941,7 @@ def plot_results(case, models):
         "actual_corrected_CR": "dashed",
         "actual_corrected_NI": "dashed",
         "actual_my_corrected_CR": "dashed",
+        "corrected_allSolute": "solid",
     }
 
 
@@ -978,7 +986,9 @@ def plot_normalized_left_phase_thickness(models):
     nrows_input=3
     fig, axes = plt.subplots(figsize=(8, 5*nrows_input), ncols=1, nrows=nrows_input, sharex=True)
     ax = axes[0]
+    ax.xaxis.set_tick_params(labelbottom=True)
     ax2 = axes[1]
+    ax2.xaxis.set_tick_params(labelbottom=True)
     ax3 = axes[2]
     colors = {
         "corrected_CR": "tab:blue",
@@ -988,6 +998,7 @@ def plot_normalized_left_phase_thickness(models):
         "actual_corrected_CR": "tab:purple",
         "actual_corrected_NI": "tab:brown",
         "actual_my_corrected_CR": "tab:pink",
+        "corrected_allSolute": "tab:pink",
     }
     linestyle = {
         "corrected_CR": "solid",
@@ -997,6 +1008,7 @@ def plot_normalized_left_phase_thickness(models):
         "actual_corrected_CR": "dashed",
         "actual_corrected_NI": "dashed",
         "actual_my_corrected_CR": "dashed",
+        "corrected_allSolute": "solid",
     }
     
     import pandas as pd

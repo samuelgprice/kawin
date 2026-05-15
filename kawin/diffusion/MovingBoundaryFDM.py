@@ -1,5 +1,8 @@
 import warnings
 
+from datetime import date
+TODAY = date.today()
+
 import numpy as np
 from scipy import optimize
 
@@ -197,7 +200,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         ``"flux_form"`` uses the node-centered flux-form discretization from
         the fixed-grid FDM implementation. This argument is required so that
         comparisons between the two schemes are explicit.
-    interfaceUpdate : {"basic", "lee_oh_corrected", "my_corrected"}
+    interfaceUpdate : {"basic", "lee_oh_corrected", "my_corrected", "1999_lee_allSolute_corrected"}
         Interface motion update used after the explicit diffusion stage.
         This argument must be specified explicitly so the chosen mass-balance
         strategy is always visible at the call site.
@@ -277,6 +280,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             constraints=constraints,
             record=record,
         )
+        if self.interfaceUpdate=="1999_lee_allSolute_corrected":
+            self.previousMassDelta = np.zeros_like(self.elements, dtype=np.float64)
         self._validateMovingBoundaryModel()
         self.interfaceData.currentY = self.initialInterfacePosition
         self.interfaceData._y[0] = self.initialInterfacePosition
@@ -300,8 +305,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             raise ValueError("Periodic boundary conditions are not supported for MovingBoundaryFD1DModel.")
         if self.interfaceUpdate is None:
             raise ValueError("interfaceUpdate must be specified explicitly.")
-        if self.interfaceUpdate not in {"basic", "lee_oh_corrected", "my_corrected"}:
-            raise ValueError("interfaceUpdate must be one of ['basic', 'lee_oh_corrected', 'my_corrected'].")
+        if self.interfaceUpdate not in {"basic", "lee_oh_corrected", "my_corrected", "1999_lee_allSolute_corrected"}:
+            raise ValueError("interfaceUpdate must be one of ['basic', 'lee_oh_corrected', 'my_corrected', '1999_lee_allSolute_corrected'].")
         if self.integrationMode is None:
             raise ValueError("integrationMode must be specified explicitly.")
         if self.integrationMode not in {"ignore", "noIgnore", "weighted"}:
@@ -326,6 +331,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         if self.constraints.movingBoundaryThreshold>=min(self.pstar, 1-self.pstar):
             raise ValueError("movingBoundaryThreshold must be less than the minimum of pstar and 1-pstar.")
         if self._isBinarySystem():
+            if self.interfaceUpdate not in {"basic", "lee_oh_corrected", "my_corrected"}:
+                raise ValueError("Binary MovingBoundaryFD1DModel does not support interfaceUpdate='1999_lee_allSolute_corrected'.")
             if self.mesh.numResponses != 1:
                 raise ValueError("MovingBoundaryFD1DModel requires one response variable for binary systems.")
             self._balanceElementIndex = 0
@@ -354,8 +361,10 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         self.interfaceData.reset()
         self.interfaceData.record(0, self.initialInterfacePosition)
         self._lastFluxes = None
-        self._lastInterfaceFluxes = (0.0, 0.0)
-        self._lastInterfaceVelocity = 0.0
+        self._lastInterfaceFluxes = None
+        self._lastInterfaceVelocity = None
+        if self.interfaceUpdate=="1999_lee_allSolute_corrected":
+            self.previousMassDelta = np.zeros_like(self.elements, dtype=np.float64)
         self._currdt = np.inf
         self._cachedMulticomponentInterfaceState = None
         self._pendingInterfaceCompositionRecord = None
@@ -678,6 +687,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         '''
         Integrates a single independent component using the binary sharp-interface helper.
         '''
+        # s_for_interp="old"
         if s_old is None:
             s_old = interface_position
         if s_new is None:
@@ -791,6 +801,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         geometry=None,
         temperature=None,
         probe=None,
+        dt=None,
     ):
         '''
         Assembles fluxes and interface velocities for a known ternary interface tie-line.
@@ -810,7 +821,21 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         denom = c_right_int + right_node - c_left_int - left_node
         if np.any(np.abs(denom) <= 1e-14):
             raise ValueError("Ternary MovingBoundaryFD1DModel encountered a near-zero Eq. (22) denominator.")
-        velocities = 2.0 * (flux_right - flux_left) / denom
+        
+        if self.interfaceUpdate=="1999_lee_allSolute_corrected":
+        # if True==False:
+            if dt is None:
+                debugInPlace()
+                raise ValueError("dt should not be None when self.interfaceUpdate=='1999_lee_allSolute_corrected'")
+            if dt=="0": ## This is used by getTotalInventory and so should be at the start when self.previousMassDelta is all zeros
+                if (self.previousMassDelta==0).all()!=True:
+                    debugInPlace()
+                    raise ValueError("dt should not be 0 when self.interfaceUpdate=='1999_lee_allSolute_corrected'")
+                velocities = (2.0 * (flux_right - flux_left)) / denom
+            else:
+                velocities = (2.0 * (flux_right - flux_left) + (2.0 * self.previousMassDelta/dt)) / denom
+        else: 
+            velocities = (2.0 * (flux_right - flux_left)) / denom
         residual = float(velocities[0] - velocities[1])
         return {
             "lambda": None if lam is None else float(lam),
@@ -828,7 +853,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             "tolerance": self._multicomponentResidualTolerance(velocities),
         }
 
-    def _evaluateMulticomponentInterfaceState(self, t, composition, interface_position, lam, geometry=None, temperature=None):
+    def _evaluateMulticomponentInterfaceState(self, t, composition, interface_position, lam, geometry=None, temperature=None, dt=None):
         '''
         Evaluates one candidate ternary interface state and the corresponding equal-velocity residual.
         '''
@@ -875,6 +900,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             geometry=geometry,
             temperature=temperature,
             probe=x_probe,
+            dt=dt,
         )
 
     def _orderMulticomponentInterfaceByPhase(self, c_a_int, c_b_int, meta, t, interface_position):
@@ -922,11 +948,11 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             f"returned=({phase_a}, {phase_b}), expected=({expected_left}, {expected_right})."
         )
 
-    def _solveMulticomponentInterfaceState(self, t, composition, interface_position):
+    def _solveMulticomponentInterfaceState(self, t, composition, interface_position, dt=None):
         '''
         Solves the ternary equal-velocity interface condition by a bracketed 1D search.
         '''
-        return self._solveMulticomponentInterfaceState_alt(t, composition, interface_position)
+        return self._solveMulticomponentInterfaceState_alt(t, composition, interface_position, dt=dt)
         geometry = get_moving_boundary_fd_geometry(self.mesh, interface_position, self.pstar)
         temperature = float(self.temperatureParameters(np.array([[interface_position]]), t)[0])
         trial_lambdas = np.linspace(0.0, 1.0, 33, dtype=np.float64)
@@ -994,7 +1020,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             f"for {self.elements}; smallest residual was {best_state['residual']:.3e}."
         )
 
-    def _solveMulticomponentInterfaceState_alt(self, t, composition, interface_position, root_scalar_method="brentq"):
+    def _solveMulticomponentInterfaceState_alt(self, t, composition, interface_position, root_scalar_method="brentq", dt=None):
         '''
         Alternate ternary equal-velocity solver using ``scipy.optimize.root_scalar``.
 
@@ -1036,8 +1062,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         #         bracket_pair = (left_state, right_state)
         #         break
 
-        left_state = self._evaluateMulticomponentInterfaceState(t, composition, interface_position, lam=0, geometry=geometry,temperature=temperature)
-        right_state = self._evaluateMulticomponentInterfaceState(t, composition, interface_position, lam=1, geometry=geometry,temperature=temperature)
+        left_state = self._evaluateMulticomponentInterfaceState(t, composition, interface_position, lam=0, geometry=geometry,temperature=temperature, dt=dt)
+        right_state = self._evaluateMulticomponentInterfaceState(t, composition, interface_position, lam=1, geometry=geometry,temperature=temperature, dt=dt)
         if np.sign(left_state["residual"]) != np.sign(right_state["residual"]):
             bracket_pair = (left_state, right_state)
         else:
@@ -1056,6 +1082,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                         float(lam),
                         geometry=geometry,
                         temperature=temperature,
+                        dt=dt,
                     )
                     if not np.isfinite(state["residual"]):
                         return np.nan
@@ -1067,8 +1094,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 residual_func,
                 bracket=[left_state["lambda"], right_state["lambda"]],
                 method=root_scalar_method,
-                xtol=1e-12,
-                rtol=1e-10,
+                rtol=1e-14,
+                xtol=1e-14,
                 maxiter=100,
             )
             if sol.converged:
@@ -1079,6 +1106,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                     float(sol.root),
                     geometry=geometry,
                     temperature=temperature,
+                    dt=dt,
                 )
                 if abs(root_state["residual"]) <= root_state["tolerance"]:
                     return root_state
@@ -1136,7 +1164,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             return None
         return cached["state"]
 
-    def _getInterfaceState(self, t, composition, interface_position, allow_solve=False):
+    def _getInterfaceState(self, t, composition, interface_position, allow_solve=False, dt=None):
         '''
         Returns geometry, interface compositions, and interfacial diffusivities.
 
@@ -1161,7 +1189,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                     "No cached ternary interface state is available for the requested time/profile. "
                     "Call the ternary step driver first or request allow_solve=True."
                 )
-            state = self._solveMulticomponentInterfaceState(t, np.asarray(composition, dtype=np.float64), interface_position)
+            state = self._solveMulticomponentInterfaceState(t, np.asarray(composition, dtype=np.float64), interface_position, dt=dt)
             self._cacheMulticomponentInterfaceState(t, composition, interface_position, "explicit_request", state)
         c_left_int, c_right_int = state["interface_compositions"]
         D_left_int, D_right_int = state["interface_diffusivities"]
@@ -1608,6 +1636,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 velocity = ds / self._currdt if self._currdt > 0 else 0.0
             except:
                 debugInPlace()
+        elif self.interfaceUpdate == "1999_lee_allSolute_corrected":
+            debugInPlace()
 
 
         else:
@@ -1645,21 +1675,71 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         c_old = np.asarray(xCurr[0], dtype=np.float64)
         s_old = self._clipInterfacePosition(float(xCurr[1]))
         geom = get_moving_boundary_fd_geometry(self.mesh, s_old, self.pstar)
-        pre_state = self._solveMulticomponentInterfaceState(t, c_old, s_old)
-        self._cacheMulticomponentInterfaceState(t, c_old, s_old, "pre", pre_state)
-        c_left_int_pre, c_right_int_pre = pre_state["interface_compositions"]
-        # sideOfProbe = self.therm._check_side_of_probe([c_old[0], c_old[-1], c_left_int_pre, c_right_int_pre])
-        # assert(sideOfProbe[0]==sideOfProbe[2] and sideOfProbe[1]==sideOfProbe[3])
-        D_left_int_pre, D_right_int_pre = pre_state["interface_diffusivities"]
         diffusivity_nodes = self._bulk_diffusivity_nodes(c_old, t, geom)
-        max_diff = float(np.max(np.abs(np.concatenate((diffusivity_nodes.reshape(-1), D_left_int_pre.reshape(-1), D_right_int_pre.reshape(-1))))))
-        min_length = self.mesh.dz * ((1.0 - geom.p) if geom.p < self.pstar else geom.p)
-        dt_diff = self.constraints.vonNeumannThreshold * (min_length**2) / max_diff if max_diff > 0 else np.inf
+        
+        # if True==False:
+        if self.interfaceUpdate in ["1999_lee_allSolute_corrected"]:
+            max_diff_onlyBulk = float(np.max(np.abs(diffusivity_nodes.reshape(-1))))
+            min_length = self.mesh.dz * ((1.0 - geom.p) if geom.p < self.pstar else geom.p)
+            trial_factor = 0.9 ## used to make sure dt_trial is less than dt_diff
+            dt_trial = trial_factor * self.constraints.vonNeumannThreshold * (min_length**2) / max_diff_onlyBulk if max_diff_onlyBulk > 0 else np.inf
 
-        move_fraction = min(self.constraints.movingBoundaryThreshold, np.inf)
-        dt_move = move_fraction * self.mesh.dz / abs(pre_state["velocity"]) if abs(pre_state["velocity"]) > 0 else np.inf
-        allowed_dt = getattr(self, "deltaTime", np.inf)
-        self._currdt = min(dt_diff, dt_move, allowed_dt)
+            dt_overall = -np.inf
+            
+            trial_count = 0
+            maxNumTrials=5
+            
+            for trial in range(maxNumTrials):
+                trial_count += 1
+                
+                pre_state = self._solveMulticomponentInterfaceState(t, c_old, s_old, dt=dt_trial)
+                self._cacheMulticomponentInterfaceState(t, c_old, s_old, "pre", pre_state)
+                c_left_int_pre, c_right_int_pre = pre_state["interface_compositions"]
+                # sideOfProbe = self.therm._check_side_of_probe([c_old[0], c_old[-1], c_left_int_pre, c_right_int_pre])
+                # assert(sideOfProbe[0]==sideOfProbe[2] and sideOfProbe[1]==sideOfProbe[3])
+                D_left_int_pre, D_right_int_pre = pre_state["interface_diffusivities"]
+                
+                max_diff = float(np.max(np.abs(np.concatenate((diffusivity_nodes.reshape(-1), D_left_int_pre.reshape(-1), D_right_int_pre.reshape(-1))))))
+                min_length = self.mesh.dz * ((1.0 - geom.p) if geom.p < self.pstar else geom.p)
+                dt_diff = self.constraints.vonNeumannThreshold * (min_length**2) / max_diff if max_diff > 0 else np.inf
+
+                move_fraction = min(self.constraints.movingBoundaryThreshold, np.inf)
+                dt_move = move_fraction * self.mesh.dz / abs(pre_state["velocity"]) if abs(pre_state["velocity"]) > 0 else np.inf
+                allowed_dt = getattr(self, "deltaTime", np.inf)
+                dt_overall = min(dt_diff, dt_move, allowed_dt)
+
+                if dt_overall < dt_trial:
+                    if (trial+1)>=maxNumTrials:
+                        debugInPlace()
+                        raise ValueError("Max number of trials exceeded")
+                    debugInPlace()
+                    print(f"Trial dt {dt_trial} larger than min(dt_diff, dt_move, allowed_dt)=min({dt_diff}, {dt_move}, {allowed_dt})={min(dt_diff, dt_move, allowed_dt)}, reducing and retrying.")
+                    dt_trial *= 1/2
+                    numRetrials = getattr(self, "numRetrials", 0)
+                    self.numRetrials = numRetrials
+                    self.numRetrials += 1
+                    
+                else:
+                    self._currdt = dt_trial
+                    break
+            
+
+        else:
+            pre_state = self._solveMulticomponentInterfaceState(t, c_old, s_old)
+            self._cacheMulticomponentInterfaceState(t, c_old, s_old, "pre", pre_state)
+            c_left_int_pre, c_right_int_pre = pre_state["interface_compositions"]
+            # sideOfProbe = self.therm._check_side_of_probe([c_old[0], c_old[-1], c_left_int_pre, c_right_int_pre])
+            # assert(sideOfProbe[0]==sideOfProbe[2] and sideOfProbe[1]==sideOfProbe[3])
+            D_left_int_pre, D_right_int_pre = pre_state["interface_diffusivities"]
+            
+            max_diff = float(np.max(np.abs(np.concatenate((diffusivity_nodes.reshape(-1), D_left_int_pre.reshape(-1), D_right_int_pre.reshape(-1))))))
+            min_length = self.mesh.dz * ((1.0 - geom.p) if geom.p < self.pstar else geom.p)
+            dt_diff = self.constraints.vonNeumannThreshold * (min_length**2) / max_diff if max_diff > 0 else np.inf
+
+            move_fraction = min(self.constraints.movingBoundaryThreshold, np.inf)
+            dt_move = move_fraction * self.mesh.dz / abs(pre_state["velocity"]) if abs(pre_state["velocity"]) > 0 else np.inf
+            allowed_dt = getattr(self, "deltaTime", np.inf)
+            self._currdt = min(dt_diff, dt_move, allowed_dt)
 
         ignored = geom.ignored_index
         if geom.p < self.pstar:
@@ -1709,7 +1789,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
 
         c_stage = self._reconstructIgnoredComposition(c_new, s_old, geom.p, s_old, (c_left_int_pre, c_right_int_pre))
         if self.multicomponentInterfaceStateUpdate == "pre_and_post_diffusion":
-            actual_state = self._solveMulticomponentInterfaceState(t, c_stage, s_old)
+            actual_state = self._solveMulticomponentInterfaceState(t, c_stage, s_old, dt=self._currdt)
             self._cacheMulticomponentInterfaceState(t, c_stage, s_old, "post", actual_state)
             chosen_stage = "post"
             post_compositions = actual_state["interface_compositions"]
@@ -1727,6 +1807,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                     geometry=geom,
                     temperature=pre_state["temperature"],
                     probe=pre_state["probe"],
+                    dt=self._currdt,
                 )
             else:
                 actual_state = pre_state
@@ -1745,7 +1826,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             balance_denom = float(actual_state["denominators"][balance_index])
             s_intermediate = s_old + ds_intermediate
             intermediate_inventory = self._integrateComponentInventory(
-                c_stage,
+                c_stage, ##XXX: This might be something that should be altered
                 s_intermediate,
                 interface_compositions,
                 balance_index,
@@ -1754,6 +1835,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 p_old=geom.p,
                 s_new=s_intermediate,
             )
+            debugInPlace()
             delta_inventory = intermediate_inventory - self._initialInventory[balance_index]
             ds = ds_intermediate + (2.0 * delta_inventory) / balance_denom
             velocity = ds / self._currdt if self._currdt > 0 else 0.0
@@ -1800,8 +1882,34 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 )
             ds = float(sol.root - s_old)
             velocity = ds / self._currdt if self._currdt > 0 else 0.0
+        elif self.interfaceUpdate == "1999_lee_allSolute_corrected":
+            # debugInPlace()
+
+            ds = ((2.0 * self._currdt * (actual_state['fluxes'][1]-actual_state['fluxes'][0]).sum()) + (2*self.previousMassDelta.sum())) /  (actual_state['denominators'].sum())
+            intermediate_inventory = self._integrateInventory(
+                c_stage, ##XXX: This might be something that should be altered
+                s_old + ds,
+                interface_compositions,
+                s_for_interp="new",
+            )
+            delta_inventory = intermediate_inventory - self._initialInventory
+            self.previousMassDelta = delta_inventory
+
+            # s_intermediate = s_old + ds_intermediate
+            
+            # intermediate_inventory = self._integrateInventory(
+            #     c_stage, ##XXX: This might be something that should be altered
+            #     s_intermediate,
+            #     interface_compositions,
+            #     s_for_interp="new",
+            # )
+            # delta_inventory = intermediate_inventory - self._initialInventory
+            # self.previousMassDelta = delta_inventory
+            # ds = ds_intermediate
+
+            velocity = ds / self._currdt if self._currdt > 0 else 0.0
         else:
-            raise ValueError("interfaceUpdate should be one of ['basic', 'lee_oh_corrected', 'my_corrected'].")
+            raise ValueError("interfaceUpdate should be one of ['basic', 'lee_oh_corrected', 'my_corrected', '1999_lee_allSolute_corrected'].")
 
         max_fraction = self.constraints.movingBoundaryThreshold
         requested_fraction = abs(ds) / self.mesh.dz
@@ -1809,9 +1917,21 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             raise ValueError("MovingBoundaryFD1DModel produced a non-finite interface increment.")
         max_fraction = max(max_fraction, 1e-12)
         if requested_fraction > max_fraction:
-            print(f"(max_fraction, requested_fraction, t): {(max_fraction, requested_fraction, t)}")
-            # debugInPlace()
-            raise ValueError("MovingBoundaryFD1DModel requested_fraction is greater than max_fraction")
+            requested_fraction_signed = ds / self.mesh.dz
+            import math
+            def binCurrentAndFuturep(current_p, requested_fraction_input):
+                current_p_plus10 = current_p + 10
+                current_p_plus10_modf = math.modf(current_p_plus10)
+                future_p_modf = math.modf(current_p_plus10 + requested_fraction_input)
+                get_modf_relativeTo_pstar = lambda modf_input: (0.25, modf_input[1]) if modf_input[0] < self.pstar else (0.75, modf_input[1])
+                return get_modf_relativeTo_pstar(current_p_plus10_modf), get_modf_relativeTo_pstar(future_p_modf)
+            currentPBin, futurePBin = binCurrentAndFuturep(geom.p, requested_fraction_signed)
+            
+            if abs(sum(currentPBin)-sum(futurePBin))>0.5:
+                print(f"(max_fraction, requested_fraction_signed, t): {(max_fraction, requested_fraction_signed, t)}")
+                print(f"(currentPBin, futurePBin): {(currentPBin, futurePBin)}")
+                debugInPlace()
+                raise ValueError("MovingBoundaryFD1DModel requested_fraction is greater than max_fraction")
 
         s_new = self._clipInterfacePosition(s_old + ds, strict=True)
         c_final = self._reconstructIgnoredComposition(c_new, s_old, geom.p, s_new, interface_compositions)
@@ -1878,11 +1998,15 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         '''
         Limits interface motion once the actual explicit time step is known
         '''
+        if TODAY>date(2026, 5, 15):
+            raise ValueError("Consider if this should still be skipped")
+        return ## I'm skipping this while I'm letting binCurrentAndFuturep() override max_fraction limits
         if dt <= 0:
             return
         interface_position = self._clipInterfacePosition(float(x[1]), strict=True)
         velocity = float(dXdt[1])
         if not np.isfinite(velocity):
+            raise ValueError("velocity is infinite and I don't want this being zeroed silently")
             dXdt[1] = 0.0
             return
 
@@ -1898,6 +2022,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         allowed_ds = min(max_ds, domain_ds)
         requested_ds = abs(velocity) * dt
         if requested_ds > allowed_ds:
+            raise ValueError("requested_ds > allowed_ds and I don't want this clipping velocity silently")
             dXdt[1] = np.sign(velocity) * allowed_ds / dt
 
     def _isClosedSystem(self):
@@ -2068,6 +2193,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                     composition,
                     interface_position,
                     allow_solve=True,
+                    dt="0",
                 )[2:4]
         return self._integrateInventory(composition, interface_position, interface_compositions, s_for_interp="old")
 

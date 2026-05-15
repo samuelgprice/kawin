@@ -280,7 +280,7 @@ def integrate_binary_fd_profile(
     s_new,
     pstar,
     interface_compositions,
-    integration_mode="weighted",
+    integration_mode="none",
     s_for_interp='none',
 ):
     """

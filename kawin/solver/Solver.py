@@ -113,6 +113,8 @@ class DESolver:
         dXdt = self._f(t, unflatX)
         if getDt:
             dt = self._getDt(dXdt)
+            if dt<self._dtmin:
+                raise ValueError(f"Calculated dt {dt} is smaller than minimum allowed dt {self._dtmin}.")
             dt = dt if dt > self._dtmin else self._dtmin
             dt = dt if dt < self._dtmax else self._dtmax
             return self._flattenX(dXdt), dt
