@@ -8,7 +8,11 @@ from kawin.diffusion import SinglePhaseModel, HomogenizationModel, MovingBoundar
 from kawin.diffusion.mesh import Cartesian1D, CartesianFD1D, Cylindrical1D, Spherical1D, Cartesian2D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh import ProfileBuilder, StepProfile1D, LinearProfile1D, DiracDeltaProfile, ConstantProfile, GaussianProfile, ExperimentalProfile1D, BoundedEllipseProfile, BoundedRectangleProfile
 from kawin.diffusion.mesh import get_moving_boundary_fd_geometry
-from kawin.diffusion.mesh.MovingBoundaryFD1D import quad_fit_derivs
+from kawin.diffusion.mesh.MovingBoundaryFD1D import (
+    integrate_binary_fd_profile,
+    interpolate_previous_ignored_composition,
+    quad_fit_derivs,
+)
 from kawin.diffusion.DiffusionParameters import computeMobility, _computeSingleMobility, TemperatureParameters, HashTable
 from kawin.diffusion.HomogenizationParameters import HomogenizationParameters, computeHomogenizationFunction
 from kawin.thermo import GeneralThermodynamics, MulticomponentThermodynamics
@@ -1055,6 +1059,83 @@ def test_moving_boundary_fdm_geometry_switches_ignored_node():
     assert geom_right.right_near_index == 6
 
 
+def test_interpolate_previous_ignored_composition_linear_vs_lagrange():
+    z = np.linspace(0.0, 1.0, 11)
+    c = 0.2 + 0.6 * z + 0.1 * z**2
+    mesh = CartesianFD1D(['CR'], [0, 1], 11)
+    s_old = 0.41
+    s_new = 0.45
+    pstar = 0.5
+    interface_compositions = (0.29, 0.71)
+    p_old = get_moving_boundary_fd_geometry(mesh, s_old, pstar, ignored_node_rule="legacy_two_region").p
+
+    c_lagrange = interpolate_previous_ignored_composition(
+        z,
+        c,
+        s_old=s_old,
+        p_old=p_old,
+        s_new=s_new,
+        pstar=pstar,
+        interface_compositions=interface_compositions,
+        ignored_node_rule="legacy_two_region",
+        ignored_node_reconstruction_mode="lagrange",
+    )
+    c_linear = interpolate_previous_ignored_composition(
+        z,
+        c,
+        s_old=s_old,
+        p_old=p_old,
+        s_new=s_new,
+        pstar=pstar,
+        interface_compositions=interface_compositions,
+        ignored_node_rule="legacy_two_region",
+        ignored_node_reconstruction_mode="linear",
+    )
+    geom_old = get_moving_boundary_fd_geometry(mesh, s_old, pstar, ignored_node_rule="legacy_two_region")
+    idx = geom_old.ignored_index
+    assert idx is not None
+    assert not np.isclose(c_lagrange[idx], c_linear[idx], rtol=1e-12, atol=1e-12)
+
+
+def test_integrate_binary_fd_profile_reconstruction_mode_affects_new_interp():
+    z = np.linspace(0.0, 1.0, 11)
+    c = 0.2 + 0.6 * z + 0.1 * z**2
+    mesh = CartesianFD1D(['CR'], [0, 1], 11)
+    s_old = 0.41
+    s_new = 0.45
+    pstar = 0.5
+    interface_compositions = (0.29, 0.71)
+    p_old = get_moving_boundary_fd_geometry(mesh, s_old, pstar, ignored_node_rule="legacy_two_region").p
+
+    mass_lagrange = integrate_binary_fd_profile(
+        z,
+        c,
+        s_old=s_old,
+        p_old=p_old,
+        s_new=s_new,
+        pstar=pstar,
+        interface_compositions=interface_compositions,
+        ignored_node_rule="legacy_two_region",
+        ignored_node_reconstruction_mode="lagrange",
+        integration_mode="weighted",
+        s_for_interp="new",
+    )
+    mass_linear = integrate_binary_fd_profile(
+        z,
+        c,
+        s_old=s_old,
+        p_old=p_old,
+        s_new=s_new,
+        pstar=pstar,
+        interface_compositions=interface_compositions,
+        ignored_node_rule="legacy_two_region",
+        ignored_node_reconstruction_mode="linear",
+        integration_mode="weighted",
+        s_for_interp="new",
+    )
+    assert not np.isclose(mass_lagrange, mass_linear, rtol=1e-12, atol=1e-12)
+
+
 def test_moving_boundary_fdm_dXdt_and_fluxes():
     interfacePosition = 0.525
     profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
@@ -1432,6 +1513,82 @@ def test_moving_boundary_fdm_from_dict_requires_initial_inventory_mode():
         new_model.fromDict(data)
 
 
+def test_moving_boundary_fdm_requires_ignored_node_reconstruction_mode():
+    interfacePosition = 0.525
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    with pytest.raises(ValueError, match="ignoredNodeReconstructionMode must be specified explicitly"):
+        MovingBoundaryFD1DModel(
+            mesh,
+            ['FE', 'CR'],
+            ['ALPHA', 'BETA'],
+            thermodynamics=therm,
+            temperature=TemperatureParameters(1000),
+            interfacePosition=interfacePosition,
+            bulkUpdateScheme='legacy',
+            integrationMode='weighted',
+            ignoredNodeRule='legacy_two_region',
+            interfaceUpdate='basic',
+            fluxGradientMode='post_diffusion',
+            initialInventoryMode='integrated',
+        )
+
+
+def test_moving_boundary_fdm_from_dict_requires_reconstruction_mode_field():
+    interfacePosition = 0.525
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        ignoredNodeRule='legacy_two_region',
+        ignoredNodeReconstructionMode='lagrange',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
+    )
+    data = model.toDict()
+    data.pop("ignored_node_reconstruction_mode")
+
+    new_mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    new_mesh.setResponseProfile(profile)
+    new_model = MovingBoundaryFD1DModel(
+        new_mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        ignoredNodeRule='legacy_two_region',
+        ignoredNodeReconstructionMode='lagrange',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
+    )
+    with pytest.raises(ValueError, match="does not include 'ignored_node_reconstruction_mode'"):
+        new_model.fromDict(data)
+
+
 def test_moving_boundary_fdm_requires_valid_bulk_update_scheme():
     interfacePosition = 0.525
     profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
@@ -1513,6 +1670,34 @@ def test_moving_boundary_fdm_requires_valid_bulk_update_scheme():
             interfacePosition=interfacePosition,
             bulkUpdateScheme='invalid',
             integrationMode='weighted',
+            interfaceUpdate='basic',
+            fluxGradientMode='post_diffusion',
+            initialInventoryMode='integrated',
+        )
+
+
+def test_moving_boundary_fdm_rejects_invalid_reconstruction_mode():
+    interfacePosition = 0.525
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    with pytest.raises(ValueError, match="ignoredNodeReconstructionMode must be one of"):
+        MovingBoundaryFD1DModel(
+            mesh,
+            ['FE', 'CR'],
+            ['ALPHA', 'BETA'],
+            thermodynamics=therm,
+            temperature=TemperatureParameters(1000),
+            interfacePosition=interfacePosition,
+            bulkUpdateScheme='legacy',
+            integrationMode='weighted',
+            ignoredNodeRule='legacy_two_region',
+            ignoredNodeReconstructionMode='cubic',
             interfaceUpdate='basic',
             fluxGradientMode='post_diffusion',
             initialInventoryMode='integrated',
@@ -2546,4 +2731,5 @@ def test_moving_boundary_mass_check_raises():
 
     with pytest.raises(ValueError, match='mass correction residual'):
         model._checkMassCorrection(model.data.currentY[:,0], model.getInterfacePosition())
+
 

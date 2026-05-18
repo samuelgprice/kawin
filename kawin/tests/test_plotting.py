@@ -859,3 +859,4 @@ def test_moving_boundary_fdm_analytic_comparison_plot():
     assert np.all(np.isfinite(delta_s_post_basic_sub))
     assert np.all(np.isfinite(analytic_post_basic_sub))
     # plt.close(fig)
+

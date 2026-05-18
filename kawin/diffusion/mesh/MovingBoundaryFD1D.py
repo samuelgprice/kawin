@@ -11,13 +11,16 @@ class MovingBoundaryFDGeometry:
     The interface lies between ``left_index`` and ``right_index`` with
     normalized local coordinate ``p`` measured from the left node. The
     ``ignored_index`` follows the Lee/Oh-style explicit treatment where one
-    adjacent node is reconstructed rather than updated directly.
+    adjacent node is reconstructed rather than updated directly. For three-region
+    Lee/Oh-1996 behavior, no node is ignored in the middle band and
+    ``ignored_index`` is ``None``.
     """
     left_index: int
     right_index: int
     interface_position: float
     p: float
-    ignored_index: int
+    ignored_index: int | None
+    ignore_mode: str
     left_near_index: int
     right_near_index: int
     left_distance: float
@@ -67,7 +70,7 @@ def _regularize_interface_position(z, interface_position: float) -> float:
     return position
 
 
-def _geometry_from_z(z, interface_position: float, pstar: float) -> MovingBoundaryFDGeometry:
+def _geometry_from_z(z, interface_position: float, pstar: float, ignored_node_rule: str) -> MovingBoundaryFDGeometry:
     """
     Builds moving-boundary geometry directly from a 1D coordinate vector.
 
@@ -85,7 +88,11 @@ def _geometry_from_z(z, interface_position: float, pstar: float) -> MovingBounda
         ``p = 0`` at ``left_index`` and ``p = 1`` at ``right_index``.
     ignored_index
         The interface-adjacent node that is reconstructed rather than updated
-        directly during the explicit Lee/Oh-style step.
+        directly during the explicit Lee/Oh-style step. Can be ``None`` when
+        ``ignored_node_rule="lee_oh_1996_three_region"`` and
+        ``pstar <= p <= 1 - pstar``.
+    ignore_mode
+        One of ``"ignore_left"``, ``"ignore_right"``, or ``"ignore_none"``.
     left_near_index / right_near_index
         The nodes immediately adjacent to the ignored node that receive the
         quadratic interface-aware stencil update on the left and right sides.
@@ -113,38 +120,48 @@ def _geometry_from_z(z, interface_position: float, pstar: float) -> MovingBounda
     p = float((interface_position - z[left_index]) / dx)
     p = float(np.clip(p, 0.0, 1.0))
 
+    if ignored_node_rule not in {"legacy_two_region", "lee_oh_1996_three_region"}:
+        raise ValueError("ignored_node_rule must be one of ['legacy_two_region', 'lee_oh_1996_three_region'].")
+
     if p < pstar:
         i1, i2 = left_index - 2, left_index - 1
         j1, j2 = right_index, right_index + 1
-    else:
+    elif ignored_node_rule == "legacy_two_region" or p > 1.0 - pstar:
         i1, i2 = left_index - 1, left_index
         j1, j2 = right_index + 1, right_index + 2
+    else:
+        i1, i2 = left_index - 1, left_index
+        j1, j2 = right_index, right_index + 1
     minIndx=0; maxIndx=len(z)-1
     validIndx = lambda i: i>=minIndx and i<=maxIndx
     # if (validIndx(left_index-2)!=True) or (validIndx(left_index+3)!=True):
     # if (i1<0) or (i2<0) or (j1>(len(z)-1)) or (j2>(len(z)-1)):
     if all([validIndx(i) for i in [i1, i2, j1, j2]])!=True:
-        try:
-            import debugpy
-            # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-            debugpy.listen(5678)
-            print("Waiting for debugger attach")
-            debugpy.wait_for_client()
-            debugpy.breakpoint()
-            print('break on this line')
-        except:
-            pass
-        # raise ValueError("Interface position is too close to the domain boundary.")
+        # debugInPlace()
+        raise ValueError("Interface position is too close to the domain boundary.")
 
-    ignored_index = left_index if p < pstar else right_index
-    left_near_index = left_index - 1 if p < pstar else left_index # left_near_index = max(0, left_index - 1) if p < pstar else left_index
-    right_near_index = right_index if p < pstar else right_index + 1 # right_near_index = right_index if p < pstar else min(right_index + 1, len(z) - 1)
+    if p < pstar:
+        ignored_index = left_index
+        ignore_mode = "ignore_left"
+        left_near_index = left_index - 1
+        right_near_index = right_index
+    elif ignored_node_rule == "legacy_two_region" or p > 1.0 - pstar:
+        ignored_index = right_index
+        ignore_mode = "ignore_right"
+        left_near_index = left_index
+        right_near_index = right_index + 1
+    else:
+        ignored_index = None
+        ignore_mode = "ignore_none"
+        left_near_index = left_index
+        right_near_index = right_index
     return MovingBoundaryFDGeometry(
         left_index=left_index,
         right_index=right_index,
         interface_position=float(interface_position),
         p=p,
-        ignored_index=int(ignored_index),
+        ignored_index=None if ignored_index is None else int(ignored_index),
+        ignore_mode=ignore_mode,
         left_near_index=int(left_near_index),
         right_near_index=int(right_near_index),
         left_distance=float(interface_position - z[left_index]),
@@ -152,7 +169,12 @@ def _geometry_from_z(z, interface_position: float, pstar: float) -> MovingBounda
     )
 
 
-def get_moving_boundary_fd_geometry(mesh, interface_position: float, pstar: float) -> MovingBoundaryFDGeometry:
+def get_moving_boundary_fd_geometry(
+    mesh,
+    interface_position: float,
+    pstar: float,
+    ignored_node_rule: str = "legacy_two_region",
+) -> MovingBoundaryFDGeometry:
     """
     Returns the discrete interface geometry for a 1D FDM mesh.
 
@@ -165,8 +187,10 @@ def get_moving_boundary_fd_geometry(mesh, interface_position: float, pstar: floa
     pstar : float
         Switching threshold used to decide which interface-adjacent node is
         ignored and reconstructed.
+    ignored_node_rule : {"legacy_two_region", "lee_oh_1996_three_region"}
+        Rule used to choose ignored-node behavior.
     """
-    return _geometry_from_z(mesh.z, interface_position, pstar)
+    return _geometry_from_z(mesh.z, interface_position, pstar, ignored_node_rule)
 
 
 def exact_lagrange(x, derivative_num: int, xi, yi):
@@ -211,48 +235,88 @@ def quad_fit_derivs(x: np.ndarray, y: np.ndarray, x_eval: float):
     )
 
 
-def interpolate_previous_ignored_composition(z, composition, s_old, p_old, s_new, pstar, interface_compositions):
+def interpolate_previous_ignored_composition(
+    z,
+    composition,
+    s_old,
+    p_old,
+    s_new,
+    pstar,
+    interface_compositions,
+    ignored_node_rule,
+    ignored_node_reconstruction_mode,
+):
     """
     Reconstructs the interface-adjacent node that is ignored by the explicit step.
 
     When the interface moves, the node treated as ignored by the Lee/Oh update
-    can change. This helper fills that node using quadratic interpolation from
-    the retained neighboring nodes and the imposed interface compositions.
+    can change. This helper fills that node using either a quadratic Lagrange
+    interpolation (``"lagrange"``) or a two-point linear interpolation
+    (``"linear"``) between the nearest retained node and the imposed interface
+    composition on that side.
     """
     z = _flatten_1d_coordinates(z)
     c = np.asarray(composition, dtype=np.float64).copy()
-    geom_old = _geometry_from_z(z, s_old, pstar)
-    geom_new = _geometry_from_z(z, s_new, pstar)
+    geom_old = _geometry_from_z(z, s_old, pstar, ignored_node_rule)
+    geom_new = _geometry_from_z(z, s_new, pstar, ignored_node_rule)
+    if geom_old.ignored_index is None:
+        return c
+    if ignored_node_reconstruction_mode not in {"lagrange", "linear"}:
+        raise ValueError("ignored_node_reconstruction_mode must be one of ['lagrange', 'linear'].")
     index = geom_old.ignored_index
 
     if index <= geom_new.left_index:
         if index!=geom_new.left_index:
             raise ValueError("Unexpected geometry change: ignored node moved more than one position to the left.")
-        if geom_new.left_index - 2 >= 0:
-            c[index] = exact_lagrange(
-                z[index],
-                derivative_num=0,
-                xi=[z[geom_new.left_index - 2], z[geom_new.left_index - 1], s_new],
-                yi=[c[geom_new.left_index - 2], c[geom_new.left_index - 1], interface_compositions[0]],
-            )
-        elif geom_new.left_index - 1 >= 0:
-            c[index] = c[geom_new.left_index - 1] + (interface_compositions[0] - c[geom_new.left_index - 1]) / (geom_new.p + 1.0)
+        if ignored_node_reconstruction_mode == "lagrange":
+            if geom_new.left_index - 2 >= 0:
+                c[index] = exact_lagrange(
+                    z[index],
+                    derivative_num=0,
+                    xi=[z[geom_new.left_index - 2], z[geom_new.left_index - 1], s_new],
+                    yi=[c[geom_new.left_index - 2], c[geom_new.left_index - 1], interface_compositions[0]],
+                )
+            elif geom_new.left_index - 1 >= 0:
+                c[index] = c[geom_new.left_index - 1] + (interface_compositions[0] - c[geom_new.left_index - 1]) / (geom_new.p + 1.0)
+            else:
+                raise ValueError(f"geom_new.left_index ({geom_new.left_index}) is too close to the left boundary to reconstruct the ignored node composition.")
         else:
-            raise ValueError(f"geom_new.left_index ({geom_new.left_index}) is too close to the left boundary to reconstruct the ignored node composition.")
+            if geom_new.left_index - 1 >= 0:
+                # x0 = z[geom_new.left_index - 1]
+                # y0 = c[geom_new.left_index - 1]
+                # x1 = s_new
+                # y1 = interface_compositions[0]
+                # assert np.abs((y0 + (y1 - y0) * (z[index] - x0) / (x1 - x0))-(c[geom_new.left_index - 1] + (interface_compositions[0] - c[geom_new.left_index - 1]) / (geom_new.p + 1.0))) < 1e-15, f"should give same value: {(y0 + (y1 - y0) * (z[index] - x0) / (x1 - x0)), (c[geom_new.left_index - 1] + (interface_compositions[0] - c[geom_new.left_index - 1]) / (geom_new.p + 1.0))}"
+                # c[index] = y0 + (y1 - y0) * (z[index] - x0) / (x1 - x0)
+                c[index] = c[geom_new.left_index - 1] + (interface_compositions[0] - c[geom_new.left_index - 1]) / (geom_new.p + 1.0)
+            else:
+                raise ValueError(f"geom_new.left_index ({geom_new.left_index}) is too close to the left boundary to reconstruct the ignored node composition.")
     else:
         if index != geom_new.right_index:
             raise ValueError("Unexpected geometry change: ignored node moved more than one position to the right.")
-        if geom_new.right_index + 2 < len(z):
-            c[index] = exact_lagrange(
-                z[index],
-                derivative_num=0,
-                xi=[s_new, z[geom_new.right_index + 1], z[geom_new.right_index + 2]],
-                yi=[interface_compositions[1], c[geom_new.right_index + 1], c[geom_new.right_index + 2]],
-            )
-        elif geom_new.right_index + 1 < len(z):
-            c[index] = c[geom_new.right_index + 1] - (c[geom_new.right_index + 1] - interface_compositions[1]) / (2.0 - geom_new.p)
+        if ignored_node_reconstruction_mode == "lagrange":
+            if geom_new.right_index + 2 < len(z):
+                c[index] = exact_lagrange(
+                    z[index],
+                    derivative_num=0,
+                    xi=[s_new, z[geom_new.right_index + 1], z[geom_new.right_index + 2]],
+                    yi=[interface_compositions[1], c[geom_new.right_index + 1], c[geom_new.right_index + 2]],
+                )
+            elif geom_new.right_index + 1 < len(z):
+                c[index] = c[geom_new.right_index + 1] - (c[geom_new.right_index + 1] - interface_compositions[1]) / (2.0 - geom_new.p)
+            else:
+                raise ValueError(f"geom_new.right_index ({geom_new.right_index}) is too close to the right boundary to reconstruct the ignored node composition.")
         else:
-            raise ValueError(f"geom_new.right_index ({geom_new.right_index}) is too close to the right boundary to reconstruct the ignored node composition.")
+            if geom_new.right_index + 1 < len(z):
+                # x0 = s_new
+                # y0 = interface_compositions[1]
+                # x1 = z[geom_new.right_index + 1]
+                # y1 = c[geom_new.right_index + 1]
+                # assert np.abs((y0 + (y1 - y0) * (z[index] - x0) / (x1 - x0))-(c[geom_new.right_index + 1] - (c[geom_new.right_index + 1] - interface_compositions[1]) / (2.0 - geom_new.p))) < 1e-15, f"should give same value: {(y0 + (y1 - y0) * (z[index] - x0) / (x1 - x0)), (c[geom_new.right_index + 1] - (c[geom_new.right_index + 1] - interface_compositions[1]) / (2.0 - geom_new.p))}"
+                # c[index] = y0 + (y1 - y0) * (z[index] - x0) / (x1 - x0)
+                c[index] = c[geom_new.right_index + 1] - (c[geom_new.right_index + 1] - interface_compositions[1]) / (2.0 - geom_new.p)
+            else:
+                raise ValueError(f"geom_new.right_index ({geom_new.right_index}) is too close to the right boundary to reconstruct the ignored node composition.")
     return c
 
 
@@ -280,6 +344,8 @@ def integrate_binary_fd_profile(
     s_new,
     pstar,
     interface_compositions,
+    ignored_node_rule: str,
+    ignored_node_reconstruction_mode: str,
     integration_mode="none",
     s_for_interp='none',
 ):
@@ -299,16 +365,29 @@ def integrate_binary_fd_profile(
         Left and right interface compositions.
     integration_mode : str
         One of ``"ignore"``, ``"noIgnore"``, or ``"weighted"``.
+    ignored_node_reconstruction_mode : {"lagrange", "linear"}
+        Reconstruction rule for previously ignored interface-adjacent nodes
+        when ``s_for_interp == "new"``.
     s_for_interp : str
         Whether reconstruction of the ignored node should use the old or new
         interface placement.
     """
     z = _flatten_1d_coordinates(z)
     c = np.asarray(composition, dtype=np.float64).reshape(-1).copy()
-    geom_new = _geometry_from_z(z, s_new, pstar)
+    geom_new = _geometry_from_z(z, s_new, pstar, ignored_node_rule)
 
     if s_for_interp == "new":
-        c = interpolate_previous_ignored_composition(z, c, s_old, p_old, s_new, pstar, interface_compositions)
+        c = interpolate_previous_ignored_composition(
+            z,
+            c,
+            s_old,
+            p_old,
+            s_new,
+            pstar,
+            interface_compositions,
+            ignored_node_rule=ignored_node_rule,
+            ignored_node_reconstruction_mode=ignored_node_reconstruction_mode,
+        )
     elif s_for_interp != "old":
         raise ValueError("s_for_interp must be 'new' or 'old'.")
 
@@ -316,20 +395,26 @@ def integrate_binary_fd_profile(
     if integration_mode == "noIgnore":
         return float(np.trapezoid(c_aug, z_aug))
 
-    s_idx = int(np.searchsorted(z, s_new))
-    if geom_new.p < pstar:
-        z_ignore = np.concatenate((z[: s_idx - 1], [s_new, s_new], z[s_idx:]))
-        c_ignore = np.concatenate((c[: s_idx - 1], np.asarray(interface_compositions, dtype=np.float64), c[s_idx:]))
+    if geom_new.ignored_index is None:
+        ignore_value = float(np.trapezoid(c_aug, z_aug))
     else:
-        z_ignore = np.concatenate((z[:s_idx], [s_new, s_new], z[s_idx + 1 :]))
-        c_ignore = np.concatenate((c[:s_idx], np.asarray(interface_compositions, dtype=np.float64), c[s_idx + 1 :]))
-    ignore_value = float(np.trapezoid(c_ignore, z_ignore))
+        s_idx = int(np.searchsorted(z, s_new))
+        if geom_new.ignore_mode == "ignore_left":
+            z_ignore = np.concatenate((z[: s_idx - 1], [s_new, s_new], z[s_idx:]))
+            c_ignore = np.concatenate((c[: s_idx - 1], np.asarray(interface_compositions, dtype=np.float64), c[s_idx:]))
+        else:
+            z_ignore = np.concatenate((z[:s_idx], [s_new, s_new], z[s_idx + 1 :]))
+            c_ignore = np.concatenate((c[:s_idx], np.asarray(interface_compositions, dtype=np.float64), c[s_idx + 1 :]))
+        ignore_value = float(np.trapezoid(c_ignore, z_ignore))
 
     if integration_mode == "ignore":
         return ignore_value
     if integration_mode == "weighted":
         no_ignore_value = float(np.trapezoid(c_aug, z_aug))
-        weight_no_ignore = geom_new.p / pstar if geom_new.p < pstar else (1.0 - geom_new.p) / (1.0 - pstar)
+        if geom_new.ignored_index is None:
+            weight_no_ignore = 1.0
+        else:
+            weight_no_ignore = geom_new.p / pstar if geom_new.p < pstar else (1.0 - geom_new.p) / (1.0 - pstar)
         weight_ignore = 1.0 - weight_no_ignore
         return float(weight_no_ignore * no_ignore_value + weight_ignore * ignore_value)
     raise ValueError("integration_mode must be one of ['ignore', 'noIgnore', 'weighted'].")
@@ -340,6 +425,7 @@ def summarize_moving_boundary_fd_state(
     composition: np.ndarray,
     interface_position: float,
     pstar: float,
+    ignored_node_rule: str = "legacy_two_region",
     window: int = 2,
     precision: int = 9,
     distance_multiplier: float = 1.0,
@@ -356,7 +442,7 @@ def summarize_moving_boundary_fd_state(
     if len(composition) != len(z):
         raise ValueError("Composition array must align with the 1D FDM moving-boundary mesh.")
 
-    geom = get_moving_boundary_fd_geometry(mesh, interface_position, pstar)
+    geom = get_moving_boundary_fd_geometry(mesh, interface_position, pstar, ignored_node_rule=ignored_node_rule)
     scale = float(distance_multiplier)
     left = max(0, geom.left_index - int(window))
     right = min(len(z) - 1, geom.right_index + int(window))
@@ -371,7 +457,7 @@ def summarize_moving_boundary_fd_state(
         ),
         (
             f"  p = {format(geom.p, fmt)}, pstar = {format(pstar, fmt)}, "
-            f"ignored_index = {geom.ignored_index}"
+            f"ignored_index = {geom.ignored_index}, ignore_mode = {geom.ignore_mode}"
         ),
         (
             f"  center-to-interface distances = left {format(geom.left_distance * scale, fmt)}, "
@@ -386,7 +472,7 @@ def summarize_moving_boundary_fd_state(
             marker = " <left of interface>"
         elif i == geom.right_index:
             marker = " <right of interface>"
-        if i == geom.ignored_index:
+        if geom.ignored_index is not None and i == geom.ignored_index:
             marker += " <ignored>"
         lines.append(
             "    "

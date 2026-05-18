@@ -22,6 +22,17 @@ from kawin.thermo import MulticomponentThermodynamics
 from pycalphad import Database, ternplot
 from pycalphad import variables as v
 
+def debugInPlace():
+    try:
+        import debugpy
+        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+        debugpy.listen(5678)
+        print("Waiting for debugger attach")
+        debugpy.wait_for_client()
+        debugpy.breakpoint()
+        print('break on this line')
+    except:
+        pass
 
 # EXAMPLES_DIR = pathlib.Path(__file__).resolve().parent if "__file__" in globals() else pathlib.Path.cwd()
 EXAMPLES_DIR = pathlib.Path(r"c:/Users/samth/OneDrive - Northwestern University/WS_DL/Lab Data/Price/code/kawin/examples")
@@ -61,7 +72,7 @@ class ApproximateTernaryTieLineThermodynamics:
         phase_tieline_start=None,
         phase_tieline_end=None,
         sampled_phase_tielines=None,
-        diffusivity_mode="single_tieline",
+        diffusivity_mode=None,
         sampled_diffusivity_compositions=None,
         sampled_diffusivities=None,
         tdb_ForPlotting=None,
@@ -217,6 +228,7 @@ class ApproximateTernaryTieLineThermodynamics:
                 self.matrix_phase: matrix_comp,
                 self.precip_phase: precip_comp,
             }
+        raise ValueError("Not sure if below stuff is correct!")
         matrix_comp = self.phase_tieline_start[self.matrix_phase] + lam * (
             self.phase_tieline_end[self.matrix_phase] - self.phase_tieline_start[self.matrix_phase]
         )
@@ -344,6 +356,10 @@ def _plot_labeled_ternary_point(ax, independent_composition, label, color, marke
     )
     return xy
 
+def composition_set_to_order(cs, desired_order):
+    order = [str(el).upper() for el in cs.phase_record.nonvacant_elements]
+    x_by_el = dict(zip(order, np.asarray(cs.X, dtype=np.float64)))
+    return np.array([x_by_el[el.upper()] for el in desired_order], dtype=np.float64)
 
 def _phase_compositions_from_workspace(wks):
     """
@@ -352,7 +368,7 @@ def _phase_compositions_from_workspace(wks):
     by_phase = {}
     for cs in wks.get_composition_sets():
         phase_name = cs.phase_record.phase_name
-        phase_comp = _as_independent_components(np.array(cs.X, dtype=np.float64))
+        phase_comp = composition_set_to_order(cs, ["CR", "NI"])
         if _valid_tieline(phase_comp, phase_comp):
             by_phase[phase_name] = phase_comp
     return by_phase
@@ -866,8 +882,11 @@ def apply_database_approximation(case):
         for global_composition in bulk_grid:
             try:
                 wks = therm.getEq(global_composition, temperature, 0, [matrix_phase, precip_phase])
+                # debugInPlace()
                 by_phase_ind = _phase_compositions_from_workspace(wks)
             except Exception:
+                # debugInPlace()
+                raise
                 continue
             for phase_name, phase_ind in by_phase_ind.items():
                 if phase_name not in sampled_diffusivity_points:
@@ -943,8 +962,8 @@ def build_ternary_case():
         "phases": ["BCC_A2", "FCC_A1"],
         "temperature": 1373.0,
         "length": [1.0, 30e-6, 30e-6, 62.05e-6+2000e-6][2],
-        "nodes": [30+1, 1000+1, 121+1][0],
-        "interface_position": [0.515, 18e-6, 18e-6+1e-8, 62.05e-6, 12e-6+1e-9, 12e-6-1e-9][-2], 
+        "nodes": [30+1, 1000+1, 60+1][0],
+        "interface_position": [0.515, 18e-6, 18e-6+1e-8, 62.05e-6, 12e-6+1e-12, 12e-6-1e-9][-2], 
         "left_bulk": [np.array([0.38, 0.001], dtype=np.float64), np.array([0.39696, 0.0001], dtype=np.float64)][0],
         "right_bulk": [np.array([0.13, 0.15], dtype=np.float64), np.array([0.139297, 0.142387], dtype=np.float64)][0],
         "probe_left": np.array([0.1233, 0.0001], dtype=np.float64),
@@ -954,13 +973,13 @@ def build_ternary_case():
         "right_tieline_start": None, #np.array([0.188, 0.12875], dtype=np.float64),
         "right_tieline_end": None, #np.array([0.218, 0.16875], dtype=np.float64),
         "diffusivities": {
-            "FCC_A1": np.array([[0.8, 0.0], [0.0, 0.8]], dtype=np.float64),
-            "BCC_A2": np.array([[0.4, 0.0], [0.0, 0.4]], dtype=np.float64),
+            "FCC_A1": np.array([[0.0, 0.0], [0.0, 0.0]], dtype=np.float64),
+            "BCC_A2": np.array([[0.0, 0.0], [0.0, 0.0]], dtype=np.float64),
         },
-        "solve_time": [5.0e-5, 3600*1e0][1],
+        "solve_time": [5.0e-5, 3600*5e2][1],
         "record": True,
         "vIt": 250,
-        "moving_boundary_threshold": min(pstar_input, (1-pstar_input))*0.98,
+        "moving_boundary_threshold": (min(pstar_input, (1-(2.0*pstar_input))) if pstar_input<0.5 else pstar_input)*0.98,
         "database_approximation": {
             "enabled": True,
             "tdb_path": EXAMPLES_DIR / "FeCrNi_Lee1993_L_style_ternary_checked_withMobility.tdb",
@@ -969,7 +988,7 @@ def build_ternary_case():
             "precipitate_phase": "FCC_A1",
             "probe_left": np.array([0.1233, 0.0001], dtype=np.float64), # np.array([0.26, 0.0575], dtype=np.float64),
             "probe_right": np.array([0.4993, 0.2257], dtype=np.float64), #np.array([0.3113, 0.1129], dtype=np.float64), # np.array([0.25, 0.08], dtype=np.float64),
-            "probe_lambdas": np.linspace(0.0, 1.0, 200),
+            "probe_lambdas": np.linspace(0.0, 1.0, 500),
             "diffusivity_mode": "nearest_sample", # "single_tieline", "nearest_sample"
             "diffusivity_lambda": 0.5,
             # Used when diffusivity_mode == "nearest_sample":
@@ -1271,11 +1290,14 @@ def _build_model(case, interface_update, balance_element, use_surrogate=True):
         temperature=TemperatureParameters(case["temperature"]),
         interfacePosition=case["interface_position"],
         bulkUpdateScheme="flux_form",
-        integrationMode= "weighted", #"noIgnore", "ignore", "weighted",
+        integrationMode= "ignore", #"noIgnore", "ignore", "weighted",
+        ignoredNodeRule="lee_oh_1996_three_region", # "legacy_two_region", "lee_oh_1996_three_region"
+        denom_type="eqn22", # "eqn22", "eqn11"
+        ignoredNodeReconstructionMode="lagrange", # "lagrange", "linear"
         initialInventoryMode="integrated", # "phase_length_idealized", "integrated"
         interfaceUpdate=interface_update,
         pstar=pstar_input,
-        fluxGradientMode="post_diffusion", #"pre_diffusion", "post_diffusion"
+        fluxGradientMode="pre_diffusion", #"pre_diffusion", "post_diffusion"
         balanceElement=balance_element,
         multicomponentInterfaceStateUpdate="pre_diffusion_only", #"pre_diffusion_only", "pre_and_post_diffusion",
         constraints=constraints,
@@ -1298,11 +1320,11 @@ def solve_models(case):
             "balance_element": "CR",
             "use_surrogate": True,
         },
-        # "corrected_NI": {
-        #     "interface_update": "lee_oh_corrected",
-        #     "balance_element": "NI",
-        #     "use_surrogate": True,
-        # },
+        "corrected_NI": {
+            "interface_update": "lee_oh_corrected",
+            "balance_element": "NI",
+            "use_surrogate": True,
+        },
         # "corrected_my_CR": {
         #     "interface_update": "my_corrected",
         #     "balance_element": "CR",
@@ -1337,7 +1359,7 @@ def solve_models(case):
                 balance_element=spec["balance_element"],
                 use_surrogate=spec.get("use_surrogate", True),
             )
-            model.solve(case["solve_time"], iterator=explicitEulerIterator, vIt=case["vIt"], verbose=True)
+            model.solve(case["solve_time"], iterator=explicitEulerIterator, vIt=case["vIt"], verbose=True, minDtFrac=1e-10)
             models[name] = model
         except Exception as exc:
             failures[name] = str(exc)
@@ -1475,8 +1497,11 @@ def plot_normalized_left_phase_thickness(models):
         t = np.asarray(model.interfaceData._time[: model.interfaceData.N + 1], dtype=np.float64)/3600
         s = np.asarray(model.interfaceData._y[: model.interfaceData.N + 1], dtype=np.float64)
         p = [get_moving_boundary_fd_geometry(model.mesh, s_el, model.pstar).p for s_el in s]
-        ax_twin.plot(t, p, label=name+" p", color=colors.get(name, None), linestyle=linestyle.get(name, None))
+        ax_twin.plot(t, p, label=name+" p", color=colors.get(name, None), linestyle=linestyle.get(name, None), alpha=0.5)
     ax_twin.hlines(model.pstar, t[0], t[-1], color='red', linestyle='--', alpha=0.5)
+    if model.ignoredNodeRule=="lee_oh_1996_three_region":
+        ax_twin.hlines(1-model.pstar, t[0], t[-1], color='red', linestyle='--', alpha=0.5)
+        
 
     # fig2, ax2 = plt.subplots(figsize=(8, 5))
     # ax2.set_xlim([1e-4, 10**(int(np.ceil(np.log10(t[-1]))))]); ax2.set_xscale("log")
@@ -1518,12 +1543,19 @@ def plot_normalized_left_phase_thickness(models):
 
             return int_el0/model.mesh.zlim[0][-1], int_el1/model.mesh.zlim[0][-1]
         intValsAttSub = np.array([getIntegralAtTime(t_input) for t_input in t_sub])
-        ax2.hlines(model._initialInventory[0]/model.mesh.zlim[0][-1], t_sub.min()/3600, t_sub.max()/3600, color='blue', linestyle=linestyle.get(name, None), alpha=0.5)
-        ax2_twin.hlines(model._initialInventory[1]/model.mesh.zlim[0][-1], t_sub.min()/3600, t_sub.max()/3600, color='red', linestyle=linestyle.get(name, None), alpha=0.5)
+        ax2.hlines(model._initialInventory[0]/model.mesh.zlim[0][-1], t_sub.min()/3600, t_sub.max()/3600, color='blue', linestyle='solid', alpha=0.5)
+        ax2_twin.hlines(model._initialInventory[1]/model.mesh.zlim[0][-1], t_sub.min()/3600, t_sub.max()/3600, color='red', linestyle='solid', alpha=0.5)
 
-        ax2.plot(t_sub/3600, intValsAttSub[:, 0], marker='o', label=name+" (Component 0)", color='blue', linestyle=linestyle.get(name, None))
-        ax2_twin.plot(t_sub/3600, intValsAttSub[:, 1], marker='o', label=name+" (Component 1)", color='red', linestyle=linestyle.get(name, None))
-        print(intValsAttSub[25])
+        ax2.plot(t_sub/3600, intValsAttSub[:, 0], marker='o', label=name+" (Component 0)", color='blue', linestyle='solid')
+        ax2_twin.plot(t_sub/3600, intValsAttSub[:, 1], marker='o', label=name+" (Component 1)", color='red', linestyle='solid')
+        print(f"{model._initialInventory/model.mesh.zlim[0][-1]}: initialMass")
+        print(f"{np.array([0.229945, 0.09035])}: LeeAndOh Table 1 Mass")
+        print(f"{(((model._initialInventory/model.mesh.zlim[0][-1])-np.array([0.229945, 0.09035]))/np.array([0.229945, 0.09035])) * 100}: Relative % Error")
+
+
+
+    ax2.hlines(0.229945, t_sub.min()/3600, t_sub.max()/3600, color='blue', linestyle='dashed', alpha=0.25)
+    ax2_twin.hlines(0.09035, t_sub.min()/3600, t_sub.max()/3600, color='red', linestyle='dashed', alpha=0.25)
 
     ax3.grid(True, alpha=0.3)
     for name, model in models.items():
@@ -1537,7 +1569,8 @@ def plot_normalized_left_phase_thickness(models):
     if plt.get_backend().lower() != "agg":
         plt.show()
 
-    
+    print(f"pstar_input: {pstar_input}")
+    print(f"N: {case['nodes']}")
     return fig, ax
 
 
@@ -1646,14 +1679,15 @@ def main():
     models, failures = solve_models(case)
     print_summary(case, models)
     print_failures(failures)
-    plot_results(case, models)
-    plot_normalized_left_phase_thickness(models)
-    plot_ternary_thermodynamics(case)
+    # plot_results(case, models)
+    # plot_normalized_left_phase_thickness(models)
+    # plot_ternary_thermodynamics(case)
 
 
 if __name__ == "__main__":
     main()
-
+    raise
+# raise
 #%%
 # %config InlineBackend.figure_format = 'svg'
 case = build_ternary_case()
@@ -1664,11 +1698,51 @@ print_failures(failures)
 plot_normalized_left_phase_thickness(models)
 # plot_ternary_thermodynamics(case)
 
-# %%
+#%%
+# %config InlineBackend.figure_format = 'svg'
+modelToUse = models["corrected_CR"] 
+fig, ax = modelToUse.plotTernaryState()
 
+import pandas as pd
+FCC_extractedPts_df = pd.read_csv("examples\\leeAndOh1996_data\\FCClineAt1373FromWPDcsv.csv", names=['W(NI)', 'W(CR)'])
+BCC_extractedPts_df = pd.read_csv("examples\\leeAndOh1996_data\\BCClineAt1373FromWPDcsv.csv", names=['W(NI)', 'W(CR)'])
+FCC_extractedPts_df = FCC_extractedPts_df/100
+BCC_extractedPts_df = BCC_extractedPts_df/100
+
+def convertNiCrWtToMoleFracs(df_input):
+    df = pd.DataFrame.from_dict(df_input.apply(lambda row: v.get_mole_fractions({v.W('CR'): row['W(CR)'], v.W('NI'): row['W(NI)']}, dependent_species='FE', pure_element_mass_dict=modelToUse.therm.db_forPlotting), axis=1).to_list(), orient='columns')
+    df.columns = df.columns.astype(str)
+    df_input[['X_NI', 'X_CR']] = df[['X_NI', 'X_CR']].copy()
+    return df_input
+
+FCC_extractedPts_df = convertNiCrWtToMoleFracs(FCC_extractedPts_df)
+BCC_extractedPts_df = convertNiCrWtToMoleFracs(BCC_extractedPts_df)
+
+ax.plot(FCC_extractedPts_df['X_CR'], FCC_extractedPts_df['X_NI'], 'o', fillstyle='none', label='FCC extracted points')
+ax.plot(BCC_extractedPts_df['X_CR'], BCC_extractedPts_df['X_NI'], 'o', fillstyle='none', label='BCC extracted points')
+
+# list(models.values())[0].therm
+# list(models.values())[0]["database_sampled_tielines"]
+FCC_sampledTielinePts_arr = np.array([tl['phase_ind']['FCC_A1'] for tl in case["database_sampled_tielines"]])
+BCC_sampledTielinePts_arr = np.array([tl['phase_ind']['BCC_A2'] for tl in case["database_sampled_tielines"]])
+ax.plot(FCC_sampledTielinePts_arr[:,0], FCC_sampledTielinePts_arr[:, 1], 'x', markersize=1, fillstyle='none', label='FCC sampled tieline')
+ax.plot(BCC_sampledTielinePts_arr[:,0], BCC_sampledTielinePts_arr[:, 1], 'x', markersize=1, fillstyle='none', label='BCC sampled tieline')
+
+
+ax.plot(modelToUse._interfaceCompositionHistory['pre_right']._y[:,0], modelToUse._interfaceCompositionHistory['pre_right']._y[:, 1], 'x', markersize=1, fillstyle='none', label='left interfacial comps')
+ax.plot(modelToUse._interfaceCompositionHistory['pre_left']._y[:,0], modelToUse._interfaceCompositionHistory['pre_left']._y[:, 1], 'x', markersize=1, fillstyle='none', label='left interfacial comps')
+
+
+ax.set_xlim([0.1, 0.5])
+ax.set_ylim([0, 0.2])
+
+# %%
 import pandas as pd
 fig9_upperCurve_df = pd.read_csv(r'C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\leeAndOh1996_data\fig9_upperCurve_Ni.csv', names=['t', 'normalized_thickness'])
 fig9_lowerCurve_df = pd.read_csv(r'C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\leeAndOh1996_data\fig9_lowerCurve_Cr.csv', names=['t', 'normalized_thickness'])
 fig9_upperCurve_df = fig9_upperCurve_df.sort_values(by=['t'])
 fig9_lowerCurve_df = fig9_lowerCurve_df.sort_values(by=['t'])
  
+
+# %%
+
