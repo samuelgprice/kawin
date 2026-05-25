@@ -8,9 +8,11 @@ import pathlib
 import time
 import json
 import hashlib
+import tqdm
 
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.neighbors import NearestNeighbors
 
 from kawin.diffusion import MovingBoundaryFD1DModel
 from kawin.diffusion.DiffusionParameters import DiffusionConstraints, TemperatureParameters
@@ -34,10 +36,10 @@ def debugInPlace():
     except:
         pass
 
-# EXAMPLES_DIR = pathlib.Path(__file__).resolve().parent if "__file__" in globals() else pathlib.Path.cwd()
-EXAMPLES_DIR = pathlib.Path(r"c:/Users/samth/OneDrive - Northwestern University/WS_DL/Lab Data/Price/code/kawin/examples")
+EXAMPLES_DIR = pathlib.Path(__file__).resolve().parent if "__file__" in globals() else pathlib.Path.cwd()
+# EXAMPLES_DIR = pathlib.Path(r"c:/Users/samth/OneDrive - Northwestern University/WS_DL/Lab Data/Price/code/kawin/examples")
 
-pstar_input=0.5
+pstar_input=0.01
 
 class ApproximateTernaryTieLineThermodynamics:
     """
@@ -47,7 +49,7 @@ class ApproximateTernaryTieLineThermodynamics:
     ``MovingBoundaryFD1DModel`` for ternary substitutions:
 
     - ``getInterdiffusivity`` supports either constant per-phase matrices
-      (single tie-line mode) or nearest-sampled per-phase matrices.
+      (single tie-line mode) or KNN-backed nearest-sampled per-phase matrices.
     - ``getInterfacialComposition`` returns a tie-line that moves smoothly
       along a user-defined family parameterized by the interface probe
       composition.
@@ -75,6 +77,7 @@ class ApproximateTernaryTieLineThermodynamics:
         diffusivity_mode=None,
         sampled_diffusivity_compositions=None,
         sampled_diffusivities=None,
+        sampled_diffusivity_tieline_lambdas=None,
         tdb_ForPlotting=None,
     ):
         self.phases = list(phases)
@@ -118,33 +121,65 @@ class ApproximateTernaryTieLineThermodynamics:
         self.diffusivity_mode = str(diffusivity_mode)
         if self.diffusivity_mode not in {"single_tieline", "nearest_sample"}:
             raise ValueError("diffusivity_mode must be either 'single_tieline' or 'nearest_sample'.")
-        self.sampled_diffusivity_compositions = None
-        self.sampled_diffusivities = None
-        if sampled_diffusivity_compositions is not None or sampled_diffusivities is not None:
+        self.sampled_diffusivity_compositions_by_context = {}
+        self.sampled_diffusivities_by_context = {}
+        self._diffusivity_nn_models = {}
+        if self.diffusivity_mode == "nearest_sample":
             if sampled_diffusivity_compositions is None or sampled_diffusivities is None:
                 raise ValueError(
-                    "sampled_diffusivity_compositions and sampled_diffusivities must both be provided together."
+                    "Nearest-sample mode requires sampled_diffusivity_compositions and sampled_diffusivities."
                 )
-            self.sampled_diffusivity_compositions = {
-                phase: np.asarray(values, dtype=np.float64) for phase, values in sampled_diffusivity_compositions.items()
+            if sampled_diffusivity_tieline_lambdas is None:
+                raise ValueError(
+                    "Nearest-sample mode requires sampled_diffusivity_tieline_lambdas so interface/general pools can be derived."
+                )
+            n_interface = int(len(np.asarray(sampled_diffusivity_tieline_lambdas, dtype=np.float64).reshape(-1)))
+            if n_interface < 1:
+                raise ValueError("Nearest-sample mode requires at least one diffusivity tie-line lambda.")
+            sampled_diffusivity_compositions_general = {
+                phase: np.asarray(values, dtype=np.float64)
+                for phase, values in sampled_diffusivity_compositions.items()
             }
-            self.sampled_diffusivities = {
-                phase: np.asarray(values, dtype=np.float64) for phase, values in sampled_diffusivities.items()
+            sampled_diffusivities_general = {
+                phase: np.asarray(values, dtype=np.float64)
+                for phase, values in sampled_diffusivities.items()
             }
-            if self.diffusivity_mode == "nearest_sample":
+            sampled_diffusivity_compositions_interface = {}
+            sampled_diffusivities_interface = {}
+            for phase in self.phases:
+                phase_x = sampled_diffusivity_compositions_general[phase]
+                phase_d = sampled_diffusivities_general[phase]
+                if n_interface > phase_x.shape[0]:
+                    raise ValueError(
+                        f"Not enough sampled diffusivity points for phase {phase}: need at least {n_interface}, got {phase_x.shape[0]}."
+                    )
+                sampled_diffusivity_compositions_interface[phase] = np.asarray(phase_x[:n_interface], dtype=np.float64)
+                sampled_diffusivities_interface[phase] = np.asarray(phase_d[:n_interface], dtype=np.float64)
+
+            self.sampled_diffusivity_compositions_by_context = {
+                "interface": sampled_diffusivity_compositions_interface,
+                "general": sampled_diffusivity_compositions_general,
+            }
+            self.sampled_diffusivities_by_context = {
+                "interface": sampled_diffusivities_interface,
+                "general": sampled_diffusivities_general,
+            }
+            for context in ["interface", "general"]:
                 for phase in self.phases:
-                    if phase not in self.sampled_diffusivity_compositions or phase not in self.sampled_diffusivities:
-                        raise ValueError(f"Nearest-sample diffusivity mode requires sampled data for phase {phase}.")
-                    comps = self.sampled_diffusivity_compositions[phase]
-                    mats = self.sampled_diffusivities[phase]
+                    if phase not in self.sampled_diffusivity_compositions_by_context[context] or phase not in self.sampled_diffusivities_by_context[context]:
+                        raise ValueError(f"Nearest-sample diffusivity mode requires sampled data for phase {phase} in context '{context}'.")
+                    comps = self.sampled_diffusivity_compositions_by_context[context][phase]
+                    mats = self.sampled_diffusivities_by_context[context][phase]
                     if comps.ndim != 2:
-                        raise ValueError(f"sampled_diffusivity_compositions[{phase}] must be 2D.")
+                        raise ValueError(f"sampled_diffusivity_compositions[{context}][{phase}] must be 2D.")
                     if mats.ndim != 3:
-                        raise ValueError(f"sampled_diffusivities[{phase}] must be 3D.")
+                        raise ValueError(f"sampled_diffusivities[{context}][{phase}] must be 3D.")
                     if comps.shape[0] != mats.shape[0]:
-                        raise ValueError(f"Sample count mismatch for phase {phase}.")
+                        raise ValueError(f"Sample count mismatch for phase {phase} in context '{context}'.")
                     if comps.shape[0] < 1:
-                        raise ValueError(f"No sampled diffusivity points were provided for phase {phase}.")
+                        raise ValueError(f"No sampled diffusivity points were provided for phase {phase} in context '{context}'.")
+        if self.diffusivity_mode == "nearest_sample":
+            self._build_diffusivity_nn_models()
         self.sampled_lambdas = None if sampled_lambdas is None else np.asarray(sampled_lambdas, dtype=np.float64).reshape(-1)
         if sampled_phase_tielines is None:
             if sampled_left_tielines is not None and sampled_right_tielines is not None:
@@ -170,6 +205,20 @@ class ApproximateTernaryTieLineThermodynamics:
     def clearCache(self):
         """Matches the thermodynamics API; there is no cache to clear."""
         return
+
+    def _build_diffusivity_nn_models(self):
+        """
+        Builds one KNN index per phase for fast nearest-sample diffusivity lookup.
+        """
+        self._diffusivity_nn_models = {"interface": {}, "general": {}}
+        for context in ["interface", "general"]:
+            for phase in self.phases:
+                samples_x = np.asarray(self.sampled_diffusivity_compositions_by_context[context][phase], dtype=np.float64)
+                if samples_x.ndim != 2 or samples_x.shape[0] < 1:
+                    raise ValueError(f"sampled_diffusivity_compositions[{context}][{phase}] must be a non-empty 2D array.")
+                model = NearestNeighbors(n_neighbors=1, algorithm="auto", metric="euclidean")
+                model.fit(samples_x)
+                self._diffusivity_nn_models[context][phase] = model
 
     def _lambda_from_probe(self, x):
         """
@@ -240,26 +289,36 @@ class ApproximateTernaryTieLineThermodynamics:
             self.precip_phase: precip_comp,
         }
 
-    def getInterfacialComposition(self, x, T, gExtra=0, precPhase=None, returnMeta=False):
+    def getInterfacialComposition(self, x, T, gExtra=0, precPhase=None, returnMeta=False, xIsLambda=None):
         """
         Returns the independent-component tie-line compositions.
 
         Parameters
         ----------
+        OLD
         x : array-like
             Probe composition(s) in the solver's independent-component
             convention, here ``[x_CR, x_NI]``.
+        OLD
+        x : float
+            Probe lambda
         T, gExtra, precPhase :
             Accepted for API compatibility. This surrogate ignores them.
         returnMeta : bool (optional)
             If True, also returns endpoint metadata with phase labels aligned to
             the returned compositions.
         """
-        values = np.asarray(x, dtype=np.float64)
+        if xIsLambda is None:
+            raise ValueError("This now requires x to be lambda now")
+        if (isinstance(x, float)!=True) or (not (0<=x<=1)):
+            raise ValueError(f"This now requires x to be lambda now which should be a float between 0 and 1 but for x={x}")
+        
         matrix_phase = self.phases[0]
         precip_phase = self.phases[1] if precPhase is None else precPhase
-        if values.ndim == 1:
-            by_phase = self._tieline_from_lambda(self._lambda_from_probe(values))
+        # if values.ndim == 1:
+        if True==True:
+            # by_phase = self._tieline_from_lambda(self._lambda_from_probe(values))
+            by_phase = self._tieline_from_lambda(x)
             left = np.asarray(by_phase[matrix_phase], dtype=np.float64)
             right = np.asarray(by_phase[precip_phase], dtype=np.float64)
             if not returnMeta:
@@ -271,23 +330,29 @@ class ApproximateTernaryTieLineThermodynamics:
                     {"phase": precip_phase, "composition": right},
                 ),
             }
-        by_phase_pairs = [self._tieline_from_lambda(self._lambda_from_probe(v)) for v in values]
-        left = np.asarray([pair[matrix_phase] for pair in by_phase_pairs], dtype=np.float64)
-        right = np.asarray([pair[precip_phase] for pair in by_phase_pairs], dtype=np.float64)
-        if not returnMeta:
-            return left, right
-        return left, right, {
-            "endpoint_phases": (matrix_phase, precip_phase),
-            "endpoints": (
-                {"phase": matrix_phase, "composition": left},
-                {"phase": precip_phase, "composition": right},
-            ),
-        }
+        # by_phase_pairs = [self._tieline_from_lambda(self._lambda_from_probe(v)) for v in values]
+        # left = np.asarray([pair[matrix_phase] for pair in by_phase_pairs], dtype=np.float64)
+        # right = np.asarray([pair[precip_phase] for pair in by_phase_pairs], dtype=np.float64)
+        # if not returnMeta:
+        #     return left, right
+        # return left, right, {
+        #     "endpoint_phases": (matrix_phase, precip_phase),
+        #     "endpoints": (
+        #         {"phase": matrix_phase, "composition": left},
+        #         {"phase": precip_phase, "composition": right},
+        #     ),
+        # }
 
-    def getInterdiffusivity(self, x, T, removeCache=True, phase=None):
+    def getInterdiffusivity(self, x, T, removeCache=True, phase=None, query_context=None):
         """
         Returns interdiffusivity for the requested phase using the configured
         diffusivity surrogate mode.
+
+        In ``nearest_sample`` mode this uses context-aware sample pools:
+        - ``query_context='interface'`` searches interface-only samples.
+        - ``query_context='general'`` searches combined interface+bulk samples.
+        Single-point queries use sum-of-squared-distances, while batched
+        queries use sklearn KNN (``k=1``).
         """
         if phase is None:
             if self.diffusivity_mode == "nearest_sample":
@@ -298,13 +363,23 @@ class ApproximateTernaryTieLineThermodynamics:
         base = np.asarray(self.diffusivities[phase], dtype=np.float64)
         values = np.asarray(x, dtype=np.float64)
         if self.diffusivity_mode == "nearest_sample":
-            samples_x = np.asarray(self.sampled_diffusivity_compositions[phase], dtype=np.float64)
-            samples_d = np.asarray(self.sampled_diffusivities[phase], dtype=np.float64)
+            if query_context not in {"interface", "general"}:
+                raise ValueError("query_context must be explicitly set to 'interface' or 'general' for nearest_sample diffusivity mode.")
+            samples_x = np.asarray(self.sampled_diffusivity_compositions_by_context[query_context][phase], dtype=np.float64)
+            samples_d = np.asarray(self.sampled_diffusivities_by_context[query_context][phase], dtype=np.float64)
+            nn_model = self._diffusivity_nn_models.get(query_context, {}).get(phase, None)
+            if nn_model is None:
+                raise ValueError(f"Missing KNN diffusivity index for phase '{phase}' in context '{query_context}'.")
             if values.ndim == 1:
-                distances = np.linalg.norm(samples_x - values.reshape(1, -1), axis=1)
-                return np.asarray(samples_d[int(np.argmin(distances))], dtype=np.float64)
+                deltas = samples_x - values.reshape(1, -1)
+                indices = np.sum(deltas * deltas, axis=1)
+                return np.asarray(samples_d[int(np.argmin(indices))], dtype=np.float64)
+            # debugInPlace()
             deltas = values[:, np.newaxis, :] - samples_x[np.newaxis, :, :]
-            indices = np.argmin(np.linalg.norm(deltas, axis=2), axis=1)
+            indices = np.argmin(np.sum(deltas * deltas, axis=2), axis=1)
+            ## Overridding the knn because it appears to be slower than squared sums
+            # indices = nn_model.kneighbors(values, return_distance=False)
+            # indices = indices.reshape(-1)
             return np.asarray(samples_d[indices], dtype=np.float64)
         if values.ndim == 1:
             return base
@@ -503,17 +578,29 @@ def _save_surrogate_cache(case, cache_paths, cache_payload):
             case["database_diffusivity_tieline"]["phase_ind"][precip_phase], dtype=np.float64
         )
     else:
-        arrays[f"database_sampled_diff_comp__{matrix_phase}"] = np.asarray(
-            case["database_sampled_diffusivity_compositions"][matrix_phase], dtype=np.float64
+        arrays[f"database_sampled_diff_comp_interface__{matrix_phase}"] = np.asarray(
+            case["database_sampled_diffusivity_compositions_interface"][matrix_phase], dtype=np.float64
         )
-        arrays[f"database_sampled_diff_comp__{precip_phase}"] = np.asarray(
-            case["database_sampled_diffusivity_compositions"][precip_phase], dtype=np.float64
+        arrays[f"database_sampled_diff_comp_interface__{precip_phase}"] = np.asarray(
+            case["database_sampled_diffusivity_compositions_interface"][precip_phase], dtype=np.float64
         )
-        arrays[f"database_sampled_diff_mats__{matrix_phase}"] = np.asarray(
-            case["database_sampled_diffusivities"][matrix_phase], dtype=np.float64
+        arrays[f"database_sampled_diff_mats_interface__{matrix_phase}"] = np.asarray(
+            case["database_sampled_diffusivities_interface"][matrix_phase], dtype=np.float64
         )
-        arrays[f"database_sampled_diff_mats__{precip_phase}"] = np.asarray(
-            case["database_sampled_diffusivities"][precip_phase], dtype=np.float64
+        arrays[f"database_sampled_diff_mats_interface__{precip_phase}"] = np.asarray(
+            case["database_sampled_diffusivities_interface"][precip_phase], dtype=np.float64
+        )
+        arrays[f"database_sampled_diff_comp_general__{matrix_phase}"] = np.asarray(
+            case["database_sampled_diffusivity_compositions_general"][matrix_phase], dtype=np.float64
+        )
+        arrays[f"database_sampled_diff_comp_general__{precip_phase}"] = np.asarray(
+            case["database_sampled_diffusivity_compositions_general"][precip_phase], dtype=np.float64
+        )
+        arrays[f"database_sampled_diff_mats_general__{matrix_phase}"] = np.asarray(
+            case["database_sampled_diffusivities_general"][matrix_phase], dtype=np.float64
+        )
+        arrays[f"database_sampled_diff_mats_general__{precip_phase}"] = np.asarray(
+            case["database_sampled_diffusivities_general"][precip_phase], dtype=np.float64
         )
         sampling = case["database_diffusivity_sampling"]
         arrays["database_diff_tieline_lambdas"] = np.asarray(sampling["tieline_lambdas"], dtype=np.float64)
@@ -589,25 +676,39 @@ def _load_surrogate_cache(case, cache_paths, expected_payload):
             "left_full": left_ind.copy(),
             "right_full": right_ind.copy(),
         }
-        case.pop("database_sampled_diffusivity_compositions", None)
-        case.pop("database_sampled_diffusivities", None)
+        case.pop("database_sampled_diffusivity_compositions_interface", None)
+        case.pop("database_sampled_diffusivities_interface", None)
+        case.pop("database_sampled_diffusivity_compositions_general", None)
+        case.pop("database_sampled_diffusivities_general", None)
         case.pop("database_diffusivity_sampling", None)
     else:
-        case["database_sampled_diffusivity_compositions"] = {
-            matrix_phase: np.asarray(z[f"database_sampled_diff_comp__{matrix_phase}"], dtype=np.float64),
-            precip_phase: np.asarray(z[f"database_sampled_diff_comp__{precip_phase}"], dtype=np.float64),
+        case["database_sampled_diffusivity_compositions_interface"] = {
+            matrix_phase: np.asarray(z[f"database_sampled_diff_comp_interface__{matrix_phase}"], dtype=np.float64),
+            precip_phase: np.asarray(z[f"database_sampled_diff_comp_interface__{precip_phase}"], dtype=np.float64),
         }
-        case["database_sampled_diffusivities"] = {
-            matrix_phase: np.asarray(z[f"database_sampled_diff_mats__{matrix_phase}"], dtype=np.float64),
-            precip_phase: np.asarray(z[f"database_sampled_diff_mats__{precip_phase}"], dtype=np.float64),
+        case["database_sampled_diffusivities_interface"] = {
+            matrix_phase: np.asarray(z[f"database_sampled_diff_mats_interface__{matrix_phase}"], dtype=np.float64),
+            precip_phase: np.asarray(z[f"database_sampled_diff_mats_interface__{precip_phase}"], dtype=np.float64),
+        }
+        case["database_sampled_diffusivity_compositions_general"] = {
+            matrix_phase: np.asarray(z[f"database_sampled_diff_comp_general__{matrix_phase}"], dtype=np.float64),
+            precip_phase: np.asarray(z[f"database_sampled_diff_comp_general__{precip_phase}"], dtype=np.float64),
+        }
+        case["database_sampled_diffusivities_general"] = {
+            matrix_phase: np.asarray(z[f"database_sampled_diff_mats_general__{matrix_phase}"], dtype=np.float64),
+            precip_phase: np.asarray(z[f"database_sampled_diff_mats_general__{precip_phase}"], dtype=np.float64),
         }
         case["database_diffusivity_sampling"] = {
             "tieline_lambdas": np.asarray(z["database_diff_tieline_lambdas"], dtype=np.float64),
             "bulk_bbox": np.asarray(z["database_diff_bulk_bbox"], dtype=np.float64),
             "bulk_spacing": float(np.asarray(z["database_diff_bulk_spacing"], dtype=np.float64).reshape(-1)[0]),
             "sample_count_by_phase": {
-                matrix_phase: int(case["database_sampled_diffusivity_compositions"][matrix_phase].shape[0]),
-                precip_phase: int(case["database_sampled_diffusivity_compositions"][precip_phase].shape[0]),
+                matrix_phase: int(case["database_sampled_diffusivity_compositions_general"][matrix_phase].shape[0]),
+                precip_phase: int(case["database_sampled_diffusivity_compositions_general"][precip_phase].shape[0]),
+            },
+            "sample_count_by_phase_interface": {
+                matrix_phase: int(case["database_sampled_diffusivity_compositions_interface"][matrix_phase].shape[0]),
+                precip_phase: int(case["database_sampled_diffusivity_compositions_interface"][precip_phase].shape[0]),
             },
         }
         case.pop("database_diffusivity_global", None)
@@ -852,8 +953,10 @@ def apply_database_approximation(case):
             raise ValueError(
                 "database_approximation must include 'diffusivity_bulk_bbox' and 'diffusivity_bulk_spacing' for diffusivity_mode='nearest_sample'."
             )
-        sampled_diffusivity_points = {matrix_phase: [], precip_phase: []}
-        sampled_diffusivity_mats = {matrix_phase: [], precip_phase: []}
+        sampled_diffusivity_points_interface = {matrix_phase: [], precip_phase: []}
+        sampled_diffusivity_mats_interface = {matrix_phase: [], precip_phase: []}
+        sampled_diffusivity_points_general = {matrix_phase: [], precip_phase: []}
+        sampled_diffusivity_mats_general = {matrix_phase: [], precip_phase: []}
 
         for lam in diffusivity_tieline_lambdas:
             global_composition = (1.0 - lam) * probe_left + lam * probe_right
@@ -865,17 +968,29 @@ def apply_database_approximation(case):
             )
             endpoints = diff_meta.get("endpoints", None) if isinstance(diff_meta, dict) else None
             if endpoints is None or len(endpoints) != 2:
-                continue
+                raise ValueError(
+                    f"Could not resolve diffusivity tie-line endpoints at lambda={float(lam):.6g}."
+                )
+            phase_seen = set()
             for endpoint in endpoints:
                 phase_name = endpoint["phase"]
-                if phase_name not in sampled_diffusivity_points:
+                if phase_name not in sampled_diffusivity_points_interface:
                     continue
                 phase_ind = _as_independent_components(np.asarray(endpoint["composition"], dtype=np.float64))
                 if not np.all(np.isfinite(phase_ind)):
-                    continue
-                sampled_diffusivity_points[phase_name].append(phase_ind)
-                sampled_diffusivity_mats[phase_name].append(
-                    np.asarray(therm.getInterdiffusivity(phase_ind, temperature, phase=phase_name), dtype=np.float64)
+                    raise ValueError(
+                        f"Non-finite diffusivity tie-line endpoint composition at lambda={float(lam):.6g} for phase {phase_name}."
+                    )
+                dmat = np.asarray(therm.getInterdiffusivity(phase_ind, temperature, phase=phase_name), dtype=np.float64)
+                sampled_diffusivity_points_interface[phase_name].append(phase_ind)
+                sampled_diffusivity_mats_interface[phase_name].append(dmat)
+                sampled_diffusivity_points_general[phase_name].append(phase_ind)
+                sampled_diffusivity_mats_general[phase_name].append(dmat)
+                phase_seen.add(phase_name)
+            missing = [p for p in [matrix_phase, precip_phase] if p not in phase_seen]
+            if missing:
+                raise ValueError(
+                    f"Diffusivity tie-line at lambda={float(lam):.6g} did not include required phases: {missing}."
                 )
 
         bulk_grid = _build_bulk_grid(seed["diffusivity_bulk_bbox"], seed["diffusivity_bulk_spacing"])
@@ -889,37 +1004,51 @@ def apply_database_approximation(case):
                 raise
                 continue
             for phase_name, phase_ind in by_phase_ind.items():
-                if phase_name not in sampled_diffusivity_points:
+                if phase_name not in sampled_diffusivity_points_general:
                     continue
-                sampled_diffusivity_points[phase_name].append(np.asarray(phase_ind, dtype=np.float64))
-                sampled_diffusivity_mats[phase_name].append(
+                sampled_diffusivity_points_general[phase_name].append(np.asarray(phase_ind, dtype=np.float64))
+                sampled_diffusivity_mats_general[phase_name].append(
                     np.asarray(therm.getInterdiffusivity(phase_ind, temperature, phase=phase_name), dtype=np.float64)
                 )
 
-        sampled_comp_out = {}
-        sampled_mat_out = {}
+        sampled_comp_out_interface = {}
+        sampled_mat_out_interface = {}
+        sampled_comp_out_general = {}
+        sampled_mat_out_general = {}
         for phase_name in [matrix_phase, precip_phase]:
-            if len(sampled_diffusivity_points[phase_name]) == 0:
+            if len(sampled_diffusivity_points_interface[phase_name]) == 0:
                 raise ValueError(
-                    f"No sampled diffusivity points were collected for phase {phase_name} in nearest_sample mode."
+                    f"No interface sampled diffusivity points were collected for phase {phase_name} in nearest_sample mode."
                 )
-            sampled_comp_out[phase_name] = np.asarray(sampled_diffusivity_points[phase_name], dtype=np.float64)
-            sampled_mat_out[phase_name] = np.asarray(sampled_diffusivity_mats[phase_name], dtype=np.float64)
+            if len(sampled_diffusivity_points_general[phase_name]) == 0:
+                raise ValueError(
+                    f"No general sampled diffusivity points were collected for phase {phase_name} in nearest_sample mode."
+                )
+            sampled_comp_out_interface[phase_name] = np.asarray(sampled_diffusivity_points_interface[phase_name], dtype=np.float64)
+            sampled_mat_out_interface[phase_name] = np.asarray(sampled_diffusivity_mats_interface[phase_name], dtype=np.float64)
+            sampled_comp_out_general[phase_name] = np.asarray(sampled_diffusivity_points_general[phase_name], dtype=np.float64)
+            sampled_mat_out_general[phase_name] = np.asarray(sampled_diffusivity_mats_general[phase_name], dtype=np.float64)
 
-        case["database_sampled_diffusivity_compositions"] = sampled_comp_out
-        case["database_sampled_diffusivities"] = sampled_mat_out
+        case["database_sampled_diffusivity_compositions_interface"] = sampled_comp_out_interface
+        case["database_sampled_diffusivities_interface"] = sampled_mat_out_interface
+        case["database_sampled_diffusivity_compositions_general"] = sampled_comp_out_general
+        case["database_sampled_diffusivities_general"] = sampled_mat_out_general
         case["database_diffusivity_sampling"] = {
             "tieline_lambdas": diffusivity_tieline_lambdas.copy(),
             "bulk_bbox": np.asarray(seed["diffusivity_bulk_bbox"], dtype=np.float64),
             "bulk_spacing": float(seed["diffusivity_bulk_spacing"]),
             "sample_count_by_phase": {
-                matrix_phase: int(sampled_comp_out[matrix_phase].shape[0]),
-                precip_phase: int(sampled_comp_out[precip_phase].shape[0]),
+                matrix_phase: int(sampled_comp_out_general[matrix_phase].shape[0]),
+                precip_phase: int(sampled_comp_out_general[precip_phase].shape[0]),
+            },
+            "sample_count_by_phase_interface": {
+                matrix_phase: int(sampled_comp_out_interface[matrix_phase].shape[0]),
+                precip_phase: int(sampled_comp_out_interface[precip_phase].shape[0]),
             },
         }
 
         case["diffusivities"] = {
-            phase_name: np.asarray(sampled_mat_out[phase_name][0], dtype=np.float64)
+            phase_name: np.asarray(sampled_mat_out_general[phase_name][0], dtype=np.float64)
             for phase_name in [matrix_phase, precip_phase]
         }
     case["database_diffusivity_surrogate_build_time_s"] = float(time.perf_counter() - diffusivity_build_t0)
@@ -976,9 +1105,9 @@ def build_ternary_case():
             "FCC_A1": np.array([[0.0, 0.0], [0.0, 0.0]], dtype=np.float64),
             "BCC_A2": np.array([[0.0, 0.0], [0.0, 0.0]], dtype=np.float64),
         },
-        "solve_time": [5.0e-5, 3600*5e2][1],
+        "solve_time": [5.0e-5, 3600*1e2][1],
         "record": True,
-        "vIt": 250,
+        "vIt": 5000,
         "moving_boundary_threshold": (min(pstar_input, (1-(2.0*pstar_input))) if pstar_input<0.5 else pstar_input)*0.98,
         "database_approximation": {
             "enabled": True,
@@ -988,13 +1117,13 @@ def build_ternary_case():
             "precipitate_phase": "FCC_A1",
             "probe_left": np.array([0.1233, 0.0001], dtype=np.float64), # np.array([0.26, 0.0575], dtype=np.float64),
             "probe_right": np.array([0.4993, 0.2257], dtype=np.float64), #np.array([0.3113, 0.1129], dtype=np.float64), # np.array([0.25, 0.08], dtype=np.float64),
-            "probe_lambdas": np.linspace(0.0, 1.0, 500),
+            "probe_lambdas": np.linspace(0.0, 1.0, 50),
             "diffusivity_mode": "nearest_sample", # "single_tieline", "nearest_sample"
             "diffusivity_lambda": 0.5,
             # Used when diffusivity_mode == "nearest_sample":
-            "diffusivity_tieline_lambdas": np.linspace(0.0, 1.0, 50),
+            "diffusivity_tieline_lambdas": np.linspace(0.0, 1.0, 25),
             "diffusivity_bulk_bbox": np.array([[0.001, 0.45], [0.001, 0.20]], dtype=np.float64),
-            "diffusivity_bulk_spacing": 0.01,
+            "diffusivity_bulk_spacing": 0.02,
             "surrogate_cache_enabled": True,
             "surrogate_cache_dir": EXAMPLES_DIR / ".surrogate_cache",
             "surrogate_cache_policy": "load_or_build",  # "load_or_build", "load_only", "build_only"
@@ -1058,8 +1187,9 @@ def make_surrogate_thermodynamics(case):
         phase_tieline_end=case.get("phase_tieline_end"),
         sampled_phase_tielines=case.get("sampled_phase_tielines"),
         diffusivity_mode=case.get("database_diffusivity_mode", case.get("database_approximation", {}).get("diffusivity_mode", "single_tieline")),
-        sampled_diffusivity_compositions=case.get("database_sampled_diffusivity_compositions"),
-        sampled_diffusivities=case.get("database_sampled_diffusivities"),
+        sampled_diffusivity_compositions=case.get("database_sampled_diffusivity_compositions_general"),
+        sampled_diffusivities=case.get("database_sampled_diffusivities_general"),
+        sampled_diffusivity_tieline_lambdas=None if case.get("database_diffusivity_sampling") is None else case["database_diffusivity_sampling"].get("tieline_lambdas"),
         tdb_ForPlotting=case["database_approximation"]["tdb_path"] if case.get("database_approximation", {}).get("enabled", False) else None,
     )
 
@@ -1290,7 +1420,7 @@ def _build_model(case, interface_update, balance_element, use_surrogate=True):
         temperature=TemperatureParameters(case["temperature"]),
         interfacePosition=case["interface_position"],
         bulkUpdateScheme="flux_form",
-        integrationMode= "ignore", #"noIgnore", "ignore", "weighted",
+        integrationMode= "noIgnore", #"noIgnore", "ignore", "weighted",
         ignoredNodeRule="lee_oh_1996_three_region", # "legacy_two_region", "lee_oh_1996_three_region"
         denom_type="eqn22", # "eqn22", "eqn11"
         ignoredNodeReconstructionMode="lagrange", # "lagrange", "linear"
@@ -1320,11 +1450,11 @@ def solve_models(case):
             "balance_element": "CR",
             "use_surrogate": True,
         },
-        "corrected_NI": {
-            "interface_update": "lee_oh_corrected",
-            "balance_element": "NI",
-            "use_surrogate": True,
-        },
+        # "corrected_NI": {
+        #     "interface_update": "lee_oh_corrected",
+        #     "balance_element": "NI",
+        #     "use_surrogate": True,
+        # },
         # "corrected_my_CR": {
         #     "interface_update": "my_corrected",
         #     "balance_element": "CR",
@@ -1469,8 +1599,8 @@ def plot_normalized_left_phase_thickness(models):
     }
     
     import pandas as pd
-    fig9_upperCurve_df = pd.read_csv(r'C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\leeAndOh1996_data\fig9_upperCurve_Ni.csv', names=['t', 'normalized_thickness'])
-    fig9_lowerCurve_df = pd.read_csv(r'C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\leeAndOh1996_data\fig9_lowerCurve_Cr.csv', names=['t', 'normalized_thickness'])
+    fig9_upperCurve_df = pd.read_csv(EXAMPLES_DIR.joinpath(r'leeAndOh1996_data\fig9_upperCurve_Ni.csv'), names=['t', 'normalized_thickness'])
+    fig9_lowerCurve_df = pd.read_csv(EXAMPLES_DIR.joinpath(r'leeAndOh1996_data\fig9_lowerCurve_Cr.csv'), names=['t', 'normalized_thickness'])
     fig9_upperCurve_df = fig9_upperCurve_df.sort_values(by=['t'])
     fig9_lowerCurve_df = fig9_lowerCurve_df.sort_values(by=['t'])
     fig9_upperCurve_df.plot(x='t', y='normalized_thickness', ax=ax, label='Lee & Oh Fig. 9 upper curve (Ni)', color='k')
@@ -1509,9 +1639,9 @@ def plot_normalized_left_phase_thickness(models):
     ax2_twin = ax2.twinx()
     ax2.set_ylabel('Component 0', color='blue')
     ax2_twin.set_ylabel('Component 1', color='red')
-    for name, model in models.items():
+    for name, model in models.items(): ## could add tqdm progress bar here
         t = np.asarray(model.interfaceData._time, dtype=np.float64)
-        t_sub_indices = np.concatenate([np.arange(len(t))[1:100], np.arange(len(t))[100:][::100]])
+        t_sub_indices = np.concatenate([np.arange(len(t))[1:100], np.arange(len(t))[100:][::1000]])
         t_sub = t[t_sub_indices].copy()
         
         preOrPost_str = model.fluxGradientMode.split("_")[0]
@@ -1542,7 +1672,7 @@ def plot_normalized_left_phase_thickness(models):
             )
 
             return int_el0/model.mesh.zlim[0][-1], int_el1/model.mesh.zlim[0][-1]
-        intValsAttSub = np.array([getIntegralAtTime(t_input) for t_input in t_sub])
+        intValsAttSub = np.array([getIntegralAtTime(t_input) for t_input in tqdm.tqdm(t_sub, total=len(t_sub))])
         ax2.hlines(model._initialInventory[0]/model.mesh.zlim[0][-1], t_sub.min()/3600, t_sub.max()/3600, color='blue', linestyle='solid', alpha=0.5)
         ax2_twin.hlines(model._initialInventory[1]/model.mesh.zlim[0][-1], t_sub.min()/3600, t_sub.max()/3600, color='red', linestyle='solid', alpha=0.5)
 
@@ -1571,6 +1701,10 @@ def plot_normalized_left_phase_thickness(models):
 
     print(f"pstar_input: {pstar_input}")
     print(f"N: {case['nodes']}")
+
+    modelAttributesToPrint = ["integrationMode", "initialInventoryMode", "ignoredNodeRule", "denom_type", "ignoredNodeReconstructionMode", "fluxGradientMode", "multicomponentInterfaceStateUpdate"]
+    print([f"{attrStr}: {getattr(model, attrStr)}" for attrStr in modelAttributesToPrint])
+    
     return fig, ax
 
 
@@ -1620,6 +1754,8 @@ def print_summary(case, models):
             print(f"  surrogate_cache_npz = {case['database_surrogate_cache_paths']['npz']}")
             print(f"  surrogate_cache_json = {case['database_surrogate_cache_paths']['json']}")
         print(f"  diffusivity_mode = {case.get('database_diffusivity_mode', case['database_approximation'].get('diffusivity_mode', 'single_tieline'))}")
+        if case.get('database_diffusivity_mode', case['database_approximation'].get('diffusivity_mode', 'single_tieline')) == "nearest_sample":
+            print("  diffusivity inference backend = hybrid (single: SSD, batch: sklearn KNN k=1)")
         if "database_diffusivity_global" in case:
             print(f"  diffusivity global [CR, NI] = {case['database_diffusivity_global']}")
         if "database_diffusivity_surrogate_load_time_s" in case:
@@ -1642,6 +1778,8 @@ def print_summary(case, models):
             print(f"  diffusivity bulk bbox = {sampling['bulk_bbox']}")
             print(f"  diffusivity bulk spacing = {sampling['bulk_spacing']}")
             print(f"  diffusivity samples by phase = {sampling['sample_count_by_phase']}")
+            if "sample_count_by_phase_interface" in sampling:
+                print(f"  diffusivity interface-only samples by phase = {sampling['sample_count_by_phase_interface']}")
         if "database_sampled_tielines" in case:
             print("  sampled tie-lines:")
             for sample in case["database_sampled_tielines"]:
@@ -1660,7 +1798,9 @@ def print_summary(case, models):
         print(f"  final interface position = {model.getInterfacePosition():.8f}")
         print(f"  interface compositions left  = {np.asarray(left_int)}")
         print(f"  interface compositions right = {np.asarray(right_int)}")
-        print(f"  inventory residuals [CR, NI] = {inventory_residuals(model)}")
+        inventoryRes = inventory_residuals(model)
+        print(f"  inventory residuals [CR, NI] = {inventoryRes}")
+        print(f"  inventory normalized residuals [CR, NI] = {inventoryRes / model.mesh.zlim[0][1]}")
 
 
 def print_failures(failures):
@@ -1695,17 +1835,17 @@ models, failures = solve_models(case)
 print_summary(case, models)
 print_failures(failures)
 # plot_results(case, models)
-plot_normalized_left_phase_thickness(models)
+# plot_normalized_left_phase_thickness(models)
 # plot_ternary_thermodynamics(case)
 
-#%%
+ #%%
 # %config InlineBackend.figure_format = 'svg'
 modelToUse = models["corrected_CR"] 
 fig, ax = modelToUse.plotTernaryState()
 
 import pandas as pd
-FCC_extractedPts_df = pd.read_csv("examples\\leeAndOh1996_data\\FCClineAt1373FromWPDcsv.csv", names=['W(NI)', 'W(CR)'])
-BCC_extractedPts_df = pd.read_csv("examples\\leeAndOh1996_data\\BCClineAt1373FromWPDcsv.csv", names=['W(NI)', 'W(CR)'])
+FCC_extractedPts_df = pd.read_csv("leeAndOh1996_data\\FCClineAt1373FromWPDcsv.csv", names=['W(NI)', 'W(CR)'])
+BCC_extractedPts_df = pd.read_csv("leeAndOh1996_data\\BCClineAt1373FromWPDcsv.csv", names=['W(NI)', 'W(CR)'])
 FCC_extractedPts_df = FCC_extractedPts_df/100
 BCC_extractedPts_df = BCC_extractedPts_df/100
 
@@ -1723,26 +1863,64 @@ ax.plot(BCC_extractedPts_df['X_CR'], BCC_extractedPts_df['X_NI'], 'o', fillstyle
 
 # list(models.values())[0].therm
 # list(models.values())[0]["database_sampled_tielines"]
-FCC_sampledTielinePts_arr = np.array([tl['phase_ind']['FCC_A1'] for tl in case["database_sampled_tielines"]])
-BCC_sampledTielinePts_arr = np.array([tl['phase_ind']['BCC_A2'] for tl in case["database_sampled_tielines"]])
-ax.plot(FCC_sampledTielinePts_arr[:,0], FCC_sampledTielinePts_arr[:, 1], 'x', markersize=1, fillstyle='none', label='FCC sampled tieline')
-ax.plot(BCC_sampledTielinePts_arr[:,0], BCC_sampledTielinePts_arr[:, 1], 'x', markersize=1, fillstyle='none', label='BCC sampled tieline')
+# FCC_sampledTielinePts_arr = np.array([tl['phase_ind']['FCC_A1'] for tl in case["database_sampled_tielines"]])
+# BCC_sampledTielinePts_arr = np.array([tl['phase_ind']['BCC_A2'] for tl in case["database_sampled_tielines"]])
+# ax.plot(FCC_sampledTielinePts_arr[:,0], FCC_sampledTielinePts_arr[:, 1], 'x', markersize=1, fillstyle='none', label='FCC sampled tieline')
+# ax.plot(BCC_sampledTielinePts_arr[:,0], BCC_sampledTielinePts_arr[:, 1], 'x', markersize=1, fillstyle='none', label='BCC sampled tieline')
 
 
-ax.plot(modelToUse._interfaceCompositionHistory['pre_right']._y[:,0], modelToUse._interfaceCompositionHistory['pre_right']._y[:, 1], 'x', markersize=1, fillstyle='none', label='left interfacial comps')
-ax.plot(modelToUse._interfaceCompositionHistory['pre_left']._y[:,0], modelToUse._interfaceCompositionHistory['pre_left']._y[:, 1], 'x', markersize=1, fillstyle='none', label='left interfacial comps')
+# ax.plot(modelToUse._interfaceCompositionHistory['pre_right']._y[:,0], modelToUse._interfaceCompositionHistory['pre_right']._y[:, 1], 'x', markersize=1, fillstyle='none', label='left interfacial comps')
+# ax.plot(modelToUse._interfaceCompositionHistory['pre_left']._y[:,0], modelToUse._interfaceCompositionHistory['pre_left']._y[:, 1], 'x', markersize=1, fillstyle='none', label='left interfacial comps')
 
+globalComps = np.array([[0.23, 0.0904], [0.28476, 0.06109]])
+globalComps_evaled = [models["corrected_CR"].therm._tieline_from_lambda(models["corrected_CR"].therm._lambda_from_probe(globalComp)) for globalComp in globalComps]
+globalComps_evaled_BCC = np.array([globalComp_evaled['BCC_A2'] for globalComp_evaled in globalComps_evaled])
+globalComps_evaled_FCC = np.array([globalComp_evaled['FCC_A1'] for globalComp_evaled in globalComps_evaled])
+ax.plot(globalComps[:,0], globalComps[:, 1], 'x', markersize=5, fillstyle='none', label='global comps')
+ax.plot(globalComps_evaled_BCC[:,0], globalComps_evaled_BCC[:, 1], 'x', markersize=5, fillstyle='none', label='global comps evaled BCC')
+ax.plot(globalComps_evaled_FCC[:,0], globalComps_evaled_FCC[:, 1], 'x', markersize=5, fillstyle='none', label='global comps evaled FCC')
+ax.plot(np.array([models["corrected_CR"].therm.left_probe, models["corrected_CR"].therm.right_probe])[:,0], np.array([models["corrected_CR"].therm.left_probe, models["corrected_CR"].therm.right_probe])[:, 1], color='k', label='probeLine')
 
-ax.set_xlim([0.1, 0.5])
-ax.set_ylim([0, 0.2])
+ax.legend()
+# ax.set_xlim([0.1, 0.5])
+# ax.set_ylim([0, 0.2])
+ax.set_xlim([0.15, 0.35])
+ax.set_ylim([0.04, 0.125])
 
 # %%
 import pandas as pd
-fig9_upperCurve_df = pd.read_csv(r'C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\leeAndOh1996_data\fig9_upperCurve_Ni.csv', names=['t', 'normalized_thickness'])
-fig9_lowerCurve_df = pd.read_csv(r'C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\leeAndOh1996_data\fig9_lowerCurve_Cr.csv', names=['t', 'normalized_thickness'])
+fig9_upperCurve_df = pd.read_csv(EXAMPLES_DIR.joinpath(r'leeAndOh1996_data\fig9_upperCurve_Ni.csv'), names=['t', 'normalized_thickness'])
+fig9_lowerCurve_df = pd.read_csv(EXAMPLES_DIR.joinpath(r'leeAndOh1996_data\fig9_lowerCurve_Cr.csv'), names=['t', 'normalized_thickness'])
 fig9_upperCurve_df = fig9_upperCurve_df.sort_values(by=['t'])
 fig9_lowerCurve_df = fig9_lowerCurve_df.sort_values(by=['t'])
  
 
 # %%
 
+
+from scipy import optimize
+
+def getTielineOfGlobalComposition(globalComp, T):
+    def dotWithTlPerp(lam):
+        tlPt1, tlPt2 = models["corrected_CR"].therm.getInterfacialComposition(lam, T, returnMeta=False, xIsLambda=True)
+        tlDir = tlPt1-tlPt2
+        tlPerpDir = np.array([-tlDir[1], tlDir[0]])
+        return np.dot(globalComp - tlPt1, tlPerpDir)
+
+    sol = optimize.root_scalar(
+                dotWithTlPerp,
+                # bracket=[0, 1],
+                bracket=[0.0, 1.0],
+                method="brentq",
+                # rtol=1e-14,
+                xtol=1e-10,
+                maxiter=100,
+            )
+    return models["corrected_CR"].therm.getInterfacialComposition(sol.root, T, returnMeta=True, xIsLambda=True)
+t0 = time.perf_counter()
+for i in range(1000):
+    getTielineOfGlobalComposition(globalComp=np.array([0.23, 0.0904]), T=1373)
+t1 = time.perf_counter()
+print(t1-t0)
+getTielineOfGlobalComposition(globalComp=np.array([0.1235, 0.0001]), T=1373)
+# %%

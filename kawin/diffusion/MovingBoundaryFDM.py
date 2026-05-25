@@ -306,6 +306,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         self.interfaceData.currentY = self.initialInterfacePosition
         self.interfaceData._y[0] = self.initialInterfacePosition
         # self._initialInventory = self._getStoredInventory()
+        raise ValueError("This is just to let you know that the initialInventory is being hard-coded here")
         self._initialInventory = np.array([0.229945, 0.09035])*self.mesh.zlim[0][-1]
         self._cachedMulticomponentInterfaceState = None
         self._initializeInterfaceCompositionHistory()
@@ -953,14 +954,16 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         if temperature is None:
             temperature = float(self.temperatureParameters(np.array([[interface_position]]), t)[0])
 
-        x_probe = self._composeInterfaceProbe(composition, geometry, lam)
+        # x_probe = self._composeInterfaceProbe(composition, geometry, lam)
         try:
             c_a_int, c_b_int, meta = self.therm.getInterfacialComposition(
-                x_probe,
+                # x_probe,
+                lam,
                 temperature,
                 0,
                 precPhase=self.phases[1],
                 returnMeta=True,
+                xIsLambda=True,
             )
         except TypeError as exc:
             raise ValueError(
@@ -977,8 +980,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         c_left_int = self._normalizeThermoIndependentComposition(c_left_int)
         c_right_int = self._normalizeThermoIndependentComposition(c_right_int)
 
-        D_left_int = np.asarray(self.therm.getInterdiffusivity(c_left_int, temperature, phase=self.phases[0]), dtype=np.float64).reshape(len(self.elements), len(self.elements))
-        D_right_int = np.asarray(self.therm.getInterdiffusivity(c_right_int, temperature, phase=self.phases[1]), dtype=np.float64).reshape(len(self.elements), len(self.elements))
+        D_left_int = np.asarray(self.therm.getInterdiffusivity(c_left_int, temperature, phase=self.phases[0], query_context="interface"), dtype=np.float64).reshape(len(self.elements), len(self.elements))
+        D_right_int = np.asarray(self.therm.getInterdiffusivity(c_right_int, temperature, phase=self.phases[1], query_context="interface"), dtype=np.float64).reshape(len(self.elements), len(self.elements))
         return self._assembleMulticomponentInterfaceState(
             t,
             composition,
@@ -990,7 +993,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             lam=lam,
             geometry=geometry,
             temperature=temperature,
-            probe=x_probe,
+            # probe=x_probe,
+            probe=None,
             dt=dt,
             denom_type=denom_type,
             reconstructPreviouslyIgnoredComposition=reconstructPreviouslyIgnoredComposition,
@@ -1124,51 +1128,23 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         '''
         geometry = get_moving_boundary_fd_geometry(self.mesh, interface_position, self.pstar, self.ignoredNodeRule)
         temperature = float(self.temperatureParameters(np.array([[interface_position]]), t)[0])
-        left_state = self._evaluateMulticomponentInterfaceState(t, composition, interface_position, lam=0, geometry=geometry,temperature=temperature, dt=dt, denom_type=denom_type, reconstructPreviouslyIgnoredComposition=reconstructPreviouslyIgnoredComposition, reconstructPreviouslyIgnoredCompositionFunc=reconstructPreviouslyIgnoredCompositionFunc)
-        right_state = self._evaluateMulticomponentInterfaceState(t, composition, interface_position, lam=1, geometry=geometry,temperature=temperature, dt=dt, denom_type=denom_type, reconstructPreviouslyIgnoredComposition=reconstructPreviouslyIgnoredComposition, reconstructPreviouslyIgnoredCompositionFunc=reconstructPreviouslyIgnoredCompositionFunc)
-        if np.sign(left_state["residual"]) != np.sign(right_state["residual"]):
-            bracket_pair = (left_state, right_state)
-        else:
-            debugInPlace()
-            raise ValueError("Extreme bracket (lambda=0 and lambda=1) is not valid as both have same sign")
+        # left_state = self._evaluateMulticomponentInterfaceState(t, composition, interface_position, lam=0, geometry=geometry,temperature=temperature, dt=dt, denom_type=denom_type, reconstructPreviouslyIgnoredComposition=reconstructPreviouslyIgnoredComposition, reconstructPreviouslyIgnoredCompositionFunc=reconstructPreviouslyIgnoredCompositionFunc)
+        # right_state = self._evaluateMulticomponentInterfaceState(t, composition, interface_position, lam=1, geometry=geometry,temperature=temperature, dt=dt, denom_type=denom_type, reconstructPreviouslyIgnoredComposition=reconstructPreviouslyIgnoredComposition, reconstructPreviouslyIgnoredCompositionFunc=reconstructPreviouslyIgnoredCompositionFunc)
+        # if np.sign(left_state["residual"]) != np.sign(right_state["residual"]):
+        #     bracket_pair = (left_state, right_state)
+        # else:
+        #     debugInPlace()
+        #     raise ValueError("Extreme bracket (lambda=0 and lambda=1) is not valid as both have same sign")
 
-        if bracket_pair is not None:
-            left_state, right_state = bracket_pair
-
-            def residual_func(lam):
-                try:
-                    state = self._evaluateMulticomponentInterfaceState(
-                        t,
-                        composition,
-                        interface_position,
-                        float(lam),
-                        geometry=geometry,
-                        temperature=temperature,
-                        dt=dt,
-                        denom_type=denom_type,
-                        reconstructPreviouslyIgnoredComposition=reconstructPreviouslyIgnoredComposition,
-                        reconstructPreviouslyIgnoredCompositionFunc=reconstructPreviouslyIgnoredCompositionFunc,
-                    )
-                    if not np.isfinite(state["residual"]):
-                        return np.nan
-                    return float(state["residual"])
-                except Exception:
-                    return np.nan
-
-            sol = optimize.root_scalar(
-                residual_func,
-                bracket=[left_state["lambda"], right_state["lambda"]],
-                method=root_scalar_method,
-                # rtol=1e-14,
-                xtol=1e-15,
-                maxiter=100,
-            )
-            if sol.converged:
-                root_state = self._evaluateMulticomponentInterfaceState(
+        # if bracket_pair is not None:
+        #     left_state, right_state = bracket_pair
+        def residual_func(lam):
+            try:
+                state = self._evaluateMulticomponentInterfaceState(
                     t,
                     composition,
                     interface_position,
-                    float(sol.root),
+                    float(lam),
                     geometry=geometry,
                     temperature=temperature,
                     dt=dt,
@@ -1176,14 +1152,44 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                     reconstructPreviouslyIgnoredComposition=reconstructPreviouslyIgnoredComposition,
                     reconstructPreviouslyIgnoredCompositionFunc=reconstructPreviouslyIgnoredCompositionFunc,
                 )
-                if abs(root_state["residual"]) <= root_state["tolerance"]:
-                    return root_state
-                else:
-                    debugInPlace()
-                
+                if not np.isfinite(state["residual"]):
+                    return np.nan
+                return float(state["residual"])
+            except Exception as e:
+                print(lam)
+                raise e
+                return np.nan
+
+        sol = optimize.root_scalar(
+            residual_func,
+            # bracket=[0, 1],
+            bracket=[0.25, 0.5],
+            method=root_scalar_method,
+            # rtol=1e-14,
+            xtol=1e-10,
+            maxiter=100,
+        )
+        if sol.converged:
+            root_state = self._evaluateMulticomponentInterfaceState(
+                t,
+                composition,
+                interface_position,
+                float(sol.root),
+                geometry=geometry,
+                temperature=temperature,
+                dt=dt,
+                denom_type=denom_type,
+                reconstructPreviouslyIgnoredComposition=reconstructPreviouslyIgnoredComposition,
+                reconstructPreviouslyIgnoredCompositionFunc=reconstructPreviouslyIgnoredCompositionFunc,
+            )
+            if abs(root_state["residual"]) <= root_state["tolerance"]:
+                return root_state
+            else:
+                debugInPlace()
+        debugInPlace()
         raise ValueError(
             "Ternary MovingBoundaryFD1DModel (alt solver) could not match the Eq. (22) interface velocities "
-            f"for {self.elements}; smallest residual was {root_state['residual']:.3e}."
+            f"for {self.elements}; smallest residual was {root_state['residual']}."
         )
 
     def _cacheMulticomponentInterfaceState(self, t, composition, interface_position, solve_stage, state):
@@ -1241,8 +1247,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             c_left_int, c_right_int = self.therm.getInterfacialComposition(T_interface, 0, precPhase=self.phases[1])
             c_left_int = float(np.clip(np.squeeze(c_left_int), self.constraints.minComposition, 1 - self.constraints.minComposition))
             c_right_int = float(np.clip(np.squeeze(c_right_int), self.constraints.minComposition, 1 - self.constraints.minComposition))
-            D_left_int = float(np.squeeze(self.therm.getInterdiffusivity(c_left_int, T_interface, phase=self.phases[0])))
-            D_right_int = float(np.squeeze(self.therm.getInterdiffusivity(c_right_int, T_interface, phase=self.phases[1])))
+            D_left_int = float(np.squeeze(self.therm.getInterdiffusivity(c_left_int, T_interface, phase=self.phases[0], query_context="interface")))
+            D_right_int = float(np.squeeze(self.therm.getInterdiffusivity(c_right_int, T_interface, phase=self.phases[1], query_context="interface")))
             return geometry, T_interface, c_left_int, c_right_int, D_left_int, D_right_int
 
         state = self._getCachedMulticomponentInterfaceState(t=t, composition=composition, interface_position=interface_position)
@@ -1273,7 +1279,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         right_slice = slice(geometry.right_index, comp.shape[0])
         if geometry.right_index > 0:
             left_diff = np.asarray(
-                self.therm.getInterdiffusivity(comp[left_slice], temperatures[left_slice], phase=self.phases[0]),
+                self.therm.getInterdiffusivity(comp[left_slice], temperatures[left_slice], phase=self.phases[0], query_context="general"),
                 dtype=np.float64,
             )
             if comp.ndim == 1:
@@ -1284,7 +1290,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 D[left_slice] = left_diff.reshape(geometry.right_index, comp.shape[1], comp.shape[1])
         if geometry.right_index < comp.shape[0]:
             right_diff = np.asarray(
-                self.therm.getInterdiffusivity(comp[right_slice], temperatures[right_slice], phase=self.phases[1]),
+                self.therm.getInterdiffusivity(comp[right_slice], temperatures[right_slice], phase=self.phases[1], query_context="general"),
                 dtype=np.float64,
             )
             if comp.ndim == 1:
@@ -2132,7 +2138,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 return get_modf_relativeTo_pstar(current_p_plus10_modf), get_modf_relativeTo_pstar(future_p_modf)
             currentPBin, futurePBin = binCurrentAndFuturep(geom.p, requested_fraction_signed)
             Pbin_threshold = 0.5 if self.pstar==0.5 else 0.25
-            if abs(sum(currentPBin)-sum(futurePBin))>Pbin_threshold:
+            # if abs(sum(currentPBin)-sum(futurePBin))>Pbin_threshold:
+            if False==True:
                 print(f"(max_fraction, requested_fraction_signed, t): {(max_fraction, requested_fraction_signed, t)}")
                 print(f"(currentPBin, futurePBin): {(currentPBin, futurePBin)}")
                 debugInPlace()
@@ -2208,7 +2215,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         '''
         Limits interface motion once the actual explicit time step is known
         '''
-        if TODAY>date(2026, 5, 18):
+        if TODAY>date(2026, 5, 30):
             raise ValueError("Consider if this should still be skipped")
         return ## I'm skipping this while I'm letting binCurrentAndFuturep() override max_fraction limits
         if dt <= 0:
