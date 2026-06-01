@@ -40,6 +40,8 @@ EXAMPLES_DIR = pathlib.Path(__file__).resolve().parent if "__file__" in globals(
 # EXAMPLES_DIR = pathlib.Path(r"c:/Users/samth/OneDrive - Northwestern University/WS_DL/Lab Data/Price/code/kawin/examples")
 
 pstar_input=0.01
+pstarSchedule_input={"times": [3600*1e0], "values": [0.25]}
+# pstarSchedule_input=None
 
 class ApproximateTernaryTieLineThermodynamics:
     """
@@ -1427,6 +1429,7 @@ def _build_model(case, interface_update, balance_element, use_surrogate=True):
         initialInventoryMode="integrated", # "phase_length_idealized", "integrated"
         interfaceUpdate=interface_update,
         pstar=pstar_input,
+        pstarSchedule=pstarSchedule_input, # None, pstarSchedule_input
         fluxGradientMode="pre_diffusion", #"pre_diffusion", "post_diffusion"
         balanceElement=balance_element,
         multicomponentInterfaceStateUpdate="pre_diffusion_only", #"pre_diffusion_only", "pre_and_post_diffusion",
@@ -1628,9 +1631,22 @@ def plot_normalized_left_phase_thickness(models):
         s = np.asarray(model.interfaceData._y[: model.interfaceData.N + 1], dtype=np.float64)
         p = [get_moving_boundary_fd_geometry(model.mesh, s_el, model.pstar).p for s_el in s]
         ax_twin.plot(t, p, label=name+" p", color=colors.get(name, None), linestyle=linestyle.get(name, None), alpha=0.5)
-    ax_twin.hlines(model.pstar, t[0], t[-1], color='red', linestyle='--', alpha=0.5)
-    if model.ignoredNodeRule=="lee_oh_1996_three_region":
-        ax_twin.hlines(1-model.pstar, t[0], t[-1], color='red', linestyle='--', alpha=0.5)
+    if pstarSchedule_input is None:
+        ax_twin.hlines(model.pstar, t[0], t[-1], color='red', linestyle='--', alpha=0.5)
+        if model.ignoredNodeRule=="lee_oh_1996_three_region":
+            ax_twin.hlines(1-model.pstar, t[0], t[-1], color='red', linestyle='--', alpha=0.5)
+    else:
+        pstarSchedule_input["times"]
+        times_arr = np.array([t[0]*3600]+pstarSchedule_input["times"]+[t[-1]*3600])/3600
+        values_arr = np.array([pstar_input]+pstarSchedule_input["values"])
+        assert all(times_arr[:-1]<t[-1]), "make sure all times should have been reached"
+        assert all([len(model._pstarScheduleUpdateLog)==len(np.array(pstarSchedule_input["times"])) for name, model in models.items()]), "make sure all models have the same number of pstar updates as the length of the pstar schedule"
+        assert all([np.allclose(np.array([log["time"] for log in model._pstarScheduleUpdateLog]), np.array(pstarSchedule_input["times"]), rtol=1e-4) for name, model in models.items()]), "make sure all times are close to actual times"
+        ysToPlot = np.concatenate([[values_arr[i], values_arr[i], np.nan] for i in range(len(values_arr))])
+        xsToPlot = np.concatenate([[times_arr[i], times_arr[i+1], np.nan] for i in range(len(values_arr))])
+        ax_twin.plot(xsToPlot, ysToPlot, color='red', linestyle='--', alpha=0.5)
+        if model.ignoredNodeRule=="lee_oh_1996_three_region":
+            ax_twin.plot(xsToPlot, 1-ysToPlot, color='red', linestyle='--', alpha=0.5)
         
 
     # fig2, ax2 = plt.subplots(figsize=(8, 5))
@@ -1694,12 +1710,15 @@ def plot_normalized_left_phase_thickness(models):
         interfaceCompChange = np.linalg.norm(np.diff(interfaceComps, axis=0), axis=1)
         ax3.plot(t[1:]/3600, interfaceCompChange, marker='o', label=name, color=colors.get(name, None), linestyle=linestyle.get(name, None))
 
+    # for name, model in models.items():
+    #     model.
     
     plt.tight_layout()
     if plt.get_backend().lower() != "agg":
         plt.show()
 
     print(f"pstar_input: {pstar_input}")
+    print(f"pstarSchedule_input: {pstarSchedule_input}")
     print(f"N: {case['nodes']}")
 
     modelAttributesToPrint = ["integrationMode", "initialInventoryMode", "ignoredNodeRule", "denom_type", "ignoredNodeReconstructionMode", "fluxGradientMode", "multicomponentInterfaceStateUpdate"]
@@ -1817,8 +1836,8 @@ def print_failures(failures):
 def main():
     case = build_ternary_case()
     models, failures = solve_models(case)
-    print_summary(case, models)
-    print_failures(failures)
+    # print_summary(case, models)
+    # print_failures(failures)
     # plot_results(case, models)
     # plot_normalized_left_phase_thickness(models)
     # plot_ternary_thermodynamics(case)
@@ -1835,7 +1854,7 @@ models, failures = solve_models(case)
 print_summary(case, models)
 print_failures(failures)
 # plot_results(case, models)
-# plot_normalized_left_phase_thickness(models)
+plot_normalized_left_phase_thickness(models)
 # plot_ternary_thermodynamics(case)
 
  #%%

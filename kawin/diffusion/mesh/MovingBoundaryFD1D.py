@@ -109,7 +109,7 @@ def _geometry_from_z(z, interface_position: float, pstar: float, ignored_node_ru
     if interface_position <= z[0] or interface_position >= z[-1]:
         raise ValueError("Interface position must lie strictly inside the FDM domain.")
 
-    right_index = int(np.searchsorted(z, interface_position, side="right"))
+    right_index = int(np.searchsorted(z, interface_position, side="right")) ## could use math.modf(interface_position/dz) to get p directly without searching, but this is may be more robust to nonuniform meshes and floating point issues near node positions
     left_index = right_index - 1
     if left_index < 0 or right_index >= len(z):
         raise ValueError("Interface position must lie between two adjacent nodes.")
@@ -118,7 +118,7 @@ def _geometry_from_z(z, interface_position: float, pstar: float, ignored_node_ru
     
     dx = float(z[1] - z[0])
     p = float((interface_position - z[left_index]) / dx)
-    p = float(np.clip(p, 0.0, 1.0))
+    # p = float(np.clip(p, 0.0, 1.0)) ## commented this out because gprof2dot seemed to indicate that it was a bit slow
 
     if ignored_node_rule not in {"legacy_two_region", "lee_oh_1996_three_region"}:
         raise ValueError("ignored_node_rule must be one of ['legacy_two_region', 'lee_oh_1996_three_region'].")

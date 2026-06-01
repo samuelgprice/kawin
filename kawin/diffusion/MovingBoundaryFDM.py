@@ -34,6 +34,14 @@ def debugInPlace():
     except:
         pass
 
+def getMaxEigVal(diffusivities_input):
+    diff_eigvals = np.linalg.eigvals(diffusivities_input)
+    diff_minEigval, diff_maxEigVal = np.min(diff_eigvals), np.max(diff_eigvals)
+    if diff_minEigval<0:
+        debugInPlace()
+        raise ValueError("I think it might be unstable if any eigvals are less than zero")
+    return diff_maxEigVal
+
 class _ScalarHistory:
     def __init__(self, record: bool | int = False):
         if isinstance(record, bool):
@@ -267,6 +275,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         initialInventoryMode: str | None = None,
         balanceElement: str | None = None,
         multicomponentInterfaceStateUpdate: str = "pre_diffusion_only",
+        pstarSchedule: dict | None = None,
     ):
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceData = _ScalarHistory(record)
@@ -287,10 +296,21 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         self._lastFluxes = None
         self._lastInterfaceFluxes = (0.0, 0.0)
         self._lastInterfaceVelocity = 0.0
+        self.dtDiffData = _ScalarHistory(record)
+        self.dtMoveData = _ScalarHistory(record)
+        self._pendingDtDiff = np.inf
+        self._pendingDtMove = np.inf
         self._cachedMulticomponentInterfaceState = None
         self._interfaceCompositionHistory = None
         self._pendingInterfaceCompositionRecord = None
         self._hasInterfaceCompositionHistoryData = False
+        self._pstarScheduleTimes = np.array([], dtype=np.float64)
+        self._pstarScheduleValues = np.array([], dtype=np.float64)
+        self._nextPstarScheduleIndex = 0
+        self._lastAppliedPstarScheduleIndex = -1
+        self._pstarScheduleUpdateLog = []
+        self._pstarStrictAudit = True
+        self._pstarChangedSinceLastPreProcess = False
         super().__init__(
             mesh=mesh,
             elements=elements,
@@ -310,6 +330,13 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         self._initialInventory = np.array([0.229945, 0.09035])*self.mesh.zlim[0][-1]
         self._cachedMulticomponentInterfaceState = None
         self._initializeInterfaceCompositionHistory()
+        if pstarSchedule is not None:
+            if not isinstance(pstarSchedule, dict):
+                raise ValueError("pstarSchedule must be a dict with 'times' and 'values'.")
+            self.setPstarSchedule(
+                schedule_times=pstarSchedule.get("times", None),
+                schedule_values=pstarSchedule.get("values", None),
+            )
 
     def _validateMovingBoundaryModel(self):
         '''
@@ -397,6 +424,12 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         super().reset()
         self.interfaceData.reset()
         self.interfaceData.record(0, self.initialInterfacePosition)
+        self.dtDiffData.reset()
+        self.dtMoveData.reset()
+        self.dtDiffData.record(0, np.inf)
+        self.dtMoveData.record(0, np.inf)
+        self._pendingDtDiff = np.inf
+        self._pendingDtMove = np.inf
         self._lastFluxes = None
         self._lastInterfaceFluxes = None
         self._lastInterfaceVelocity = None
@@ -404,6 +437,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             self.previousMassDelta = np.zeros_like(self.elements, dtype=np.float64)
         self._currdt = np.inf
         self._cachedMulticomponentInterfaceState = None
+        self._pstarChangedSinceLastPreProcess = False
         self._pendingInterfaceCompositionRecord = None
         self._hasInterfaceCompositionHistoryData = False
         if hasattr(self, "mesh") and self.mesh is not None:
@@ -412,7 +446,178 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             self._cachedMulticomponentInterfaceState = None
             self._initializeInterfaceCompositionHistory()
 
+    def _validatePstarValue(self, pstar_value: float):
+        '''
+        Validates one ``pstar`` value against runtime moving-boundary constraints.
+        '''
+        pstar_value = float(pstar_value)
+        if not (0 < pstar_value < 1):
+            raise ValueError("pstar must lie strictly between 0 and 1.")
+        if self.ignoredNodeRule == "lee_oh_1996_three_region" and pstar_value > 0.5:
+            raise ValueError(
+                "pstar should be between 0 and 0.5 for ignoredNodeRule='lee_oh_1996_three_region'."
+            )
+        if self.constraints.movingBoundaryThreshold >= min(pstar_value, 1 - pstar_value):
+            raise ValueError("movingBoundaryThreshold must be less than the minimum of pstar and 1-pstar.")
+
+    def setPstarSchedule(self, schedule_times, schedule_values):
+        '''
+        Configures a piecewise-constant runtime ``pstar`` schedule.
+
+        The schedule is checked and then applied at iteration boundaries during
+        ``preProcess``.
+        '''
+        if schedule_times is None or schedule_values is None:
+            raise ValueError("Both schedule_times and schedule_values must be provided.")
+        times = np.asarray(schedule_times, dtype=np.float64).reshape(-1)
+        values = np.asarray(schedule_values, dtype=np.float64).reshape(-1)
+        if len(times) != len(values):
+            raise ValueError("schedule_times and schedule_values must have the same length.")
+        if len(times) == 0:
+            raise ValueError("pstar schedule must include at least one entry.")
+        if not np.all(np.isfinite(times)):
+            raise ValueError("schedule_times must all be finite.")
+        if not np.all(np.diff(times) > 0):
+            raise ValueError("schedule_times must be strictly increasing.")
+        for pstar_value in values:
+            self._validatePstarValue(float(pstar_value))
+
+        self._pstarScheduleTimes = times.copy()
+        self._pstarScheduleValues = values.copy()
+        self._nextPstarScheduleIndex = 0
+        self._lastAppliedPstarScheduleIndex = -1
+        self._pstarScheduleUpdateLog = []
+
+    def clearPstarSchedule(self):
+        '''
+        Disables runtime ``pstar`` scheduling and clears schedule state.
+        '''
+        self._pstarScheduleTimes = np.array([], dtype=np.float64)
+        self._pstarScheduleValues = np.array([], dtype=np.float64)
+        self._nextPstarScheduleIndex = 0
+        self._lastAppliedPstarScheduleIndex = -1
+        self._pstarScheduleUpdateLog = []
+
+    def getPstarScheduleStatus(self):
+        '''
+        Returns schedule state and runtime update history.
+        '''
+        next_time = None
+        next_value = None
+        if self._nextPstarScheduleIndex < len(self._pstarScheduleTimes):
+            next_time = float(self._pstarScheduleTimes[self._nextPstarScheduleIndex])
+            next_value = float(self._pstarScheduleValues[self._nextPstarScheduleIndex])
+        return {
+            "enabled": len(self._pstarScheduleTimes) > 0,
+            "current_pstar": float(self.pstar),
+            "next_index": int(self._nextPstarScheduleIndex),
+            "last_applied_index": int(self._lastAppliedPstarScheduleIndex),
+            "next_time": next_time,
+            "next_value": next_value,
+            "history": list(self._pstarScheduleUpdateLog),
+        }
+
+    def _recordPstarScheduleEvent(self, **event):
+        '''
+        Appends one schedule/update event to the runtime history.
+        '''
+        event_copy = {k: v for k, v in event.items()}
+        event_copy["time"] = float(event_copy.get("time", self.currentTime))
+        event_copy["pstar_before"] = float(event_copy.get("pstar_before", self.pstar))
+        if "pstar_after" in event_copy and event_copy["pstar_after"] is not None:
+            event_copy["pstar_after"] = float(event_copy["pstar_after"])
+        print(event_copy)
+        self._pstarScheduleUpdateLog.append(event_copy)
+
+    def updatePstar(self, new_pstar, *, reason="manual", time=None, pAtUpdate=None):
+        '''
+        Applies a new ``pstar`` value and clears stale runtime state.
+        '''
+        t_eval = self.currentTime if time is None else float(time)
+        pstar_old = float(self.pstar)
+        new_pstar = float(new_pstar)
+        self._validatePstarValue(new_pstar)
+        if np.isclose(new_pstar, pstar_old, rtol=0.0, atol=1e-14):
+            self._recordPstarScheduleEvent(
+                event="no_change",
+                reason=str(reason),
+                time=t_eval,
+                pstar_before=pstar_old,
+                pstar_after=pstar_old,
+                pAtUpdate=pAtUpdate,
+            )
+            return pstar_old
+
+        self.pstar = new_pstar
+        self._cachedMulticomponentInterfaceState = None
+        self._lastFluxes = None
+        self._lastInterfaceFluxes = None
+        self._lastInterfaceVelocity = None
+        self._pstarChangedSinceLastPreProcess = True
+
+        interface_now = float(self.interfaceData.currentY)
+        geom_new = get_moving_boundary_fd_geometry(self.mesh, interface_now, self.pstar, self.ignoredNodeRule)
+        if self._pstarStrictAudit and self._cachedMulticomponentInterfaceState is not None:
+            raise ValueError("Stale ternary interface cache detected immediately after pstar update.")
+        if self._pstarStrictAudit and geom_new.ignore_mode not in {"ignore_left", "ignore_right", "ignore_none"}:
+            raise ValueError("Unexpected ignored-node regime after pstar update.")
+        self._recordPstarScheduleEvent(
+            event="applied",
+            reason=str(reason),
+            time=t_eval,
+            pstar_before=pstar_old,
+            pstar_after=new_pstar,
+            ignore_mode_after=geom_new.ignore_mode,
+            interface_position=float(interface_now),
+            pAtUpdate=pAtUpdate,
+        )
+        return new_pstar
+
+    def preProcess(self):
+        '''
+        Applies due scheduled ``pstar`` updates at iteration boundaries.
+        '''
+        self._pstarChangedSinceLastPreProcess = False
+        if len(self._pstarScheduleTimes) == 0:
+            return
+
+        eps_t = 1e-14
+        while self._nextPstarScheduleIndex < len(self._pstarScheduleTimes):
+            schedule_time = float(self._pstarScheduleTimes[self._nextPstarScheduleIndex])
+            if self.currentTime + eps_t < schedule_time:
+                break
+
+            target_pstar = float(self._pstarScheduleValues[self._nextPstarScheduleIndex])
+            interface_now = float(self.interfaceData.currentY)
+            geom_old = get_moving_boundary_fd_geometry(self.mesh, interface_now, self.pstar, self.ignoredNodeRule)
+            geom_new = get_moving_boundary_fd_geometry(self.mesh, interface_now, target_pstar, self.ignoredNodeRule)
+            if geom_old.ignore_mode != geom_new.ignore_mode:
+                self._recordPstarScheduleEvent(
+                    event="deferred",
+                    reason="regime_flip",
+                    time=self.currentTime,
+                    schedule_index=int(self._nextPstarScheduleIndex),
+                    pstar_before=float(self.pstar),
+                    pstar_after=float(target_pstar),
+                    ignore_mode_before=geom_old.ignore_mode,
+                    ignore_mode_after=geom_new.ignore_mode,
+                    p=float(geom_old.p),
+                )
+                break
+
+            self.updatePstar(
+                target_pstar,
+                reason=f"schedule[{self._nextPstarScheduleIndex}]",
+                time=self.currentTime,
+                pAtUpdate=geom_old.p,
+            )
+            self._lastAppliedPstarScheduleIndex = int(self._nextPstarScheduleIndex)
+            self._nextPstarScheduleIndex += 1
+
     def toDict(self):
+        '''
+        Serializes solved state, including interface and timestep-limit histories.
+        '''
         data = super().toDict()
         data.update(
             {
@@ -429,6 +634,14 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 "bulk_update_scheme": self.bulkUpdateScheme,
                 "balance_element": "" if self.balanceElement is None else self.balanceElement,
                 "multicomponent_interface_state_update": self.multicomponentInterfaceStateUpdate,
+                "dt_diff": self.dtDiffData._y,
+                "dt_diff_time": self.dtDiffData._time,
+                "dt_diff_interval": self.dtDiffData.recordInterval,
+                "dt_diff_index": self.dtDiffData.N,
+                "dt_move": self.dtMoveData._y,
+                "dt_move_time": self.dtMoveData._time,
+                "dt_move_interval": self.dtMoveData.recordInterval,
+                "dt_move_index": self.dtMoveData.N,
             }
         )
         if self._isTernarySystem() and self._interfaceCompositionHistory is not None and self._hasInterfaceCompositionHistoryData:
@@ -448,6 +661,9 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         return data
 
     def fromDict(self, data):
+        '''
+        Restores solved state, including interface and timestep-limit histories.
+        '''
         super().fromDict(data)
         interface_update = data.get("interface_update", self.interfaceUpdate)
         if isinstance(interface_update, np.ndarray):
@@ -499,6 +715,20 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         self.interfaceData.currentY = float(self.interfaceData._y[-1])
         self.interfaceData.currentTime = float(self.interfaceData._time[-1])
         self.interfaceData.currentIndex = self.interfaceData.N
+        self.dtDiffData.recordInterval = int(data.get("dt_diff_interval", self.interfaceData.recordInterval))
+        self.dtDiffData.N = int(data.get("dt_diff_index", self.interfaceData.N))
+        self.dtDiffData._y = np.array(data.get("dt_diff", np.full_like(self.interfaceData._y, np.inf)), dtype=np.float64)
+        self.dtDiffData._time = np.array(data.get("dt_diff_time", self.interfaceData._time), dtype=np.float64)
+        self.dtDiffData.currentY = float(self.dtDiffData._y[self.dtDiffData.N])
+        self.dtDiffData.currentTime = float(self.dtDiffData._time[self.dtDiffData.N])
+        self.dtDiffData.currentIndex = self.dtDiffData.N
+        self.dtMoveData.recordInterval = int(data.get("dt_move_interval", self.interfaceData.recordInterval))
+        self.dtMoveData.N = int(data.get("dt_move_index", self.interfaceData.N))
+        self.dtMoveData._y = np.array(data.get("dt_move", np.full_like(self.interfaceData._y, np.inf)), dtype=np.float64)
+        self.dtMoveData._time = np.array(data.get("dt_move_time", self.interfaceData._time), dtype=np.float64)
+        self.dtMoveData.currentY = float(self.dtMoveData._y[self.dtMoveData.N])
+        self.dtMoveData.currentTime = float(self.dtMoveData._time[self.dtMoveData.N])
+        self.dtMoveData.currentIndex = self.dtMoveData.N
         self._validateMovingBoundaryModel()
         self._initialInventory = self._getStoredInventory(0)
         self._cachedMulticomponentInterfaceState = None
@@ -901,13 +1131,16 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         elif denom_type=="eqn11":
             denom = c_right_int - c_left_int
         else:
+            debugInPlace()
             raise ValueError("denom_type should be one of the above")
         if np.any(np.abs(denom) <= 1e-14):
             raise ValueError("Ternary MovingBoundaryFD1DModel encountered a near-zero Eq. (22) denominator.")
         
         if self.interfaceUpdate=="1999_lee_allSolute_corrected":
         # if True==False:
-            raise ValueError("Interface update method '1999_lee_allSolute_corrected' needs to be reexamined")
+            # raise ValueError("Interface update method '1999_lee_allSolute_corrected' needs to be reexamined")
+            if denom_type!="eqn22":
+                raise ValueError(f"denom_type must be 'eqn22' for interface update method '1999_lee_allSolute_corrected'. Got denom_type='{denom_type}'")
             if dt is None:
                 debugInPlace()
                 raise ValueError("dt should not be None when self.interfaceUpdate=='1999_lee_allSolute_corrected'")
@@ -1159,16 +1392,19 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 print(lam)
                 raise e
                 return np.nan
-
-        sol = optimize.root_scalar(
-            residual_func,
-            # bracket=[0, 1],
-            bracket=[0.25, 0.5],
-            method=root_scalar_method,
-            # rtol=1e-14,
-            xtol=1e-10,
-            maxiter=100,
-        )
+        try:
+            sol = optimize.root_scalar(
+                residual_func,
+                # bracket=[0, 1],
+                bracket=[0.25, 0.5],
+                method=root_scalar_method,
+                # rtol=1e-14,
+                xtol=1e-10,
+                maxiter=100,
+            )
+        except Exception as e:
+            debugInPlace()
+            raise e
         if sol.converged:
             root_state = self._evaluateMulticomponentInterfaceState(
                 t,
@@ -1564,6 +1800,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         move_fraction = min(self.constraints.movingBoundaryThreshold, np.inf) # , 0.95 * self._max_interface_step_fraction(geom, s_dot_pred))
         dt_move = move_fraction * self.mesh.dz / abs(s_dot_pred) if abs(s_dot_pred) > 0 else np.inf
         allowed_dt = getattr(self, "deltaTime", np.inf)
+        self._pendingDtDiff = float(dt_diff)
+        self._pendingDtMove = float(dt_move)
         self._currdt = min(dt_diff, dt_move, allowed_dt)
         if dt_diff>dt_move:
             raise ValueError("Not Expecting dt_move to control the time step at this point")
@@ -1768,7 +2006,21 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         # if True==False:
         if self.interfaceUpdate in ["1999_lee_allSolute_corrected"]:
             # max_diff_onlyBulk = float(np.max(np.abs(diffusivity_nodes.reshape(-1))))
-            min_length = self.mesh.dz * ((1.0 - geom.p) if geom.p < self.pstar else geom.p)
+            max_diff_onlyBulk = getMaxEigVal(diffusivity_nodes)
+
+            if self.ignoredNodeRule == "legacy_two_region":
+                min_length = self.mesh.dz * ((1.0 - geom.p) if geom.p < self.pstar else geom.p)
+            else:
+                if self.ignoredNodeRule != "lee_oh_1996_three_region":
+                    raise ValueError("ignoredNodeRule must be either 'legacy_two_region' or 'lee_oh_1996_three_region'")
+                if geom.p<self.pstar:
+                    min_length = 1-geom.p
+                elif geom.p>(1-self.pstar):
+                    min_length = geom.p
+                else:
+                    min_length = min(geom.p, 1-geom.p)
+                min_length = self.mesh.dz * min_length
+            
             trial_factor = 0.9 ## used to make sure dt_trial is less than dt_diff
             dt_trial = trial_factor * self.constraints.vonNeumannThreshold * (min_length**2) / max_diff_onlyBulk if max_diff_onlyBulk > 0 else np.inf
 
@@ -1780,14 +2032,17 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             for trial in range(maxNumTrials):
                 trial_count += 1
                 
-                pre_state = self._solveMulticomponentInterfaceState(t, c_old, s_old, dt=dt_trial)
-                self._cacheMulticomponentInterfaceState(t, c_old, s_old, "pre", pre_state)
+                pre_state = self._solveMulticomponentInterfaceState(t, c_old, s_old, dt=dt_trial, denom_type=self.denom_type)
+                # self._cacheMulticomponentInterfaceState(t, c_old, s_old, "pre", pre_state)
                 c_left_int_pre, c_right_int_pre = pre_state["interface_compositions"]
                 # sideOfProbe = self.therm._check_side_of_probe([c_old[0], c_old[-1], c_left_int_pre, c_right_int_pre])
                 # assert(sideOfProbe[0]==sideOfProbe[2] and sideOfProbe[1]==sideOfProbe[3])
                 D_left_int_pre, D_right_int_pre = pre_state["interface_diffusivities"]
                 
                 # max_diff = float(np.max(np.abs(np.concatenate((diffusivity_nodes.reshape(-1), D_left_int_pre.reshape(-1), D_right_int_pre.reshape(-1))))))
+                D_ints = np.stack((D_left_int_pre, D_right_int_pre))
+                max_diff = getMaxEigVal(np.concatenate((diffusivity_nodes, D_ints)))
+
                 min_length = self.mesh.dz * ((1.0 - geom.p) if geom.p < self.pstar else geom.p)
                 dt_diff = self.constraints.vonNeumannThreshold * (min_length**2) / max_diff if max_diff > 0 else np.inf
 
@@ -1797,17 +2052,20 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 dt_overall = min(dt_diff, dt_move, allowed_dt)
 
                 if dt_overall < dt_trial:
-                    if (trial+1)>=maxNumTrials:
+                    if (trial_count)>=maxNumTrials:
                         debugInPlace()
                         raise ValueError("Max number of trials exceeded")
-                    debugInPlace()
+                    # debugInPlace()
                     print(f"Trial dt {dt_trial} larger than min(dt_diff, dt_move, allowed_dt)=min({dt_diff}, {dt_move}, {allowed_dt})={min(dt_diff, dt_move, allowed_dt)}, reducing and retrying.")
-                    dt_trial *= 1/2
-                    numRetrials = getattr(self, "numRetrials", 0)
-                    self.numRetrials = numRetrials
-                    self.numRetrials += 1
+                    # dt_trial *= 1/2
+                    dt_trial = dt_overall * 0.95
+                    # numRetrials = getattr(self, "numRetrials", 0)
+                    # self.numRetrials = numRetrials
+                    # self.numRetrials += 1
                     
                 else:
+                    self._pendingDtDiff = float(dt_diff)
+                    self._pendingDtMove = float(dt_move)
                     self._currdt = dt_trial
                     break
             
@@ -1822,11 +2080,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             
             # max_diff = float(np.max(np.abs(np.concatenate((diffusivity_nodes.reshape(-1), D_left_int_pre.reshape(-1), D_right_int_pre.reshape(-1))))))
             D_ints = np.stack((D_left_int_pre, D_right_int_pre))
-            diff_eigvals = np.linalg.eigvals(np.concatenate((diffusivity_nodes, D_ints)))
-            diff_minEigval, diff_maxEigVal = np.min(diff_eigvals), np.max(diff_eigvals)
-            if diff_minEigval<0:
-                raise ValueError("I think it might be unstable if any eigvals are less than zero")
-            max_diff = diff_maxEigVal
+            max_diff = getMaxEigVal(np.concatenate((diffusivity_nodes, D_ints)))
             # debugInPlace()
             # min_length = self.mesh.dz * ((1.0 - geom.p) if geom.p < self.pstar else geom.p)
             if self.ignoredNodeRule == "legacy_two_region":
@@ -1847,6 +2101,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             move_fraction = min(self.constraints.movingBoundaryThreshold, np.inf)
             dt_move = move_fraction * self.mesh.dz / abs(pre_state["velocity"]) if abs(pre_state["velocity"]) > 0 else np.inf
             allowed_dt = getattr(self, "deltaTime", np.inf)
+            self._pendingDtDiff = float(dt_diff)
+            self._pendingDtMove = float(dt_move)
             self._currdt = min(dt_diff, dt_move, allowed_dt)
 
         ignored = geom.ignored_index
@@ -2191,6 +2447,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         '''
         Returns time derivatives for the composition field and interface position
         '''
+        if self._pstarStrictAudit and self._pstarChangedSinceLastPreProcess and self._cachedMulticomponentInterfaceState is not None:
+            raise ValueError("Ternary interface cache should be cleared after a pstar update before getdXdt.")
         dcdt, velocity = self._computeState(t, xCurr)
         return [dcdt, velocity]
 
@@ -2298,7 +2556,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
 
     def postProcess(self, time, x):
         '''
-        Clips composition values, validates mass behavior, and records the new state
+        Clips composition values, validates mass behavior, and records accepted-step state.
         '''
         GenericModel.postProcess(self, time, x)
         composition = self._clipCompositionField(np.asarray(x[0], dtype=np.float64))
@@ -2307,6 +2565,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         self._checkMassCorrection(mass_check_composition, interface_position)
         self.data.record(time, composition)
         self.interfaceData.record(time, interface_position)
+        self.dtDiffData.record(time, self._pendingDtDiff)
+        self.dtMoveData.record(time, self._pendingDtMove)
         if self._isTernarySystem() and self._interfaceCompositionHistory is not None:
             pending = self._pendingInterfaceCompositionRecord
             if pending is None:
@@ -2342,8 +2602,13 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         return super().solve(simTime, iterator=iterator, verbose=verbose, vIt=vIt, minDtFrac=minDtFrac, maxDtFrac=maxDtFrac)
 
     def postSolve(self):
+        '''
+        Finalizes recorded histories after solve completion.
+        '''
         self.data.finalize()
         self.interfaceData.finalize()
+        self.dtDiffData.finalize()
+        self.dtMoveData.finalize()
         if self._isTernarySystem() and self._interfaceCompositionHistory is not None and self._hasInterfaceCompositionHistoryData:
             pending = self._pendingInterfaceCompositionRecord
             if pending is not None:
@@ -2363,6 +2628,18 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         Returns the interface position at a requested time
         '''
         return self.interfaceData.y(time)
+
+    def getDtDiff(self, time = None):
+        '''
+        Returns the diffusion-limited timestep estimate at a requested time.
+        '''
+        return self.dtDiffData.y(time)
+
+    def getDtMove(self, time = None):
+        '''
+        Returns the interface-motion-limited timestep estimate at a requested time.
+        '''
+        return self.dtMoveData.y(time)
 
     def getTotalMass(self, time = None):
         '''

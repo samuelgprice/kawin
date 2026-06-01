@@ -36,7 +36,7 @@ class ConstantBinaryThermodynamics:
     def clearCache(self):
         return
 
-    def getInterdiffusivity(self, x, T, removeCache=True, phase=None):
+    def getInterdiffusivity(self, x, T, removeCache=True, phase=None, query_context=None):
         values = np.atleast_1d(T).astype(np.float64)
         return np.squeeze(np.ones(values.shape, dtype=np.float64) * self.diffusivities[phase])
 
@@ -48,7 +48,7 @@ class ConstantBinaryThermodynamics:
 
 
 class VariableBinaryThermodynamics(ConstantBinaryThermodynamics):
-    def getInterdiffusivity(self, x, T, removeCache=True, phase=None):
+    def getInterdiffusivity(self, x, T, removeCache=True, phase=None, query_context=None):
         composition = np.asarray(x, dtype=np.float64)
         base = float(self.diffusivities[phase])
         return np.squeeze(base * (1.0 + 0.5 * composition))
@@ -135,7 +135,7 @@ class MockTernaryTieLineThermodynamics:
             }
         return left, right
 
-    def getInterdiffusivity(self, x, T, removeCache=True, phase=None):
+    def getInterdiffusivity(self, x, T, removeCache=True, phase=None, query_context=None):
         values = np.asarray(x, dtype=np.float64)
         base = np.asarray(self.diffusivities[phase], dtype=np.float64)
         if values.ndim == 1:
@@ -1218,6 +1218,92 @@ def test_moving_boundary_fdm_left_near_node_uses_quadratic_update_for_p_less_tha
     assert abs(dXdt[0][geom.left_near_index, 0] - bulk_dxdt) > max(1e-8, 1e-6 * abs(expected_dxdt))
     assert np.isfinite(dt) and dt > 0
 
+def _build_binary_fdm_model_for_pstar_schedule(interface_position=0.515, pstar=0.45):
+    profile = ProfileBuilder([(StepProfile1D(interface_position, 0.1, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 2.0},
+        interface_compositions=(0.3, 0.7),
+    )
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interface_position,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        ignoredNodeReconstructionMode='lagrange',
+        ignoredNodeRule='legacy_two_region',
+        denom_type='eqn11',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
+        interfaceUpdate='basic',
+        pstar=pstar,
+    )
+    model.setup()
+    return model
+
+
+def test_moving_boundary_fdm_pstar_schedule_validation_rejects_bad_inputs():
+    model = _build_binary_fdm_model_for_pstar_schedule(interface_position=0.515, pstar=0.45)
+
+    with pytest.raises(ValueError):
+        model.setPstarSchedule(schedule_times=[0.0, 1.0], schedule_values=[0.46])
+    with pytest.raises(ValueError):
+        model.setPstarSchedule(schedule_times=[0.0, 0.0], schedule_values=[0.46, 0.47])
+    with pytest.raises(ValueError):
+        model.setPstarSchedule(schedule_times=[0.0, 1.0], schedule_values=[0.46, 1.1])
+    model.ignoredNodeRule = "lee_oh_1996_three_region"
+    with pytest.raises(ValueError):
+        model.setPstarSchedule(schedule_times=[0.0, 1.0], schedule_values=[0.35, 0.6])
+
+
+def test_moving_boundary_fdm_pstar_schedule_applies_in_preprocess_and_tracks_status():
+    model = _build_binary_fdm_model_for_pstar_schedule(interface_position=0.515, pstar=0.45)
+    model.setPstarSchedule(schedule_times=[0.0, 1e-15], schedule_values=[0.46, 0.47])
+
+    model.preProcess()
+    status = model.getPstarScheduleStatus()
+    assert np.isclose(model.pstar, 0.47)
+    assert status["last_applied_index"] == 1
+    assert status["next_index"] == 2
+    assert len(status["history"]) >= 2
+    assert all(event.get("event") in {"applied", "no_change"} for event in status["history"])
+
+
+def test_moving_boundary_fdm_pstar_schedule_defers_when_regime_would_flip():
+    # p ~= 0.48 at this interface location for dz=0.05.
+    model = _build_binary_fdm_model_for_pstar_schedule(interface_position=0.524, pstar=0.45)
+    geom_before = get_moving_boundary_fd_geometry(model.mesh, model.interfaceData.currentY, model.pstar, model.ignoredNodeRule)
+    assert geom_before.ignore_mode == "ignore_right"
+
+    model.setPstarSchedule(schedule_times=[0.0], schedule_values=[0.5])
+    model.preProcess()
+    status = model.getPstarScheduleStatus()
+
+    assert np.isclose(model.pstar, 0.45)
+    assert status["next_index"] == 0
+    assert len(status["history"]) >= 1
+    assert status["history"][-1]["event"] == "deferred"
+    assert status["history"][-1]["reason"] == "regime_flip"
+
+
+def test_moving_boundary_fdm_update_pstar_clears_cache_and_strict_audit_in_getdxdt():
+    model = _build_binary_fdm_model_for_pstar_schedule(interface_position=0.515, pstar=0.45)
+
+    model._cachedMulticomponentInterfaceState = {"dummy": True}
+    model._pstarChangedSinceLastPreProcess = True
+    with pytest.raises(ValueError):
+        model.getdXdt(model.currentTime, model.getCurrentX())
+
+    model._cachedMulticomponentInterfaceState = {"dummy": True}
+    model.updatePstar(0.46, reason="test")
+    assert model._cachedMulticomponentInterfaceState is None
+    assert np.isclose(model.pstar, 0.46)
 
 def test_moving_boundary_fdm_mass_correction_option_improves_mass_error():
     interfacePosition = 0.5125
@@ -1406,6 +1492,152 @@ def test_moving_boundary_fdm_saving_loading():
     assert new_model.fluxGradientMode == model.fluxGradientMode
     assert new_model.bulkUpdateScheme == model.bulkUpdateScheme
     assert new_model.interfaceUpdate == model.interfaceUpdate
+    try:
+        os.remove(save_path)
+    except PermissionError:
+        pass
+
+def test_moving_boundary_fdm_dt_histories_record_with_interface_history():
+    interfacePosition = 0.525
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        ignoredNodeReconstructionMode='lagrange',
+        ignoredNodeRule='legacy_two_region',
+        denom_type='eqn11',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
+        record=True,
+    )
+    model.solve(0.002, iterator=explicitEulerIterator)
+
+    interface_time = np.array(model.interfaceData._time[: model.interfaceData.N + 1], dtype=np.float64)
+    dt_diff_time = np.array(model.dtDiffData._time[: model.dtDiffData.N + 1], dtype=np.float64)
+    dt_move_time = np.array(model.dtMoveData._time[: model.dtMoveData.N + 1], dtype=np.float64)
+    dt_diff_values = np.array(model.dtDiffData._y[: model.dtDiffData.N + 1], dtype=np.float64)
+    dt_move_values = np.array(model.dtMoveData._y[: model.dtMoveData.N + 1], dtype=np.float64)
+
+    assert_allclose(dt_diff_time, interface_time, rtol=0, atol=0)
+    assert_allclose(dt_move_time, interface_time, rtol=0, atol=0)
+    assert np.all((dt_diff_values >= 0) | np.isinf(dt_diff_values))
+    assert np.all((dt_move_values >= 0) | np.isinf(dt_move_values))
+
+
+def test_moving_boundary_fdm_dt_histories_support_record_false():
+    interfacePosition = 0.525
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        ignoredNodeReconstructionMode='lagrange',
+        ignoredNodeRule='legacy_two_region',
+        denom_type='eqn11',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
+        record=False,
+    )
+    model.solve(0.002, iterator=explicitEulerIterator)
+
+    assert model.dtDiffData.recordInterval <= 0
+    assert model.dtMoveData.recordInterval <= 0
+    assert np.isfinite(model.getDtDiff()) or np.isinf(model.getDtDiff())
+    assert np.isfinite(model.getDtMove()) or np.isinf(model.getDtMove())
+    assert model.dtDiffData.currentTime == model.interfaceData.currentTime
+    assert model.dtMoveData.currentTime == model.interfaceData.currentTime
+
+
+def test_moving_boundary_fdm_saving_loading_preserves_dt_histories():
+    interfacePosition = 0.525
+    profile = ProfileBuilder([(StepProfile1D(interfacePosition, 0.1, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0, 'BETA': 1.0},
+        interface_compositions=(0.35, 0.65),
+    )
+    model = MovingBoundaryFD1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        ignoredNodeReconstructionMode='lagrange',
+        ignoredNodeRule='legacy_two_region',
+        denom_type='eqn11',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
+        record=True,
+    )
+    model.solve(0.002, iterator=explicitEulerIterator)
+    os.makedirs('.pytest_tmp', exist_ok=True)
+    save_path = os.path.join('.pytest_tmp', f'moving_boundary_fdm_dt_{os.getpid()}.npz')
+    model.save(save_path)
+
+    new_mesh = CartesianFD1D(['CR'], [0, 1], 21)
+    new_mesh.setResponseProfile(profile)
+    new_model = MovingBoundaryFD1DModel(
+        new_mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interfacePosition,
+        bulkUpdateScheme='legacy',
+        integrationMode='weighted',
+        ignoredNodeReconstructionMode='lagrange',
+        ignoredNodeRule='legacy_two_region',
+        denom_type='eqn11',
+        interfaceUpdate='basic',
+        fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
+        record=True,
+    )
+    new_model.load(save_path)
+
+    assert new_model.dtDiffData.recordInterval == model.dtDiffData.recordInterval
+    assert new_model.dtMoveData.recordInterval == model.dtMoveData.recordInterval
+    assert new_model.dtDiffData.N == model.dtDiffData.N
+    assert new_model.dtMoveData.N == model.dtMoveData.N
+    assert_allclose(new_model.dtDiffData._time, model.dtDiffData._time)
+    assert_allclose(new_model.dtMoveData._time, model.dtMoveData._time)
+    assert_allclose(new_model.dtDiffData._y, model.dtDiffData._y)
+    assert_allclose(new_model.dtMoveData._y, model.dtMoveData._y)
+    assert_allclose(new_model.getDtDiff(), model.getDtDiff())
+    assert_allclose(new_model.getDtMove(), model.getDtMove())
     try:
         os.remove(save_path)
     except PermissionError:
