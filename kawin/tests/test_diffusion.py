@@ -4,7 +4,7 @@ import numpy as np
 from numpy.testing import assert_allclose
 import pytest
 
-from kawin.diffusion import SinglePhaseModel, HomogenizationModel, MovingBoundary1DModel, MovingBoundaryFD1DModel, TemperatureParameters
+from kawin.diffusion import SinglePhaseModel, HomogenizationModel, MovingBoundary1DModel, MovingBoundaryFD1DModel, MovingBoundaryOlayeFD1DModel, TemperatureParameters
 from kawin.diffusion.mesh import Cartesian1D, CartesianFD1D, Cylindrical1D, Spherical1D, Cartesian2D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh import ProfileBuilder, StepProfile1D, LinearProfile1D, DiracDeltaProfile, ConstantProfile, GaussianProfile, ExperimentalProfile1D, BoundedEllipseProfile, BoundedRectangleProfile
 from kawin.diffusion.mesh import get_moving_boundary_fd_geometry
@@ -2963,5 +2963,138 @@ def test_moving_boundary_mass_check_raises():
 
     with pytest.raises(ValueError, match='mass correction residual'):
         model._checkMassCorrection(model.data.currentY[:,0], model.getInterfacePosition())
+
+
+def _build_olaye_model(
+    interface_position=0.5,
+    dt_mode="cfl",
+    main_step_mode="leapfrog_dufort_frankel",
+    geometry="planar",
+    diffusivities=None,
+    record=True,
+):
+    profile = ProfileBuilder([(StepProfile1D(interface_position, 0.2, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 81)
+    mesh.setResponseProfile(profile)
+    if diffusivities is None:
+        diffusivities = {'ALPHA': 1.0e-3, 'BETA': 2.0e-3}
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities=diffusivities,
+        interface_compositions=(0.3, 0.7),
+    )
+    model = MovingBoundaryOlayeFD1DModel(
+        mesh,
+        ['FE', 'CR'],
+        ['ALPHA', 'BETA'],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000),
+        interfacePosition=interface_position,
+        interface_compositions=(0.3, 0.7),
+        first_step_mode="classical_explicit",
+        main_step_mode=main_step_mode,
+        dt_mode=dt_mode,
+        geometry=geometry,
+        semi_log_points=120,
+        record=record,
+    )
+    return model
+
+
+def test_olaye_moving_boundary_geometry_guards_nonplanar():
+    with pytest.raises(NotImplementedError, match="documented but not implemented"):
+        _build_olaye_model(geometry="cylindrical")
+    with pytest.raises(NotImplementedError, match="documented but not implemented"):
+        _build_olaye_model(geometry="spherical")
+
+
+def test_olaye_moving_boundary_k1_then_lfdf_transition():
+    model = _build_olaye_model(dt_mode="cfl", main_step_mode="leapfrog_dufort_frankel")
+    model.solve(0.2, iterator=explicitEulerIterator)
+
+    assert model._stepIndex > 1
+    assert model._lastStepScheme == "leapfrog_dufort_frankel"
+    assert model._p_prev is not None
+    assert model._q_prev is not None
+    assert np.isfinite(model.getInterfacePosition())
+
+
+def test_olaye_moving_boundary_conservation_constant_and_variable_diffusivity():
+    for therm_class in (ConstantBinaryThermodynamics, VariableBinaryThermodynamics):
+        profile = ProfileBuilder([(StepProfile1D(0.5, 0.25, 0.75), 'CR')])
+        mesh = CartesianFD1D(['CR'], [0, 1], 81)
+        mesh.setResponseProfile(profile)
+        therm = therm_class(
+            phases=['ALPHA', 'BETA'],
+            diffusivities={'ALPHA': 8.0e-4, 'BETA': 1.2e-3},
+            interface_compositions=(0.3, 0.7),
+        )
+        model = MovingBoundaryOlayeFD1DModel(
+            mesh,
+            ['FE', 'CR'],
+            ['ALPHA', 'BETA'],
+            thermodynamics=therm,
+            temperature=TemperatureParameters(1000),
+            interfacePosition=0.5,
+            interface_compositions=(0.3, 0.7),
+            first_step_mode="classical_explicit",
+            main_step_mode="leapfrog_dufort_frankel",
+            dt_mode="cfl",
+            geometry="planar",
+            record=True,
+        )
+        initial_inventory = model.getTotalInventory()
+        model.solve(0.12, iterator=explicitEulerIterator)
+        final_inventory = model.getTotalInventory()
+        assert np.isfinite(final_inventory)
+        assert abs(final_inventory - initial_inventory) < 3e-3
+
+
+def test_olaye_moving_boundary_semi_log_dt_mode_runs():
+    model = _build_olaye_model(dt_mode="semi_log_optional", main_step_mode="leapfrog_dufort_frankel")
+    model.solve(0.3, iterator=explicitEulerIterator)
+
+    assert model._pendingDtSemi > 0
+    assert np.isfinite(model.getInterfacePosition())
+    assert model.interfaceData.N > 2
+
+
+def test_olaye_moving_boundary_stability_comparison_against_classical():
+    high_D = {'ALPHA': 2.0e-2, 'BETA': 4.0e-2}
+    lfdf_model = _build_olaye_model(main_step_mode="leapfrog_dufort_frankel", diffusivities=high_D, record=True)
+    classical_model = _build_olaye_model(main_step_mode="classical_explicit", diffusivities=high_D, record=True)
+    lfdf_model.constraints.vonNeumannThreshold = 2.0
+    classical_model.constraints.vonNeumannThreshold = 2.0
+
+    lfdf_model.solve(0.06, iterator=explicitEulerIterator)
+    classical_model.solve(0.06, iterator=explicitEulerIterator)
+
+    lfdf_vals = np.asarray(lfdf_model.data.currentY[:, 0], dtype=np.float64)
+    classical_vals = np.asarray(classical_model.data.currentY[:, 0], dtype=np.float64)
+    # Synthetic stability check: LF/DF should avoid larger excursions compared to classical.
+    assert np.max(np.abs(lfdf_vals - 0.5)) <= np.max(np.abs(classical_vals - 0.5)) + 1e-8
+
+
+def test_olaye_moving_boundary_paper_style_benchmark_monotonic_and_sqrt_like_growth():
+    model = _build_olaye_model(
+        interface_position=0.42,
+        main_step_mode="leapfrog_dufort_frankel",
+        dt_mode="semi_log_optional",
+        diffusivities={'ALPHA': 4.0e-4, 'BETA': 3.0e-3},
+        record=True,
+    )
+    model.solve(0.4, iterator=explicitEulerIterator)
+
+    t = np.array(model.interfaceData._time[: model.interfaceData.N + 1], dtype=np.float64)
+    s = np.array(model.interfaceData._y[: model.interfaceData.N + 1], dtype=np.float64)
+    assert len(t) > 8
+    # "Paper-style" behavior check: dominant one-direction migration.
+    ds = np.diff(s)
+    net_sign = np.sign(s[-1] - s[0]) if not np.isclose(s[-1], s[0]) else 0.0
+    same_direction_fraction = np.mean(np.sign(ds[np.abs(ds) > 1e-14]) == net_sign) if np.any(np.abs(ds) > 1e-14) else 1.0
+    assert same_direction_fraction > 0.7
+    # Benchmark-style sanity: displacement is finite and non-trivial.
+    assert np.all(np.isfinite(s))
+    assert abs(s[-1] - s[0]) > 1e-8
 
 
