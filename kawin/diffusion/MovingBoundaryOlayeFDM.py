@@ -10,8 +10,25 @@ from kawin.diffusion.mesh.MovingBoundaryOlayeFD1D import (
     get_olaye_fd_geometry,
     integrate_binary_olaye_fd_profile,
 )
+from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
 
+def debugInPlace():
+    try:
+        import debugpy
+        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+        debugpy.listen(5678)
+        print("Waiting for debugger attach")
+        debugpy.wait_for_client()
+        debugpy.breakpoint()
+        print('break on this line')
+    except:
+        pass
+def loge_arange(start, stop, log_step):
+    logs = np.arange(np.log(start),
+                    np.log(stop),
+                    log_step)
+    return np.exp(logs)
 
 class _ScalarHistory:
     def __init__(self, record: bool | int = False):
@@ -98,8 +115,10 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         main_step_mode: str,
         dt_mode: str,
         geometry: str = "planar",
-        semi_log_points: int = 200,
-        semi_log_t0_fraction: float = 1e-6,
+        phase_a_nodes: int | None = None,
+        phase_b_nodes: int | None = None,
+        semiLog_dt: float | None = None,
+        semiLogT0: float | None = None,
         constraints=None,
         record=False,
     ):
@@ -110,8 +129,10 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.mainStepMode = str(main_step_mode)
         self.dtMode = str(dt_mode)
         self.geometry = str(geometry)
-        self.semiLogPoints = int(semi_log_points)
-        self.semiLogT0Fraction = float(semi_log_t0_fraction)
+        self.phaseANodes = None if phase_a_nodes is None else int(phase_a_nodes)
+        self.phaseBNodes = None if phase_b_nodes is None else int(phase_b_nodes)
+        self.semiLog_dt = None if semiLog_dt is None else float(semiLog_dt)
+        self.semiLogT0 = None if semiLogT0 is None else float(semiLogT0)
 
         self._currdt = np.inf
         self._pendingDtDiff = np.inf
@@ -121,6 +142,9 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self._lastFluxes = None
         self._lastInterfaceFluxes = (0.0, 0.0)
         self._lastInterfaceVelocity = 0.0
+        self._lastInterfaceCoefficients = (np.nan, np.nan)
+        self._lastWindingAB = (1.0, 0.0)
+        self._currentPaperDt = np.inf
         self._stepIndex = 0
 
         self._p_prev = None
@@ -171,6 +195,8 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             raise ValueError("main_step_mode must be 'leapfrog_dufort_frankel' or 'classical_explicit'.")
         if self.dtMode not in {"cfl", "semi_log_optional"}:
             raise ValueError("dt_mode must be 'cfl' or 'semi_log_optional'.")
+        if self.dtMode == "semi_log_optional" and ((self.semiLog_dt is None) or (self.semiLogT0 is None)):
+            raise ValueError("semiLog_dt and semiLogT0 must be specified when dt_mode is 'semi_log_optional'.")
         if self.geometry not in {"planar", "cylindrical", "spherical"}:
             raise ValueError("geometry must be one of ['planar', 'cylindrical', 'spherical'].")
         if self.geometry != "planar":
@@ -178,13 +204,12 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
                 f"geometry='{self.geometry}' is documented but not implemented yet for "
                 "MovingBoundaryOlayeFD1DModel."
             )
-        if self.semiLogPoints < 3:
-            raise ValueError("semi_log_points must be at least 3.")
-        if not (0 < self.semiLogT0Fraction < 1):
-            raise ValueError("semi_log_t0_fraction must be between 0 and 1.")
-        c_ab, c_ba = self.interfaceCompositions
-        if c_ba <= c_ab:
-            raise ValueError("Expected interface_compositions=(C_AB, C_BA) with C_BA > C_AB.")
+        if not (0 < self.semiLogT0 < 1):
+            raise ValueError("semiLogT0 must be between 0 and 1.")
+        if self.phaseANodes is not None and self.phaseANodes < 3:
+            raise ValueError("phase_a_nodes must be at least 3 when specified.")
+        if self.phaseBNodes is not None and self.phaseBNodes < 3:
+            raise ValueError("phase_b_nodes must be at least 3 when specified.")
         self.initialInterfacePosition = self._clipInterfacePosition(self.initialInterfacePosition, strict=True)
 
     def _clipInterfacePosition(self, interface_position: float, strict: bool = True) -> float:
@@ -193,6 +218,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         lower = float(z[0] + eps)
         upper = float(z[-1] - eps)
         if strict and not (lower < interface_position < upper):
+            # debugInPlace()
             raise ValueError("Interface position must lie strictly inside the FD domain.")
         clipped = float(np.clip(interface_position, lower, upper))
         matches = np.where(np.isclose(z, clipped, atol=eps, rtol=0.0))[0]
@@ -210,8 +236,16 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             self._semiLogTimes = None
             self._semiLogNextIndex = 0
             return
-        t0_rel = max(self.semiLogT0Fraction * simTime, 1e-15)
-        rel_times = np.geomspace(t0_rel, simTime, self.semiLogPoints)
+        t0_rel = max(self.semiLogT0, 1e-15)
+        # rel_times = np.geomspace(t0_rel, simTime, self.semiLogPoints)
+        rel_times = loge_arange(t0_rel, simTime, self.semiLog_dt)
+        if len(rel_times) < 3:
+            raise ValueError("len(rel_times) must be at least 3.")
+        if rel_times[-1] < simTime:
+            rel_times = np.append(rel_times, simTime)
+        if rel_times[-1] != simTime:
+            raise ValueError(f"rel_times[-1] = {rel_times[-1]} does not match simTime = {simTime}")
+            
         self._semiLogTimes = currTime + rel_times
         self._semiLogNextIndex = 0
 
@@ -227,6 +261,9 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self._lastFluxes = None
         self._lastInterfaceFluxes = (0.0, 0.0)
         self._lastInterfaceVelocity = 0.0
+        self._lastInterfaceCoefficients = (np.nan, np.nan)
+        self._lastWindingAB = (1.0, 0.0)
+        self._currentPaperDt = np.inf
         self._stepIndex = 0
         self._semiLogTimes = None
         self._semiLogNextIndex = 0
@@ -258,8 +295,8 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         s0 = float(self.interfaceData.currentY)
         geom = get_olaye_fd_geometry(self.mesh, s0)
 
-        n_left = geom.left_index + 2
-        n_right = len(c0) - geom.right_index + 1
+        n_left = self.phaseANodes if self.phaseANodes is not None else geom.left_index + 1
+        n_right = self.phaseBNodes if self.phaseBNodes is not None else len(c0) - geom.right_index
         if n_left < 3 or n_right < 3:
             raise ValueError("Each phase must retain at least three transformed grid points.")
 
@@ -278,17 +315,51 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.data.currentY = self._reconstruct_physical_profile(self._p_curr, self._q_curr, s0)[:, np.newaxis]
         self._initialInventory = self.getTotalInventory(time=0)
 
-    def _initialize_transformed_state(self, composition, interface_position):
-        c = np.asarray(composition, dtype=np.float64).reshape(-1)
-        c_ab, c_ba = self.interfaceCompositions
+    def solve(self, simTime, iterator=explicitEulerIterator, verbose=False, vIt=10, minDtFrac=1e-8, maxDtFrac=1):
+        """
+        Solves the paper-style recurrence using a single-step explicit Euler wrapper.
 
+        The Olaye/Ojo update is itself a complete explicit recurrence. Multi-stage
+        iterators such as RK4 would evaluate inconsistent intermediate states, so
+        this model accepts only ``explicitEulerIterator``.
+        """
+        if iterator is not explicitEulerIterator:
+            raise ValueError("MovingBoundaryOlayeFD1DModel supports only explicitEulerIterator.")
+        return super().solve(simTime, iterator=iterator, verbose=verbose, vIt=vIt, minDtFrac=minDtFrac, maxDtFrac=maxDtFrac)
+
+    def _initialize_transformed_state(self, composition, interface_position):
+        """
+        Maps the physical profile onto the transformed phase grids.
+
+        The physical profile is discontinuous at the sharp interface, so the left
+        and right phases are interpolated independently. This avoids smearing the
+        interface jump across the transformed grids, which would otherwise flip
+        the initial near-interface gradient and corrupt the Eq. (12) root.
+        """
+        c = np.asarray(composition, dtype=np.float64).reshape(-1)
+        
         z_left = np.clip(interface_position * self._u_grid, self._z[0], interface_position)
         right_span = max(self._R - interface_position, 1e-15)
         z_right = interface_position + right_span * self._v_grid
 
-        p = np.interp(z_left[:-1], self._z, c)
-        q = np.interp(z_right[1:], self._z, c)
+        left_mask = self._z <= interface_position
+        right_mask = self._z >= interface_position
 
+        z_left_source = self._z[left_mask].copy() ## old way np.concatenate((self._z[left_mask], [interface_position]))
+        c_left_source = c[left_mask].copy() ## old way np.concatenate((c[left_mask], [c_ab]))
+        z_right_source = self._z[right_mask].copy()## old way np.concatenate(([interface_position], self._z[right_mask]))
+        c_right_source = c[right_mask].copy() ## old way np.concatenate(([c_ba], c[right_mask]))
+
+        if len(np.unique(c_left_source))!=1 or len(np.unique(c_right_source))!=1:
+             raise ValueError("Initial composition profile has more than one unique composition on at least one side of the interface. The transformed grid initialization will interpolate these values which may cause unexpected results")
+
+        p = np.interp(z_left[:-1], z_left_source, c_left_source)
+        q = np.interp(z_right[1:], z_right_source, c_right_source)
+
+        if len(np.unique(p))!=1 or len(np.unique(q))!=1:
+             raise ValueError("Transformed composition profile has more than one unique composition on at least one side of the interface. The values were interpolatedwhich may cause unexpected results")
+
+        c_ab, c_ba = self.interfaceCompositions
         p_full = np.concatenate((p, [c_ab]))
         q_full = np.concatenate(([c_ba], q))
         return self._apply_boundary_conditions(p_full, q_full)
@@ -323,6 +394,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             self._semiLogNextIndex += 1
 
     def _computeSemiLogDt(self, t):
+        # debugInPlace()
         if self.dtMode != "semi_log_optional" or self._semiLogTimes is None:
             return np.inf
         self._updateSemiLogIndex(t)
@@ -389,6 +461,116 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             velocity = (D_p[-1] * grad_left - D_q[0] * grad_right) / denom
         return float(grad_left), float(grad_right), float(velocity)
 
+    def _planar_interface_root_coefficients(self, p, q, s_curr, dt, told, grad_left, grad_right, D_p, D_q):
+        """
+        Builds the planar Eq. (38) coefficients from the paper's Eq. (12).
+
+        For planar geometry (``lambda = 1``), the radius-curvature terms in Eq. (12)
+        collapse to unity and the future interface position satisfies the linear
+        root form ``a_1 s^(k+1) + b_1 = 0`` from Eq. (38). Matching terms gives:
+
+        ``a_1 = p_(N+1/2)^k u_(N+1/2) + q_(1+1/2)^k (1 - v_(1+1/2)) + C_AB - C_BA``
+
+        ``b_1 = dt * ( D_A * dp/dx + D_B * dq/dx ) - a_1 * s^k``
+
+        where the half-node concentrations are arithmetic averages between the
+        interface Dirichlet values and the adjacent interior nodes. The gradients
+        supplied here are physical gradients, so the ``1/s`` and ``1/(R-s)``
+        factors from Eq. (12) are already included.
+        """
+        # debugInPlace()
+        c_ab, c_ba = self.interfaceCompositions
+        p_half = 0.5 * (float(p[-2]) + c_ab)
+        q_half = 0.5 * (c_ba + float(q[1]))
+        u_half = 0.5 * (float(self._u_grid[-2]) + float(self._u_grid[-1]))
+        v_half = 0.5 * (float(self._v_grid[0]) + float(self._v_grid[1]))
+
+        coeff_a = p_half * u_half + q_half * (1.0 - v_half) + c_ab - c_ba
+        flux_term = D_p[-1] * grad_left + D_q[0] * grad_right
+        coeff_b = dt * flux_term - coeff_a * s_curr
+
+        def coeffsFromMathematicaSolve(
+                cA, cB, 
+                pN, pNPlus1, qPlus1, qPlus2, 
+                uN, uNPlus1, vPlus1, vPlus2, 
+                DANPlushalf, DBOnePlushalf,
+                told, tnew,
+                sold,
+                R
+        ):
+            
+            pNPlushalf = (pN + pNPlus1)/2
+            qOnePlushalf = (qPlus1 + qPlus2)/2
+            uNPlushalf = (uN + uNPlus1)/2
+            vOnePlushalf = (vPlus1 + vPlus2)/2
+
+            # a = cA + qOnePlushalf - (cA * uNPlushalf) + (pNPlushalf * uNPlushalf) - (cB * vOnePlushalf) - (qOnePlushalf * vOnePlushalf)
+            a = cA - qOnePlushalf - (cA * uNPlushalf) + (pNPlushalf * uNPlushalf) - (cB * vOnePlushalf) + (qOnePlushalf * vOnePlushalf)
+            b = ((DANPlushalf*pNPlus1*tnew)/(sold * (-uN+uNPlus1))) + \
+            ((DANPlushalf*pN*told)/(sold *(-uN+uNPlus1))) + \
+            ((DANPlushalf*pN*tnew)/(sold*uN - sold*uNPlus1)) + \
+            ((DANPlushalf*pNPlus1*told)/(sold*uN - sold*uNPlus1)) + \
+            (cA*sold * (-1+uNPlushalf)) + \
+            -((pNPlushalf*sold*tnew*uNPlushalf)/(tnew-told)) + \
+            ((pNPlushalf*sold*told*uNPlushalf)/(tnew-told)) + \
+            (-qOnePlushalf*sold * (-1+vOnePlushalf)) + \
+            (cB*sold*vOnePlushalf) + \
+            -((DBOnePlushalf*qPlus1*tnew)/((R-sold)*(vPlus1-vPlus2))) + \
+            -((DBOnePlushalf*qPlus2*told)/((R-sold)*(vPlus1-vPlus2))) + \
+            -((DBOnePlushalf*qPlus2*tnew)/((R-sold)*(-vPlus1+vPlus2))) + \
+            -((DBOnePlushalf*qPlus1*told)/((R-sold)*(-vPlus1+vPlus2)))
+
+            return a, b, -b/a
+        
+        vals = {
+            "cA": c_ab,
+            "cB": c_ba,
+            "pN": p[-2],
+            "pNPlus1": p[-1],
+            "qPlus1": q[0],
+            "qPlus2": q[1],
+            "uN": self._u_grid[-2],
+            "uNPlus1": self._u_grid[-1],
+            "vPlus1": self._v_grid[0],
+            "vPlus2": self._v_grid[1],
+            "DANPlushalf": D_p[-1],
+            "DBOnePlushalf": D_q[0],
+            "told": 0.0010539198280561037,
+            "tnew": 0.0010539198280561037 + dt,
+            "sold": s_curr,
+            "R": self.mesh.zlim[0][-1],
+        }
+
+        a, b, _ = coeffsFromMathematicaSolve(**vals)
+            
+            
+
+        # return float(coeff_a), float(coeff_b)
+        return float(a), float(b)
+
+   
+
+    def _compute_next_interface_position(self, p, q, s_curr, dt, told, grad_left, grad_right, D_p, D_q):
+        """
+        Returns the next planar interface position using Eq. (12) -> Eq. (38).
+
+        The Olaye/Ojo planar update is a root of the linear polynomial
+        ``a_1 s^(k+1) + b_1 = 0``. This is not the generic Euler interface step
+        ``s^(k+1) = s^k + dt * v``; the half-cell concentration terms from Eq. (12)
+        contribute directly to ``a_1``.
+        """
+        coeff_a, coeff_b = self._planar_interface_root_coefficients(
+            p, q, s_curr, dt, told, grad_left, grad_right, D_p, D_q
+        )
+        if abs(coeff_a) <= 1e-15:
+            s_new = s_curr
+            coeff_a = 1.0
+            coeff_b = -s_curr
+        else:
+            s_new = -coeff_b / coeff_a
+        self._lastInterfaceCoefficients = (float(coeff_a), float(coeff_b))
+        return self._clipInterfacePosition(float(s_new), strict=True)
+
     def _computeDt(self, t, s, D_p, D_q, velocity):
         left_len = max(s, 1e-15)
         right_len = max(self._R - s, 1e-15)
@@ -417,35 +599,53 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self._pendingDtSemi = float(dt_semi)
 
         if self.dtMode == "semi_log_optional":
-            dt_raw = min(dt_diff, dt_move, dt_semi, getattr(self, "deltaTime", np.inf))
+            dt_raw = dt_semi
         else:
             dt_raw = min(dt_diff, dt_move, getattr(self, "deltaTime", np.inf))
 
-        dt_floor = max(1e-15, float(getattr(self, "deltaTime", 1.0)) * 1e-8)
-        return max(float(dt_raw), dt_floor)
+        # dt_floor = max(1e-15, float(getattr(self, "deltaTime", 1.0)) * 1e-12)
+        if dt_raw < 1e-15:
+            debugInPlace()
+            raise ValueError("Computed time step is too small: {}".format(dt_raw))
+        dt = dt_raw
+        self._currentPaperDt = float(dt)
+        return dt
 
-    def _advective_term_p(self, p, sdot, s):
+    def _winding_coefficients_from_interface_step(self, s_new, s_curr):
+        """
+        Returns the paper-style winding coefficients for the advective term.
+
+        The paper defines ``a`` and ``b`` as stepwise constants that are either
+        1 or 0 depending on the winding direction. We determine that direction
+        from the interface motion implied by Eq. (12), i.e. from the sign of
+        ``s^{k+1} - s^k``.
+        """
+        ds = float(s_new - s_curr)
+        if ds >= 0:
+            return 1.0, 0.0
+        return 0.0, 1.0
+
+    def _upwind_gradient(self, values, i, step, a, b):
+        face_plus = a * values[i] + b * values[i + 1]
+        face_minus = a * values[i - 1] + b * values[i]
+        return (face_plus - face_minus) / step
+
+    def _advective_term_p(self, p, sdot, s, a, b):
         out = np.zeros_like(p, dtype=np.float64)
         p_bc, _ = self._apply_boundary_conditions(p, self._q_curr if self._q_curr is not None else self._q_prev)
         for i in range(1, len(p_bc) - 1):
             a_i = (self._u_grid[i] * sdot) / max(s, 1e-15)
-            if a_i >= 0:
-                grad = (p_bc[i] - p_bc[i - 1]) / self._du
-            else:
-                grad = (p_bc[i + 1] - p_bc[i]) / self._du
+            grad = self._upwind_gradient(p_bc, i, self._du, a, b)
             out[i] = a_i * grad
         return out
 
-    def _advective_term_q(self, q, sdot, s):
+    def _advective_term_q(self, q, sdot, s, a, b):
         out = np.zeros_like(q, dtype=np.float64)
         _, q_bc = self._apply_boundary_conditions(self._p_curr if self._p_curr is not None else self._p_prev, q)
         scale = max(self._R - s, 1e-15)
         for i in range(1, len(q_bc) - 1):
-            a_i = -((1.0 - self._v_grid[i]) * sdot) / scale
-            if a_i >= 0:
-                grad = (q_bc[i] - q_bc[i - 1]) / self._dv
-            else:
-                grad = (q_bc[i + 1] - q_bc[i]) / self._dv
+            a_i = ((1.0 - self._v_grid[i]) * sdot) / scale
+            grad = self._upwind_gradient(q_bc, i, self._dv, a, b)
             out[i] = a_i * grad
         return out
 
@@ -460,22 +660,22 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             out[i] = (d_e * (c_bc[i + 1] - c_bc[i]) - d_w * (c_bc[i] - c_bc[i - 1])) / (scale2 * h2)
         return out
 
-    def _classical_explicit_phase_update(self, p, q, s, dt, sdot, D_p, D_q):
+    def _classical_explicit_phase_update(self, p, q, s, dt, sdot, D_p, D_q, a, b):
         p_bc, q_bc = self._apply_boundary_conditions(p, q)
-        p_rhs = self._advective_term_p(p_bc, sdot, s) + self._diffusion_term(p_bc, D_p, s, self._du)
-        q_rhs = self._advective_term_q(q_bc, sdot, s) + self._diffusion_term(q_bc, D_q, self._R - s, self._dv)
+        p_rhs = self._advective_term_p(p_bc, sdot, s, a, b) + self._diffusion_term(p_bc, D_p, s, self._du)
+        q_rhs = self._advective_term_q(q_bc, sdot, s, a, b) + self._diffusion_term(q_bc, D_q, self._R - s, self._dv)
 
         p_new = p_bc + dt * p_rhs
         q_new = q_bc + dt * q_rhs
         return self._apply_boundary_conditions(p_new, q_new)
 
-    def _lfdf_phase_update(self, p_prev, p_curr, q_prev, q_curr, s, dt, sdot, D_p, D_q):
+    def _lfdf_phase_update(self, p_prev, p_curr, q_prev, q_curr, s, dt, sdot, D_p, D_q, a, b):
         p_old, q_old = self._apply_boundary_conditions(p_curr, q_curr)
         p_new = p_old.copy()
         q_new = q_old.copy()
 
-        adv_p = self._advective_term_p(p_old, sdot, s)
-        adv_q = self._advective_term_q(q_old, sdot, s)
+        adv_p = self._advective_term_p(p_old, sdot, s, a, b)
+        adv_q = self._advective_term_q(q_old, sdot, s, a, b)
 
         left_scale = max(s, 1e-15)
         right_scale = max(self._R - s, 1e-15)
@@ -532,6 +732,9 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
     def _computeState(self, t, xCurr):
         p_curr = np.asarray(xCurr[0], dtype=np.float64).reshape(-1)
         q_curr = np.asarray(xCurr[1], dtype=np.float64).reshape(-1)
+        # if (p_curr[:-1]<0.12).any():
+        # if (p_curr[:-1]<0.10223).any():
+        #     debugInPlace()
         s_curr = self._clipInterfacePosition(float(xCurr[2]))
         p_curr, q_curr = self._apply_boundary_conditions(p_curr, q_curr)
 
@@ -540,14 +743,17 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         dt = self._computeDt(t, s_curr, D_p, D_q, velocity)
         self._currdt = float(dt)
 
-        s_new = self._clipInterfacePosition(s_curr + dt * velocity, strict=True)
+        
+        s_new = self._compute_next_interface_position(p_curr, q_curr, s_curr, dt, t, grad_left, grad_right, D_p, D_q)
         sdot = (s_new - s_curr) / dt
+        a_wind, b_wind = self._winding_coefficients_from_interface_step(s_new, s_curr)
+        self._lastWindingAB = (float(a_wind), float(b_wind))
 
         if self._stepIndex == 0 or self.mainStepMode == "classical_explicit":
-            p_new, q_new = self._classical_explicit_phase_update(p_curr, q_curr, s_curr, dt, sdot, D_p, D_q)
-            self._lastStepScheme = "classical_explicit"
+            p_new, q_new = self._classical_explicit_phase_update(p_curr, q_curr, s_curr, dt, sdot, D_p, D_q, a_wind, b_wind)
+            self._lastStepScheme = "bootstrap_classical_explicit" if self._stepIndex == 0 else "classical_explicit"
         else:
-            p_new, q_new = self._lfdf_phase_update(self._p_prev, p_curr, self._q_prev, q_curr, s_curr, dt, sdot, D_p, D_q)
+            p_new, q_new = self._lfdf_phase_update(self._p_prev, p_curr, self._q_prev, q_curr, s_curr, dt, sdot, D_p, D_q, a_wind, b_wind)
             self._lastStepScheme = "leapfrog_dufort_frankel"
 
         p_new = np.clip(p_new, self.constraints.minComposition, 1 - self.constraints.minComposition)
