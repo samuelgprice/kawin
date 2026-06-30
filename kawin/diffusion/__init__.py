@@ -3,5 +3,6 @@ from .Homogenization import HomogenizationModel
 from .MovingBoundary import MovingBoundary1DModel
 from .MovingBoundaryFDM import MovingBoundaryFD1DModel
 from .MovingBoundaryOlayeFDM import MovingBoundaryOlayeFD1DModel
+from .MovingBoundaryOlayeFDM_rework import MovingBoundaryOlayeFD1DReworkModel
 from .DiffusionParameters import HashTable, TemperatureParameters, computeMobility
 from .HomogenizationParameters import HomogenizationParameters, computeHomogenizationFunction

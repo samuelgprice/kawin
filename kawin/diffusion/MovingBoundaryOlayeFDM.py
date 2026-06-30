@@ -124,6 +124,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
     ):
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceData = _ScalarHistory(record)
+        self.concData = _ScalarHistory(record)
         self.interfaceCompositions = tuple(float(v) for v in interface_compositions)
         self.firstStepMode = str(first_step_mode)
         self.mainStepMode = str(main_step_mode)
@@ -147,6 +148,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self._currentPaperDt = np.inf
         self._stepIndex = 0
 
+        self._t_prev = None
         self._p_prev = None
         self._p_curr = None
         self._q_prev = None
@@ -204,8 +206,8 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
                 f"geometry='{self.geometry}' is documented but not implemented yet for "
                 "MovingBoundaryOlayeFD1DModel."
             )
-        if not (0 < self.semiLogT0 < 1):
-            raise ValueError("semiLogT0 must be between 0 and 1.")
+        if not (0 < self.semiLogT0):
+            raise ValueError("semiLogT0 must be positive.")
         if self.phaseANodes is not None and self.phaseANodes < 3:
             raise ValueError("phase_a_nodes must be at least 3 when specified.")
         if self.phaseBNodes is not None and self.phaseBNodes < 3:
@@ -253,6 +255,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         super().reset()
         self.interfaceData.reset()
         self.interfaceData.record(0, self.initialInterfacePosition)
+        self.concData.reset()
         self._currdt = np.inf
         self._pendingDtDiff = np.inf
         self._pendingDtMove = np.inf
@@ -314,6 +317,9 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
 
         self.data.currentY = self._reconstruct_physical_profile(self._p_curr, self._q_curr, s0)[:, np.newaxis]
         self._initialInventory = self.getTotalInventory(time=0)
+        averageConc = self.checkMassIntegral(p=self._p_curr.copy(), q=self._q_curr.copy(), s=self._s_curr)
+        self.concData.record(0, averageConc)
+
 
     def solve(self, simTime, iterator=explicitEulerIterator, verbose=False, vIt=10, minDtFrac=1e-8, maxDtFrac=1):
         """
@@ -485,9 +491,9 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         u_half = 0.5 * (float(self._u_grid[-2]) + float(self._u_grid[-1]))
         v_half = 0.5 * (float(self._v_grid[0]) + float(self._v_grid[1]))
 
-        coeff_a = p_half * u_half + q_half * (1.0 - v_half) + c_ab - c_ba
-        flux_term = D_p[-1] * grad_left + D_q[0] * grad_right
-        coeff_b = dt * flux_term - coeff_a * s_curr
+        # coeff_a = p_half * u_half + q_half * (1.0 - v_half) + c_ab - c_ba
+        # flux_term = D_p[-1] * grad_left + D_q[0] * grad_right
+        # coeff_b = dt * flux_term - coeff_a * s_curr
 
         def coeffsFromMathematicaSolve(
                 cA, cB, 
@@ -535,10 +541,12 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             "vPlus2": self._v_grid[1],
             "DANPlushalf": D_p[-1],
             "DBOnePlushalf": D_q[0],
-            "told": 0.0010539198280561037,
-            "tnew": 0.0010539198280561037 + dt,
+            # "told": 0.0010539198280561037,
+            # "tnew": 0.0010539198280561037 + dt,
+            "told": told,
+            "tnew": told + dt,
             "sold": s_curr,
-            "R": self.mesh.zlim[0][-1],
+            "R": self._R,
         }
 
         a, b, _ = coeffsFromMathematicaSolve(**vals)
@@ -563,46 +571,67 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             p, q, s_curr, dt, told, grad_left, grad_right, D_p, D_q
         )
         if abs(coeff_a) <= 1e-15:
-            s_new = s_curr
-            coeff_a = 1.0
-            coeff_b = -s_curr
+            raise ValueError("abs(coeff_a) <= 1e-15")
+            # s_new = s_curr
+            # coeff_a = 1.0
+            # coeff_b = -s_curr
         else:
             s_new = -coeff_b / coeff_a
         self._lastInterfaceCoefficients = (float(coeff_a), float(coeff_b))
         return self._clipInterfacePosition(float(s_new), strict=True)
 
     def _computeDt(self, t, s, D_p, D_q, velocity):
-        left_len = max(s, 1e-15)
-        right_len = max(self._R - s, 1e-15)
-        left_dx = left_len * self._du
-        right_dx = right_len * self._dv
+        if self._stepIndex == 0 or self.mainStepMode == "classical_explicit":
+            left_len = max(s, 1e-15)
+            right_len = max(self._R - s, 1e-15)
+            left_dx = left_len * self._du
+            right_dx = right_len * self._dv
 
-        diff_terms = []
-        if np.any(np.abs(D_p) > 0):
-            diff_terms.append(self.constraints.vonNeumannThreshold * left_dx * left_dx / float(np.max(np.abs(D_p))))
-        if np.any(np.abs(D_q) > 0):
-            diff_terms.append(self.constraints.vonNeumannThreshold * right_dx * right_dx / float(np.max(np.abs(D_q))))
-        dt_diff = min(diff_terms) if diff_terms else np.inf
+            diff_terms = []
+            if np.any(np.abs(D_p) > 0):
+                diff_terms.append(self.constraints.vonNeumannThreshold * left_dx * left_dx / float(np.max(np.abs(D_p))))
+            if np.any(np.abs(D_q) > 0):
+                diff_terms.append(self.constraints.vonNeumannThreshold * right_dx * right_dx / float(np.max(np.abs(D_q))))
+            dt_diff = min(diff_terms) if diff_terms else np.inf
 
-        adv_terms = []
-        left_adv = abs(velocity) / left_len
-        right_adv = abs(velocity) / right_len
-        if left_adv > 0:
-            adv_terms.append(self.constraints.movingBoundaryThreshold / left_adv)
-        if right_adv > 0:
-            adv_terms.append(self.constraints.movingBoundaryThreshold / right_adv)
-        dt_move = min(adv_terms) if adv_terms else np.inf
+            adv_terms = []
+            left_adv = abs(velocity) / left_len
+            right_adv = abs(velocity) / right_len
+            if left_adv > 0:
+                adv_terms.append(self.constraints.movingBoundaryThreshold / left_adv)
+            if right_adv > 0:
+                adv_terms.append(self.constraints.movingBoundaryThreshold / right_adv)
+            dt_move = min(adv_terms) if adv_terms else np.inf
+            dt_semi = self._computeSemiLogDt(t)
 
-        dt_semi = self._computeSemiLogDt(t)
+            
+        else:
+            dt_diff = -np.inf
+            dt_move = -np.inf
+            dt_semi = self._computeSemiLogDt(t)
+
         self._pendingDtDiff = float(dt_diff)
         self._pendingDtMove = float(dt_move)
         self._pendingDtSemi = float(dt_semi)
 
+        
         if self.dtMode == "semi_log_optional":
-            dt_raw = dt_semi
+            if self._stepIndex == 0 or self.mainStepMode == "classical_explicit":
+                print(f"dt_semi: {dt_semi}")
+                print(f"dt_diff: {dt_diff}")
+                print(f"dt_move: {dt_move}")
+                if dt_semi >= min(dt_diff, dt_move):
+                    debugInPlace()
+                    raise ValueError("First time step (self.semi_log_dt) should be smaller than the computed CFL time step for stability.")
+                dt_raw = dt_semi
+            else:
+                dt_raw = dt_semi
         else:
+            raise ValueError("I don't think this should be used. I would to need to verify it is done correctly")
             dt_raw = min(dt_diff, dt_move, getattr(self, "deltaTime", np.inf))
-
+        
+        
+        
         # dt_floor = max(1e-15, float(getattr(self, "deltaTime", 1.0)) * 1e-12)
         if dt_raw < 1e-15:
             debugInPlace()
@@ -767,6 +796,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self._lastFluxes = fluxes
         self._lastInterfaceFluxes = (-D_p[-1] * grad_left, -D_q[0] * grad_right)
         self._lastInterfaceVelocity = float(sdot)
+        self._t_prev = t
         return dpdt, dqdt, float(sdot)
 
     def getdXdt(self, t, xCurr):
@@ -789,6 +819,8 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
 
         self.data.record(time, physical)
         self.interfaceData.record(time, s)
+        averageConc = self.checkMassIntegral(p=p, q=q, s=s)
+        self.concData.record(time, averageConc)
 
         self._p_prev = self._p_curr.copy()
         self._q_prev = self._q_curr.copy()
@@ -804,6 +836,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
     def postSolve(self):
         self.data.finalize()
         self.interfaceData.finalize()
+        self.concData.finalize()
 
     def getInterfacePosition(self, time=None):
         return self.interfaceData.y(time)
@@ -857,3 +890,14 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
                 stacklevel=2,
             )
         return drift
+    
+    def checkMassIntegral(self, p, q, s):
+        # debugInPlace()
+        assert ((len(p)-2) * self._du) + self._du/2 + self._du/2 == 1
+        assert ((len(q)-2) * self._dv) + self._dv/2 + self._dv/2 == 1
+
+        left_mass = s * ( (self._du/2)*p[0] + (self._du*p[1:-1]).sum() + (self._du/2)*p[-1] )
+        right_mass = (self._R - s) * ( (self._dv/2)*q[0] + (self._dv*q[1:-1]).sum() + (self._dv/2)*q[-1] )
+        total_mass = left_mass + right_mass
+        total_conc = total_mass/self._R
+        return total_conc

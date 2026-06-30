@@ -28,9 +28,16 @@ import numpy as np
 import pandas as pd
 import time
 
-from kawin.diffusion import MovingBoundaryOlayeFD1DModel, TemperatureParameters
+from kawin.diffusion import (
+    MovingBoundaryOlayeFD1DModel,
+    MovingBoundaryOlayeFD1DReworkModel,
+    TemperatureParameters,
+)
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 from kawin.solver import explicitEulerIterator
+
+# MODEL_VARIANT = "current"
+MODEL_VARIANT = "rework"
 
 def debugInPlace():
     try:
@@ -84,7 +91,16 @@ def solve_beta(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b, left=-1, right=1):
             raise ValueError("Root finding did not converge.")                
 
 
+def calculateCFLConstants(model_input):
+    ID_time_arr = model_input.interfaceData._time[:-1].copy()
+    ID_s_arr = model_input.interfaceData._y[:-1].copy()
+    ID_dt_arr = np.diff(ID_time_arr).copy()
+    D_A = model_input.therm.diffusivities[model_input.therm.phases[0]]
+    # D_B = model_input.therm.diffusivities[model_input.therm.phases[1]]
+    mu_A_arr = ((ID_dt_arr*D_A) / (ID_s_arr[1:]*model_input._du)**2).copy()
+    w_arr = (ID_s_arr[1:]/ID_s_arr[:-1]).copy()
 
+    return w_arr, mu_A_arr
 
 class ConstantBinaryThermodynamics:
     """Minimal binary thermodynamics interface for fixed diffusivity runs."""
@@ -113,6 +129,34 @@ def _load_experimental_csv(path: pathlib.Path):
     return np.asarray(data["time_s"], dtype=np.float64), np.asarray(data["half_width_um"], dtype=np.float64)
 
 
+FIG5_BASE_PARAMS = {
+    "R_um": 3012.5,
+    "s0_um": 12.5,
+    "c_liquid0_pct": 19.0,
+    "c_solid0_pct": 0.0,
+    "c_liquid_int_pct": 10.223,
+    "c_solid_int_pct": 0.166,
+    "D_liquid_base": 500.0,
+    "D_solid_base": 18.0,
+    "D_scale": 1e-12,
+    "n_nodes": 3013 + 1,
+    "t_end_s": 1e2,
+    "dt_mode": "semi_log_optional",
+    "semiLogT0": 1e-6,
+    "exp_csv": r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_PresentModel_curve.csv",
+    "out": None,
+    "show": True,
+}
+
+
+def compute_idealized_conc(params):
+    """Returns the idealized average concentration for the Figure-5 setup."""
+    return (
+        params["s0_um"] * (params["c_liquid0_pct"] / 100.0)
+        + (params["R_um"] - params["s0_um"]) * (params["c_solid0_pct"] / 100.0)
+    ) / params["R_um"]
+
+
 def run_case(
     *,
     R_um: float,
@@ -131,6 +175,7 @@ def run_case(
     # semi_log_points: int,
     semiLog_dt: float,
     semiLogT0: float,
+    model_variant: str,
 
 ):
     """Runs one Figure-5-style simulation and returns time and liquid half-width."""
@@ -239,7 +284,12 @@ def run_case(
     '''
     # debugInPlace()
 
-    model = MovingBoundaryOlayeFD1DModel(
+    model_class = {
+        "current": MovingBoundaryOlayeFD1DModel,
+        "rework": MovingBoundaryOlayeFD1DReworkModel,
+    }[str(model_variant)]
+
+    model = model_class(
         mesh,
         ["NI", "P"],
         ["LIQUID", "SOLID"],
@@ -304,28 +354,12 @@ def build_parser():
 
 def main(n_phase_nodes, semiLog_dt):
     # args = build_parser().parse_args()
-    DEFAULT_FIG5_ARGS = {
-    "R_um": 3012.5,
-    "s0_um": 12.5,
-    "c_liquid0_pct": 19.0,
-    "c_solid0_pct": 0.0,
-    "c_liquid_int_pct": 10.223,
-    "c_solid_int_pct": 0.166,
-    "D_liquid_base": 500.0,
-    "D_solid_base": 18.0,
-    "D_scale": 1e-12,
-    "n_nodes": 3013+1,
-    "n_phase_nodes": n_phase_nodes,
-    "t_end_s": 1e4, # 0.005*3600
-    "dt_mode": "semi_log_optional",
-    # "semi_log_points": semi_log_points,
-    "semiLog_dt": semiLog_dt,
-    "semiLogT0": 1.8e-5,
-    "exp_csv": r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_PresentModel_curve.csv",
-    "out": None,
-    "show": True,
+    args = {
+        **FIG5_BASE_PARAMS,
+        "n_phase_nodes": n_phase_nodes,
+        "semiLog_dt": semiLog_dt,
+        "model_variant": MODEL_VARIANT,
     }
-    args=DEFAULT_FIG5_ARGS.copy()
 
     script_dir = pathlib.Path(__file__).resolve().parent
     out_path = (
@@ -333,7 +367,7 @@ def main(n_phase_nodes, semiLog_dt):
         if args['out'] is not None
         # pathlib.Path(args.out).resolve()
         # if args.out is not None
-        else script_dir / "olaye2020_fig5_replication.png"
+        else script_dir / "Olaye2020\\olaye2020_fig5_replication.png"
     )
 
     t_s, width_um, model = run_case(
@@ -353,6 +387,7 @@ def main(n_phase_nodes, semiLog_dt):
         # semi_log_points=args["semi_log_points"],
         semiLog_dt=args["semiLog_dt"],
         semiLogT0=args["semiLogT0"],
+        model_variant=args["model_variant"],
     )
     # t_h, width_um, model = run_case(
     #     R_um=args.R_um,
@@ -393,10 +428,23 @@ def main(n_phase_nodes, semiLog_dt):
             label="Experimental (digitized)",
         )
 
+    exp_t_s, exp_w_um = _load_experimental_csv(pathlib.Path(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_alt_PresentModelRough2_curve.csv"))
+    exp_mask = np.isfinite(exp_t_s) & np.isfinite(exp_w_um)
+    ax.scatter(
+        exp_t_s[exp_mask],
+        exp_w_um[exp_mask],
+        s=26,
+        color="tab:pink",
+        marker="o",
+        facecolors='none',
+        label="Experimental alt rough (digitized)",
+    )
+
     # ax.set_xlabel("Time (h)")
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Liquid half-width (um)")
-    ax.set_title("Olaye & Ojo (2020) Figure 5 Replication")
+    # ax.set_title("Olaye & Ojo (2020) Figure 5 Replication")
+    ax.set_title(f"n_phase_nodes:{n_phase_nodes}, semiLog_dt:{semiLog_dt:.10f}    {MODEL_VARIANT}")
 
     x_min = float(np.min(t_s_plot))
     x_max = float(np.max(t_s_plot))
@@ -413,13 +461,27 @@ def main(n_phase_nodes, semiLog_dt):
         y_min -= pad_y
         y_max += pad_y
     ax.set_xlim(x_min, x_max)
-    ax.set_ylim(y_min, y_max)
+    # ax.set_ylim(y_min, y_max)
+    ax.set_ylim(12.5, 24) ## hardcode limits to be able to compare graphs by eye more easily
 
     ax.set_xscale('log')
-    ax.set_xlim(0.1, x_max)
+    # ax.set_xlim(0.1, x_max)
+    ax.set_xlim(0.00001, x_max)
 
     ax.grid(True, alpha=0.25)
     ax.legend()
+
+    ax_twin = ax.twinx()
+    ax_twin.set_ylabel('conc', color='green')
+    conc_time_arr = model.concData._time.copy()
+    conc_arr = model.concData._y.copy()
+    ax_twin.plot(conc_time_arr, conc_arr, lw=1.0, color="tab:green", label="Conc")
+    ax_twin.hlines(conc_arr[0], conc_time_arr[0], conc_time_arr[-1], lw=1.0, color="tab:green", linestyle='dashdot', label="Initial conc")
+    idealized_conc = compute_idealized_conc(args)
+    ax_twin.hlines(idealized_conc, conc_time_arr[0], conc_time_arr[-1], lw=1.0, color="tab:green", linestyle='dashed', label="Idealized conc")
+    ax_twin.legend(loc='center right')
+    # ax_twin.set_ylim([0,1])
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
     print(f"Saved: {out_path}")
@@ -435,8 +497,8 @@ def main(n_phase_nodes, semiLog_dt):
 if __name__ == "__main__":
     models={}
     # semi_log_points_inputs = [2500]#, 5000, 10000, 20000, 50000]
-    semiLog_dt_inputs = [0.002763654842561367, 0.002763654842561367/10]#, 5000, 10000, 20000, 50000]
-    n_phase_nodes_inputs = [25+1, 50+1]#, 100+1, 200+1]
+    semiLog_dt_inputs = [0.002763654842561367, 0.002763654842561367/10, 0.002763654842561367/25]#, 0.002763654842561367/10]#, 5000, 10000, 20000, 50000]
+    n_phase_nodes_inputs = [25+1, 50+1, 100+1]#, 50+1]#, 100+1, 200+1]
 
     conds_list=[]
     for semiLog_dt_input in semiLog_dt_inputs:
@@ -492,6 +554,13 @@ if (np.sqrt(fig5_df['time_s'])<x_arr[indexToPlotTo]).any():
     digitizedIndexToPlot = np.max(np.where(np.sqrt(fig5_df['time_s'])<x_arr[indexToPlotTo])[0])
     ax.plot(np.sqrt(fig5_df['time_s'])[:digitizedIndexToPlot], fig5_df['half_width_m'][:digitizedIndexToPlot], 'o', fillstyle='none', color='tab:gray',  label='Fig 5 "Present Model" (digitized)', zorder=-2)
 
+fig5_alt_df = pd.read_csv(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_alt_PresentModelRough_curve.csv")
+fig5_alt_df = fig5_alt_df.sort_values(by=['time_s'])
+fig5_alt_df['half_width_m'] = fig5_alt_df['half_width_um']*1e-6
+if (np.sqrt(fig5_alt_df['time_s'])<x_arr[indexToPlotTo]).any():
+    digitizedAltRoughIndexToPlot = np.max(np.where(np.sqrt(fig5_alt_df['time_s'])<x_arr[indexToPlotTo])[0])
+    ax.plot(np.sqrt(fig5_alt_df['time_s'])[:digitizedAltRoughIndexToPlot], fig5_alt_df['half_width_m'][:digitizedAltRoughIndexToPlot], 'o', fillstyle='none', color='darkgray',  label='Fig 5 "Present Model" alt rough (digitized)', zorder=-2)
+
 with np.load("C:\\Users\\samth\\Downloads\\LeeAndOh_NiP_results_100sec_N3013.npz") as LeeAndOh_NiP_results_loaded:
     LeeAndOh_NiP_results_loaded_df = pd.DataFrame.from_dict({item: LeeAndOh_NiP_results_loaded[item] for item in LeeAndOh_NiP_results_loaded.files}).copy()
 LeeAndOh_NiP_results_loaded_df['half_width_m'] = LeeAndOh_NiP_results_loaded_df['half_width_um'] * 1e-6
@@ -525,6 +594,10 @@ styleDict = {'linewidth':1, 'alpha':0.75}
 plotly_fig = go.Figure()
 indexToPlotTo = -1
 theoreticalMaxLiquidWidth = (0.19 / 0.10223) * 12.5e-6
+model_colorway = [
+    "#3366CC", "#DC3912", "#FF9900", "#109618", "#990099",
+    "#0099C6", "#DD4477", "#66AA00", "#B82E2E", "#316395",
+]
 
 def deltat_to_deltax_ratio(modelDict_input):
     # return (modelDict_input["n_phase_nodes"] - 1) / modelDict_input["semi_log_points"]
@@ -536,14 +609,18 @@ def format_model_label(modelName_input, modelDict_input):
     ratio = deltat_to_deltax_ratio(modelDict_input)
     return f"{modelName_input} (dt/dx={ratio:.6g})"
 
-for modelName, modelDict in models.items():
+for model_idx, (modelName, modelDict) in enumerate(models.items()):
     if 'error' in modelDict:
         print(f"Skipping {modelName} due to error: {modelDict['error']}")
         continue
     model = modelDict['model']
     y_arr = model.interfaceData._y[:model.interfaceData.currentIndex]
     x_arr = np.sqrt(model.interfaceData._time[:model.interfaceData.currentIndex])
+    conc_time_arr = model.concData._time.copy()
+    conc_x_arr = np.sqrt(conc_time_arr)
+    conc_arr = model.concData._y.copy()
     modelLabel = format_model_label(modelName, modelDict)
+    modelColor = model_colorway[model_idx % len(model_colorway)]
     plotly_fig.add_trace(
         go.Scatter(
             x=x_arr[:indexToPlotTo],
@@ -552,18 +629,43 @@ for modelName, modelDict in models.items():
             name=modelLabel,
             meta={
                 "trace_kind": "model",
+                "series_group": "interface",
                 "model_name": modelName,
                 "n_phase_nodes": modelDict["n_phase_nodes"],
                 # "semi_log_points": modelDict["semi_log_points"],
                 "semiLog_dt": modelDict["semiLog_dt"],
                 "deltat_to_deltax_ratio": deltat_to_deltax_ratio(modelDict),
             },
-            line={"width": styleDict["linewidth"]},
+            line={"width": styleDict["linewidth"], "color": modelColor},
             opacity=styleDict["alpha"],
             hovertemplate=(
                 f"{modelLabel}<br>"
                 + "sqrt(time): %{x}<br>"
                 + "Liquid half-width: %{y}<extra></extra>"
+            ),
+        )
+    )
+    plotly_fig.add_trace(
+        go.Scatter(
+            x=conc_x_arr,
+            y=conc_arr,
+            mode="lines",
+            name=f"{modelLabel} conc",
+            meta={
+                "trace_kind": "model",
+                "series_group": "conc",
+                "model_name": modelName,
+                "n_phase_nodes": modelDict["n_phase_nodes"],
+                "semiLog_dt": modelDict["semiLog_dt"],
+                "deltat_to_deltax_ratio": deltat_to_deltax_ratio(modelDict),
+            },
+            yaxis="y2",
+            line={"width": 1.0, "dash": "dash", "color": modelColor},
+            opacity=0.9,
+            hovertemplate=(
+                f"{modelLabel} conc<br>"
+                + "sqrt(time): %{x}<br>"
+                + "Conc: %{y}<extra></extra>"
             ),
         )
     )
@@ -576,7 +678,7 @@ plotly_fig.add_trace(
         y=2 * beta * x_arr[:indexToPlotTo_beta] + model.interfaceData._y[0],
         mode="lines",
         name=f"Analytic Solution, beta={beta}",
-        meta={"trace_kind": "reference"},
+        meta={"trace_kind": "reference", "series_group": "interface"},
         line={"color": "gray", "dash": "dash"},
     )
 )
@@ -592,8 +694,24 @@ if (np.sqrt(fig5_df["time_s"]) < x_arr[indexToPlotTo]).any():
             y=fig5_df["half_width_m"][:digitizedIndexToPlot],
             mode="markers",
             name='Fig 5 "Present Model" (digitized)',
-            meta={"trace_kind": "reference"},
+            meta={"trace_kind": "reference", "series_group": "interface"},
             marker={"color": "gray", "symbol": "circle-open"},
+        )
+    )
+
+fig5_alt_df = pd.read_csv(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_alt_PresentModelRough_curve.csv")
+fig5_alt_df = fig5_alt_df.sort_values(by=["time_s"])
+fig5_alt_df["half_width_m"] = fig5_alt_df["half_width_um"] * 1e-6
+if (np.sqrt(fig5_alt_df["time_s"]) < x_arr[indexToPlotTo]).any():
+    digitizedAltRoughIndexToPlot = np.max(np.where(np.sqrt(fig5_alt_df["time_s"]) < x_arr[indexToPlotTo])[0])
+    plotly_fig.add_trace(
+        go.Scatter(
+            x=np.sqrt(fig5_alt_df["time_s"])[:digitizedAltRoughIndexToPlot],
+            y=fig5_alt_df["half_width_m"][:digitizedAltRoughIndexToPlot],
+            mode="markers",
+            name='Fig 5 "Present Model" alt rough (digitized)',
+            meta={"trace_kind": "reference", "series_group": "interface"},
+            marker={"color": "darkgray", "symbol": "circle-open"},
         )
     )
 
@@ -608,7 +726,7 @@ if (np.sqrt(LeeAndOh_NiP_results_loaded_df["time_s"]) < x_arr[indexToPlotTo]).an
             y=LeeAndOh_NiP_results_loaded_df["half_width_m"][:LeeAndOhIndexToPlot],
             mode="lines",
             name="Lee and Oh calculated results (N=3013)",
-            meta={"trace_kind": "reference"},
+            meta={"trace_kind": "reference", "series_group": "interface"},
             line={"color": "black", "width": styleDict["linewidth"]},
             opacity=styleDict["alpha"],
         )
@@ -625,7 +743,7 @@ if (np.sqrt(LeeAndOh_NiP_results_loaded_df["time_s"]) < x_arr[indexToPlotTo]).an
             y=LeeAndOh_NiP_results_loaded_df["half_width_m"][:LeeAndOhIndexToPlot],
             mode="lines",
             name="Lee and Oh calculated results (N=4500)",
-            meta={"trace_kind": "reference"},
+            meta={"trace_kind": "reference", "series_group": "interface"},
             line={"color": "black", "width": styleDict["linewidth"], "dash": "dot"},
             opacity=styleDict["alpha"],
         )
@@ -639,20 +757,50 @@ plotly_fig.add_hline(
     annotation_position="top left",
 )
 
+idealized_conc = compute_idealized_conc(FIG5_BASE_PARAMS)
+# plotly_fig.add_trace(
+#     go.Scatter(
+#         x=[conc_x_arr[0], conc_x_arr[-1]],
+#         y=[conc_arr[0], conc_arr[0]],
+#         mode="lines",
+#         name="Initial conc",
+#         meta={"trace_kind": "reference"},
+#         yaxis="y2",
+#         line={"color": "#2ca02c", "width": 1.0, "dash": "dashdot"},
+#         hovertemplate="Initial conc<br>sqrt(time): %{x}<br>Conc: %{y}<extra></extra>",
+#     )
+# )
+plotly_fig.add_trace(
+    go.Scatter(
+        x=[conc_x_arr[0], conc_x_arr[-1]],
+        y=[idealized_conc, idealized_conc],
+        mode="lines",
+        name="Idealized conc",
+        meta={"trace_kind": "reference", "series_group": "conc"},
+        yaxis="y2",
+        line={"color": "#2ca02c", "width": 1.0, "dash": "dash"},
+        hovertemplate="Idealized conc<br>sqrt(time): %{x}<br>Conc: %{y}<extra></extra>",
+    )
+)
+
 plotly_fig.update_layout(
     width=1200,
     height=800,
     template="plotly_white",
-    colorway=[
-        "#3366CC", "#DC3912", "#FF9900", "#109618", "#990099",
-        "#0099C6", "#DD4477", "#66AA00", "#B82E2E", "#316395",
-    ],
+    colorway=model_colorway,
     xaxis_title="sqrt(time) [s^0.5]",
     yaxis_title="Liquid half-width [m]",
+    yaxis2={
+        "title": "conc",
+        "overlaying": "y",
+        "side": "right",
+        "showgrid": False,
+    },
     hoverlabel={
         "font_size": 14,
         "namelength": -1,
     },
+    title=f"MODEL_VARIANT: {MODEL_VARIANT}"
 )
 
 plotly_script_dir = pathlib.Path(__file__).resolve().parent
@@ -762,9 +910,17 @@ filter_page_html = f"""<!DOCTYPE html>
           <div class="checkbox-list" id="semiLog_dt-options"></div>
         </section>
       </div>
+      <section class="control-group" style="margin-top: 16px;">
+        <h3>Trace Groups</h3>
+        <div class="checkbox-list">
+          <label><input type="checkbox" id="toggle-interface-traces" checked> Show interface-position traces</label>
+          <label><input type="checkbox" id="toggle-conc-traces" checked> Show concentration traces</label>
+        </div>
+      </section>
       <div class="hint">
         Checked values remain visible. A model trace is shown only when both its `n_phase_nodes`
-        and `semiLog_dt` values are currently selected. Reference curves stay visible.
+        and `semiLog_dt` values are currently selected. The trace-group toggles let you hide or
+        show all interface-position curves and concentration curves independently.
       </div>
     </aside>
     <main class="plot-card">
@@ -809,8 +965,16 @@ filter_page_html = f"""<!DOCTYPE html>
     function updateTraceVisibility() {{
       const selectedNPhaseNodes = getSelectedValues("n_phase_nodes");
       const selectedSemiLogPoints = getSelectedValues("semiLog_dt");
+      const showInterfaceTraces = document.getElementById("toggle-interface-traces").checked;
+      const showConcTraces = document.getElementById("toggle-conc-traces").checked;
       const visibility = plotDiv.data.map((trace) => {{
         const meta = trace.meta || {{}};
+        if (meta.series_group === "interface" && !showInterfaceTraces) {{
+          return false;
+        }}
+        if (meta.series_group === "conc" && !showConcTraces) {{
+          return false;
+        }}
         if (meta.trace_kind !== "model") {{
           return true;
         }}
@@ -822,6 +986,8 @@ filter_page_html = f"""<!DOCTYPE html>
 
     buildCheckboxes("n_phase_nodes-options", "n_phase_nodes", uniqueNPhaseNodes);
     buildCheckboxes("semiLog_dt-options", "semiLog_dt", uniqueSemiLogDt);
+    document.getElementById("toggle-interface-traces").addEventListener("change", updateTraceVisibility);
+    document.getElementById("toggle-conc-traces").addEventListener("change", updateTraceVisibility);
     updateTraceVisibility();
   </script>
 </body>
