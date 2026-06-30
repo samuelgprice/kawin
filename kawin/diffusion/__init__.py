@@ -2,6 +2,7 @@ from .SinglePhase import SinglePhaseModel
 from .Homogenization import HomogenizationModel
 from .MovingBoundary import MovingBoundary1DModel
 from .MovingBoundaryFDM import MovingBoundaryFD1DModel
+from .MovingBoundaryIllingworthFDM import MovingBoundaryIllingworthFD1DModel
 from .MovingBoundaryOlayeFDM import MovingBoundaryOlayeFD1DModel
 from .MovingBoundaryOlayeFDM_rework import MovingBoundaryOlayeFD1DReworkModel
 from .DiffusionParameters import HashTable, TemperatureParameters, computeMobility

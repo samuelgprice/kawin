@@ -4,7 +4,7 @@ import numpy as np
 from numpy.testing import assert_allclose
 import pytest
 
-from kawin.diffusion import SinglePhaseModel, HomogenizationModel, MovingBoundary1DModel, MovingBoundaryFD1DModel, MovingBoundaryOlayeFD1DModel, TemperatureParameters
+from kawin.diffusion import SinglePhaseModel, HomogenizationModel, MovingBoundary1DModel, MovingBoundaryFD1DModel, MovingBoundaryIllingworthFD1DModel, MovingBoundaryOlayeFD1DModel, TemperatureParameters
 from kawin.diffusion.mesh import Cartesian1D, CartesianFD1D, Cylindrical1D, Spherical1D, Cartesian2D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh import ProfileBuilder, StepProfile1D, LinearProfile1D, DiracDeltaProfile, ConstantProfile, GaussianProfile, ExperimentalProfile1D, BoundedEllipseProfile, BoundedRectangleProfile
 from kawin.diffusion.mesh import get_moving_boundary_fd_geometry
@@ -18,7 +18,7 @@ from kawin.diffusion.HomogenizationParameters import HomogenizationParameters, c
 from kawin.thermo import GeneralThermodynamics, MulticomponentThermodynamics
 from kawin.thermo.Surrogate import GeneralSurrogate, BinarySurrogate
 from kawin.tests.datasets import *
-from kawin.solver import explicitEulerIterator
+from kawin.solver import explicitEulerIterator, rk4Iterator
 
 NiCrTherm = GeneralThermodynamics(NICRAL_TDB, ['NI', 'CR'], ['FCC_A1', 'BCC_A2'])
 NiCrAlTherm = GeneralThermodynamics(NICRAL_TDB, ['NI', 'CR', 'AL'], ['FCC_A1', 'BCC_A2'])
@@ -2972,6 +2972,8 @@ def _build_olaye_model(
     geometry="planar",
     diffusivities=None,
     record=True,
+    semi_log_points=120,
+    semi_log_t0_fraction=1e-6,
 ):
     profile = ProfileBuilder([(StepProfile1D(interface_position, 0.2, 0.8), 'CR')])
     mesh = CartesianFD1D(['CR'], [0, 1], 81)
@@ -2995,7 +2997,8 @@ def _build_olaye_model(
         main_step_mode=main_step_mode,
         dt_mode=dt_mode,
         geometry=geometry,
-        semi_log_points=120,
+        semi_log_points=semi_log_points,
+        semi_log_t0_fraction=semi_log_t0_fraction,
         record=record,
     )
     return model
@@ -3041,6 +3044,8 @@ def test_olaye_moving_boundary_conservation_constant_and_variable_diffusivity():
             main_step_mode="leapfrog_dufort_frankel",
             dt_mode="cfl",
             geometry="planar",
+            semi_log_points=120,
+            semi_log_t0_fraction=1e-6,
             record=True,
         )
         initial_inventory = model.getTotalInventory()
@@ -3057,6 +3062,33 @@ def test_olaye_moving_boundary_semi_log_dt_mode_runs():
     assert model._pendingDtSemi > 0
     assert np.isfinite(model.getInterfacePosition())
     assert model.interfaceData.N > 2
+
+
+def test_olaye_moving_boundary_requires_explicit_semi_log_controls():
+    profile = ProfileBuilder([(StepProfile1D(0.5, 0.2, 0.8), 'CR')])
+    mesh = CartesianFD1D(['CR'], [0, 1], 81)
+    mesh.setResponseProfile(profile)
+    therm = ConstantBinaryThermodynamics(
+        phases=['ALPHA', 'BETA'],
+        diffusivities={'ALPHA': 1.0e-3, 'BETA': 2.0e-3},
+        interface_compositions=(0.3, 0.7),
+    )
+
+    with pytest.raises(ValueError, match="must be specified explicitly"):
+        MovingBoundaryOlayeFD1DModel(
+            mesh,
+            ['FE', 'CR'],
+            ['ALPHA', 'BETA'],
+            thermodynamics=therm,
+            temperature=TemperatureParameters(1000),
+            interfacePosition=0.5,
+            interface_compositions=(0.3, 0.7),
+            first_step_mode="classical_explicit",
+            main_step_mode="leapfrog_dufort_frankel",
+            dt_mode="cfl",
+            geometry="planar",
+            record=True,
+        )
 
 
 def test_olaye_moving_boundary_stability_comparison_against_classical():
@@ -3098,3 +3130,149 @@ def test_olaye_moving_boundary_paper_style_benchmark_monotonic_and_sqrt_like_gro
     assert abs(s[-1] - s[0]) > 1e-8
 
 
+def test_olaye_moving_boundary_semi_log_schedule_is_monotone():
+    model = _build_olaye_model(dt_mode="semi_log_optional", main_step_mode="leapfrog_dufort_frankel")
+    model.setTimeInfo(0.0, 0.3)
+
+    assert model._semiLogTimes is not None
+    assert len(model._semiLogTimes) == model.semiLogPoints
+    assert np.all(np.diff(model._semiLogTimes) > 0)
+    assert model._semiLogTimes[0] < model._semiLogTimes[-1]
+    assert_allclose(model._semiLogTimes[-1], 0.3, rtol=0, atol=1e-12)
+
+
+def test_olaye_moving_boundary_rejects_non_euler_iterator():
+    model = _build_olaye_model(dt_mode="semi_log_optional", main_step_mode="leapfrog_dufort_frankel")
+
+    with pytest.raises(ValueError, match="supports only explicitEulerIterator"):
+        model.solve(0.05, iterator=rk4Iterator)
+
+
+def test_olaye_moving_boundary_planar_interface_root_matches_paper_coefficients():
+    model = _build_olaye_model(dt_mode="semi_log_optional", main_step_mode="leapfrog_dufort_frankel")
+    model.setup()
+
+    p = model._p_curr.copy()
+    q = model._q_curr.copy()
+    s = float(model._s_curr)
+    D_p, D_q = model._phase_diffusivities(0.0, p, q, s)
+    grad_left, grad_right, _ = model._interface_velocity(p, q, s, D_p, D_q)
+    dt = 1.0e-4
+
+    c_ab, c_ba = model.interfaceCompositions
+    p_half = 0.5 * (p[-2] + c_ab)
+    q_half = 0.5 * (c_ba + q[1])
+    u_half = 0.5 * (model._u_grid[-2] + model._u_grid[-1])
+    v_half = 0.5 * (model._v_grid[0] + model._v_grid[1])
+    expected_a = p_half * u_half + q_half * (1.0 - v_half) + c_ab - c_ba
+    expected_b = dt * (D_p[-1] * grad_left + D_q[0] * grad_right) - expected_a * s
+
+    s_new = model._compute_next_interface_position(p, q, s, dt, grad_left, grad_right, D_p, D_q)
+    assert_allclose(model._lastInterfaceCoefficients[0], expected_a, rtol=0, atol=1e-12)
+    assert_allclose(model._lastInterfaceCoefficients[1], expected_b, rtol=0, atol=1e-12)
+    assert_allclose(s_new, -expected_b / expected_a, rtol=0, atol=1e-12)
+    assert_allclose(model._lastInterfaceCoefficients[0] * s_new + model._lastInterfaceCoefficients[1], 0.0, rtol=0, atol=1e-12)
+
+
+def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, **kwargs):
+    params = {
+        "s0": 1.0,
+        "R": 5.0,
+        "n_alpha": 100,
+        "d_alpha": 1.0e-7,
+        "initial_alpha": 0.8,
+        "interface_alpha": 0.6,
+        "n_beta": 100,
+        "d_beta": 1.0e-5,
+        "initial_beta": 0.4,
+        "interface_beta": 0.0,
+        "time_step": 0.1,
+        "tolerance": 1.0e-8,
+        "geometry": "planar",
+    }
+    params.update(kwargs)
+    profile = ProfileBuilder([(StepProfile1D(params["s0"], params["initial_alpha"], params["initial_beta"]), "CR")])
+    mesh = CartesianFD1D(["CR"], [0.0, params["R"]], 501)
+    mesh.setResponseProfile(profile)
+    therm = therm_class(
+        phases=["ALPHA", "BETA"],
+        diffusivities={"ALPHA": params["d_alpha"], "BETA": params["d_beta"]},
+        interface_compositions=(params["interface_alpha"], params["interface_beta"]),
+    )
+    return MovingBoundaryIllingworthFD1DModel(
+        mesh,
+        ["NI", "CR"],
+        ["ALPHA", "BETA"],
+        thermodynamics=therm,
+        temperature=TemperatureParameters(1000.0),
+        interfacePosition=params["s0"],
+        interface_compositions=(params["interface_alpha"], params["interface_beta"]),
+        time_step=params["time_step"],
+        geometry=params["geometry"],
+        phase_a_nodes=params["n_alpha"],
+        phase_b_nodes=params["n_beta"],
+        tolerance=params["tolerance"],
+        record=True,
+    )
+
+
+def test_illingworth_moving_boundary_guards():
+    with pytest.raises(NotImplementedError, match="only planar"):
+        _build_illingworth_default_model(geometry="spherical")
+    with pytest.raises(ValueError, match="time_step"):
+        _build_illingworth_default_model(time_step=0.0)
+    with pytest.raises(ValueError, match="phase_a_nodes"):
+        _build_illingworth_default_model(n_alpha=2)
+    with pytest.raises(ValueError, match="constant diffusivity"):
+        _build_illingworth_default_model(therm_class=VariableBinaryThermodynamics).solve(0.1, iterator=explicitEulerIterator)
+
+    model = _build_illingworth_default_model()
+    with pytest.raises(ValueError, match="explicitEulerIterator"):
+        model.solve(0.1, iterator=rk4Iterator)
+
+
+def test_illingworth_default_planar_case_regression():
+    model = _build_illingworth_default_model()
+    model.solve(1.0, iterator=explicitEulerIterator, minDtFrac=1e-14)
+
+    t = model.interfaceData._time[: model.interfaceData.N + 1]
+    s = model.interfaceData._y[: model.interfaceData.N + 1]
+    expected_t = np.linspace(0.0, 1.0, 11)
+    expected_s = np.array(
+        [
+            1.0,
+            1.0000498907689606,
+            1.0000996876816444,
+            1.0001493912089776,
+            1.0001990018180928,
+            1.0002485199723707,
+            1.0002979461314816,
+            1.0003472807514266,
+            1.0003965242845785,
+            1.0004456771797203,
+            1.0004947398820860,
+        ],
+        dtype=np.float64,
+    )
+    assert_allclose(t, expected_t, rtol=0.0, atol=1e-12)
+    assert_allclose(s, expected_s, rtol=0.0, atol=5e-12)
+
+
+def test_illingworth_default_planar_case_conservation():
+    model = _build_illingworth_default_model()
+    model.solve(1.0, iterator=explicitEulerIterator, minDtFrac=1e-14)
+
+    assert model._lastImplicitIterations >= 2
+    assert model.checkConservation(1e-10) < 1e-10
+
+
+def test_illingworth_cpp_reference_comparison():
+    try:
+        from examples.Illingworth2005.compare_illingworth2005_planar import compare_default_case
+
+        comparison = compare_default_case()
+    except (FileNotFoundError, RuntimeError, PermissionError) as exc:
+        pytest.skip(f"Authors' C++ comparison unavailable: {exc}")
+
+    assert comparison["max_abs_diff"] < 5e-7
+    assert comparison["max_rel_diff"] < 5e-7
