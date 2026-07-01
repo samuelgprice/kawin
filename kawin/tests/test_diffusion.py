@@ -3264,6 +3264,11 @@ def test_illingworth_default_planar_case_conservation():
 
     assert model._lastImplicitIterations >= 2
     assert model.checkConservation(1e-10) < 1e-10
+    expected_average = model.checkMassIntegral(model._p_curr, model._q_curr, model._s_curr)
+    assert_allclose(model.concData.y(), expected_average, rtol=0.0, atol=1e-14)
+    recorded_average = model.concData._y[: model.concData.N + 1]
+    assert_allclose(recorded_average, recorded_average[0], rtol=0.0, atol=1e-10)
+    assert_allclose(model.getTotalInventory(time=0.5), recorded_average[0] * model._R, rtol=0.0, atol=1e-10)
 
 
 def test_illingworth_cpp_reference_comparison():
@@ -3274,5 +3279,8 @@ def test_illingworth_cpp_reference_comparison():
     except (FileNotFoundError, RuntimeError, PermissionError) as exc:
         pytest.skip(f"Authors' C++ comparison unavailable: {exc}")
 
-    assert comparison["max_abs_diff"] < 5e-7
-    assert comparison["max_rel_diff"] < 5e-7
+    # The MAP code writes results.txt with "%lg", so the parsed C++ reference
+    # has about six significant digits even though the internal calculation is
+    # double precision.
+    assert comparison["max_abs_diff"] < 5e-6
+    assert comparison["max_rel_diff"] < 5e-6

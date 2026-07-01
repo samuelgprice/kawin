@@ -14,6 +14,17 @@ from kawin.diffusion.mesh.MovingBoundaryIllingworthFD1D import (
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
 
+def debugInPlace():
+    try:
+        import debugpy
+        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+        debugpy.listen(5678)
+        print("Waiting for debugger attach")
+        debugpy.wait_for_client()
+        debugpy.breakpoint()
+        print('break on this line')
+    except:
+        pass
 
 class _ScalarHistory:
     def __init__(self, record: bool | int = False):
@@ -236,7 +247,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         physical = self._reconstruct_physical_profile(self._p_curr, self._q_curr, s0)[:, np.newaxis]
         self.data.currentY = physical
         self._initialInventory = self.getTotalInventoryFromState(self._p_curr, self._q_curr, self._s_curr)
-        self.concData.record(0, self._initialInventory / self._R)
+        self.concData.record(0, self.checkMassIntegral(self._p_curr, self._q_curr, self._s_curr))
 
     def _initialize_transformed_state(self, composition, interface_position):
         c = np.asarray(composition, dtype=np.float64).reshape(-1)
@@ -497,7 +508,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         physical = self._reconstruct_physical_profile(p, q, s)[:, np.newaxis]
         self.data.record(time, physical)
         self.interfaceData.record(time, s)
-        self.concData.record(time, self.getTotalInventoryFromState(p, q, s) / self._R)
+        self.concData.record(time, self.checkMassIntegral(p, q, s))
 
         self._s_old = float(self._s_curr)
         self._p_curr = p
@@ -527,6 +538,8 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     def getTotalInventory(self, time=None):
         if time is None:
             return self.getTotalInventoryFromState(self._p_curr, self._q_curr, self._s_curr)
+        if self.concData is not None:
+            return self.concData.y(time) * self._R
         composition = np.asarray(self.data.y(time), dtype=np.float64).reshape(-1)
         return float(np.trapezoid(composition, self._z))
 
@@ -552,3 +565,29 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
                 stacklevel=2,
             )
         return drift
+
+    def checkMassIntegral_old(self, p, q, s):
+        """
+        Returns the conserved average composition of the transformed state.
+
+        Illingworth's planar scheme conserves solute in the Landau coordinates,
+        so the numerically meaningful inventory is
+        ``s int_0^1 p du + (R-s) int_0^1 q dv``. This helper records the
+        corresponding average composition, matching ``concData`` in the Olaye
+        model while avoiding any extra interpolation through the physical mesh.
+        """
+        total_mass = self.getTotalInventoryFromState(p, q, s)
+        return float(total_mass / self._R)
+    
+    def checkMassIntegral(self, p, q, s):
+        # debugInPlace()
+        [du] = np.unique(np.diff(self._u_grid.copy()).round(15)).tolist()
+        [dv] = np.unique(np.diff(self._v_grid.copy()).round(15)).tolist()
+        assert abs((((len(p)-2) * du) + du/2 + du/2)-1)<1e-10
+        assert abs((((len(q)-2) * dv) + dv/2 + dv/2)-1)<1e-10
+
+        left_mass = s * ( (du/2)*p[0] + (du*p[1:-1]).sum() + (du/2)*p[-1] )
+        right_mass = (self._R - s) * ( (dv/2)*q[0] + (dv*q[1:-1]).sum() + (dv/2)*q[-1] )
+        total_mass = left_mass + right_mass
+        total_conc = total_mass/self._R
+        return total_conc
