@@ -53,12 +53,28 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
         return 1.0, 0.0
         # return 0.0, 1.0
 
-    def _wound_face_values(self, values, a, b):
+    def _wound_face_values(self, values, a, b, pq_str):
         """
         Builds the wound face concentrations used in Eq. (17).
         """
         values = np.asarray(values, dtype=np.float64)
+        # debugInPlace()
+        ## For actual wound face values use this
+        self.forceHalfNodeValues_HACK=False
         return a * values[:-1] + b * values[1:]
+        ## HACK: for testing half-node values instead of wound face values
+        raise ValueError("THIS HACK DOES NOT ACTUALLY CHANGE THE LFDF PHASE UPDATE!!")
+        # self.forceHalfNodeValues_HACK=True
+        # # return (values[:-1] + values[1:])/2
+        # valsToReturn = a * values[:-1] + b * values[1:]
+        # if pq_str=='p':
+        #     valsToReturn[-1]=(values[-2]+values[-1])/2
+        # elif pq_str=='q':
+        #     valsToReturn[0]=(values[0]+values[1])/2
+        # else:
+        #     raise ValueError("Invalid pq_str. Must be 'p' or 'q'.")
+        # return valsToReturn
+
 
     def _half_node_diffusivities(self, values, temperatures, phase):
         """
@@ -178,13 +194,14 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
         p_k_i = p_curr.copy()
         p_k_iPlus1[:-1] = p_k_i[1:].copy()
         p_k_iMinus1[1:] = p_k_i[:-1].copy()
-        p_k_iPlusHalf[:-1] = self._wound_face_values(p_k_i, a, b)
+        p_k_iPlusHalf[:-1] = self._wound_face_values(p_k_i, a, b, 'p')
         # p_k_iPlusHalf[:-1] = (p_k_i[:-1] + p_k_i[1:])/2
         p_k_iMinusHalf = np.roll(p_k_iPlusHalf, 1)
-        if s_next>s_curr:
-            assert all([p_k_iPlusHalf[i] == p_curr[i+1] for i in range(len(p_curr)-1)]) == True
-        else:
-            assert all([p_k_iPlusHalf[i] == p_curr[i] for i in range(len(p_curr)-1)]) == True
+        if not self.forceHalfNodeValues_HACK:
+            if s_next>s_curr:
+                assert all([p_k_iPlusHalf[i] == p_curr[i+1] for i in range(len(p_curr)-1)]) == True
+            else:
+                assert all([p_k_iPlusHalf[i] == p_curr[i] for i in range(len(p_curr)-1)]) == True
         
         u_iPlusHalf[:-1] = (self._u_grid[:-1] + self._u_grid[1:])/2
         u_iMinusHalf = np.roll(u_iPlusHalf, 1)
@@ -227,13 +244,14 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
         q_k_i = q_curr.copy()
         q_k_iPlus1[:-1] = q_k_i[1:].copy()
         q_k_iMinus1[1:] = q_k_i[:-1].copy()
-        q_k_iPlusHalf[:-1] = self._wound_face_values(q_k_i, a, b)
+        q_k_iPlusHalf[:-1] = self._wound_face_values(q_k_i, a, b, 'q')
         # q_k_iPlusHalf[:-1] = (q_k_i[:-1] + q_k_i[1:])/2
         q_k_iMinusHalf = np.roll(q_k_iPlusHalf, 1)
-        if s_next>s_curr:
-            assert all([q_k_iPlusHalf[i] == q_curr[i+1] for i in range(len(q_curr)-1)]) == True
-        else:
-            assert all([q_k_iPlusHalf[i] == q_curr[i] for i in range(len(q_curr)-1)]) == True
+        if not self.forceHalfNodeValues_HACK:
+            if s_next>s_curr:
+                assert all([q_k_iPlusHalf[i] == q_curr[i+1] for i in range(len(q_curr)-1)]) == True
+            else:
+                assert all([q_k_iPlusHalf[i] == q_curr[i] for i in range(len(q_curr)-1)]) == True
         
         v_iPlusHalf[:-1] = (self._v_grid[:-1] + self._v_grid[1:])/2
         v_iMinusHalf = np.roll(v_iPlusHalf, 1)
@@ -379,7 +397,13 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
         delta_t0 = t_kPlus1 - t_kMinus1
         delta_tPlus = t_kPlus1 - t_k
         delta_tMinus = t_k - t_kMinus1
-        
+        ## Non-uniform timesteps
+        t_plus_deltaRatio = delta_tPlus / delta_t0
+        t_minus_deltaRatio = delta_tMinus / delta_t0
+        ## HACK: Pretend timesteps are uniform
+        # raise
+        # t_plus_deltaRatio = 1/2
+        # t_minus_deltaRatio = 1/2
 
 
         uShape_nan_arr = np.full(self._u_grid.shape, np.nan)
@@ -396,7 +420,7 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
         r_kPlus1_iMinusHalf = s_next * u_iMinusHalf
         r_kMinus1_iPlusHalf = s_prev * u_iPlusHalf
         r_kMinus1_iMinusHalf = s_prev * u_iMinusHalf
-
+        
         assert all([u_iPlusHalf[i]==((self._u_grid[i] + self._u_grid[i+1])/2) for i in range(len(self._u_grid)-1)]) == True
         assert all([u_iMinusHalf[i]==((self._u_grid[i-1] + self._u_grid[i])/2) for i in range(1, len(self._u_grid))]) == True
 
@@ -411,19 +435,20 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
 
         p_k_iPlus1 = np.append(p_curr[1:], np.nan).copy()
         p_k_iMinus1 = np.insert(p_curr[:-1], 0, np.nan).copy()
-        p_k_iPlusHalf = uShape_nan_arr.copy()
-        p_k_iPlusHalf[:-1] = self._wound_face_values(p_curr, a, b)
-        if s_next>s_curr:
-            assert all([p_k_iPlusHalf[i] == p_curr[i+1] for i in range(len(p_curr)-1)]) == True
-        else:
-            assert all([p_k_iPlusHalf[i] == p_curr[i] for i in range(len(p_curr)-1)]) == True
+        # p_k_iPlusHalf = uShape_nan_arr.copy()
+        # p_k_iPlusHalf[:-1] = self._wound_face_values(p_curr, a, b, 'p')
+        # if not self.forceHalfNodeValues_HACK:
+        #     if s_next>s_curr:
+        #         assert all([p_k_iPlusHalf[i] == p_curr[i+1] for i in range(len(p_curr)-1)]) == True
+        #     else:
+        #         assert all([p_k_iPlusHalf[i] == p_curr[i] for i in range(len(p_curr)-1)]) == True
 
         
         H_p_k_i = (a*F_p_k_iPlusHalf) - (b*F_p_k_iMinusHalf) - G_p_k_iPlusHalf - G_p_k_iMinusHalf
         # print(f"H_p_k_i.shape: {H_p_k_i.shape}")
 
-        delta_p1 = V_p_kPlus1_i - (delta_tMinus * H_p_k_i)
-        delta_p2 = V_p_kMinus1_i + (delta_tPlus * H_p_k_i)
+        delta_p1 = V_p_kPlus1_i - (t_minus_deltaRatio*delta_t0 * H_p_k_i)
+        delta_p2 = V_p_kMinus1_i + (t_plus_deltaRatio*delta_t0 * H_p_k_i)
         delta_p3 = delta_t0 * (b*F_p_k_iPlusHalf + G_p_k_iPlusHalf)
         delta_p4 = delta_t0 * (G_p_k_iMinusHalf - a*F_p_k_iMinusHalf)
 
@@ -459,18 +484,19 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
 
         q_k_iPlus1 = np.append(q_curr[1:], np.nan).copy()
         q_k_iMinus1 = np.insert(q_curr[:-1], 0, np.nan).copy()
-        q_k_iPlusHalf = vShape_nan_arr.copy()
-        q_k_iPlusHalf[:-1] = self._wound_face_values(q_curr, a, b)
-        if s_next>s_curr:
-            assert all([q_k_iPlusHalf[i] == q_curr[i+1] for i in range(len(q_curr)-1)]) == True
-        else:
-            assert all([q_k_iPlusHalf[i] == q_curr[i] for i in range(len(q_curr)-1)]) == True
+        # q_k_iPlusHalf = vShape_nan_arr.copy()
+        # q_k_iPlusHalf[:-1] = self._wound_face_values(q_curr, a, b, 'q')
+        # if not self.forceHalfNodeValues_HACK:
+        #     if s_next>s_curr:
+        #         assert all([q_k_iPlusHalf[i] == q_curr[i+1] for i in range(len(q_curr)-1)]) == True
+        #     else:
+        #         assert all([q_k_iPlusHalf[i] == q_curr[i] for i in range(len(q_curr)-1)]) == True
 
 
         H_q_k_i = (a*F_q_k_iPlusHalf) - (b*F_q_k_iMinusHalf) - G_q_k_iPlusHalf - G_q_k_iMinusHalf
 
-        delta_q1 = V_q_kPlus1_i - (delta_tMinus * H_q_k_i)
-        delta_q2 = V_q_kMinus1_i + (delta_tPlus * H_q_k_i)
+        delta_q1 = V_q_kPlus1_i - (t_minus_deltaRatio*delta_t0 * H_q_k_i)
+        delta_q2 = V_q_kMinus1_i + (t_plus_deltaRatio*delta_t0 * H_q_k_i)
         delta_q3 = delta_t0 * (b*F_q_k_iPlusHalf + G_q_k_iPlusHalf)
         delta_q4 = delta_t0 * (G_q_k_iMinusHalf - a*F_q_k_iMinusHalf)
 
@@ -488,8 +514,8 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
 
         H_p_k_1 = (a*F_p_k_1PlusHalf) - G_p_k_1PlusHalf
 
-        delta_p5 = V_p_kPlus1_1 - (delta_tMinus * H_p_k_1)
-        delta_p6 = V_p_kMinus1_1 + (delta_tPlus * H_p_k_1)
+        delta_p5 = V_p_kPlus1_1 - (t_minus_deltaRatio*delta_t0 * H_p_k_1)
+        delta_p6 = V_p_kMinus1_1 + (t_plus_deltaRatio*delta_t0 * H_p_k_1)
         delta_p7 = delta_t0 * (b*F_p_k_1PlusHalf + G_p_k_1PlusHalf)
 
         p_new_i[0] = (((delta_p6*p_prev[0]) + (delta_p7*p_k_iPlus1[0])) / delta_p5).copy()
@@ -505,8 +531,8 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
 
         H_q_k_M = - (b*F_q_k_MMinusHalf) - G_q_k_MMinusHalf
 
-        delta_q5 = V_q_kPlus1_M - (delta_tMinus * H_q_k_M)
-        delta_q6 = V_q_kMinus1_M + (delta_tPlus * H_q_k_M)
+        delta_q5 = V_q_kPlus1_M - (t_minus_deltaRatio*delta_t0 * H_q_k_M)
+        delta_q6 = V_q_kMinus1_M + (t_plus_deltaRatio*delta_t0 * H_q_k_M)
         delta_q7 = delta_t0 * (G_q_k_MMinusHalf - a*F_q_k_MMinusHalf)
 
         q_new_i[-1] = (((delta_q6*q_prev[-1]) + (delta_q7*q_k_iMinus1[-1])) / delta_q5).copy()

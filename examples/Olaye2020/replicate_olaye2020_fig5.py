@@ -100,7 +100,8 @@ def calculateCFLConstants(model_input):
     mu_A_arr = ((ID_dt_arr*D_A) / (ID_s_arr[1:]*model_input._du)**2).copy()
     w_arr = (ID_s_arr[1:]/ID_s_arr[:-1]).copy()
 
-    return w_arr, mu_A_arr
+    intermediateTime_arr = (ID_time_arr[:-1] + ID_time_arr[1:]) / 2
+    return w_arr, mu_A_arr, intermediateTime_arr
 
 class ConstantBinaryThermodynamics:
     """Minimal binary thermodynamics interface for fixed diffusivity runs."""
@@ -444,7 +445,7 @@ def main(n_phase_nodes, semiLog_dt):
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Liquid half-width (um)")
     # ax.set_title("Olaye & Ojo (2020) Figure 5 Replication")
-    ax.set_title(f"n_phase_nodes:{n_phase_nodes}, semiLog_dt:{semiLog_dt:.10f}    {MODEL_VARIANT}")
+    ax.set_title(f"n_phase_nodes:{n_phase_nodes}, semiLog_dt:{semiLog_dt:.10f}    {MODEL_VARIANT}", fontsize=10)
 
     x_min = float(np.min(t_s_plot))
     x_max = float(np.max(t_s_plot))
@@ -480,7 +481,21 @@ def main(n_phase_nodes, semiLog_dt):
     idealized_conc = compute_idealized_conc(args)
     ax_twin.hlines(idealized_conc, conc_time_arr[0], conc_time_arr[-1], lw=1.0, color="tab:green", linestyle='dashed', label="Idealized conc")
     ax_twin.legend(loc='center right')
+    
+    w_arr_out, mu_A_arr_out, intermediateTime_arr_out = calculateCFLConstants(model)
+    ax_twin_mu = ax.twinx()
+    ax_twin_mu.set_ylabel('mu_A', color='orange')
+    ax_twin_mu.plot(intermediateTime_arr_out, mu_A_arr_out, lw=1.0, color="tab:orange", label="Mu_A")
+    ax_twin_mu.hlines(1, intermediateTime_arr_out[0], intermediateTime_arr_out[-1], lw=1.0, color="tab:orange", linestyle='dashdot', label="mu_A=1")
+    ax_twin_mu.set_yscale('log')
+    ax_twin_mu.spines['right'].set_position(('outward', 70))
     # ax_twin.set_ylim([0,1])
+    
+    ax_twin_w = ax.twinx()
+    ax_twin_w.set_ylabel('1/w', color='brown')
+    ax_twin_w.plot(intermediateTime_arr_out, 1/w_arr_out, lw=1.0, color="tab:brown", label="1/w")
+    ax_twin_w.hlines(1, intermediateTime_arr_out[0], intermediateTime_arr_out[-1], lw=1.0, color="tab:brown", linestyle='dashdot', label="1/w=1")
+    ax_twin_w.spines['right'].set_position(('outward', 120))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
@@ -497,8 +512,8 @@ def main(n_phase_nodes, semiLog_dt):
 if __name__ == "__main__":
     models={}
     # semi_log_points_inputs = [2500]#, 5000, 10000, 20000, 50000]
-    semiLog_dt_inputs = [0.002763654842561367, 0.002763654842561367/10, 0.002763654842561367/25]#, 0.002763654842561367/10]#, 5000, 10000, 20000, 50000]
-    n_phase_nodes_inputs = [25+1, 50+1, 100+1]#, 50+1]#, 100+1, 200+1]
+    semiLog_dt_inputs = [0.002763654842561367/25]#, 0.002763654842561367/10, 0.002763654842561367/25]#, 0.002763654842561367/10]#, 5000, 10000, 20000, 50000]
+    n_phase_nodes_inputs = [100+1]#, 50+1, 100+1]#, 50+1]#, 100+1, 200+1]
 
     conds_list=[]
     for semiLog_dt_input in semiLog_dt_inputs:
@@ -516,6 +531,9 @@ if __name__ == "__main__":
             continue
         t1=time.perf_counter()
         models.update({f"model_{cond['n_phase_nodes']}_{cond['semiLog_dt']}": {**cond, 'model': model, 'runtime':(t1-t0)}})
+
+        print([(model.concData._y[i] - model.concData._y[0]) / model.concData._y[0] for i in [1,2,3,4,5,6, -1]])
+        print([((model.concData._y[i] - model.concData._y[0]) / model.concData._y[0]) / (model.concData._time[i] - model.concData._time[0]) for i in [1,2,3,4,5,6, -1]])
 
 # %%
 
