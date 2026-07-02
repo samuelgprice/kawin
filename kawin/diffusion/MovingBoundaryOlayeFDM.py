@@ -125,6 +125,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceData = _ScalarHistory(record)
         self.concData = _ScalarHistory(record)
+        self.concData_alt = _ScalarHistory(record)
         self.interfaceCompositions = tuple(float(v) for v in interface_compositions)
         self.firstStepMode = str(first_step_mode)
         self.mainStepMode = str(main_step_mode)
@@ -256,6 +257,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.interfaceData.reset()
         self.interfaceData.record(0, self.initialInterfacePosition)
         self.concData.reset()
+        self.concData_alt.reset()
         self._currdt = np.inf
         self._pendingDtDiff = np.inf
         self._pendingDtMove = np.inf
@@ -319,6 +321,9 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self._initialInventory = self.getTotalInventory(time=0)
         averageConc = self.checkMassIntegral(p=self._p_curr.copy(), q=self._q_curr.copy(), s=self._s_curr)
         self.concData.record(0, averageConc)
+        averageConc_alt = self.getTotalInventory(time=0) / self._R
+        self.concData_alt.record(0, averageConc_alt)
+        
 
 
     def solve(self, simTime, iterator=explicitEulerIterator, verbose=False, vIt=10, minDtFrac=1e-8, maxDtFrac=1):
@@ -486,10 +491,10 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         """
         # debugInPlace()
         c_ab, c_ba = self.interfaceCompositions
-        p_half = 0.5 * (float(p[-2]) + c_ab)
-        q_half = 0.5 * (c_ba + float(q[1]))
-        u_half = 0.5 * (float(self._u_grid[-2]) + float(self._u_grid[-1]))
-        v_half = 0.5 * (float(self._v_grid[0]) + float(self._v_grid[1]))
+        # p_half = 0.5 * (float(p[-2]) + c_ab)
+        # q_half = 0.5 * (c_ba + float(q[1]))
+        # u_half = 0.5 * (float(self._u_grid[-2]) + float(self._u_grid[-1]))
+        # v_half = 0.5 * (float(self._v_grid[0]) + float(self._v_grid[1]))
 
         # coeff_a = p_half * u_half + q_half * (1.0 - v_half) + c_ab - c_ba
         # flux_term = D_p[-1] * grad_left + D_q[0] * grad_right
@@ -502,11 +507,20 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
                 DANPlushalf, DBOnePlushalf,
                 told, tnew,
                 sold,
-                R
+                R,
+                windOrHalfNode, alpha=None, beta=None
         ):
             
-            pNPlushalf = (pN + pNPlus1)/2
-            qOnePlushalf = (qPlus1 + qPlus2)/2
+            if windOrHalfNode=="halfNode":
+                pNPlushalf = (pN + pNPlus1)/2
+                qOnePlushalf = (qPlus1 + qPlus2)/2
+            elif windOrHalfNode=="wind":
+                pNPlushalf = alpha*pN + beta*pNPlus1
+                qOnePlushalf = alpha*qPlus1 + beta*qPlus2
+                if not ((alpha==1 and beta==0) or (alpha==0 and beta==1)):
+                    raise ValueError("alpha and beta must be 0/1 when windOrHalfNode=='wind' ")
+            else:
+                raise ValueError("windOrHalfNode must be either 'halfNode' or 'wind'")
             uNPlushalf = (uN + uNPlus1)/2
             vOnePlushalf = (vPlus1 + vPlus2)/2
 
@@ -528,7 +542,34 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
 
             return a, b, -b/a
         
-        vals = {
+        ## Original behavior
+        # vals = {
+        #     "cA": c_ab,
+        #     "cB": c_ba,
+        #     "pN": p[-2],
+        #     "pNPlus1": p[-1],
+        #     "qPlus1": q[0],
+        #     "qPlus2": q[1],
+        #     "uN": self._u_grid[-2],
+        #     "uNPlus1": self._u_grid[-1],
+        #     "vPlus1": self._v_grid[0],
+        #     "vPlus2": self._v_grid[1],
+        #     "DANPlushalf": D_p[-1],
+        #     "DBOnePlushalf": D_q[0],
+        #     # "told": 0.0010539198280561037,
+        #     # "tnew": 0.0010539198280561037 + dt,
+        #     "told": told,
+        #     "tnew": told + dt,
+        #     "sold": s_curr,
+        #     "R": self._R,
+        #     "windOrHalfNode":'halfNode'
+        # }
+
+        # a, b, _ = coeffsFromMathematicaSolve(**vals)
+        # return float(a), float(b)
+
+        ## HACK: Use the winding coefficients to compute the half-node concentrations instead of the arithmetic average. Want to see if this fixes the mass drift issues
+        vals1 = {
             "cA": c_ab,
             "cB": c_ba,
             "pN": p[-2],
@@ -547,14 +588,44 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             "tnew": told + dt,
             "sold": s_curr,
             "R": self._R,
+            "windOrHalfNode":'halfNode',
         }
 
-        a, b, _ = coeffsFromMathematicaSolve(**vals)
-            
-            
+        a1, b1, _ = coeffsFromMathematicaSolve(**vals1)
+        
+        alpha, beta = self._winding_coefficients_from_interface_step(-b1/a1, s_curr)
+        
+        vals2 = {
+            "cA": c_ab,
+            "cB": c_ba,
+            "pN": p[-2],
+            "pNPlus1": p[-1],
+            "qPlus1": q[0],
+            "qPlus2": q[1],
+            "uN": self._u_grid[-2],
+            "uNPlus1": self._u_grid[-1],
+            "vPlus1": self._v_grid[0],
+            "vPlus2": self._v_grid[1],
+            "DANPlushalf": D_p[-1],
+            "DBOnePlushalf": D_q[0],
+            # "told": 0.0010539198280561037,
+            # "tnew": 0.0010539198280561037 + dt,
+            "told": told,
+            "tnew": told + dt,
+            "sold": s_curr,
+            "R": self._R,
+            "windOrHalfNode":'wind',
+            'alpha': alpha,
+            'beta': beta,
+        }
 
-        # return float(coeff_a), float(coeff_b)
-        return float(a), float(b)
+        a2, b2, _ = coeffsFromMathematicaSolve(**vals2)
+        if np.sign((-b2/a2)-s_curr) != np.sign((-b1/a1)-s_curr):
+            debugInPlace()
+            raise
+        return a2, b2
+        
+        
 
    
 
@@ -649,6 +720,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         from the interface motion implied by Eq. (12), i.e. from the sign of
         ``s^{k+1} - s^k``.
         """
+        raise RuntimeError("Base winding convention is legacy; use the rework override.")
         ds = float(s_new - s_curr)
         if ds >= 0:
             return 1.0, 0.0
@@ -817,10 +889,14 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         p, q = self._apply_boundary_conditions(p, q)
         physical = self._reconstruct_physical_profile(p, q, s)[:, np.newaxis]
 
+        
         self.data.record(time, physical)
         self.interfaceData.record(time, s)
+        
         averageConc = self.checkMassIntegral(p=p, q=q, s=s)
         self.concData.record(time, averageConc)
+        averageConc_alt = self.getTotalInventory() / self._R
+        self.concData_alt.record(time, averageConc_alt)
 
         self._p_prev = self._p_curr.copy()
         self._q_prev = self._q_curr.copy()
@@ -837,6 +913,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.data.finalize()
         self.interfaceData.finalize()
         self.concData.finalize()
+        self.concData_alt.finalize()
 
     def getInterfacePosition(self, time=None):
         return self.interfaceData.y(time)
@@ -893,8 +970,8 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
     
     def checkMassIntegral(self, p, q, s):
         # debugInPlace()
-        assert ((len(p)-2) * self._du) + self._du/2 + self._du/2 == 1
-        assert ((len(q)-2) * self._dv) + self._dv/2 + self._dv/2 == 1
+        assert abs((((len(p)-2) * self._du) + self._du/2 + self._du/2)-1)<1e-10
+        assert abs((((len(q)-2) * self._dv) + self._dv/2 + self._dv/2)-1)<1e-10
 
         left_mass = s * ( (self._du/2)*p[0] + (self._du*p[1:-1]).sum() + (self._du/2)*p[-1] )
         right_mass = (self._R - s) * ( (self._dv/2)*q[0] + (self._dv*q[1:-1]).sum() + (self._dv/2)*q[-1] )
