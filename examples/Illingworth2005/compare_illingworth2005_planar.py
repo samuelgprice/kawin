@@ -273,7 +273,7 @@ def run_fig3_present_work(params=None):
 
     model = build_fig3_present_work_model(p, record=p["record"])
     model.solve(p["t_end_s"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True)
-    debugInPlace()
+    # debugInPlace()
     n = model.interfaceData.N + 1
     time_s = model.interfaceData._time[:n].copy()
     liquid_half_width_um = model.interfaceData._y[:n].copy()
@@ -307,6 +307,7 @@ def plot_fig3_present_work(params=None, ax=None):
         result["liquid_half_width_um"][mask],
         label="Present work",
         linewidth=2.0,
+        zorder=5
     )
     ax.plot(
         [0.1, p["t_end_s"]],
@@ -333,7 +334,7 @@ def plot_fig3_present_work(params=None, ax=None):
             zorder=float(overlay.get("zorder", 3)),
         )
     ax.set_xscale("log")
-    ax.set_xlim(0.1, p["t_end_s"])
+    ax.set_xlim(0.00001, p["t_end_s"]) # ax.set_xlim(0.1, p["t_end_s"])
     ax.set_ylim(12.5, 24) #ax.set_ylim(0.0, 30.0)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Interface position / liquid half-width (um)")
@@ -372,6 +373,8 @@ def plot_fig3_present_work(params=None, ax=None):
                 label="Initial conc",
             )
             idealized_conc = compute_fig3_idealized_conc(p)
+            print(f"idealized_conc: {idealized_conc}")
+            print(f"(conc_arr[0], conc_arr[-1], conc_arr.min(), conc_arr.max()): {(conc_arr[0], conc_arr[-1], conc_arr.min(), conc_arr.max())}")
             ax_twin.plot(
                 [conc_t0, conc_t1],
                 [idealized_conc, idealized_conc],

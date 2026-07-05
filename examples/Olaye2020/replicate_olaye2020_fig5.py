@@ -479,6 +479,7 @@ def main(n_phase_nodes, semiLog_dt):
     ax_twin.plot(conc_time_arr, conc_arr, lw=1.0, color="tab:green", label="Conc")
     ax_twin.hlines(conc_arr[0], conc_time_arr[0], conc_time_arr[-1], lw=1.0, color="tab:green", linestyle='dashdot', label="Initial conc")
     idealized_conc = compute_idealized_conc(args)
+    print(f"Idealized conc: {idealized_conc}")
     ax_twin.hlines(idealized_conc, conc_time_arr[0], conc_time_arr[-1], lw=1.0, color="tab:green", linestyle='dashed', label="Idealized conc")
     ax_twin.legend(loc='center right')
     

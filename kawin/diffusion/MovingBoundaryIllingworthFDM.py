@@ -583,8 +583,8 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         # debugInPlace()
         [du] = np.unique(np.diff(self._u_grid.copy()).round(15)).tolist()
         [dv] = np.unique(np.diff(self._v_grid.copy()).round(15)).tolist()
-        assert abs((((len(p)-2) * du) + du/2 + du/2)-1)<1e-10
-        assert abs((((len(q)-2) * dv) + dv/2 + dv/2)-1)<1e-10
+        assert abs((((len(p)-2) * du) + du/2 + du/2)-1)<1e-10, ((((len(p)-2) * du) + du/2 + du/2)-1, len(p), du)
+        assert abs((((len(q)-2) * dv) + dv/2 + dv/2)-1)<1e-10, ((((len(q)-2) * dv) + dv/2 + dv/2)-1, len(q), dv)
 
         left_mass = s * ( (du/2)*p[0] + (du*p[1:-1]).sum() + (du/2)*p[-1] )
         right_mass = (self._R - s) * ( (dv/2)*q[0] + (dv*q[1:-1]).sum() + (dv/2)*q[-1] )
