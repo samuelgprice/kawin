@@ -84,6 +84,74 @@ class _ScalarHistory:
             return float((uy - ly) * (time - ltime) / (utime - ltime) + ly)
         return float(self._y[0])
 
+class _VectorHistory:
+    def __init__(self, n_components: int, record: bool | int = False):
+        if isinstance(record, bool):
+            self.recordInterval = 1 if record else -1
+        else:
+            self.recordInterval = int(record)
+        self.n_components = int(n_components)
+        self.batchSize = 1000
+        self.reset()
+
+    def reset(self):
+        '''
+        Resets arrays for a vector-valued history.
+        '''
+        self._y = np.zeros((self.batchSize, self.n_components), dtype=np.float64)
+        self._time = np.zeros(self.batchSize, dtype=np.float64)
+        self.currentIndex = 0
+        self.currentY = np.zeros(self.n_components, dtype=np.float64)
+        self.currentTime = 0.0
+        self.N = 0
+
+    def record(self, time, y, force: bool = False):
+        '''
+        Stores current state of time and vector variable.
+        '''
+        values = np.asarray(y, dtype=np.float64).reshape(-1)
+        if values.size != self.n_components:
+            raise ValueError(f"Expected {self.n_components} components, got {values.size}.")
+        if self.recordInterval > 0:
+            if self.currentIndex % self.recordInterval == 0 or force:
+                self.N = int(self.currentIndex / self.recordInterval)
+                if self.N >= self._time.shape[0]:
+                    self._y = np.pad(self._y, ((0, self.batchSize), (0, 0)))
+                    self._time = np.pad(self._time, (0, self.batchSize))
+                self._y[self.N] = values
+                self._time[self.N] = time
+            self.currentIndex += 1
+        else:
+            self._y[self.N] = values
+            self._time[self.N] = time
+        self.currentY = values.copy()
+        self.currentTime = float(time)
+
+    def finalize(self):
+        '''
+        Removes extra padding.
+        '''
+        if self.recordInterval > 0 and self.N >= 0 and np.isclose(self._time[self.N], self.currentTime, rtol=0.0, atol=1e-14):
+            self._y = self._y[: self.N + 1]
+            self._time = self._time[: self.N + 1]
+            return
+        self.record(self.currentTime, self.currentY, force=True)
+        self._y = self._y[: self.N + 1]
+        self._time = self._time[: self.N + 1]
+
+    def y(self, time=None):
+        '''
+        Returns vector value at an exact recorded time.
+        '''
+        if time is None:
+            return self._y[self.N].copy()
+        recorded_time = self._time[: self.N + 1]
+        matches = np.where(np.isclose(recorded_time, float(time), atol=1e-14, rtol=0.0))[0]
+        if len(matches) == 0:
+            raise ValueError(
+                f"Requested time {float(time):.6g} was not found in exact recorded interface composition times."
+            )
+        return self._y[matches[-1]].copy()
 
 class MovingBoundaryOlayeFD1DModel(DiffusionModel):
     """
@@ -126,6 +194,8 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.interfaceData = _ScalarHistory(record)
         self.concData = _ScalarHistory(record)
         self.concData_alt = _ScalarHistory(record)
+        self.pData = None
+        self.qData = None
         self.interfaceCompositions = tuple(float(v) for v in interface_compositions)
         self.firstStepMode = str(first_step_mode)
         self.mainStepMode = str(main_step_mode)
@@ -258,6 +328,8 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.interfaceData.record(0, self.initialInterfacePosition)
         self.concData.reset()
         self.concData_alt.reset()
+        self.pData = None
+        self.qData = None
         self._currdt = np.inf
         self._pendingDtDiff = np.inf
         self._pendingDtMove = np.inf
@@ -310,12 +382,16 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self._du = float(self._u_grid[1] - self._u_grid[0])
         self._dv = float(self._v_grid[1] - self._v_grid[0])
         self._phase_counts = (n_left, n_right)
+        self.pData = _VectorHistory(n_left, self.interfaceData.recordInterval)
+        self.qData = _VectorHistory(n_right, self.interfaceData.recordInterval)
 
         self._p_curr, self._q_curr = self._initialize_transformed_state(c0, s0)
         self._p_prev = self._p_curr.copy()
         self._q_prev = self._q_curr.copy()
         self._s_curr = s0
         self._s_prev = s0
+        self.pData.record(0, self._p_curr)
+        self.qData.record(0, self._q_curr)
 
         self.data.currentY = self._reconstruct_physical_profile(self._p_curr, self._q_curr, s0)[:, np.newaxis]
         self._initialInventory = self.getTotalInventory(time=0)
@@ -880,6 +956,28 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             return self._currdt
         return getattr(self, "deltaTime", np.inf)
 
+    def getTransformedState(self, time=None):
+        """
+        Returns the recorded transformed left/right phase state at an exact time.
+        """
+        return self.getTransformedStateLeft(time), self.getTransformedStateRight(time)
+
+    def getTransformedStateLeft(self, time=None):
+        """
+        Returns the recorded left transformed composition vector ``p``.
+        """
+        if self.pData is None:
+            raise ValueError("Transformed left-state history is not initialized.")
+        return self.pData.y(time)
+
+    def getTransformedStateRight(self, time=None):
+        """
+        Returns the recorded right transformed composition vector ``q``.
+        """
+        if self.qData is None:
+            raise ValueError("Transformed right-state history is not initialized.")
+        return self.qData.y(time)
+
     def postProcess(self, time, x):
         GenericModel.postProcess(self, time, x)
 
@@ -892,6 +990,8 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         
         self.data.record(time, physical)
         self.interfaceData.record(time, s)
+        self.pData.record(time, p)
+        self.qData.record(time, q)
         
         averageConc = self.checkMassIntegral(p=p, q=q, s=s)
         self.concData.record(time, averageConc)
@@ -914,6 +1014,10 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.interfaceData.finalize()
         self.concData.finalize()
         self.concData_alt.finalize()
+        if self.pData is not None:
+            self.pData.finalize()
+        if self.qData is not None:
+            self.qData.finalize()
 
     def getInterfacePosition(self, time=None):
         return self.interfaceData.y(time)

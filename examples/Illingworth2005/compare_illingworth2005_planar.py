@@ -552,7 +552,7 @@ if __name__ == "__main__":
         result, ax = plot_fig3_present_work({
             "t_end_s": 10.0,
             "time_step_s": 0.01,
-            "spatial_step_um":1.0,
+            "spatial_step_um":0.5,
             "show": True,
             "record": True,
         })

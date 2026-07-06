@@ -170,7 +170,8 @@ def run_case(
     D_solid_base: float,
     D_scale: float,
     n_nodes: int,
-    n_phase_nodes: int,
+    n_phase_a_nodes: int,
+    n_phase_b_nodes: int,
     t_end_s: float,
     dt_mode: str,
     # semi_log_points: int,
@@ -302,8 +303,8 @@ def run_case(
         main_step_mode="leapfrog_dufort_frankel",
         dt_mode=dt_mode,
         geometry="planar",
-        phase_a_nodes=int(n_phase_nodes),
-        phase_b_nodes=int(n_phase_nodes),
+        phase_a_nodes=int(n_phase_a_nodes),
+        phase_b_nodes=int(n_phase_b_nodes),
         # semi_log_points=semi_log_points,
         semiLog_dt=semiLog_dt,
         semiLogT0=semiLogT0,
@@ -353,11 +354,12 @@ def build_parser():
     return parser
 
 
-def main(n_phase_nodes, semiLog_dt):
+def main(n_phase_a_nodes, n_phase_b_nodes, semiLog_dt):
     # args = build_parser().parse_args()
     args = {
         **FIG5_BASE_PARAMS,
-        "n_phase_nodes": n_phase_nodes,
+        "n_phase_a_nodes": n_phase_a_nodes,
+        "n_phase_b_nodes": n_phase_b_nodes,
         "semiLog_dt": semiLog_dt,
         "model_variant": MODEL_VARIANT,
     }
@@ -382,7 +384,8 @@ def main(n_phase_nodes, semiLog_dt):
         D_solid_base=args["D_solid_base"],
         D_scale=args["D_scale"],
         n_nodes=args["n_nodes"],
-        n_phase_nodes=args["n_phase_nodes"],
+        n_phase_a_nodes=args["n_phase_a_nodes"],
+        n_phase_b_nodes=args["n_phase_b_nodes"],
         t_end_s=args["t_end_s"],
         dt_mode=args["dt_mode"],
         # semi_log_points=args["semi_log_points"],
@@ -445,7 +448,7 @@ def main(n_phase_nodes, semiLog_dt):
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Liquid half-width (um)")
     # ax.set_title("Olaye & Ojo (2020) Figure 5 Replication")
-    ax.set_title(f"n_phase_nodes:{n_phase_nodes}, semiLog_dt:{semiLog_dt:.10f}    {MODEL_VARIANT}", fontsize=10)
+    ax.set_title(f"n_phase_a_nodes:{n_phase_a_nodes}, n_phase_b_nodes:{n_phase_b_nodes}, semiLog_dt:{semiLog_dt:.10f}    {MODEL_VARIANT}", fontsize=10)
 
     x_min = float(np.min(t_s_plot))
     x_max = float(np.max(t_s_plot))
@@ -513,13 +516,13 @@ def main(n_phase_nodes, semiLog_dt):
 if __name__ == "__main__":
     models={}
     # semi_log_points_inputs = [2500]#, 5000, 10000, 20000, 50000]
-    semiLog_dt_inputs = [0.002763654842561367/25]#, 0.002763654842561367/10, 0.002763654842561367/25]#, 0.002763654842561367/10]#, 5000, 10000, 20000, 50000]
-    n_phase_nodes_inputs = [100+1]#, 50+1, 100+1]#, 50+1]#, 100+1, 200+1]
+    semiLog_dt_inputs = [0.002763654842561367/10]#, 0.002763654842561367/10, 0.002763654842561367/25]#, 0.002763654842561367/10]#, 5000, 10000, 20000, 50000]
+    n_phase_nodes_inputs = [(26, 6001)]#, 50+1, 100+1]#, 50+1]#, 100+1, 200+1]
 
     conds_list=[]
     for semiLog_dt_input in semiLog_dt_inputs:
         for n_phase_nodes_input in n_phase_nodes_inputs:
-            conds_list.append({'n_phase_nodes': n_phase_nodes_input, 'semiLog_dt': semiLog_dt_input})
+            conds_list.append({'n_phase_a_nodes': n_phase_nodes_input[0], 'n_phase_b_nodes': n_phase_nodes_input[1], 'semiLog_dt': semiLog_dt_input})
 
     for cond in conds_list:
         t0=time.perf_counter()
@@ -528,10 +531,10 @@ if __name__ == "__main__":
             model = main(**cond)
         except Exception as e:
             print(f"Error occurred while running case {cond}: {e}")
-            models.update({f"model_{cond['n_phase_nodes']}_{cond['semiLog_dt']}": {**cond, 'error':str(e)}})
+            models.update({f"model_{cond['n_phase_a_nodes']}_{cond['n_phase_b_nodes']}_{cond['semiLog_dt']}": {**cond, 'error':str(e)}})
             continue
         t1=time.perf_counter()
-        models.update({f"model_{cond['n_phase_nodes']}_{cond['semiLog_dt']}": {**cond, 'model': model, 'runtime':(t1-t0)}})
+        models.update({f"model_{cond['n_phase_a_nodes']}_{cond['n_phase_b_nodes']}_{cond['semiLog_dt']}": {**cond, 'model': model, 'runtime':(t1-t0)}})
 
         print([(model.concData._y[i] - model.concData._y[0]) / model.concData._y[0] for i in [1,2,3,4,5,6, -1]])
         print([((model.concData._y[i] - model.concData._y[0]) / model.concData._y[0]) / (model.concData._time[i] - model.concData._time[0]) for i in [1,2,3,4,5,6, -1]])

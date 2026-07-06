@@ -2972,8 +2972,8 @@ def _build_olaye_model(
     geometry="planar",
     diffusivities=None,
     record=True,
-    semi_log_points=120,
-    semi_log_t0_fraction=1e-6,
+    semi_log_dt=0.05,
+    semi_log_t0=1e-6,
 ):
     profile = ProfileBuilder([(StepProfile1D(interface_position, 0.2, 0.8), 'CR')])
     mesh = CartesianFD1D(['CR'], [0, 1], 81)
@@ -2997,8 +2997,8 @@ def _build_olaye_model(
         main_step_mode=main_step_mode,
         dt_mode=dt_mode,
         geometry=geometry,
-        semi_log_points=semi_log_points,
-        semi_log_t0_fraction=semi_log_t0_fraction,
+        semiLog_dt=semi_log_dt,
+        semiLogT0=semi_log_t0,
         record=record,
     )
     return model
@@ -3044,8 +3044,8 @@ def test_olaye_moving_boundary_conservation_constant_and_variable_diffusivity():
             main_step_mode="leapfrog_dufort_frankel",
             dt_mode="cfl",
             geometry="planar",
-            semi_log_points=120,
-            semi_log_t0_fraction=1e-6,
+            semiLog_dt=0.05,
+            semiLogT0=1e-6,
             record=True,
         )
         initial_inventory = model.getTotalInventory()
@@ -3135,7 +3135,7 @@ def test_olaye_moving_boundary_semi_log_schedule_is_monotone():
     model.setTimeInfo(0.0, 0.3)
 
     assert model._semiLogTimes is not None
-    assert len(model._semiLogTimes) == model.semiLogPoints
+    assert len(model._semiLogTimes) >= 3
     assert np.all(np.diff(model._semiLogTimes) > 0)
     assert model._semiLogTimes[0] < model._semiLogTimes[-1]
     assert_allclose(model._semiLogTimes[-1], 0.3, rtol=0, atol=1e-12)
@@ -3174,6 +3174,29 @@ def test_olaye_moving_boundary_planar_interface_root_matches_paper_coefficients(
     assert_allclose(model._lastInterfaceCoefficients[0] * s_new + model._lastInterfaceCoefficients[1], 0.0, rtol=0, atol=1e-12)
 
 
+def test_olaye_transformed_state_history_records_and_queries_exact_times():
+    model = _build_olaye_model(record=2)
+    model.solve(0.2, iterator=explicitEulerIterator)
+
+    p_latest, q_latest = model.getTransformedState()
+    assert_allclose(p_latest, model._p_curr, rtol=0.0, atol=0.0)
+    assert_allclose(q_latest, model._q_curr, rtol=0.0, atol=0.0)
+
+    recorded_times = np.array(model.pData._time[: model.pData.N + 1], dtype=np.float64)
+    assert_allclose(recorded_times, model.qData._time[: model.qData.N + 1], rtol=0.0, atol=0.0)
+    assert_allclose(recorded_times, model.interfaceData._time[: model.interfaceData.N + 1], rtol=0.0, atol=0.0)
+    assert len(recorded_times) >= 2
+    assert np.all(np.diff(recorded_times) > 0)
+
+    t_mid = float(recorded_times[min(1, len(recorded_times) - 1)])
+    p_mid = model.getTransformedStateLeft(t_mid)
+    q_mid = model.getTransformedStateRight(t_mid)
+    assert_allclose(p_mid, model.pData.y(t_mid), rtol=0.0, atol=0.0)
+    assert_allclose(q_mid, model.qData.y(t_mid), rtol=0.0, atol=0.0)
+    assert model.pData._y.shape[0] == model.pData.N + 1
+    assert model.qData._y.shape[0] == model.qData.N + 1
+
+
 def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, **kwargs):
     params = {
         "s0": 1.0,
@@ -3189,6 +3212,7 @@ def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, *
         "time_step": 0.1,
         "tolerance": 1.0e-8,
         "geometry": "planar",
+        "record": True,
     }
     params.update(kwargs)
     profile = ProfileBuilder([(StepProfile1D(params["s0"], params["initial_alpha"], params["initial_beta"]), "CR")])
@@ -3212,7 +3236,7 @@ def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, *
         phase_a_nodes=params["n_alpha"],
         phase_b_nodes=params["n_beta"],
         tolerance=params["tolerance"],
-        record=True,
+        record=params["record"],
     )
 
 
@@ -3269,6 +3293,28 @@ def test_illingworth_default_planar_case_conservation():
     recorded_average = model.concData._y[: model.concData.N + 1]
     assert_allclose(recorded_average, recorded_average[0], rtol=0.0, atol=1e-10)
     assert_allclose(model.getTotalInventory(time=0.5), recorded_average[0] * model._R, rtol=0.0, atol=1e-10)
+
+
+def test_illingworth_transformed_state_history_records_and_queries_exact_times():
+    model = _build_illingworth_default_model(record=2)
+    model.solve(0.4, iterator=explicitEulerIterator, minDtFrac=1e-14)
+
+    p_latest, q_latest = model.getTransformedState()
+    assert_allclose(p_latest, model._p_curr, rtol=0.0, atol=0.0)
+    assert_allclose(q_latest, model._q_curr, rtol=0.0, atol=0.0)
+
+    recorded_times = np.array(model.pData._time[: model.pData.N + 1], dtype=np.float64)
+    assert_allclose(recorded_times, model.qData._time[: model.qData.N + 1], rtol=0.0, atol=0.0)
+    assert_allclose(recorded_times, model.interfaceData._time[: model.interfaceData.N + 1], rtol=0.0, atol=0.0)
+    assert len(recorded_times) >= 2
+    assert np.all(np.diff(recorded_times) > 0)
+
+    t_mid = float(recorded_times[min(1, len(recorded_times) - 1)])
+    p_mid, q_mid = model.getTransformedState(t_mid)
+    assert_allclose(p_mid, model.pData.y(t_mid), rtol=0.0, atol=0.0)
+    assert_allclose(q_mid, model.qData.y(t_mid), rtol=0.0, atol=0.0)
+    assert model.pData._y.shape[0] == model.pData.N + 1
+    assert model.qData._y.shape[0] == model.qData.N + 1
 
 
 def test_illingworth_cpp_reference_comparison():
