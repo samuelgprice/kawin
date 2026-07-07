@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import shutil
@@ -34,6 +35,31 @@ def _find_repo_root(start):
     raise RuntimeError("Could not locate the kawin repository root.")
 
 
+def _resolve_this_file():
+    """
+    Returns this script's path without trusting stale Interactive Window globals.
+
+    In notebook/interactive execution, VS Code can leave ``__file__`` bound to
+    another script that previously populated the shared kernel namespace. We
+    therefore accept ``__file__`` only when it already points to this file and
+    otherwise fall back to locating the script from the current working
+    directory.
+    """
+    expected_parts = ("examples", "Illingworth2005", "compare_illingworth2005_planar.py")
+    if "__file__" in globals():
+        candidate = pathlib.Path(__file__).resolve()
+        if tuple(candidate.parts[-3:]) == expected_parts:
+            return candidate
+
+    cwd = pathlib.Path.cwd().resolve()
+    candidates = [cwd.joinpath(*expected_parts[-2:]), cwd.joinpath(*expected_parts)]
+    candidates.extend(parent.joinpath(*expected_parts) for parent in cwd.parents)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise RuntimeError(f"Could not resolve {'/'.join(expected_parts)} from cwd={cwd}.")
+
+
 def _find_illingworth_source_dir(repo_root, script_dir):
     """Finds the authors' MAP C++ source directory in CLI and notebook runs."""
     candidates = [
@@ -49,7 +75,7 @@ def _find_illingworth_source_dir(repo_root, script_dir):
     raise FileNotFoundError(f"Could not find illingworth_MAP_code. Searched:\n{searched}")
 
 
-THIS_FILE = pathlib.Path(__file__).resolve() if "__file__" in globals() else pathlib.Path.cwd() / "examples" / "Illingworth2005" / "compare_illingworth2005_planar.py"
+THIS_FILE = _resolve_this_file()
 SCRIPT_DIR = THIS_FILE.parent
 REPO_ROOT = _find_repo_root(THIS_FILE.parent)
 AUTHOR_CPP_SOURCE_DIR = _find_illingworth_source_dir(REPO_ROOT, SCRIPT_DIR)
@@ -64,11 +90,11 @@ from kawin.solver import explicitEulerIterator
 AUTHOR_DEFAULT_PARAMS = {
     "s0": 1.0,
     "R": 5.0,
-    "n_alpha": 100,
+    "n_alpha": 13,
     "d_alpha": 1.0e-7,
     "initial_alpha": 0.8,
     "interface_alpha": 0.6,
-    "n_beta": 100,
+    "n_beta": 3001,
     "d_beta": 1.0e-5,
     "initial_beta": 0.4,
     "interface_beta": 0.0,
@@ -93,6 +119,14 @@ SCRIPT_CONFIG = {
     "fig3_overrides": {},
 }
 
+FIG3_NOTEBOOK_CONFIG = {
+    "show": True,
+    "out": None,
+    "save_run": True,
+    "save_run_path": SCRIPT_DIR / "illingworth2005_fig3_saved_run.npz",
+    "label": None,
+}
+
 
 FIG3_PRESENT_WORK_PARAMS = {
     # Parameters stated in the paragraph introducing Fig. 3.
@@ -105,14 +139,14 @@ FIG3_PRESENT_WORK_PARAMS = {
     "D_liquid_um2_s": 500.0,
     "D_solid_um2_s": 18.0,
     # The paper notes a similar initial step size of 1 um for the comparison.
-    "spatial_step_um": 1.0,
+    "spatial_step_um": 0.5,
     # The text mentions a 0.01 s time step for the comparison setup. That is
     # very expensive in pure Python out to 1e5 s, so the default here is a
     # runtime-friendly value. Set this to 0.01 for the literal paper timestep.
-    "time_step_s": 10.0,
+    "time_step_s": 0.01,
     "paper_time_step_s": 0.01,
-    "t_end_s": 1.0e5,
-    "record": 100,
+    "t_end_s": 1.0e2,
+    "record": 1,
     "plot_conc": True,
     "show": True,
     "out": None,
@@ -217,6 +251,54 @@ def compute_fig3_idealized_conc(params=None):
     ) / p["R_um"]
 
 
+def _jsonable(value):
+    """Converts notebook config values into JSON-serializable objects."""
+    if isinstance(value, pathlib.Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def build_illingworth_run_payload(result, label=None):
+    """
+    Builds the saved-run payload for Figure-3 present-work comparisons.
+
+    The payload uses seconds and micrometers so it can be overlaid directly
+    with the saved Olaye Figure-5 output.
+    """
+    params = result["params"]
+    payload_params = {
+        key: value
+        for key, value in params.items()
+        if key not in {"show", "out", "save_run", "save_run_path", "label"}
+    }
+    return {
+        "time_s": np.asarray(result["time_s"], dtype=np.float64),
+        "half_width_um": np.asarray(result["liquid_half_width_um"], dtype=np.float64),
+        "label": np.array(label or "Illingworth Figure 3 present work"),
+        "source_script": np.array("examples/Illingworth2005/compare_illingworth2005_planar.py"),
+        "model_family": np.array("illingworth_fig3_present_work"),
+        "theoretical_max_um": np.array([result["theoretical_max_um"]], dtype=np.float64),
+        "idealized_mass_integral": np.array([compute_fig3_idealized_conc(params)], dtype=np.float64),
+        "mass_integral_initial": np.array([float(result["model"].concData._y[0])], dtype=np.float64),
+        "mass_integral_final": np.array([float(result["model"].concData.y())], dtype=np.float64),
+        "params_json": np.array(json.dumps(_jsonable(payload_params), sort_keys=True)),
+    }
+
+
+def save_illingworth_run_result(path, payload):
+    """Saves an Illingworth Figure-3 run payload to a compressed ``.npz`` file."""
+    save_path = pathlib.Path(path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(save_path, **payload)
+    return save_path
+
+
 def build_fig3_present_work_model(params=None, record=None):
     """
     Builds the planar Illingworth model for the paper's Figure 3 present-work curve.
@@ -296,8 +378,10 @@ def plot_fig3_present_work(params=None, ax=None):
     """
     import matplotlib.pyplot as plt
 
-    result = run_fig3_present_work(params)
+    notebook_params = FIG3_NOTEBOOK_CONFIG if params is None else {**FIG3_NOTEBOOK_CONFIG, **dict(params)}
+    result = run_fig3_present_work(notebook_params)
     p = result["params"]
+    created_figure = ax is None
     if ax is None:
         _, ax = plt.subplots(figsize=(7.2, 4.8), dpi=140)
 
@@ -305,7 +389,7 @@ def plot_fig3_present_work(params=None, ax=None):
     ax.plot(
         result["time_s"][mask],
         result["liquid_half_width_um"][mask],
-        label="Present work",
+        label=p.get("label") or "Present work",
         linewidth=2.0,
         zorder=5
     )
@@ -388,10 +472,18 @@ def plot_fig3_present_work(params=None, ax=None):
     out = p.get("out")
     if out:
         ax.figure.savefig(out, bbox_inches="tight")
-    if p.get("show", True):
-        plt.show()
-    else:
-        plt.close(ax.figure)
+    payload = build_illingworth_run_payload(result, label=p.get("label"))
+    save_path = None
+    if p.get("save_run", False):
+        save_path = save_illingworth_run_result(p["save_run_path"], payload)
+        print(f"Saved run: {save_path}")
+    if created_figure:
+        if p.get("show", True):
+            plt.show()
+        else:
+            plt.close(ax.figure)
+    result["payload"] = payload
+    result["save_path"] = save_path
     return result, ax
 
 
@@ -514,7 +606,7 @@ def run_from_config(config=None):
         print_comparison_summary(comparison, print_table=config["print_table"])
         return comparison
     if config["run_mode"] == "fig3_present_work":
-        return plot_fig3_present_work(config["fig3_overrides"])
+        return plot_fig3_present_work({**FIG3_NOTEBOOK_CONFIG, **config["fig3_overrides"]})
     raise ValueError("SCRIPT_CONFIG['run_mode'] must be 'cpp_comparison' or 'fig3_present_work'.")
 
 
@@ -549,13 +641,7 @@ def main(argv=None):
 
 if __name__ == "__main__":
     if "ipykernel" in sys.modules:
-        result, ax = plot_fig3_present_work({
-            "t_end_s": 10.0,
-            "time_step_s": 0.01,
-            "spatial_step_um":0.5,
-            "show": True,
-            "record": True,
-        })
+        result, ax = plot_fig3_present_work(FIG3_NOTEBOOK_CONFIG)
         # comparison = run_from_config()
     else:
         main()

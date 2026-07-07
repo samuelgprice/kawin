@@ -19,7 +19,9 @@ Notes
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
+import sys
 
 import matplotlib
 # matplotlib.use("Agg")
@@ -149,6 +151,46 @@ FIG5_BASE_PARAMS = {
     "show": True,
 }
 
+def _resolve_this_file():
+    """
+    Returns this script's path without trusting stale Interactive Window globals.
+
+    In notebook/interactive execution, VS Code can leave ``__file__`` bound to
+    another script that previously populated the shared kernel namespace. We
+    therefore accept ``__file__`` only when it already points to this file and
+    otherwise fall back to locating the script from the current working
+    directory.
+    """
+    expected_parts = ("examples", "Olaye2020", "replicate_olaye2020_fig5.py")
+    if "__file__" in globals():
+        candidate = pathlib.Path(__file__).resolve()
+        if tuple(candidate.parts[-3:]) == expected_parts:
+            return candidate
+
+    cwd = pathlib.Path.cwd().resolve()
+    candidates = [cwd.joinpath(*expected_parts[-2:]), cwd.joinpath(*expected_parts)]
+    candidates.extend(parent.joinpath(*expected_parts) for parent in cwd.parents)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise RuntimeError(f"Could not resolve {'/'.join(expected_parts)} from cwd={cwd}.")
+
+
+THIS_FILE = _resolve_this_file()
+SCRIPT_DIR = THIS_FILE.parent
+
+OLAYE_NOTEBOOK_CONFIG = {
+    "n_phase_a_nodes": 26,
+    "n_phase_b_nodes": 6001,
+    "semiLog_dt": 0.002763654842561367 / 10.0,
+    "model_variant": MODEL_VARIANT,
+    "out": None,
+    "show": True,
+    "save_run": True,
+    "save_run_path": SCRIPT_DIR / "olaye2020_fig5_saved_run.npz",
+    "label": None,
+}
+
 
 def compute_idealized_conc(params):
     """Returns the idealized average concentration for the Figure-5 setup."""
@@ -156,6 +198,76 @@ def compute_idealized_conc(params):
         params["s0_um"] * (params["c_liquid0_pct"] / 100.0)
         + (params["R_um"] - params["s0_um"]) * (params["c_solid0_pct"] / 100.0)
     ) / params["R_um"]
+
+
+def theoretical_fig5_max_liquid_half_width_um(params):
+    """
+    Returns the idealized maximum liquid half-width for the Figure-5 setup.
+
+    This assumes the initial liquid solute inventory is redistributed into
+    liquid at the liquid-side interface composition.
+    """
+    return params["s0_um"] * params["c_liquid0_pct"] / params["c_liquid_int_pct"]
+
+
+def _jsonable(value):
+    """Converts nested notebook config values into JSON-serializable objects."""
+    if isinstance(value, pathlib.Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def build_olaye_run_payload(
+    *,
+    time_s,
+    half_width_um,
+    params,
+    model_variant,
+    label=None,
+    mass_integral_initial=None,
+    mass_integral_final=None,
+):
+    """
+    Builds the saved-run payload for notebook-friendly Figure-5 comparisons.
+
+    The saved arrays use seconds and micrometers so they can be overlaid
+    directly with the Illingworth Figure-3 present-work results.
+    """
+    payload_params = {
+        key: value
+        for key, value in params.items()
+        if key not in {"show", "out", "save_run", "save_run_path", "label"}
+    }
+    payload = {
+        "time_s": np.asarray(time_s, dtype=np.float64),
+        "half_width_um": np.asarray(half_width_um, dtype=np.float64),
+        "label": np.array(label or f"Olaye Figure 5 ({model_variant})"),
+        "source_script": np.array("examples/Olaye2020/replicate_olaye2020_fig5.py"),
+        "model_family": np.array("olaye_fig5"),
+        "model_variant": np.array(str(model_variant)),
+        "theoretical_max_um": np.array([theoretical_fig5_max_liquid_half_width_um(params)], dtype=np.float64),
+        "idealized_mass_integral": np.array([compute_idealized_conc(params)], dtype=np.float64),
+        "params_json": np.array(json.dumps(_jsonable(payload_params), sort_keys=True)),
+    }
+    if mass_integral_initial is not None:
+        payload["mass_integral_initial"] = np.array([float(mass_integral_initial)], dtype=np.float64)
+    if mass_integral_final is not None:
+        payload["mass_integral_final"] = np.array([float(mass_integral_final)], dtype=np.float64)
+    return payload
+
+
+def save_olaye_run_result(path, payload):
+    """Saves an Olaye Figure-5 run payload to a compressed ``.npz`` file."""
+    save_path = pathlib.Path(path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(save_path, **payload)
+    return save_path
 
 
 def run_case(
@@ -321,56 +433,33 @@ def run_case(
 
 
 def build_parser():
+    """Builds the optional CLI parser retained for backward compatibility."""
     parser = argparse.ArgumentParser(description="Replicate Olaye & Ojo 2020 Figure 5 using the Olaye FD model.")
-    parser.add_argument("--R-um", type=float, default=3012.5, help="Half-domain size R in micrometers.")
-    parser.add_argument("--s0-um", type=float, default=12.5, help="Initial liquid half-width s0 in micrometers.")
-    parser.add_argument("--c-liquid0-pct", type=float, default=19.0, help="Initial liquid composition (percent).")
-    parser.add_argument("--c-solid0-pct", type=float, default=0.0, help="Initial solid composition (percent).")
-    parser.add_argument("--c-liquid-int-pct", type=float, default=10.223, help="Liquid-side interface composition (percent).")
-    parser.add_argument("--c-solid-int-pct", type=float, default=0.166, help="Solid-side interface composition (percent).")
-    parser.add_argument("--D-liquid-base", type=float, default=500.0, help="Liquid diffusivity base value from table.")
-    parser.add_argument("--D-solid-base", type=float, default=18.0, help="Solid diffusivity base value from table.")
-    parser.add_argument("--D-scale", type=float, default=1e-12, help="Scale to convert table diffusivities to m^2/s.")
-    parser.add_argument("--n-nodes", type=int, default=3013+1, help="Number of FD nodes.")
-    parser.add_argument("--t-end-h", type=float, default=0.005, help="Simulation end time (hours).")
-    # parser.add_argument("--semi_log_points", type=int, default=200, help="Number of semi-log points.")
-    parser.add_argument("--semiLog_dt", type=float, default=1e-3, help="Time step for semi-log scaling.")
-    parser.add_argument("--semiLogT0", type=float, default=1e-6, help="First dt")
-    parser.add_argument(
-        "--dt-mode",
-        type=str,
-        choices=["cfl", "semi_log_optional"],
-        default="semi_log_optional",
-        help="Time-step policy for Olaye model.",
-    )
-    parser.add_argument("--exp-csv", type=str, default=None, help="Optional CSV with experimental points: time_h,half_width_um.")
-    parser.add_argument(
-        "--out",
-        type=str,
-        default=None,
-        help="Output figure path. Default: examples/Olaye2020/olaye2020_fig5_replication.png",
-    )
-    parser.add_argument("--show", action="store_true", help="Show the matplotlib window.")
+    parser.add_argument("--n-phase-a-nodes", type=int, default=OLAYE_NOTEBOOK_CONFIG["n_phase_a_nodes"])
+    parser.add_argument("--n-phase-b-nodes", type=int, default=OLAYE_NOTEBOOK_CONFIG["n_phase_b_nodes"])
+    parser.add_argument("--semiLog-dt", type=float, default=OLAYE_NOTEBOOK_CONFIG["semiLog_dt"])
+    parser.add_argument("--model-variant", type=str, choices=["current", "rework"], default=OLAYE_NOTEBOOK_CONFIG["model_variant"])
+    parser.add_argument("--out", type=str, default=None, help="Optional figure output path.")
+    parser.add_argument("--save-run-path", type=str, default=None, help="Optional saved-run ``.npz`` output path.")
+    parser.add_argument("--no-save-run", action="store_true", help="Disable saving the notebook-friendly run artifact.")
+    parser.add_argument("--hide-plot", action="store_true", help="Do not show the matplotlib window.")
     return parser
 
 
-def main(n_phase_a_nodes, n_phase_b_nodes, semiLog_dt):
-    # args = build_parser().parse_args()
-    args = {
-        **FIG5_BASE_PARAMS,
-        "n_phase_a_nodes": n_phase_a_nodes,
-        "n_phase_b_nodes": n_phase_b_nodes,
-        "semiLog_dt": semiLog_dt,
-        "model_variant": MODEL_VARIANT,
-    }
+def plot_olaye_fig5_notebook(config=None, ax=None):
+    """
+    Runs the Figure-5 example from editable in-file settings and plots the run.
 
-    script_dir = pathlib.Path(__file__).resolve().parent
+    Parameters are taken from ``OLAYE_NOTEBOOK_CONFIG`` by default so the script
+    can be run directly from a notebook cell or interactive window.
+    """
+    config = OLAYE_NOTEBOOK_CONFIG if config is None else {**OLAYE_NOTEBOOK_CONFIG, **dict(config)}
+    args = {**FIG5_BASE_PARAMS, **config}
+
     out_path = (
-        pathlib.Path(args['out']).resolve()
-        if args['out'] is not None
-        # pathlib.Path(args.out).resolve()
-        # if args.out is not None
-        else script_dir / "Olaye2020\\olaye2020_fig5_replication.png"
+        pathlib.Path(args["out"]).resolve()
+        if args["out"] is not None
+        else SCRIPT_DIR / "olaye2020_fig5_replication.png"
     )
 
     t_s, width_um, model = run_case(
@@ -388,26 +477,10 @@ def main(n_phase_a_nodes, n_phase_b_nodes, semiLog_dt):
         n_phase_b_nodes=args["n_phase_b_nodes"],
         t_end_s=args["t_end_s"],
         dt_mode=args["dt_mode"],
-        # semi_log_points=args["semi_log_points"],
         semiLog_dt=args["semiLog_dt"],
         semiLogT0=args["semiLogT0"],
         model_variant=args["model_variant"],
     )
-    # t_h, width_um, model = run_case(
-    #     R_um=args.R_um,
-    #     s0_um=args.s0_um,
-    #     c_liquid0_pct=args.c_liquid0_pct,
-    #     c_solid0_pct=args.c_solid0_pct,
-    #     c_liquid_int_pct=args.c_liquid_int_pct,
-    #     c_solid_int_pct=args.c_solid_int_pct,
-    #     D_liquid_base=args.D_liquid_base,
-    #     D_solid_base=args.D_solid_base,
-    #     D_scale=args.D_scale,
-    #     n_nodes=args.n_nodes,
-    #     n_phase_nodes=args.n_phase_nodes,
-    #     t_end_s=args.t_end_s,
-    #     dt_mode=args.dt_mode,
-    # )
 
     mask = np.isfinite(t_s) & np.isfinite(width_um)
     t_s_plot = t_s[mask]
@@ -415,11 +488,15 @@ def main(n_phase_a_nodes, n_phase_b_nodes, semiLog_dt):
     if t_s_plot.size < 2:
         raise ValueError("Simulation did not produce enough finite points to plot.")
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.8), dpi=140)
-    ax.plot(t_s_plot, width_um_plot, lw=2.0, color="tab:blue", label="Olaye model (this work)")
+    created_figure = ax is None
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(7.2, 4.8), dpi=140)
+    else:
+        fig = ax.figure
+    label = args["label"] or f"Olaye model ({args['model_variant']})"
+    ax.plot(t_s_plot, width_um_plot, lw=2.0, color="tab:blue", label=label)
 
     exp_csv = args["exp_csv"]
-    # exp_csv = args.exp_csv
     if exp_csv is not None:
         exp_t_s, exp_w_um = _load_experimental_csv(pathlib.Path(exp_csv))
         exp_mask = np.isfinite(exp_t_s) & np.isfinite(exp_w_um)
@@ -432,7 +509,8 @@ def main(n_phase_a_nodes, n_phase_b_nodes, semiLog_dt):
             label="Experimental (digitized)",
         )
 
-    exp_t_s, exp_w_um = _load_experimental_csv(pathlib.Path(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_alt_PresentModelRough2_curve.csv"))
+    alt_csv = SCRIPT_DIR / "Olaye2020_fig5_alt_PresentModelRough2_curve.csv"
+    exp_t_s, exp_w_um = _load_experimental_csv(alt_csv)
     exp_mask = np.isfinite(exp_t_s) & np.isfinite(exp_w_um)
     ax.scatter(
         exp_t_s[exp_mask],
@@ -440,186 +518,108 @@ def main(n_phase_a_nodes, n_phase_b_nodes, semiLog_dt):
         s=26,
         color="tab:pink",
         marker="o",
-        facecolors='none',
+        facecolors="none",
         label="Experimental alt rough (digitized)",
     )
 
-    # ax.set_xlabel("Time (h)")
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Liquid half-width (um)")
-    # ax.set_title("Olaye & Ojo (2020) Figure 5 Replication")
-    ax.set_title(f"n_phase_a_nodes:{n_phase_a_nodes}, n_phase_b_nodes:{n_phase_b_nodes}, semiLog_dt:{semiLog_dt:.10f}    {MODEL_VARIANT}", fontsize=10)
-
-    x_min = float(np.min(t_s_plot))
-    x_max = float(np.max(t_s_plot))
-    y_min = float(np.min(width_um_plot))
-    y_max = float(np.max(width_um_plot))
-    if not np.isfinite(x_min + x_max + y_min + y_max):
-        raise ValueError("Plot limits are not finite.")
-    if x_max <= x_min:
-        pad_x = max(1e-6, abs(x_min) * 1e-3 + 1e-6)
-        x_min -= pad_x
-        x_max += pad_x
-    if y_max <= y_min:
-        pad_y = max(1e-6, abs(y_min) * 1e-3 + 1e-6)
-        y_min -= pad_y
-        y_max += pad_y
-    ax.set_xlim(x_min, x_max)
-    # ax.set_ylim(y_min, y_max)
-    ax.set_ylim(12.5, 24) ## hardcode limits to be able to compare graphs by eye more easily
-
-    ax.set_xscale('log')
-    # ax.set_xlim(0.1, x_max)
-    ax.set_xlim(0.00001, x_max)
-
+    ax.set_title(
+        f"n_phase_a_nodes:{args['n_phase_a_nodes']}, "
+        f"n_phase_b_nodes:{args['n_phase_b_nodes']}, "
+        f"semiLog_dt:{args['semiLog_dt']:.10f}    {args['model_variant']}",
+        fontsize=10,
+    )
+    ax.set_xscale("log")
+    ax.set_xlim(0.00001, float(np.max(t_s_plot)))
+    ax.set_ylim(12.5, 24)
     ax.grid(True, alpha=0.25)
     ax.legend()
 
     ax_twin = ax.twinx()
-    ax_twin.set_ylabel('conc', color='green')
-    conc_time_arr = model.concData._time.copy()
-    conc_arr = model.concData._y.copy()
+    ax_twin.set_ylabel("conc", color="green")
+    conc_time_arr = np.asarray(model.concData._time, dtype=np.float64)
+    conc_arr = np.asarray(model.concData._y, dtype=np.float64)
     ax_twin.plot(conc_time_arr, conc_arr, lw=1.0, color="tab:green", label="Conc")
-    ax_twin.hlines(conc_arr[0], conc_time_arr[0], conc_time_arr[-1], lw=1.0, color="tab:green", linestyle='dashdot', label="Initial conc")
+    ax_twin.hlines(conc_arr[0], conc_time_arr[0], conc_time_arr[-1], lw=1.0, color="tab:green", linestyle="dashdot", label="Initial conc")
     idealized_conc = compute_idealized_conc(args)
-    print(f"Idealized conc: {idealized_conc}")
-    ax_twin.hlines(idealized_conc, conc_time_arr[0], conc_time_arr[-1], lw=1.0, color="tab:green", linestyle='dashed', label="Idealized conc")
-    ax_twin.legend(loc='center right')
-    
-    w_arr_out, mu_A_arr_out, intermediateTime_arr_out = calculateCFLConstants(model)
+    ax_twin.hlines(idealized_conc, conc_time_arr[0], conc_time_arr[-1], lw=1.0, color="tab:green", linestyle="dashed", label="Idealized conc")
+    ax_twin.legend(loc="center right")
+
+    w_arr_out, mu_A_arr_out, intermediate_time_arr_out = calculateCFLConstants(model)
     ax_twin_mu = ax.twinx()
-    ax_twin_mu.set_ylabel('mu_A', color='orange')
-    ax_twin_mu.plot(intermediateTime_arr_out, mu_A_arr_out, lw=1.0, color="tab:orange", label="Mu_A")
-    ax_twin_mu.hlines(1, intermediateTime_arr_out[0], intermediateTime_arr_out[-1], lw=1.0, color="tab:orange", linestyle='dashdot', label="mu_A=1")
-    ax_twin_mu.set_yscale('log')
-    ax_twin_mu.spines['right'].set_position(('outward', 70))
-    # ax_twin.set_ylim([0,1])
-    
+    ax_twin_mu.set_ylabel("mu_A", color="orange")
+    ax_twin_mu.plot(intermediate_time_arr_out, mu_A_arr_out, lw=1.0, color="tab:orange", label="Mu_A")
+    ax_twin_mu.hlines(1, intermediate_time_arr_out[0], intermediate_time_arr_out[-1], lw=1.0, color="tab:orange", linestyle="dashdot", label="mu_A=1")
+    ax_twin_mu.set_yscale("log")
+    ax_twin_mu.spines["right"].set_position(("outward", 70))
+
     ax_twin_w = ax.twinx()
-    ax_twin_w.set_ylabel('1/w', color='brown')
-    ax_twin_w.plot(intermediateTime_arr_out, 1/w_arr_out, lw=1.0, color="tab:brown", label="1/w")
-    ax_twin_w.hlines(1, intermediateTime_arr_out[0], intermediateTime_arr_out[-1], lw=1.0, color="tab:brown", linestyle='dashdot', label="1/w=1")
-    ax_twin_w.spines['right'].set_position(('outward', 120))
+    ax_twin_w.set_ylabel("1/w", color="brown")
+    ax_twin_w.plot(intermediate_time_arr_out, 1 / w_arr_out, lw=1.0, color="tab:brown", label="1/w")
+    ax_twin_w.hlines(1, intermediate_time_arr_out[0], intermediate_time_arr_out[-1], lw=1.0, color="tab:brown", linestyle="dashdot", label="1/w=1")
+    ax_twin_w.spines["right"].set_position(("outward", 120))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path)
-    print(f"Saved: {out_path}")
+    fig.savefig(out_path, bbox_inches="tight")
+    print(f"Saved figure: {out_path}")
 
-    # if args.show:
-    if args["show"]:
-        plt.show()
-    else:
-        plt.close(fig)
+    payload = build_olaye_run_payload(
+        time_s=t_s_plot,
+        half_width_um=width_um_plot,
+        params=args,
+        model_variant=args["model_variant"],
+        label=args["label"],
+        mass_integral_initial=conc_arr[0],
+        mass_integral_final=conc_arr[-1],
+    )
+    save_path = None
+    if args["save_run"]:
+        save_path = save_olaye_run_result(args["save_run_path"], payload)
+        print(f"Saved run: {save_path}")
 
-    return model
+    if created_figure:
+        if args["show"]:
+            plt.show()
+        else:
+            plt.close(fig)
+
+    return {
+        "model": model,
+        "figure": fig,
+        "axes": ax,
+        "time_s": t_s_plot,
+        "half_width_um": width_um_plot,
+        "payload": payload,
+        "save_path": save_path,
+        "params": args,
+    }
+
+
+def main(argv=None):
+    """Runs the Figure-5 example using CLI overrides on top of notebook defaults."""
+    args = build_parser().parse_args(argv)
+    config = {
+        "n_phase_a_nodes": args.n_phase_a_nodes,
+        "n_phase_b_nodes": args.n_phase_b_nodes,
+        "semiLog_dt": args.semiLog_dt,
+        "model_variant": args.model_variant,
+        "out": args.out,
+        "save_run_path": args.save_run_path or OLAYE_NOTEBOOK_CONFIG["save_run_path"],
+        "save_run": not args.no_save_run,
+        "show": not args.hide_plot,
+    }
+    return plot_olaye_fig5_notebook(config)
+
 
 if __name__ == "__main__":
-    models={}
-    # semi_log_points_inputs = [2500]#, 5000, 10000, 20000, 50000]
-    semiLog_dt_inputs = [0.002763654842561367/10]#, 0.002763654842561367/10, 0.002763654842561367/25]#, 0.002763654842561367/10]#, 5000, 10000, 20000, 50000]
-    n_phase_nodes_inputs = [(26, 6001)]#, 50+1, 100+1]#, 50+1]#, 100+1, 200+1]
+    if "ipykernel" in sys.modules:
+        plot_olaye_fig5_notebook()
+    else:
+        main()
 
-    conds_list=[]
-    for semiLog_dt_input in semiLog_dt_inputs:
-        for n_phase_nodes_input in n_phase_nodes_inputs:
-            conds_list.append({'n_phase_a_nodes': n_phase_nodes_input[0], 'n_phase_b_nodes': n_phase_nodes_input[1], 'semiLog_dt': semiLog_dt_input})
-
-    for cond in conds_list:
-        t0=time.perf_counter()
-        try:
-            print(cond)
-            model = main(**cond)
-        except Exception as e:
-            print(f"Error occurred while running case {cond}: {e}")
-            models.update({f"model_{cond['n_phase_a_nodes']}_{cond['n_phase_b_nodes']}_{cond['semiLog_dt']}": {**cond, 'error':str(e)}})
-            continue
-        t1=time.perf_counter()
-        models.update({f"model_{cond['n_phase_a_nodes']}_{cond['n_phase_b_nodes']}_{cond['semiLog_dt']}": {**cond, 'model': model, 'runtime':(t1-t0)}})
-
-        print([(model.concData._y[i] - model.concData._y[0]) / model.concData._y[0] for i in [1,2,3,4,5,6, -1]])
-        print([((model.concData._y[i] - model.concData._y[0]) / model.concData._y[0]) / (model.concData._time[i] - model.concData._time[0]) for i in [1,2,3,4,5,6, -1]])
-
-# %%
-
-import matplotlib as mpl
-mpl.rcParams['figure.dpi'] = 300
-
-# styleDict = {'marker':'o', 'markersize':2}
-styleDict = {'linewidth':1, 'alpha':0.75}
-import matplotlib.pyplot as plt
-fig, ax = plt.subplots(figsize=(12, 8))
-indexToPlotTo=-1
-xMax = -np.inf
-# for modelName, model in {"model_20000":model_20000, "model_10000":model_10000, "model_5000":model_5000}.items():
-for modelName, modelDict in models.items():
-    if 'error' in modelDict:
-        print(f"Skipping {modelName} due to error: {modelDict['error']}")
-        continue
-    model=modelDict['model']
-    # y_arr = (model.interfaceData._y[:model.interfaceData.currentIndex]-model.interfaceData._y[0])
-    y_arr = (model.interfaceData._y[:model.interfaceData.currentIndex])
-    x_arr = np.sqrt(model.interfaceData._time[:model.interfaceData.currentIndex])
-    # ax.plot(x_arr[:indexToPlotTo], y_arr[:indexToPlotTo], label=f"Olaye model calculated results {modelName.split('_')[-1]} t-pts", zorder=3, **styleDict)
-    ax.plot(x_arr[:indexToPlotTo], y_arr[:indexToPlotTo], label=f"Olaye model calculated results {modelName}", zorder=3, **styleDict)
-
-    # if np.max(x_arr)>xMax
-beta = 7.207320366333016e-06
-indexToPlotTo_beta = np.max(np.where((2*beta*x_arr + model.interfaceData._y[0])<np.max(y_arr[:indexToPlotTo]))[0])
-# indexToPlotTo_beta=indexToPlotTo
-ax.plot(x_arr[:indexToPlotTo_beta], 2*beta*x_arr[:indexToPlotTo_beta] + model.interfaceData._y[0], label=f'Analytic Solution, beta={beta}', color='gray', linestyle='dashed', zorder=-1)
-
-import pandas as pd
-fig5_df = pd.read_csv("C:\\Users\\samth\\OneDrive - Northwestern University\\WS_DL\\Lab Data\\Price\\code\\kawin\\examples\\Olaye2020\\Olaye2020_fig5_PresentModel_curve.csv")
-fig5_df = fig5_df.sort_values(by=['time_s'])
-fig5_df['half_width_m'] = fig5_df['half_width_um']*1e-6
-if (np.sqrt(fig5_df['time_s'])<x_arr[indexToPlotTo]).any():
-    digitizedIndexToPlot = np.max(np.where(np.sqrt(fig5_df['time_s'])<x_arr[indexToPlotTo])[0])
-    ax.plot(np.sqrt(fig5_df['time_s'])[:digitizedIndexToPlot], fig5_df['half_width_m'][:digitizedIndexToPlot], 'o', fillstyle='none', color='tab:gray',  label='Fig 5 "Present Model" (digitized)', zorder=-2)
-
-fig5_alt_df = pd.read_csv(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_alt_PresentModelRough_curve.csv")
-fig5_alt_df = fig5_alt_df.sort_values(by=['time_s'])
-fig5_alt_df['half_width_m'] = fig5_alt_df['half_width_um']*1e-6
-if (np.sqrt(fig5_alt_df['time_s'])<x_arr[indexToPlotTo]).any():
-    digitizedAltRoughIndexToPlot = np.max(np.where(np.sqrt(fig5_alt_df['time_s'])<x_arr[indexToPlotTo])[0])
-    ax.plot(np.sqrt(fig5_alt_df['time_s'])[:digitizedAltRoughIndexToPlot], fig5_alt_df['half_width_m'][:digitizedAltRoughIndexToPlot], 'o', fillstyle='none', color='darkgray',  label='Fig 5 "Present Model" alt rough (digitized)', zorder=-2)
-
-with np.load("C:\\Users\\samth\\Downloads\\LeeAndOh_NiP_results_100sec_N3013.npz") as LeeAndOh_NiP_results_loaded:
-    LeeAndOh_NiP_results_loaded_df = pd.DataFrame.from_dict({item: LeeAndOh_NiP_results_loaded[item] for item in LeeAndOh_NiP_results_loaded.files}).copy()
-LeeAndOh_NiP_results_loaded_df['half_width_m'] = LeeAndOh_NiP_results_loaded_df['half_width_um'] * 1e-6
-if (np.sqrt(LeeAndOh_NiP_results_loaded_df['time_s'])<x_arr[indexToPlotTo]).any():
-    LeeAndOhIndexToPlot = np.max(np.where(np.sqrt(LeeAndOh_NiP_results_loaded_df['time_s'])<x_arr[indexToPlotTo])[0])
-    ax.plot(np.sqrt(LeeAndOh_NiP_results_loaded_df['time_s'])[:LeeAndOhIndexToPlot], LeeAndOh_NiP_results_loaded_df['half_width_m'][:LeeAndOhIndexToPlot], label='Lee and Oh calculated results (N=3013)', zorder=2, color='k', **styleDict)
-
-with np.load("C:\\Users\\samth\\Downloads\\LeeAndOh_NiP_results_100sec_N4500.npz") as LeeAndOh_NiP_results_loaded:
-    LeeAndOh_NiP_results_loaded_df = pd.DataFrame.from_dict({item: LeeAndOh_NiP_results_loaded[item] for item in LeeAndOh_NiP_results_loaded.files}).copy()
-LeeAndOh_NiP_results_loaded_df['half_width_m'] = LeeAndOh_NiP_results_loaded_df['half_width_um'] * 1e-6
-if (np.sqrt(LeeAndOh_NiP_results_loaded_df['time_s'])<x_arr[indexToPlotTo]).any():
-    LeeAndOhIndexToPlot = np.max(np.where(np.sqrt(LeeAndOh_NiP_results_loaded_df['time_s'])<x_arr[indexToPlotTo])[0])
-    ax.plot(np.sqrt(LeeAndOh_NiP_results_loaded_df['time_s'])[:LeeAndOhIndexToPlot], LeeAndOh_NiP_results_loaded_df['half_width_m'][:LeeAndOhIndexToPlot], label='Lee and Oh calculated results (N=4500)', zorder=2, color='k', linestyle='dotted', **styleDict)
-
-plt.legend()
-plt.show(block=True)
-
-theoreticalMaxLiquidWidth = (0.18999998/0.10223) * 12.5e-6
-print(f"max liquid width in sim:      {np.max(model.interfaceData._y)}")
-print(f"theoretical max liquid width: {(0.19/0.10223) * 12.5e-6}")   ## {(c_a0/c_a_eq) * l_a}
-print(f"theoretical max liquid width: {theoreticalMaxLiquidWidth}")   ## {(c_a0/c_a_eq) * l_a}
-print([f"({modelDict['n_phase_nodes']-1}^2 / {modelDict['semi_log_points']}): {((modelDict['n_phase_nodes']-1)**2)/modelDict['semi_log_points']}" for modelDict in models.values()])
-
-# %%
-import plotly.graph_objects as go
-import json
-import webbrowser
-
-styleDict = {'linewidth':1, 'alpha':0.75}
-
-plotly_fig = go.Figure()
-indexToPlotTo = -1
-theoreticalMaxLiquidWidth = (0.19 / 0.10223) * 12.5e-6
-model_colorway = [
-    "#3366CC", "#DC3912", "#FF9900", "#109618", "#990099",
-    "#0099C6", "#DD4477", "#66AA00", "#B82E2E", "#316395",
-]
+r'''
+Legacy exploratory notebook block intentionally disabled.
 
 def deltat_to_deltax_ratio(modelDict_input):
     # return (modelDict_input["n_phase_nodes"] - 1) / modelDict_input["semi_log_points"]
@@ -1014,12 +1014,11 @@ filter_page_html = f"""<!DOCTYPE html>
   </script>
 </body>
 </html>
-"""
 
 plotly_html_path.write_text(filter_page_html, encoding="utf-8")
 print(f"Saved interactive Plotly filter page: {plotly_html_path}")
 webbrowser.open(plotly_html_path.resolve().as_uri())
 
-
+'''
 
 # %%

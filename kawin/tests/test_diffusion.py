@@ -1,5 +1,6 @@
 import os
 
+import matplotlib.pyplot as plt
 import numpy as np
 from numpy.testing import assert_allclose
 import pytest
@@ -3330,3 +3331,120 @@ def test_illingworth_cpp_reference_comparison():
     # double precision.
     assert comparison["max_abs_diff"] < 5e-6
     assert comparison["max_rel_diff"] < 5e-6
+
+
+def test_olaye_saved_run_payload_contains_required_fields():
+    from examples.Olaye2020.replicate_olaye2020_fig5 import build_olaye_run_payload
+
+    payload = build_olaye_run_payload(
+        time_s=np.array([0.0, 1.0, 2.0]),
+        half_width_um=np.array([12.5, 13.0, 13.2]),
+        params={
+            "s0_um": 12.5,
+            "c_liquid0_pct": 19.0,
+            "c_liquid_int_pct": 10.223,
+            "show": True,
+            "out": None,
+        },
+        model_variant="rework",
+        label="Synthetic Olaye",
+    )
+
+    assert set(["time_s", "half_width_um", "label", "source_script", "model_family", "params_json", "model_variant"]).issubset(payload)
+    assert payload["model_family"] == "olaye_fig5"
+    assert payload["label"] == "Synthetic Olaye"
+
+
+def test_illingworth_saved_run_payload_contains_required_fields():
+    from examples.Illingworth2005.compare_illingworth2005_planar import build_illingworth_run_payload
+
+    payload = build_illingworth_run_payload(
+        {
+            "time_s": np.array([0.1, 1.0, 10.0]),
+            "liquid_half_width_um": np.array([12.5, 13.0, 14.0]),
+            "theoretical_max_um": 23.2,
+            "params": {"time_step_s": 10.0, "show": True, "out": None},
+        },
+        label="Synthetic Illingworth",
+    )
+
+    assert set(["time_s", "half_width_um", "label", "source_script", "model_family", "params_json", "theoretical_max_um"]).issubset(payload)
+    assert payload["model_family"] == "illingworth_fig3_present_work"
+    assert payload["label"] == "Synthetic Illingworth"
+
+
+def test_saved_planar_run_loader_accepts_minimal_valid_npz(tmp_path):
+    from examples.compare_saved_planar_runs import _load_saved_run
+
+    save_path = tmp_path / "valid_saved_run.npz"
+    np.savez_compressed(
+        save_path,
+        time_s=np.array([0.0, 1.0, 2.0], dtype=np.float64),
+        half_width_um=np.array([12.5, 13.0, 13.5], dtype=np.float64),
+        label=np.array("Valid run"),
+    )
+
+    loaded = _load_saved_run(save_path)
+    assert_allclose(loaded["time_s"], [0.0, 1.0, 2.0], rtol=0.0, atol=0.0)
+    assert_allclose(loaded["half_width_um"], [12.5, 13.0, 13.5], rtol=0.0, atol=0.0)
+    assert loaded["metadata"]["label"] == "Valid run"
+
+
+def test_saved_planar_run_loader_rejects_missing_required_arrays(tmp_path):
+    from examples.compare_saved_planar_runs import _load_saved_run
+
+    save_path = tmp_path / "missing_half_width.npz"
+    np.savez_compressed(save_path, time_s=np.array([0.0, 1.0], dtype=np.float64))
+
+    with pytest.raises(ValueError, match="time_s, half_width_um"):
+        _load_saved_run(save_path)
+
+
+def test_saved_planar_run_loader_rejects_too_few_finite_points(tmp_path):
+    from examples.compare_saved_planar_runs import _load_saved_run
+
+    save_path = tmp_path / "too_short.npz"
+    np.savez_compressed(
+        save_path,
+        time_s=np.array([0.0, np.nan], dtype=np.float64),
+        half_width_um=np.array([12.5, 13.0], dtype=np.float64),
+    )
+
+    with pytest.raises(ValueError, match="at least two finite saved points"):
+        _load_saved_run(save_path)
+
+
+def test_saved_planar_run_plotter_uses_label_fallbacks_and_supports_log_scale(tmp_path):
+    from examples.compare_saved_planar_runs import plot_saved_planar_comparison
+
+    olaye_path = tmp_path / "olaye_saved_run.npz"
+    illingworth_path = tmp_path / "illingworth_saved_run.npz"
+    np.savez_compressed(
+        olaye_path,
+        time_s=np.array([0.1, 1.0, 2.0], dtype=np.float64),
+        half_width_um=np.array([12.5, 13.0, 13.4], dtype=np.float64),
+    )
+    np.savez_compressed(
+        illingworth_path,
+        time_s=np.array([0.1, 1.0, 10.0], dtype=np.float64),
+        half_width_um=np.array([12.5, 13.1, 14.2], dtype=np.float64),
+        theoretical_max_um=np.array([23.2], dtype=np.float64),
+    )
+
+    fig, ax = plt.subplots()
+    result = plot_saved_planar_comparison(
+        {
+            "olaye_run_path": olaye_path,
+            "illingworth_run_path": illingworth_path,
+            "x_axis": "log",
+            "show": False,
+            "out": None,
+        },
+        ax=ax,
+    )
+
+    assert result["axes"].get_xscale() == "log"
+    labels = [line.get_label() for line in result["axes"].lines]
+    assert "Olaye saved run" in labels
+    assert "Illingworth saved run" in labels
+    plt.close(fig)
