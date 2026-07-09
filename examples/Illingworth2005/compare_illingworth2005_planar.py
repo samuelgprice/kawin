@@ -8,6 +8,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 
 import numpy as np
@@ -125,6 +126,10 @@ FIG3_NOTEBOOK_CONFIG = {
     "save_run": True,
     "save_run_path": SCRIPT_DIR / "illingworth2005_fig3_saved_run.npz",
     "label": None,
+    "checkAgainstAuthorsCPP": False,
+    "cpp_compiler": None,
+    "cpp_build_dir": None,
+    "cpp_print_table": False,
 }
 
 
@@ -139,15 +144,19 @@ FIG3_PRESENT_WORK_PARAMS = {
     "D_liquid_um2_s": 500.0,
     "D_solid_um2_s": 18.0,
     # The paper notes a similar initial step size of 1 um for the comparison.
-    "spatial_step_um": 0.5,
+    "spatial_step_um": 1.0,
     # The text mentions a 0.01 s time step for the comparison setup. That is
     # very expensive in pure Python out to 1e5 s, so the default here is a
     # runtime-friendly value. Set this to 0.01 for the literal paper timestep.
     "time_step_s": 0.01,
     "paper_time_step_s": 0.01,
-    "t_end_s": 1.0e2,
+    "t_end_s": 1.0e1,
     "record": 1,
     "plot_conc": True,
+    "checkAgainstAuthorsCPP": False,
+    "cpp_compiler": None,
+    "cpp_build_dir": None,
+    "cpp_print_table": False,
     "show": True,
     "out": None,
     "overlay_csvs": [
@@ -352,20 +361,31 @@ def run_fig3_present_work(params=None):
             "Increase FIG3_PRESENT_WORK_PARAMS['time_step_s'] for exploratory plotting, "
             "or run a shorter t_end_s."
         )
-
     model = build_fig3_present_work_model(p, record=p["record"])
+    python_start = time.perf_counter()
     model.solve(p["t_end_s"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True)
+    python_runtime_s = time.perf_counter() - python_start
     # debugInPlace()
     n = model.interfaceData.N + 1
     time_s = model.interfaceData._time[:n].copy()
     liquid_half_width_um = model.interfaceData._y[:n].copy()
-    return {
+    result = {
         "time_s": time_s,
         "liquid_half_width_um": liquid_half_width_um,
         "theoretical_max_um": theoretical_fig3_max_liquid_half_width_um(p),
         "model": model,
         "params": p,
+        "python_runtime_s": python_runtime_s,
     }
+    if p.get("checkAgainstAuthorsCPP", False):
+        comparison = compare_fig3_result_to_authors_cpp(
+            result,
+            compiler=p.get("cpp_compiler"),
+            build_dir=p.get("cpp_build_dir"),
+        )
+        result["cpp_comparison"] = comparison
+        print_comparison_summary(comparison, print_table=p.get("cpp_print_table", False))
+    return result
 
 
 def plot_fig3_present_work(params=None, ax=None):
@@ -393,6 +413,20 @@ def plot_fig3_present_work(params=None, ax=None):
         linewidth=2.0,
         zorder=5
     )
+    if p.get("checkAgainstAuthorsCPP", False) and "cpp_comparison" in result:
+        comparison = result["cpp_comparison"]
+        cpp_time = np.asarray(comparison.get("cpp_time", comparison["time"]), dtype=np.float64)
+        cpp_interface = np.asarray(comparison.get("cpp_interface", comparison["cpp_s"]), dtype=np.float64)
+        cpp_mask = np.isfinite(cpp_time) & np.isfinite(cpp_interface) & (cpp_time > 0)
+        ax.plot(
+            cpp_time[cpp_mask],
+            cpp_interface[cpp_mask],
+            color="tab:orange",
+            linestyle="dotted",
+            linewidth=1.4,
+            label="Authors' C++ reference",
+            zorder=6,
+        )
     ax.plot(
         [0.1, p["t_end_s"]],
         [result["theoretical_max_um"], result["theoretical_max_um"]],
@@ -468,7 +502,7 @@ def plot_fig3_present_work(params=None, ax=None):
                 label="Idealized conc",
             )
             ax_twin.legend(loc="center right")
-
+    return result, ax
     out = p.get("out")
     if out:
         ax.figure.savefig(out, bbox_inches="tight")
@@ -494,6 +528,219 @@ def parse_results(path):
         raise ValueError(f"No rows found in {path}.")
     data = np.atleast_2d(data)
     return np.asarray(data[:, 0], dtype=np.float64), np.asarray(data[:, 1], dtype=np.float64)
+
+
+def _format_cpp_float(value):
+    """Formats a Python float as a C++ double literal with round-trip precision."""
+    return format(float(value), ".17g")
+
+
+def fig3_params_to_author_cpp_params(params):
+    """
+    Converts Figure-3 Python parameters to the authors' planar C++ parameters.
+
+    The authors' C++ driver requires an integer number of fixed timesteps. The
+    Python comparison therefore requires ``t_end_s`` to be an integer multiple
+    of ``time_step_s`` when running against generated C++ reference output.
+    """
+    p = FIG3_PRESENT_WORK_PARAMS if params is None else {**FIG3_PRESENT_WORK_PARAMS, **dict(params)}
+    n_time_steps_float = float(p["t_end_s"]) / float(p["time_step_s"])
+    n_time_steps = int(round(n_time_steps_float))
+    if not np.isclose(n_time_steps_float, n_time_steps, rtol=0.0, atol=1e-9):
+        raise ValueError(
+            "C++ comparison requires t_end_s to be an integer multiple of time_step_s; "
+            f"got t_end_s/time_step_s={n_time_steps_float}."
+        )
+    return {
+        "s0": float(p["s0_um"]),
+        "R": float(p["R_um"]),
+        "n_alpha": int(round(p["s0_um"] / p["spatial_step_um"])) + 1,
+        "d_alpha": float(p["D_liquid_um2_s"]),
+        "initial_alpha": float(p["c_liquid0_atpct"]) / 100.0,
+        "interface_alpha": float(p["c_liquid_int_atpct"]) / 100.0,
+        "n_beta": int(round((p["R_um"] - p["s0_um"]) / p["spatial_step_um"])) + 1,
+        "d_beta": float(p["D_solid_um2_s"]),
+        "initial_beta": float(p["c_solid0_atpct"]) / 100.0,
+        "interface_beta": float(p["c_solid_int_atpct"]) / 100.0,
+        "time_step": float(p["time_step_s"]),
+        "n_time_steps": n_time_steps,
+        "tolerance": 1.0e-8,
+    }
+
+
+def _render_author_cpp_driver(params):
+    """Renders a generated C++ driver that uses the authors' implementation files."""
+    p = params
+    return f"""#include <stdio.h>
+#include <stdlib.h>
+#include "data_structures.h"
+#include "subroutines.h"
+#include "InOut.h"
+
+int main(void)
+{{
+    const double s_0 = {_format_cpp_float(p["s0"])};
+    const double R = {_format_cpp_float(p["R"])};
+    const int nAlpha = {int(p["n_alpha"])};
+    const double dAlpha = {_format_cpp_float(p["d_alpha"])};
+    const double initialAlpha = {_format_cpp_float(p["initial_alpha"])};
+    const double interAlpha = {_format_cpp_float(p["interface_alpha"])};
+    const int nBeta = {int(p["n_beta"])};
+    const double dBeta = {_format_cpp_float(p["d_beta"])};
+    const double initialBeta = {_format_cpp_float(p["initial_beta"])};
+    const double interBeta = {_format_cpp_float(p["interface_beta"])};
+    const double time_step = {_format_cpp_float(p["time_step"])};
+    const int n_time_steps = {int(p["n_time_steps"])};
+    const double tol = {_format_cpp_float(p["tolerance"])};
+
+    int i;
+    int tmp;
+    two_phase *whole_system = (two_phase *) calloc(1, sizeof(two_phase));
+    whole_system->s = s_0;
+    whole_system->l = R;
+    whole_system->old_s = whole_system->s;
+    whole_system->future_s = whole_system->s;
+
+    whole_system->left = (single_phase *) calloc(1, sizeof(single_phase));
+    whole_system->left->n = nAlpha;
+    whole_system->left->d_coeff = dAlpha;
+    whole_system->left->c_boundary = interAlpha;
+    whole_system->left->u = (double *) calloc(whole_system->left->n, sizeof(double));
+    whole_system->left->c = (double *) calloc(whole_system->left->n, sizeof(double));
+    whole_system->left->future_c = (double *) calloc(whole_system->left->n, sizeof(double));
+    for (i = 0; i < whole_system->left->n; i++)
+    {{
+        whole_system->left->u[i] = double(i) / double(whole_system->left->n - 1);
+        whole_system->left->c[i] = initialAlpha;
+        whole_system->left->future_c[i] = whole_system->left->c[i];
+    }}
+    whole_system->left->c[whole_system->left->n - 1] = whole_system->left->c_boundary;
+    whole_system->left->future_c[whole_system->left->n - 1] = whole_system->left->c_boundary;
+
+    whole_system->right = (single_phase *) calloc(1, sizeof(single_phase));
+    whole_system->right->n = nBeta;
+    whole_system->right->d_coeff = dBeta;
+    whole_system->right->c_boundary = interBeta;
+    whole_system->right->u = (double *) calloc(whole_system->right->n, sizeof(double));
+    whole_system->right->c = (double *) calloc(whole_system->right->n, sizeof(double));
+    whole_system->right->future_c = (double *) calloc(whole_system->right->n, sizeof(double));
+    for (i = 0; i < whole_system->right->n; i++)
+    {{
+        whole_system->right->u[i] = double(i) / double(whole_system->right->n - 1);
+        whole_system->right->c[i] = initialBeta;
+        whole_system->right->future_c[i] = whole_system->right->c[i];
+    }}
+    whole_system->right->c[0] = whole_system->right->c_boundary;
+    whole_system->right->future_c[0] = whole_system->right->c_boundary;
+
+    FILE *fpt = fopen("results.txt", "w");
+    fprintf(fpt, "Time\\tInterface Position\\n");
+    for (i = 0; i < n_time_steps + 1; i++)
+    {{
+        out_interface(whole_system, double(i) * time_step, fpt);
+        if (i < n_time_steps)
+        {{
+            tmp = take_step_planar(whole_system, time_step, tol);
+            if (tmp < 0)
+            {{
+                fclose(fpt);
+                return 2;
+            }}
+        }}
+    }}
+
+    free(whole_system->left->u);
+    free(whole_system->left->c);
+    free(whole_system->left->future_c);
+    free(whole_system->right->u);
+    free(whole_system->right->c);
+    free(whole_system->right->future_c);
+    free(whole_system->left);
+    free(whole_system->right);
+    free(whole_system);
+    fclose(fpt);
+    return 0;
+}}
+"""
+
+
+def compile_and_run_authors_cpp_with_params(params, source_dir=None, build_dir=None, compiler=None, return_runtime=False):
+    """
+    Compiles and runs a generated C++ driver with user-provided parameters.
+
+    The generated driver is written to the build directory and links against the
+    authors' untouched ``subroutines.cpp``, ``trimatrix.cpp``, and ``InOut.cpp``
+    files. This keeps the original MAP source tree read-only while allowing the
+    Python run parameters to be mirrored exactly in the C++ reference run.
+    """
+    source_dir = pathlib.Path(source_dir) if source_dir is not None else AUTHOR_CPP_SOURCE_DIR
+    compiler = compiler or shutil.which("g++")
+    if compiler is None:
+        raise FileNotFoundError("Could not find g++ on PATH.")
+    compiler_path = pathlib.Path(compiler)
+    compiler_dir = compiler_path.parent if compiler_path.parent != pathlib.Path(".") else None
+
+    cleanup = False
+    if build_dir is None:
+        temp_root = REPO_ROOT / ".pytest_tmp"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        build_dir = temp_root / f"illingworth_cpp_params_{uuid.uuid4().hex}"
+        build_dir.mkdir(parents=True, exist_ok=False)
+        cleanup = True
+    else:
+        build_dir = pathlib.Path(build_dir)
+        build_dir.mkdir(parents=True, exist_ok=True)
+
+    cpp_params = fig3_params_to_author_cpp_params(params)
+    driver_path = build_dir / "generated_illingworth_driver.cpp"
+    exe = build_dir / f"illingworth_reference_{uuid.uuid4().hex}.exe"
+    sources = [
+        driver_path,
+        source_dir / "subroutines.cpp",
+        source_dir / "trimatrix.cpp",
+        source_dir / "InOut.cpp",
+    ]
+    try:
+        driver_path.write_text(_render_author_cpp_driver(cpp_params), encoding="utf-8")
+        compile_cmd = [compiler, "-I", str(source_dir), *[str(s) for s in sources], "-o", str(exe)]
+        env = None
+        if compiler_dir is not None:
+            env = dict(os.environ)
+            env["PATH"] = str(compiler_dir) + os.pathsep + env.get("PATH", "")
+        compile_start = time.perf_counter()
+        compile_result = subprocess.run(compile_cmd, text=True, capture_output=True, env=env)
+        compile_runtime_s = time.perf_counter() - compile_start
+        if compile_result.returncode != 0:
+            raise RuntimeError(
+                "Generated authors' C++ compile failed with exit code "
+                f"{compile_result.returncode}.\nSTDOUT:\n{compile_result.stdout}\nSTDERR:\n{compile_result.stderr}"
+            )
+
+        run_start = time.perf_counter()
+        run_result = subprocess.run([str(exe)], cwd=build_dir, text=True, capture_output=True, env=env)
+        run_runtime_s = time.perf_counter() - run_start
+        results_path = build_dir / "results.txt"
+        if run_result.returncode != 0:
+            raise RuntimeError(
+                "Generated authors' executable failed.\n"
+                f"Exit code: {run_result.returncode}\nSTDOUT:\n{run_result.stdout}\nSTDERR:\n{run_result.stderr}"
+            )
+        if not results_path.exists():
+            raise RuntimeError(
+                "Generated authors' executable did not produce results.txt.\n"
+                f"STDOUT:\n{run_result.stdout}\nSTDERR:\n{run_result.stderr}"
+            )
+        result = parse_results(results_path)
+        if return_runtime:
+            return result, {
+                "cpp_compile_runtime_s": compile_runtime_s,
+                "cpp_run_runtime_s": run_runtime_s,
+                "cpp_total_runtime_s": compile_runtime_s + run_runtime_s,
+            }
+        return result
+    finally:
+        if cleanup:
+            shutil.rmtree(build_dir, ignore_errors=True)
 
 
 def compile_and_run_authors_cpp(source_dir=None, build_dir=None, compiler=None):
@@ -577,11 +824,84 @@ def compare_default_case(compiler=None, build_dir=None):
     }
 
 
+def compare_fig3_result_to_authors_cpp(result, compiler=None, build_dir=None):
+    """
+    Compares a Python Figure-3 run against a parameter-matched C++ reference.
+
+    The generated C++ driver writes every fixed timestep. The Python result may
+    be recorded less frequently, so comparison is performed at the Python
+    recorded times by indexing the C++ history with ``time / time_step_s``.
+    A pandas ``DataFrame`` with side-by-side interface histories is included in
+    the returned comparison dictionary under ``"dataframe"``.
+    """
+    import pandas as pd
+
+    p = result["params"]
+    (cpp_time, cpp_s), runtime_info = compile_and_run_authors_cpp_with_params(
+        p,
+        compiler=compiler,
+        build_dir=build_dir,
+        return_runtime=True,
+    )
+    py_time = np.asarray(result["time_s"], dtype=np.float64)
+    py_s = np.asarray(result["liquid_half_width_um"], dtype=np.float64)
+    dt = float(p["time_step_s"])
+    cpp_indices = np.rint(py_time / dt).astype(int)
+    if np.any(cpp_indices < 0) or np.any(cpp_indices >= len(cpp_time)):
+        raise ValueError("Python recorded times extend outside the generated C++ reference history.")
+    matched_cpp_time = cpp_time[cpp_indices]
+    time_atol = max(abs(dt) * 1e-8, 1e-12)
+    if not np.allclose(matched_cpp_time, py_time, rtol=0.0, atol=time_atol):
+        max_time_diff = float(np.max(np.abs(matched_cpp_time - py_time)))
+        raise ValueError(f"C++ and Python output times do not match; max difference is {max_time_diff:.3e}.")
+    matched_cpp_s = cpp_s[cpp_indices]
+    abs_diff = np.abs(matched_cpp_s - py_s)
+    rel_diff = abs_diff / np.maximum(np.abs(matched_cpp_s), 1e-300)
+    comparison_df = pd.DataFrame(
+        {
+            "time_s": py_time,
+            "python_interface_um": py_s,
+            "authors_cpp_interface_um": matched_cpp_s,
+            "interface_abs_diff_um": abs_diff,
+            "interface_rel_diff": rel_diff,
+            "authors_cpp_time_s": matched_cpp_time,
+            "authors_cpp_step_index": cpp_indices,
+        }
+    )
+    python_runtime_s = result.get("python_runtime_s")
+    runtime_ratio = np.nan
+    if python_runtime_s is not None and runtime_info["cpp_run_runtime_s"] > 0:
+        runtime_ratio = float(python_runtime_s / runtime_info["cpp_run_runtime_s"])
+    return {
+        "time": py_time,
+        "cpp_s": matched_cpp_s,
+        "python_s": py_s,
+        "abs_diff": abs_diff,
+        "rel_diff": rel_diff,
+        "max_abs_diff": float(np.max(abs_diff)),
+        "max_rel_diff": float(np.max(rel_diff)),
+        "cpp_time": cpp_time,
+        "cpp_interface": cpp_s,
+        "dataframe": comparison_df,
+        "python_runtime_s": None if python_runtime_s is None else float(python_runtime_s),
+        **runtime_info,
+        "python_to_cpp_run_runtime_ratio": runtime_ratio,
+    }
+
+
 def print_comparison_summary(comparison, print_table=False):
     """Prints a compact comparison summary suitable for scripts or notebooks."""
     print(f"Rows compared: {len(comparison['time'])}")
     print(f"Max absolute interface-position difference: {comparison['max_abs_diff']:.16e}")
     print(f"Max relative interface-position difference: {comparison['max_rel_diff']:.16e}")
+    if comparison.get("python_runtime_s") is not None:
+        print(f"Python solve runtime: {comparison['python_runtime_s']:.6g} s")
+    if comparison.get("cpp_run_runtime_s") is not None:
+        print(f"C++ run runtime: {comparison['cpp_run_runtime_s']:.6g} s")
+        print(f"C++ compile runtime: {comparison['cpp_compile_runtime_s']:.6g} s")
+        print(f"C++ compile+run runtime: {comparison['cpp_total_runtime_s']:.6g} s")
+    if np.isfinite(comparison.get("python_to_cpp_run_runtime_ratio", np.nan)):
+        print(f"Python/C++ run runtime ratio: {comparison['python_to_cpp_run_runtime_ratio']:.6g}")
     if print_table:
         print("\nTime\tC++ s\tPython s\tAbs diff")
         for t, cpp_s, py_s, diff in zip(
@@ -644,6 +964,7 @@ if __name__ == "__main__":
         result, ax = plot_fig3_present_work(FIG3_NOTEBOOK_CONFIG)
         # comparison = run_from_config()
     else:
-        main()
+        result, ax = plot_fig3_present_work(FIG3_NOTEBOOK_CONFIG)
+        # main()
 
  # %%
