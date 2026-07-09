@@ -14,6 +14,11 @@ from kawin.diffusion.mesh.MovingBoundaryIllingworthFD1D import (
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
 
+def _loge_arange(start, stop, log_step):
+    """Returns exponentially spaced target times with fixed natural-log spacing."""
+    logs = np.arange(np.log(start), np.log(stop), log_step)
+    return np.exp(logs)
+
 def debugInPlace():
     try:
         import debugpy
@@ -179,6 +184,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         interfacePosition,
         interface_compositions: tuple[float, float],
         time_step: float,
+        dt_mode: str = "fixed",
+        semiLog_dt: float | None = None,
+        semiLogT0: float | None = None,
         geometry: str = "planar",
         phase_a_nodes: int | None = None,
         phase_b_nodes: int | None = None,
@@ -190,6 +198,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceCompositions = tuple(float(v) for v in interface_compositions)
         self.timeStep = float(time_step)
+        self.dtMode = str(dt_mode)
+        self.semiLog_dt = None if semiLog_dt is None else float(semiLog_dt)
+        self.semiLogT0 = None if semiLogT0 is None else float(semiLogT0)
         self.geometry = str(geometry)
         self.phaseANodes = None if phase_a_nodes is None else int(phase_a_nodes)
         self.phaseBNodes = None if phase_b_nodes is None else int(phase_b_nodes)
@@ -201,6 +212,8 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self.pData = None
         self.qData = None
         self._currdt = np.inf
+        self._semiLogTimes = None
+        self._semiLogNextIndex = 0
         self._lastImplicitIterations = 0
         self._lastImplicitError = np.nan
         self._nearFinalNoop = False
@@ -245,6 +258,14 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             raise NotImplementedError("MovingBoundaryIllingworthFD1DModel currently implements only planar geometry.")
         if not np.isfinite(self.timeStep) or self.timeStep <= 0:
             raise ValueError("time_step must be a positive finite value.")
+        if self.dtMode not in {"fixed", "semi_log"}:
+            raise ValueError("dt_mode must be 'fixed' or 'semi_log'.")
+        if self.dtMode == "semi_log" and ((self.semiLog_dt is None) or (self.semiLogT0 is None)):
+            raise ValueError("semiLog_dt and semiLogT0 must be specified when dt_mode is 'semi_log'.")
+        if self.semiLog_dt is not None and (not np.isfinite(self.semiLog_dt) or self.semiLog_dt <= 0):
+            raise ValueError("semiLog_dt must be a positive finite value.")
+        if self.semiLogT0 is not None and (not np.isfinite(self.semiLogT0) or self.semiLogT0 <= 0):
+            raise ValueError("semiLogT0 must be a positive finite value.")
         if not np.isfinite(self.tolerance) or self.tolerance <= 0:
             raise ValueError("tolerance must be a positive finite value.")
         if self.maxIterations < 2:
@@ -279,6 +300,8 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self.pData = None
         self.qData = None
         self._currdt = np.inf
+        self._semiLogTimes = None
+        self._semiLogNextIndex = 0
         self._lastImplicitIterations = 0
         self._lastImplicitError = np.nan
         self._nearFinalNoop = False
@@ -324,6 +347,34 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self.data.currentY = physical
         self._initialInventory = self.getTotalInventoryFromState(self._p_curr, self._q_curr, self._s_curr)
         self.concData.record(0, self.checkMassIntegral(self._p_curr, self._q_curr, self._s_curr))
+
+    def setTimeInfo(self, currTime, simTime):
+        """
+        Stores solve-time bounds and prepares optional semi-log target times.
+
+        In ``dt_mode='semi_log'``, the implicit Illingworth recurrence still
+        advances one complete step at a time; only the target output/step times
+        are nonuniform. ``semiLogT0`` is the first relative target time and
+        ``semiLog_dt`` is the spacing in natural-log time.
+        """
+        super().setTimeInfo(currTime, simTime)
+        self._currdt = np.inf
+        self._nearFinalNoop = False
+        if self.dtMode != "semi_log" or simTime <= 0:
+            self._semiLogTimes = None
+            self._semiLogNextIndex = 0
+            return
+
+        t0_rel = max(float(self.semiLogT0), 1e-15)
+        sim_time = float(simTime)
+        if sim_time <= t0_rel:
+            rel_times = np.asarray([sim_time], dtype=np.float64)
+        else:
+            rel_times = _loge_arange(t0_rel, sim_time, float(self.semiLog_dt))
+            rel_times = rel_times[(rel_times > 0.0) & (rel_times < sim_time)]
+            rel_times = np.append(rel_times, sim_time)
+        self._semiLogTimes = float(currTime) + np.asarray(rel_times, dtype=np.float64)
+        self._semiLogNextIndex = 0
 
     def _initialize_transformed_state(self, composition, interface_position):
         c = np.asarray(composition, dtype=np.float64).reshape(-1)
@@ -392,15 +443,39 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
 
     def _compute_dt(self, t):
         remaining = getattr(self, "finalTime", np.inf) - float(t)
-        self._nearFinalNoop = bool(np.isfinite(remaining) and 0 < remaining <= self.timeStep * 1e-10)
+        step_scale = self.timeStep
+        if self.dtMode == "semi_log":
+            scheduled_dt = self._computeSemiLogDt(t)
+            if np.isfinite(scheduled_dt) and scheduled_dt > 0:
+                step_scale = scheduled_dt
+            dt = min(scheduled_dt, remaining)
+        else:
+            dt = min(self.timeStep, remaining)
+        self._nearFinalNoop = bool(np.isfinite(remaining) and 0 < remaining <= max(step_scale, 1e-15) * 1e-10)
         if self._nearFinalNoop:
-            self._currdt = self.timeStep
-            return self.timeStep
-        dt = min(self.timeStep, remaining)
+            self._currdt = max(step_scale, 1e-15)
+            return self._currdt
         if not np.isfinite(dt) or dt <= 0:
             dt = self.timeStep
         self._currdt = float(dt)
         return float(dt)
+
+    def _updateSemiLogIndex(self, t):
+        if self._semiLogTimes is None:
+            return
+        while self._semiLogNextIndex < len(self._semiLogTimes):
+            if self._semiLogTimes[self._semiLogNextIndex] > float(t) + 1e-15:
+                break
+            self._semiLogNextIndex += 1
+
+    def _computeSemiLogDt(self, t):
+        """Returns the step needed to reach the next semi-log target time."""
+        if self.dtMode != "semi_log" or self._semiLogTimes is None:
+            return np.inf
+        self._updateSemiLogIndex(t)
+        if self._semiLogNextIndex >= len(self._semiLogTimes):
+            return np.inf
+        return max(1e-15, float(self._semiLogTimes[self._semiLogNextIndex] - float(t)))
 
     def _new_interface_planar(self, p_future, q_future, s, old_s, future_s, dt, pass_number):
         c_left_int, c_right_int = self.interfaceCompositions

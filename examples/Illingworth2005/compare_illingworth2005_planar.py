@@ -126,7 +126,10 @@ FIG3_NOTEBOOK_CONFIG = {
     "save_run": True,
     "save_run_path": SCRIPT_DIR / "illingworth2005_fig3_saved_run.npz",
     "label": None,
-    "checkAgainstAuthorsCPP": False,
+    # "dt_mode": "fixed",
+    # "semiLog_dt": None,
+    # "semiLogT0": None,
+    # "checkAgainstAuthorsCPP": False,
     "cpp_compiler": None,
     "cpp_build_dir": None,
     "cpp_print_table": False,
@@ -144,13 +147,20 @@ FIG3_PRESENT_WORK_PARAMS = {
     "D_liquid_um2_s": 500.0,
     "D_solid_um2_s": 18.0,
     # The paper notes a similar initial step size of 1 um for the comparison.
-    "spatial_step_um": 1.0,
+    "spatial_step_um": 0.125,
     # The text mentions a 0.01 s time step for the comparison setup. That is
     # very expensive in pure Python out to 1e5 s, so the default here is a
     # runtime-friendly value. Set this to 0.01 for the literal paper timestep.
-    "time_step_s": 0.01,
+    "time_step_s": 0.005,
     "paper_time_step_s": 0.01,
-    "t_end_s": 1.0e1,
+    # Options: "fixed" or "semi_log". The authors' generated C++ comparison
+    # is available only for fixed timesteps.
+    "dt_mode": "semi_log",
+    # Semi-log mode uses natural-log spacing. For example, semiLogT0=1e-4 and
+    # semiLog_dt=0.1 generate targets exp(log(1e-4) + n*0.1), plus t_end_s.
+    "semiLog_dt": 0.001,
+    "semiLogT0": 1e-5,
+    "t_end_s": 5.0e4,
     "record": 1,
     "plot_conc": True,
     "checkAgainstAuthorsCPP": False,
@@ -234,7 +244,7 @@ def run_python_default():
     """Runs the Python default comparison case and returns ``(time, interface)``."""
     p = AUTHOR_DEFAULT_PARAMS
     model = build_python_default_model(record=True)
-    model.solve(p["n_time_steps"] * p["time_step"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True)
+    model.solve(p["n_time_steps"] * p["time_step"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True, vIt=50)
     n = model.interfaceData.N + 1
     return model.interfaceData._time[:n].copy(), model.interfaceData._y[:n].copy()
 
@@ -308,6 +318,13 @@ def save_illingworth_run_result(path, payload):
     return save_path
 
 
+def _format_fig3_timestep_label(params):
+    """Returns a compact timestep label for fixed and semi-log Figure-3 runs."""
+    if params.get("dt_mode", "fixed") == "semi_log":
+        return f"semi-log dt: T0={params['semiLogT0']} s, dln(t)={params['semiLog_dt']}"
+    return f"dt={params['time_step_s']} s"
+
+
 def build_fig3_present_work_model(params=None, record=None):
     """
     Builds the planar Illingworth model for the paper's Figure 3 present-work curve.
@@ -344,6 +361,9 @@ def build_fig3_present_work_model(params=None, record=None):
         interfacePosition=p["s0_um"],
         interface_compositions=(c_liquid_int, c_solid_int),
         time_step=p["time_step_s"],
+        dt_mode=p.get("dt_mode", "fixed"),
+        semiLog_dt=p.get("semiLog_dt"),
+        semiLogT0=p.get("semiLogT0"),
         phase_a_nodes=phase_a_nodes,
         phase_b_nodes=phase_b_nodes,
         tolerance=1.0e-8,
@@ -354,16 +374,30 @@ def build_fig3_present_work_model(params=None, record=None):
 def run_fig3_present_work(params=None):
     """Runs and returns data for the Figure 3 present-work liquid half-width curve."""
     p = FIG3_PRESENT_WORK_PARAMS if params is None else {**FIG3_PRESENT_WORK_PARAMS, **dict(params)}
-    n_steps = int(np.ceil(p["t_end_s"] / p["time_step_s"]))
+    dt_mode = p.get("dt_mode", "fixed")
+    if dt_mode == "fixed":
+        n_steps = int(np.ceil(p["t_end_s"] / p["time_step_s"]))
+    elif dt_mode == "semi_log":
+        if p.get("semiLog_dt") is None or p.get("semiLogT0") is None:
+            raise ValueError("semiLog_dt and semiLogT0 must be set when dt_mode is 'semi_log'.")
+        if p["semiLog_dt"] <= 0 or p["semiLogT0"] <= 0:
+            raise ValueError("semiLog_dt and semiLogT0 must be positive when dt_mode is 'semi_log'.")
+        if p["t_end_s"] <= p["semiLogT0"]:
+            n_steps = 1
+        else:
+            n_steps = int(np.ceil((np.log(p["t_end_s"]) - np.log(p["semiLogT0"])) / p["semiLog_dt"])) + 1
+    else:
+        raise ValueError("dt_mode must be 'fixed' or 'semi_log'.")
     if n_steps > 250_000:
         raise ValueError(
             f"Figure 3 run would require about {n_steps} Python implicit steps. "
-            "Increase FIG3_PRESENT_WORK_PARAMS['time_step_s'] for exploratory plotting, "
+            "Increase FIG3_PRESENT_WORK_PARAMS['time_step_s'] for fixed-step exploratory plotting, "
+            "increase semiLog_dt for semi-log exploratory plotting, "
             "or run a shorter t_end_s."
         )
     model = build_fig3_present_work_model(p, record=p["record"])
     python_start = time.perf_counter()
-    model.solve(p["t_end_s"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True)
+    model.solve(p["t_end_s"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True, vIt=50)
     python_runtime_s = time.perf_counter() - python_start
     # debugInPlace()
     n = model.interfaceData.N + 1
@@ -378,13 +412,20 @@ def run_fig3_present_work(params=None):
         "python_runtime_s": python_runtime_s,
     }
     if p.get("checkAgainstAuthorsCPP", False):
-        comparison = compare_fig3_result_to_authors_cpp(
-            result,
-            compiler=p.get("cpp_compiler"),
-            build_dir=p.get("cpp_build_dir"),
-        )
-        result["cpp_comparison"] = comparison
-        print_comparison_summary(comparison, print_table=p.get("cpp_print_table", False))
+        if dt_mode != "fixed":
+            result["cpp_comparison_skipped"] = (
+                "Authors' generated C++ comparison is skipped for dt_mode='semi_log' "
+                "because that driver mirrors only fixed timesteps."
+            )
+            print(result["cpp_comparison_skipped"])
+        else:
+            comparison = compare_fig3_result_to_authors_cpp(
+                result,
+                compiler=p.get("cpp_compiler"),
+                build_dir=p.get("cpp_build_dir"),
+            )
+            result["cpp_comparison"] = comparison
+            print_comparison_summary(comparison, print_table=p.get("cpp_print_table", False))
     return result
 
 
@@ -453,15 +494,15 @@ def plot_fig3_present_work(params=None, ax=None):
         )
     ax.set_xscale("log")
     ax.set_xlim(0.00001, p["t_end_s"]) # ax.set_xlim(0.1, p["t_end_s"])
-    ax.set_ylim(12.5, 24) #ax.set_ylim(0.0, 30.0)
+    ax.set_ylim(0, 24) #ax.set_ylim(12.5, 24) #ax.set_ylim(0.0, 30.0)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Interface position / liquid half-width (um)")
     ax.set_title(
         "Illingworth and Golosnoy 2005 Fig. 3 present-work curve\n"
-        f"dt={p['time_step_s']} s, transformed step~{p['spatial_step_um']} um"
+        f"{_format_fig3_timestep_label(p)}, transformed step~{p['spatial_step_um']} um"
     )
     ax.grid(True, alpha=0.25)
-    ax.legend()
+    ax.legend(fontsize=7, loc="center left")
 
     if p.get("plot_conc", True):
         model = result["model"]
@@ -501,7 +542,7 @@ def plot_fig3_present_work(params=None, ax=None):
                 linestyle="dashed",
                 label="Idealized conc",
             )
-            ax_twin.legend(loc="center right")
+            ax_twin.legend(fontsize=8, loc="center right")
     return result, ax
     out = p.get("out")
     if out:
@@ -544,6 +585,8 @@ def fig3_params_to_author_cpp_params(params):
     of ``time_step_s`` when running against generated C++ reference output.
     """
     p = FIG3_PRESENT_WORK_PARAMS if params is None else {**FIG3_PRESENT_WORK_PARAMS, **dict(params)}
+    if p.get("dt_mode", "fixed") != "fixed":
+        raise ValueError("Generated authors' C++ comparison currently supports only dt_mode='fixed'.")
     n_time_steps_float = float(p["t_end_s"]) / float(p["time_step_s"])
     n_time_steps = int(round(n_time_steps_float))
     if not np.isclose(n_time_steps_float, n_time_steps, rtol=0.0, atol=1e-9):
