@@ -428,6 +428,13 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         return float(s + rhs / lhs)
 
     def _new_concentration_left_planar(self, p, s, future_s, dt):
+        """
+        Solves the left transformed concentration profile for one implicit step.
+
+        Coefficients are the planar Illingworth finite-volume coefficients from
+        the MAP implementation. Interior rows are assembled with vectorized
+        slices, but the boundary rows retain the original one-sided forms.
+        """
         n = len(p)
         lo = np.zeros(n, dtype=np.float64)
         diag = np.zeros(n, dtype=np.float64)
@@ -435,41 +442,44 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         rhs = np.zeros(n, dtype=np.float64)
         tmpA = self._D_left * dt / future_s
         tmpB = future_s - s
+        u = self._u_grid
+        left_diff = u[1:-1] - u[:-2]
+        left_sum = u[1:-1] + u[:-2]
+        right_diff = u[2:] - u[1:-1]
+        right_sum = u[2:] + u[1:-1]
+        cell_width = right_sum - left_sum
 
         if future_s >= s:
-            diag[0] = -tmpA / self._u_grid[1] - future_s * self._u_grid[1] / 2.0
-            up[0] = tmpA / self._u_grid[1] + tmpB * self._u_grid[1] / 2.0
-            rhs[0] = -p[0] * s * self._u_grid[1] / 2.0
-            for i in range(1, n - 1):
-                left_diff = self._u_grid[i] - self._u_grid[i - 1]
-                left_sum = self._u_grid[i] + self._u_grid[i - 1]
-                right_diff = self._u_grid[i + 1] - self._u_grid[i]
-                right_sum = self._u_grid[i + 1] + self._u_grid[i]
-                lo[i] = tmpA / left_diff
-                diag[i] = -tmpA * (1.0 / left_diff + 1.0 / right_diff) - tmpB * left_sum / 2.0
-                diag[i] = diag[i] - future_s * (right_sum - left_sum) / 2.0
-                up[i] = tmpA / right_diff + tmpB * right_sum / 2.0
-                rhs[i] = -s * p[i] * (right_sum - left_sum) / 2.0
+            diag[0] = -tmpA / u[1] - future_s * u[1] / 2.0
+            up[0] = tmpA / u[1] + tmpB * u[1] / 2.0
+            rhs[0] = -p[0] * s * u[1] / 2.0
+            lo[1:-1] = tmpA / left_diff
+            diag[1:-1] = -tmpA * (1.0 / left_diff + 1.0 / right_diff) - tmpB * left_sum / 2.0
+            diag[1:-1] = diag[1:-1] - future_s * cell_width / 2.0
+            up[1:-1] = tmpA / right_diff + tmpB * right_sum / 2.0
+            rhs[1:-1] = -s * p[1:-1] * cell_width / 2.0
         else:
-            diag[0] = -tmpA / self._u_grid[1] + tmpB * self._u_grid[1] / 2.0 - future_s * self._u_grid[1] / 2.0
-            up[0] = tmpA / self._u_grid[1]
-            rhs[0] = -p[0] * s * self._u_grid[1] / 2.0
-            for i in range(1, n - 1):
-                left_diff = self._u_grid[i] - self._u_grid[i - 1]
-                left_sum = self._u_grid[i] + self._u_grid[i - 1]
-                right_diff = self._u_grid[i + 1] - self._u_grid[i]
-                right_sum = self._u_grid[i + 1] + self._u_grid[i]
-                lo[i] = tmpA / left_diff - tmpB * left_sum / 2.0
-                diag[i] = -tmpA * (1.0 / left_diff + 1.0 / right_diff) + tmpB * right_sum / 2.0
-                diag[i] = diag[i] - future_s * (right_sum - left_sum) / 2.0
-                up[i] = tmpA / right_diff
-                rhs[i] = -s * p[i] * (right_sum - left_sum) / 2.0
+            diag[0] = -tmpA / u[1] + tmpB * u[1] / 2.0 - future_s * u[1] / 2.0
+            up[0] = tmpA / u[1]
+            rhs[0] = -p[0] * s * u[1] / 2.0
+            lo[1:-1] = tmpA / left_diff - tmpB * left_sum / 2.0
+            diag[1:-1] = -tmpA * (1.0 / left_diff + 1.0 / right_diff) + tmpB * right_sum / 2.0
+            diag[1:-1] = diag[1:-1] - future_s * cell_width / 2.0
+            up[1:-1] = tmpA / right_diff
+            rhs[1:-1] = -s * p[1:-1] * cell_width / 2.0
 
         diag[-1] = -1.0
         rhs[-1] = -self.interfaceCompositions[0]
         return solve_illingworth_tridiagonal(lo, diag, up, rhs)
 
     def _new_concentration_right_planar(self, q, s, future_s, dt):
+        """
+        Solves the right transformed concentration profile for one implicit step.
+
+        This is the large phase for the Figure-3 setup, so interior coefficient
+        assembly is vectorized while preserving the MAP code's boundary rows and
+        tridiagonal sign convention.
+        """
         n = len(q)
         lo = np.zeros(n, dtype=np.float64)
         diag = np.zeros(n, dtype=np.float64)
@@ -477,42 +487,39 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         rhs = np.zeros(n, dtype=np.float64)
         tmpA = self._D_right * dt / (self._R - future_s)
         tmpB = future_s - s
+        span = self._R - future_s
+        v = self._v_grid
+        left_diff = v[1:-1] - v[:-2]
+        left_sum = v[1:-1] + v[:-2]
+        right_diff = v[2:] - v[1:-1]
+        right_sum = v[2:] + v[1:-1]
+        cell_width = right_sum - left_sum
 
         diag[0] = -1.0
         rhs[0] = -self.interfaceCompositions[1]
 
         if future_s >= s:
-            for i in range(1, n - 1):
-                left_diff = self._v_grid[i] - self._v_grid[i - 1]
-                left_sum = self._v_grid[i] + self._v_grid[i - 1]
-                right_diff = self._v_grid[i + 1] - self._v_grid[i]
-                right_sum = self._v_grid[i + 1] + self._v_grid[i]
-                lo[i] = tmpA / left_diff
-                diag[i] = -tmpA * (1.0 / right_diff + 1.0 / left_diff) - tmpB * (1.0 - left_sum / 2.0)
-                diag[i] = diag[i] - (self._R - future_s) * (right_sum - left_sum) / 2.0
-                up[i] = tmpA / right_diff + tmpB * (1.0 - right_sum / 2.0)
-                rhs[i] = -(self._R - s) * q[i] * (right_sum - left_sum) / 2.0
+            lo[1:-1] = tmpA / left_diff
+            diag[1:-1] = -tmpA * (1.0 / right_diff + 1.0 / left_diff) - tmpB * (1.0 - left_sum / 2.0)
+            diag[1:-1] = diag[1:-1] - span * cell_width / 2.0
+            up[1:-1] = tmpA / right_diff + tmpB * (1.0 - right_sum / 2.0)
+            rhs[1:-1] = -(self._R - s) * q[1:-1] * cell_width / 2.0
 
-            tmp = self._v_grid[-2]
+            tmp = v[-2]
             lo[-1] = tmpA / (1.0 - tmp)
             diag[-1] = -tmpA / (1.0 - tmp) - tmpB * (1.0 - (1.0 + tmp) / 2.0)
-            diag[-1] = diag[-1] - (self._R - future_s) * (1.0 - tmp) / 2.0
+            diag[-1] = diag[-1] - span * (1.0 - tmp) / 2.0
             rhs[-1] = -q[-1] * (self._R - s) * (1.0 - tmp) / 2.0
         else:
-            for i in range(1, n - 1):
-                left_diff = self._v_grid[i] - self._v_grid[i - 1]
-                left_sum = self._v_grid[i] + self._v_grid[i - 1]
-                right_diff = self._v_grid[i + 1] - self._v_grid[i]
-                right_sum = self._v_grid[i + 1] + self._v_grid[i]
-                lo[i] = tmpA / left_diff - tmpB * (1.0 - left_sum / 2.0)
-                diag[i] = -tmpA * (1.0 / right_diff + 1.0 / left_diff) + tmpB * (1.0 - right_sum / 2.0)
-                diag[i] = diag[i] - (self._R - future_s) * (right_sum - left_sum) / 2.0
-                up[i] = tmpA / right_diff
-                rhs[i] = -(self._R - s) * q[i] * (right_sum - left_sum) / 2.0
+            lo[1:-1] = tmpA / left_diff - tmpB * (1.0 - left_sum / 2.0)
+            diag[1:-1] = -tmpA * (1.0 / right_diff + 1.0 / left_diff) + tmpB * (1.0 - right_sum / 2.0)
+            diag[1:-1] = diag[1:-1] - span * cell_width / 2.0
+            up[1:-1] = tmpA / right_diff
+            rhs[1:-1] = -(self._R - s) * q[1:-1] * cell_width / 2.0
 
-            tmp = self._v_grid[-2]
+            tmp = v[-2]
             lo[-1] = tmpA / (1.0 - tmp) - tmpB * (1.0 - (1.0 + tmp) / 2.0)
-            diag[-1] = -tmpA / (1.0 - tmp) - (self._R - future_s) * (1.0 - tmp) / 2.0
+            diag[-1] = -tmpA / (1.0 - tmp) - span * (1.0 - tmp) / 2.0
             rhs[-1] = -q[-1] * (self._R - s) * (1.0 - tmp) / 2.0
 
         return solve_illingworth_tridiagonal(lo, diag, up, rhs)
