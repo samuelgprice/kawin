@@ -896,14 +896,22 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         )
 
         flux = np.zeros(len(c) + 1, dtype=np.float64)
-        for face in range(1, geom.left_index + 1):
-            d_face = 0.5 * (D_nodes[face - 1] + D_nodes[face])
-            flux[face] = -d_face * (c[face] - c[face - 1]) / float(self.mesh.dz)
-        for face in range(geom.right_index + 1, len(c)):
-            d_face = 0.5 * (D_nodes[face - 1] + D_nodes[face])
-            flux[face] = -d_face * (c[face] - c[face - 1]) / float(self.mesh.dz)
-        flux[0] = 0.0
-        flux[-1] = 0.0
+        face_diffusivity = 0.5 * (D_nodes[:-1] + D_nodes[1:])
+        face_flux = -face_diffusivity * np.diff(c) / float(self.mesh.dz)
+        flux[1 : geom.left_index + 1] = face_flux[: geom.left_index]
+        flux[geom.right_index + 1 : len(c)] = face_flux[geom.right_index :]
+
+        # flux2 = np.zeros(len(c) + 1, dtype=np.float64)
+        # for face in range(1, geom.left_index + 1):
+        #     d_face = 0.5 * (D_nodes[face - 1] + D_nodes[face])
+        #     flux2[face] = -d_face * (c[face] - c[face - 1]) / float(self.mesh.dz)
+        # for face in range(geom.right_index + 1, len(c)):
+        #     d_face = 0.5 * (D_nodes[face - 1] + D_nodes[face])
+        #     flux2[face] = -d_face * (c[face] - c[face - 1]) / float(self.mesh.dz)
+        # flux2[0] = 0.0
+        # flux2[-1] = 0.0
+        # assert np.abs(flux-flux2).max() < 1e-10
+
         return flux, c, D_nodes
 
     def _computeState(self, t, xCurr):
