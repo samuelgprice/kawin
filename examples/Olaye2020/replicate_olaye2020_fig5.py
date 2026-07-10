@@ -143,9 +143,9 @@ FIG5_BASE_PARAMS = {
     "D_solid_base": 18.0,
     "D_scale": 1e-12,
     "n_nodes": 3013 + 1,
-    "t_end_s": 1e2,
+    "t_end_s": 1e1,
     "dt_mode": "semi_log_optional",
-    "semiLogT0": 1e-6,
+    "semiLogT0": 1e-5,
     "exp_csv": r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_PresentModel_curve.csv",
     "out": None,
     "show": True,
@@ -180,15 +180,16 @@ THIS_FILE = _resolve_this_file()
 SCRIPT_DIR = THIS_FILE.parent
 
 OLAYE_NOTEBOOK_CONFIG = {
-    "n_phase_a_nodes": 26,
-    "n_phase_b_nodes": 6001,
-    "semiLog_dt": 0.002763654842561367 / 10.0,
+    "n_phase_a_nodes": 51,
+    "n_phase_b_nodes": 5001,
+    "semiLog_dt": 0.002763654842561367 / 1.0,
     "model_variant": MODEL_VARIANT,
     "out": None,
     "show": True,
     "save_run": True,
     "save_run_path": SCRIPT_DIR / "olaye2020_fig5_saved_run.npz",
     "label": None,
+    "timeProfiling":True,
 }
 
 
@@ -420,9 +421,10 @@ def run_case(
         # semi_log_points=semi_log_points,
         semiLog_dt=semiLog_dt,
         semiLogT0=semiLogT0,
-        record=True,
+        record= True,
     )
 
+    print(f"Estimated total number of time steps: {int((np.log(t_end_s) - np.log(model.semiLogT0)) / model.semiLog_dt)}")
     model.solve(float(t_end_s), iterator=explicitEulerIterator, verbose=True, vIt=100, minDtFrac=1e-13)
 
     t_s = np.array(model.interfaceData._time[: model.interfaceData.N + 1], dtype=np.float64)
@@ -487,6 +489,36 @@ def plot_olaye_fig5_notebook(config=None, ax=None):
     width_um_plot = width_um[mask]
     if t_s_plot.size < 2:
         raise ValueError("Simulation did not produce enough finite points to plot.")
+
+    if args['timeProfiling']:
+        conc_time_arr = np.asarray(model.concData._time, dtype=np.float64)
+        conc_arr = np.asarray(model.concData._y, dtype=np.float64)
+        
+        payload = build_olaye_run_payload(
+        time_s=t_s_plot,
+        half_width_um=width_um_plot,
+        params=args,
+        model_variant=args["model_variant"],
+        label=args["label"],
+        mass_integral_initial=conc_arr[0],
+        mass_integral_final=conc_arr[-1],
+        )
+
+        save_path = None
+        if args["save_run"]:
+            save_path = save_olaye_run_result(args["save_run_path"], payload)
+            print(f"Saved run: {save_path}")
+        
+        return {
+        "model": model,
+        "figure": None,
+        "axes": None,
+        "time_s": t_s_plot,
+        "half_width_um": width_um_plot,
+        "payload": payload,
+        "save_path": save_path,
+        "params": args,
+        }
 
     created_figure = ax is None
     if ax is None:

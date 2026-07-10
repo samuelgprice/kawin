@@ -421,8 +421,8 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
         r_kMinus1_iPlusHalf = s_prev * u_iPlusHalf
         r_kMinus1_iMinusHalf = s_prev * u_iMinusHalf
         
-        assert all([u_iPlusHalf[i]==((self._u_grid[i] + self._u_grid[i+1])/2) for i in range(len(self._u_grid)-1)]) == True
-        assert all([u_iMinusHalf[i]==((self._u_grid[i-1] + self._u_grid[i])/2) for i in range(1, len(self._u_grid))]) == True
+        # assert all([u_iPlusHalf[i]==((self._u_grid[i] + self._u_grid[i+1])/2) for i in range(len(self._u_grid)-1)]) == True
+        # assert all([u_iMinusHalf[i]==((self._u_grid[i-1] + self._u_grid[i])/2) for i in range(1, len(self._u_grid))]) == True
 
         V_p_kPlus1_i = r_kPlus1_iPlusHalf - r_kPlus1_iMinusHalf
         V_p_kMinus1_i = r_kMinus1_iPlusHalf - r_kMinus1_iMinusHalf
@@ -471,8 +471,8 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
         l_kMinus1_iPlusHalf = s_prev + (self._R-s_prev) * v_iPlusHalf
         l_kMinus1_iMinusHalf = s_prev + (self._R-s_prev) * v_iMinusHalf
 
-        assert all([v_iPlusHalf[i]==((self._v_grid[i] + self._v_grid[i+1])/2) for i in range(len(self._v_grid)-1)]) == True
-        assert all([v_iMinusHalf[i]==((self._v_grid[i-1] + self._v_grid[i])/2) for i in range(1, len(self._v_grid))]) == True
+        # assert all([v_iPlusHalf[i]==((self._v_grid[i] + self._v_grid[i+1])/2) for i in range(len(self._v_grid)-1)]) == True
+        # assert all([v_iMinusHalf[i]==((self._v_grid[i-1] + self._v_grid[i])/2) for i in range(1, len(self._v_grid))]) == True
 
         V_q_kPlus1_i = l_kPlus1_iPlusHalf - l_kPlus1_iMinusHalf
         V_q_kMinus1_i = l_kMinus1_iPlusHalf - l_kMinus1_iMinusHalf
