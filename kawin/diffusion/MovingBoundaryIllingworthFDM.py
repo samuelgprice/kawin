@@ -167,6 +167,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     fixed-point problem for the future interface position and the two future
     transformed concentration profiles; the phase solves are tri-diagonal and
     the interface equation uses the paper's conservative planar balance.
+    The transformed profile histories ``pData`` and ``qData`` are recorded by
+    default, but may be disabled with ``record_transformed=False`` to reduce
+    memory use in long runs.
 
     Notes
     -----
@@ -194,6 +197,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         max_iterations: int = 100,
         constraints=None,
         record=False,
+        record_transformed: bool = True,
     ):
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceCompositions = tuple(float(v) for v in interface_compositions)
@@ -206,6 +210,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self.phaseBNodes = None if phase_b_nodes is None else int(phase_b_nodes)
         self.tolerance = float(tolerance)
         self.maxIterations = int(max_iterations)
+        self.recordTransformed = bool(record_transformed)
 
         self.interfaceData = _ScalarHistory(record)
         self.concData = _ScalarHistory(record)
@@ -334,14 +339,16 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
 
         self._u_grid = np.linspace(0.0, 1.0, int(n_left), dtype=np.float64)
         self._v_grid = np.linspace(0.0, 1.0, int(n_right), dtype=np.float64)
-        self.pData = _VectorHistory(int(n_left), self.interfaceData.recordInterval)
-        self.qData = _VectorHistory(int(n_right), self.interfaceData.recordInterval)
+        if self.recordTransformed:
+            self.pData = _VectorHistory(int(n_left), self.interfaceData.recordInterval)
+            self.qData = _VectorHistory(int(n_right), self.interfaceData.recordInterval)
         self._p_curr, self._q_curr = self._initialize_transformed_state(c0, s0)
         self._s_curr = s0
         self._s_old = s0
         self._D_left, self._D_right = self._constant_phase_diffusivities()
-        self.pData.record(0, self._p_curr)
-        self.qData.record(0, self._q_curr)
+        if self.recordTransformed:
+            self.pData.record(0, self._p_curr)
+            self.qData.record(0, self._q_curr)
 
         physical = self._reconstruct_physical_profile(self._p_curr, self._q_curr, s0)[:, np.newaxis]
         self.data.currentY = physical
@@ -618,6 +625,11 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
                 self._lastImplicitError = float(error)
                 return p_future, q_future, self._clipInterfacePosition(future_s, strict=True)
 
+        print(f"s: {s}")
+        print(f"old_s: {old_s}")
+        print(f"self.currentTime: {self.currentTime}")
+        print(f"dt: {dt}")
+        debugInPlace()
         raise RuntimeError(
             "Illingworth implicit step failed to converge within "
             f"{self.maxIterations} iterations; final interface error was {error:.3e}."
@@ -662,7 +674,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         Returns the recorded left transformed composition vector ``p``.
         """
         if self.pData is None:
-            raise ValueError("Transformed left-state history is not initialized.")
+            raise ValueError("Transformed left-state history is not available; set record_transformed=True.")
         return self.pData.y(time)
 
     def getTransformedStateRight(self, time=None):
@@ -670,7 +682,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         Returns the recorded right transformed composition vector ``q``.
         """
         if self.qData is None:
-            raise ValueError("Transformed right-state history is not initialized.")
+            raise ValueError("Transformed right-state history is not available; set record_transformed=True.")
         return self.qData.y(time)
 
     def postProcess(self, time, x):
@@ -688,8 +700,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         physical = self._reconstruct_physical_profile(p, q, s)[:, np.newaxis]
         self.data.record(time, physical)
         self.interfaceData.record(time, s)
-        self.pData.record(time, p)
-        self.qData.record(time, q)
+        if self.recordTransformed:
+            self.pData.record(time, p)
+            self.qData.record(time, q)
         self.concData.record(time, self.checkMassIntegral(p, q, s))
 
         self._s_old = float(self._s_curr)

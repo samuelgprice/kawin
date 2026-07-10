@@ -147,7 +147,9 @@ FIG3_PRESENT_WORK_PARAMS = {
     "D_liquid_um2_s": 500.0,
     "D_solid_um2_s": 18.0,
     # The paper notes a similar initial step size of 1 um for the comparison.
-    "spatial_step_um": 0.125,
+    # "spatial_step_um": 0.25,
+    "n_alpha": 51,
+    "n_beta": 5001,
     # The text mentions a 0.01 s time step for the comparison setup. That is
     # very expensive in pure Python out to 1e5 s, so the default here is a
     # runtime-friendly value. Set this to 0.01 for the literal paper timestep.
@@ -158,10 +160,11 @@ FIG3_PRESENT_WORK_PARAMS = {
     "dt_mode": "semi_log",
     # Semi-log mode uses natural-log spacing. For example, semiLogT0=1e-4 and
     # semiLog_dt=0.1 generate targets exp(log(1e-4) + n*0.1), plus t_end_s.
-    "semiLog_dt": 0.001,
+    "semiLog_dt": 0.00025,
     "semiLogT0": 1e-5,
-    "t_end_s": 5.0e4,
+    "t_end_s": 8.5e4,
     "record": 1,
+    "record_transformed": True,
     "plot_conc": True,
     "checkAgainstAuthorsCPP": False,
     "cpp_compiler": None,
@@ -169,6 +172,7 @@ FIG3_PRESENT_WORK_PARAMS = {
     "cpp_print_table": False,
     "show": True,
     "out": None,
+    "max_iterations":10000,
     "overlay_csvs": [
         {
             "path": REPO_ROOT / "examples" / "Olaye2020" / "Olaye2020_fig5_alt_PresentModelRough_curve.csv",
@@ -341,9 +345,17 @@ def build_fig3_present_work_model(params=None, record=None):
     c_liquid_int = p["c_liquid_int_atpct"] / 100.0
     c_solid_int = p["c_solid_int_atpct"] / 100.0
 
-    n_mesh = int(round(p["R_um"] / p["spatial_step_um"])) + 1
-    phase_a_nodes = int(round(p["s0_um"] / p["spatial_step_um"])) + 1
-    phase_b_nodes = int(round((p["R_um"] - p["s0_um"]) / p["spatial_step_um"])) + 1
+    if p.get("spatial_step_um") is not None:
+        n_mesh = int(round(p["R_um"] / p["spatial_step_um"])) + 1
+        phase_a_nodes = int(round(p["s0_um"] / p["spatial_step_um"])) + 1
+        phase_b_nodes = int(round((p["R_um"] - p["s0_um"]) / p["spatial_step_um"])) + 1
+    else:
+        if p.get("n_alpha") is None or p.get("n_beta") is None:
+            raise ValueError("Either spatial_step_um or both n_alpha and n_beta must be specified.")
+        else:
+            phase_a_nodes = int(p["n_alpha"])
+            phase_b_nodes = int(p["n_beta"])
+            n_mesh = phase_a_nodes + phase_b_nodes - 1
 
     profile = ProfileBuilder([(StepProfile1D(p["s0_um"], c_liquid0, c_solid0), "P")])
     mesh = CartesianFD1D(["P"], [0.0, p["R_um"]], n_mesh)
@@ -352,6 +364,9 @@ def build_fig3_present_work_model(params=None, record=None):
         phases=["LIQUID", "SOLID"],
         diffusivities={"LIQUID": p["D_liquid_um2_s"], "SOLID": p["D_solid_um2_s"]},
     )
+    additionalInputParms = {}
+    if p.get('max_iterations', None) is not None:
+        additionalInputParms.update({'max_iterations':p["max_iterations"]})
     return MovingBoundaryIllingworthFD1DModel(
         mesh,
         ["NI", "P"],
@@ -368,6 +383,8 @@ def build_fig3_present_work_model(params=None, record=None):
         phase_b_nodes=phase_b_nodes,
         tolerance=1.0e-8,
         record=record,
+        record_transformed=p.get("record_transformed", True),
+        **additionalInputParms,
     )
 
 
@@ -497,9 +514,13 @@ def plot_fig3_present_work(params=None, ax=None):
     ax.set_ylim(0, 24) #ax.set_ylim(12.5, 24) #ax.set_ylim(0.0, 30.0)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Interface position / liquid half-width (um)")
+    if p.get("spatial_step_um") is not None:
+        titleStr = f"{_format_fig3_timestep_label(p)}, transformed step~{p['spatial_step_um']} um"
+    else:
+        titleStr = f"{_format_fig3_timestep_label(p)}, n (alpha,beta)~{(p['n_alpha'], p['n_beta'])} um"
     ax.set_title(
         "Illingworth and Golosnoy 2005 Fig. 3 present-work curve\n"
-        f"{_format_fig3_timestep_label(p)}, transformed step~{p['spatial_step_um']} um"
+        + titleStr
     )
     ax.grid(True, alpha=0.25)
     ax.legend(fontsize=7, loc="center left")
