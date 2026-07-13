@@ -47,6 +47,18 @@ class _ScalarHistory:
         self.currentTime = 0.0
         self.N = 0
 
+    def preallocate(self, capacity):
+        """Preallocates scalar history storage without changing recorded values."""
+        capacity = int(capacity)
+        if capacity <= self._time.shape[0]:
+            return
+        y_new = np.zeros(capacity, dtype=self._y.dtype)
+        time_new = np.zeros(capacity, dtype=self._time.dtype)
+        y_new[: self._y.shape[0]] = self._y
+        time_new[: self._time.shape[0]] = self._time
+        self._y = y_new
+        self._time = time_new
+
     def record(self, time, y, force: bool = False):
         if self.recordInterval > 0:
             if self.currentIndex % self.recordInterval == 0 or force:
@@ -105,6 +117,18 @@ class _VectorHistory:
         self.currentTime = 0.0
         self.N = 0
 
+    def preallocate(self, capacity):
+        """Preallocates vector history storage without changing recorded values."""
+        capacity = int(capacity)
+        if capacity <= self._time.shape[0]:
+            return
+        y_new = np.zeros((capacity, self.n_components), dtype=self._y.dtype)
+        time_new = np.zeros(capacity, dtype=self._time.dtype)
+        y_new[: self._y.shape[0]] = self._y
+        time_new[: self._time.shape[0]] = self._time
+        self._y = y_new
+        self._time = time_new
+
     def record(self, time, y, force: bool = False):
         '''
         Stores current state of time and vector variable.
@@ -162,6 +186,10 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
     relation, uses a small-step classical explicit bootstrap for ``k=1``, and
     then advances both phases with a Leapfrog/Dufort-Frankel style explicit
     update for ``k>1``.
+    Recording arrays may be preallocated after the timestep schedule is known
+    by setting ``preallocate_recordings=True``. This avoids repeated padding in
+    long semi-log runs, but can allocate large full-profile histories up front
+    when mesh recording is enabled.
 
     Notes
     -----
@@ -189,6 +217,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         semiLogT0: float | None = None,
         constraints=None,
         record=False,
+        preallocate_recordings: bool = False,
     ):
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceData = _ScalarHistory(record)
@@ -205,6 +234,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.phaseBNodes = None if phase_b_nodes is None else int(phase_b_nodes)
         self.semiLog_dt = None if semiLog_dt is None else float(semiLog_dt)
         self.semiLogT0 = None if semiLogT0 is None else float(semiLogT0)
+        self.preallocateRecordings = bool(preallocate_recordings)
 
         self._currdt = np.inf
         self._pendingDtDiff = np.inf
@@ -308,6 +338,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         if self.dtMode != "semi_log_optional" or simTime <= 0:
             self._semiLogTimes = None
             self._semiLogNextIndex = 0
+            self._preallocateRecordingHistories(simTime)
             return
         t0_rel = max(self.semiLogT0, 1e-15)
         # rel_times = np.geomspace(t0_rel, simTime, self.semiLogPoints)
@@ -321,6 +352,41 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             
         self._semiLogTimes = currTime + rel_times
         self._semiLogNextIndex = 0
+        self._preallocateRecordingHistories(simTime)
+
+    def _estimateStepCount(self, simTime):
+        """Returns the expected number of explicit Olaye steps for this solve."""
+        sim_time = float(simTime)
+        if sim_time <= 0:
+            return 0
+        if self.dtMode == "semi_log_optional" and self._semiLogTimes is not None:
+            return int(len(self._semiLogTimes))
+        return 0
+
+    def _recordCapacityForSteps(self, record_interval, step_count):
+        """
+        Estimates rows needed by the history record/finalize convention.
+
+        The extra rows cover the initial state, the final forced record, and
+        small solver roundoff at the end of the integration interval.
+        """
+        if record_interval <= 0:
+            return 1
+        return int(np.ceil((int(step_count) + 2) / int(record_interval))) + 2
+
+    def _preallocateRecordingHistories(self, simTime):
+        """Preallocates enabled history arrays when the run length is predictable."""
+        if not self.preallocateRecordings:
+            return
+        step_count = self._estimateStepCount(simTime)
+        if step_count <= 0:
+            return
+        histories = [self.data, self.interfaceData, self.concData, self.concData_alt, self.pData, self.qData]
+        for history in histories:
+            if history is None or not hasattr(history, "preallocate"):
+                continue
+            capacity = self._recordCapacityForSteps(history.recordInterval, step_count)
+            history.preallocate(capacity)
 
     def reset(self):
         super().reset()

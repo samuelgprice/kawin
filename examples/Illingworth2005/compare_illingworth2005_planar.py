@@ -165,8 +165,9 @@ FIG3_PRESENT_WORK_PARAMS = {
     "t_end_s": 1e2, #8.5e4,
     "record": 1,
     "record_transformed": True,
+    "preallocate_recordings": True,
     "plot_conc": True,
-    "timeProfiling": True,
+    "timeProfiling": False,
     "checkAgainstAuthorsCPP": False,
     "cpp_compiler": None,
     "cpp_build_dir": None,
@@ -403,6 +404,7 @@ def build_fig3_present_work_model(params=None, record=None):
         tolerance=1.0e-8,
         record=record,
         record_transformed=p.get("record_transformed", True),
+        preallocate_recordings=p.get("preallocate_recordings", False),
         **additionalInputParms,
     )
 

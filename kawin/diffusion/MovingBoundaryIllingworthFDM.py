@@ -48,6 +48,18 @@ class _ScalarHistory:
         self.currentTime = 0.0
         self.N = 0
 
+    def preallocate(self, capacity):
+        """Preallocates scalar history storage without changing recorded values."""
+        capacity = int(capacity)
+        if capacity <= self._time.shape[0]:
+            return
+        y_new = np.zeros(capacity, dtype=self._y.dtype)
+        time_new = np.zeros(capacity, dtype=self._time.dtype)
+        y_new[: self._y.shape[0]] = self._y
+        time_new[: self._time.shape[0]] = self._time
+        self._y = y_new
+        self._time = time_new
+
     def record(self, time, y, force: bool = False):
         if self.recordInterval > 0:
             if self.currentIndex % self.recordInterval == 0 or force:
@@ -110,6 +122,18 @@ class _VectorHistory:
         self.currentTime = 0.0
         self.N = 0
 
+    def preallocate(self, capacity):
+        """Preallocates vector history storage without changing recorded values."""
+        capacity = int(capacity)
+        if capacity <= self._time.shape[0]:
+            return
+        y_new = np.zeros((capacity, self.n_components), dtype=self._y.dtype)
+        time_new = np.zeros(capacity, dtype=self._time.dtype)
+        y_new[: self._y.shape[0]] = self._y
+        time_new[: self._time.shape[0]] = self._time
+        self._y = y_new
+        self._time = time_new
+
     def record(self, time, y, force: bool = False):
         '''
         Stores current state of time and vector variable.
@@ -169,7 +193,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     the interface equation uses the paper's conservative planar balance.
     The transformed profile histories ``pData`` and ``qData`` are recorded by
     default, but may be disabled with ``record_transformed=False`` to reduce
-    memory use in long runs.
+    memory use in long runs. Recording arrays can also be preallocated once the
+    timestep schedule is known; this avoids repeated padding but may allocate
+    large full-profile histories up front.
 
     Notes
     -----
@@ -198,6 +224,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         constraints=None,
         record=False,
         record_transformed: bool = True,
+        preallocate_recordings: bool = False,
     ):
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceCompositions = tuple(float(v) for v in interface_compositions)
@@ -211,6 +238,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self.tolerance = float(tolerance)
         self.maxIterations = int(max_iterations)
         self.recordTransformed = bool(record_transformed)
+        self.preallocateRecordings = bool(preallocate_recordings)
 
         self.interfaceData = _ScalarHistory(record)
         self.concData = _ScalarHistory(record)
@@ -370,6 +398,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         if self.dtMode != "semi_log" or simTime <= 0:
             self._semiLogTimes = None
             self._semiLogNextIndex = 0
+            self._preallocateRecordingHistories(simTime)
             return
 
         t0_rel = max(float(self.semiLogT0), 1e-15)
@@ -382,6 +411,42 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             rel_times = np.append(rel_times, sim_time)
         self._semiLogTimes = float(currTime) + np.asarray(rel_times, dtype=np.float64)
         self._semiLogNextIndex = 0
+        self._preallocateRecordingHistories(simTime)
+
+    def _estimateStepCount(self, simTime):
+        """Returns the number of implicit steps expected for the current schedule."""
+        sim_time = float(simTime)
+        if sim_time <= 0:
+            return 0
+        if self.dtMode == "semi_log" and self._semiLogTimes is not None:
+            return int(len(self._semiLogTimes))
+        return int(np.ceil(sim_time / self.timeStep))
+
+    def _recordCapacityForSteps(self, record_interval, step_count):
+        """
+        Estimates rows needed by the history record/finalize convention.
+
+        Histories already contain the initial state when this is called. The
+        extra two rows cover the final forced record path and roundoff-driven
+        near-final no-op step.
+        """
+        if record_interval <= 0:
+            return 1
+        return int(np.ceil((int(step_count) + 2) / int(record_interval))) + 2
+
+    def _preallocateRecordingHistories(self, simTime):
+        """Preallocates enabled history arrays when the run length is predictable."""
+        if not self.preallocateRecordings:
+            return
+        step_count = self._estimateStepCount(simTime)
+        histories = [self.data, self.interfaceData, self.concData]
+        if self.recordTransformed:
+            histories.extend([self.pData, self.qData])
+        for history in histories:
+            if history is None or not hasattr(history, "preallocate"):
+                continue
+            capacity = self._recordCapacityForSteps(history.recordInterval, step_count)
+            history.preallocate(capacity)
 
     def _initialize_transformed_state(self, composition, interface_position):
         c = np.asarray(composition, dtype=np.float64).reshape(-1)

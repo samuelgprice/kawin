@@ -567,6 +567,25 @@ class MeshData:
         self.currentY = self._y[0]
         self.currentTime = self._time[0]
         self.N = 0
+
+    def preallocate(self, capacity):
+        '''
+        Preallocates recording storage for at least ``capacity`` rows.
+
+        This is intended for solvers that can estimate their recording count
+        before time integration starts. The normal ``record`` growth path is
+        unchanged, so models that cannot estimate their size still expand in
+        batches with ``np.pad``.
+        '''
+        capacity = int(capacity)
+        if capacity <= self._time.shape[0]:
+            return
+        y_new = np.zeros((capacity, *self.yShape), dtype=self._y.dtype)
+        time_new = np.zeros(capacity, dtype=self._time.dtype)
+        y_new[: self._y.shape[0]] = self._y
+        time_new[: self._time.shape[0]] = self._time
+        self._y = y_new
+        self._time = time_new
         
     def record(self, time, y, force = False):
         '''

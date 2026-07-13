@@ -143,9 +143,9 @@ FIG5_BASE_PARAMS = {
     "D_solid_base": 18.0,
     "D_scale": 1e-12,
     "n_nodes": 3013 + 1,
-    "t_end_s": 1e1,
+    "t_end_s": 1e2,
     "dt_mode": "semi_log_optional",
-    "semiLogT0": 1e-5,
+    "semiLogT0": 1e-6,
     "exp_csv": r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_PresentModel_curve.csv",
     "out": None,
     "show": True,
@@ -182,7 +182,7 @@ SCRIPT_DIR = THIS_FILE.parent
 OLAYE_NOTEBOOK_CONFIG = {
     "n_phase_a_nodes": 51,
     "n_phase_b_nodes": 5001,
-    "semiLog_dt": 0.002763654842561367 / 1.0,
+    "semiLog_dt": 0.0025 / 10.0, #0.002763654842561367 / 1.0,
     "model_variant": MODEL_VARIANT,
     "out": None,
     "show": True,
@@ -190,6 +190,7 @@ OLAYE_NOTEBOOK_CONFIG = {
     "save_run_path": SCRIPT_DIR / "olaye2020_fig5_saved_run.npz",
     "label": None,
     "timeProfiling":True,
+    "preallocate_recordings": True,
 }
 
 
@@ -291,6 +292,7 @@ def run_case(
     semiLog_dt: float,
     semiLogT0: float,
     model_variant: str,
+    preallocate_recordings: bool = False,
 
 ):
     """Runs one Figure-5-style simulation and returns time and liquid half-width."""
@@ -404,6 +406,8 @@ def run_case(
         "rework": MovingBoundaryOlayeFD1DReworkModel,
     }[str(model_variant)]
 
+    model_kwargs = {"preallocate_recordings": preallocate_recordings}
+
     model = model_class(
         mesh,
         ["NI", "P"],
@@ -422,9 +426,11 @@ def run_case(
         semiLog_dt=semiLog_dt,
         semiLogT0=semiLogT0,
         record= True,
+        **model_kwargs,
     )
 
     print(f"Estimated total number of time steps: {int((np.log(t_end_s) - np.log(model.semiLogT0)) / model.semiLog_dt)}")
+    print(f"Estimated total number of time steps: {len(np.arange(np.log(model.semiLogT0), np.log(t_end_s), model.semiLog_dt))}")
     model.solve(float(t_end_s), iterator=explicitEulerIterator, verbose=True, vIt=100, minDtFrac=1e-13)
 
     t_s = np.array(model.interfaceData._time[: model.interfaceData.N + 1], dtype=np.float64)
@@ -445,6 +451,7 @@ def build_parser():
     parser.add_argument("--save-run-path", type=str, default=None, help="Optional saved-run ``.npz`` output path.")
     parser.add_argument("--no-save-run", action="store_true", help="Disable saving the notebook-friendly run artifact.")
     parser.add_argument("--hide-plot", action="store_true", help="Do not show the matplotlib window.")
+    parser.add_argument("--preallocate-recordings", action="store_true", help="Preallocate Olaye recording histories before solving.")
     return parser
 
 
@@ -482,6 +489,7 @@ def plot_olaye_fig5_notebook(config=None, ax=None):
         semiLog_dt=args["semiLog_dt"],
         semiLogT0=args["semiLogT0"],
         model_variant=args["model_variant"],
+        preallocate_recordings=args.get("preallocate_recordings", False),
     )
 
     mask = np.isfinite(t_s) & np.isfinite(width_um)
@@ -640,6 +648,7 @@ def main(argv=None):
         "save_run_path": args.save_run_path or OLAYE_NOTEBOOK_CONFIG["save_run_path"],
         "save_run": not args.no_save_run,
         "show": not args.hide_plot,
+        "preallocate_recordings": args.preallocate_recordings,
     }
     return plot_olaye_fig5_notebook(config)
 
@@ -648,7 +657,8 @@ if __name__ == "__main__":
     if "ipykernel" in sys.modules:
         plot_olaye_fig5_notebook()
     else:
-        main()
+        plot_olaye_fig5_notebook()
+        # main()
 
 r'''
 Legacy exploratory notebook block intentionally disabled.
