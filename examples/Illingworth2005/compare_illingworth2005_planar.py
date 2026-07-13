@@ -164,7 +164,7 @@ FIG3_PRESENT_WORK_PARAMS = {
     "semiLogT0": 1e-6,
     "t_end_s": 1e2, #8.5e4,
     "record": 1,
-    "record_transformed": True,
+    "record_pq_data": True,
     "preallocate_recordings": True,
     "plot_conc": True,
     "timeProfiling": False,
@@ -403,7 +403,7 @@ def build_fig3_present_work_model(params=None, record=None):
         phase_b_nodes=phase_b_nodes,
         tolerance=1.0e-8,
         record=record,
-        record_transformed=p.get("record_transformed", True),
+        record_pq_data=p.get("record_pq_data", True),
         preallocate_recordings=p.get("preallocate_recordings", False),
         **additionalInputParms,
     )

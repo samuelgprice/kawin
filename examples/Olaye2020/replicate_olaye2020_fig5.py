@@ -190,6 +190,7 @@ OLAYE_NOTEBOOK_CONFIG = {
     "save_run_path": SCRIPT_DIR / "olaye2020_fig5_saved_run.npz",
     "label": None,
     "timeProfiling":True,
+    "record_pq_data": True,
     "preallocate_recordings": True,
 }
 
@@ -292,6 +293,7 @@ def run_case(
     semiLog_dt: float,
     semiLogT0: float,
     model_variant: str,
+    record_pq_data: bool = True,
     preallocate_recordings: bool = False,
 
 ):
@@ -406,7 +408,7 @@ def run_case(
         "rework": MovingBoundaryOlayeFD1DReworkModel,
     }[str(model_variant)]
 
-    model_kwargs = {"preallocate_recordings": preallocate_recordings}
+    model_kwargs = {"record_pq_data": record_pq_data, "preallocate_recordings": preallocate_recordings}
 
     model = model_class(
         mesh,
@@ -451,6 +453,7 @@ def build_parser():
     parser.add_argument("--save-run-path", type=str, default=None, help="Optional saved-run ``.npz`` output path.")
     parser.add_argument("--no-save-run", action="store_true", help="Disable saving the notebook-friendly run artifact.")
     parser.add_argument("--hide-plot", action="store_true", help="Do not show the matplotlib window.")
+    parser.add_argument("--no-record-pq-data", action="store_true", help="Disable Olaye pData/qData history recording.")
     parser.add_argument("--preallocate-recordings", action="store_true", help="Preallocate Olaye recording histories before solving.")
     return parser
 
@@ -489,6 +492,7 @@ def plot_olaye_fig5_notebook(config=None, ax=None):
         semiLog_dt=args["semiLog_dt"],
         semiLogT0=args["semiLogT0"],
         model_variant=args["model_variant"],
+        record_pq_data=args.get("record_pq_data", True),
         preallocate_recordings=args.get("preallocate_recordings", False),
     )
 
@@ -648,6 +652,7 @@ def main(argv=None):
         "save_run_path": args.save_run_path or OLAYE_NOTEBOOK_CONFIG["save_run_path"],
         "save_run": not args.no_save_run,
         "show": not args.hide_plot,
+        "record_pq_data": not args.no_record_pq_data,
         "preallocate_recordings": args.preallocate_recordings,
     }
     return plot_olaye_fig5_notebook(config)

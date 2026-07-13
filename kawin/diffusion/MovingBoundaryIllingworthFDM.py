@@ -192,7 +192,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     transformed concentration profiles; the phase solves are tri-diagonal and
     the interface equation uses the paper's conservative planar balance.
     The transformed profile histories ``pData`` and ``qData`` are recorded by
-    default, but may be disabled with ``record_transformed=False`` to reduce
+    default, but may be disabled with ``record_pq_data=False`` to reduce
     memory use in long runs. Recording arrays can also be preallocated once the
     timestep schedule is known; this avoids repeated padding but may allocate
     large full-profile histories up front.
@@ -223,7 +223,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         max_iterations: int = 100,
         constraints=None,
         record=False,
-        record_transformed: bool = True,
+        record_pq_data: bool = True,
         preallocate_recordings: bool = False,
     ):
         self.initialInterfacePosition = float(interfacePosition)
@@ -237,7 +237,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self.phaseBNodes = None if phase_b_nodes is None else int(phase_b_nodes)
         self.tolerance = float(tolerance)
         self.maxIterations = int(max_iterations)
-        self.recordTransformed = bool(record_transformed)
+        self.recordPqData = bool(record_pq_data)
         self.preallocateRecordings = bool(preallocate_recordings)
 
         self.interfaceData = _ScalarHistory(record)
@@ -367,14 +367,14 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
 
         self._u_grid = np.linspace(0.0, 1.0, int(n_left), dtype=np.float64)
         self._v_grid = np.linspace(0.0, 1.0, int(n_right), dtype=np.float64)
-        if self.recordTransformed:
+        if self.recordPqData:
             self.pData = _VectorHistory(int(n_left), self.interfaceData.recordInterval)
             self.qData = _VectorHistory(int(n_right), self.interfaceData.recordInterval)
         self._p_curr, self._q_curr = self._initialize_transformed_state(c0, s0)
         self._s_curr = s0
         self._s_old = s0
         self._D_left, self._D_right = self._constant_phase_diffusivities()
-        if self.recordTransformed:
+        if self.recordPqData:
             self.pData.record(0, self._p_curr)
             self.qData.record(0, self._q_curr)
 
@@ -440,7 +440,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             return
         step_count = self._estimateStepCount(simTime)
         histories = [self.data, self.interfaceData, self.concData]
-        if self.recordTransformed:
+        if self.recordPqData:
             histories.extend([self.pData, self.qData])
         for history in histories:
             if history is None or not hasattr(history, "preallocate"):
@@ -739,7 +739,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         Returns the recorded left transformed composition vector ``p``.
         """
         if self.pData is None:
-            raise ValueError("Transformed left-state history is not available; set record_transformed=True.")
+            raise ValueError("Transformed left-state history is not available; set record_pq_data=True.")
         return self.pData.y(time)
 
     def getTransformedStateRight(self, time=None):
@@ -747,7 +747,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         Returns the recorded right transformed composition vector ``q``.
         """
         if self.qData is None:
-            raise ValueError("Transformed right-state history is not available; set record_transformed=True.")
+            raise ValueError("Transformed right-state history is not available; set record_pq_data=True.")
         return self.qData.y(time)
 
     def postProcess(self, time, x):
@@ -765,7 +765,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         physical = self._reconstruct_physical_profile(p, q, s)[:, np.newaxis]
         self.data.record(time, physical)
         self.interfaceData.record(time, s)
-        if self.recordTransformed:
+        if self.recordPqData:
             self.pData.record(time, p)
             self.qData.record(time, q)
         self.concData.record(time, self.checkMassIntegral(p, q, s))

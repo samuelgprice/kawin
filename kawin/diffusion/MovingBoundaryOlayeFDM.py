@@ -190,6 +190,9 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
     by setting ``preallocate_recordings=True``. This avoids repeated padding in
     long semi-log runs, but can allocate large full-profile histories up front
     when mesh recording is enabled.
+    The transformed profile histories ``pData`` and ``qData`` are recorded by
+    default, but may be disabled with ``record_pq_data=False`` to reduce memory
+    use when only interface, mesh, or concentration histories are needed.
 
     Notes
     -----
@@ -217,6 +220,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         semiLogT0: float | None = None,
         constraints=None,
         record=False,
+        record_pq_data: bool = True,
         preallocate_recordings: bool = False,
     ):
         self.initialInterfacePosition = float(interfacePosition)
@@ -234,6 +238,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.phaseBNodes = None if phase_b_nodes is None else int(phase_b_nodes)
         self.semiLog_dt = None if semiLog_dt is None else float(semiLog_dt)
         self.semiLogT0 = None if semiLogT0 is None else float(semiLogT0)
+        self.recordPqData = bool(record_pq_data)
         self.preallocateRecordings = bool(preallocate_recordings)
 
         self._currdt = np.inf
@@ -381,7 +386,9 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         step_count = self._estimateStepCount(simTime)
         if step_count <= 0:
             return
-        histories = [self.data, self.interfaceData, self.concData, self.concData_alt, self.pData, self.qData]
+        histories = [self.data, self.interfaceData, self.concData, self.concData_alt]
+        if self.recordPqData:
+            histories.extend([self.pData, self.qData])
         for history in histories:
             if history is None or not hasattr(history, "preallocate"):
                 continue
@@ -448,16 +455,18 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self._du = float(self._u_grid[1] - self._u_grid[0])
         self._dv = float(self._v_grid[1] - self._v_grid[0])
         self._phase_counts = (n_left, n_right)
-        self.pData = _VectorHistory(n_left, self.interfaceData.recordInterval)
-        self.qData = _VectorHistory(n_right, self.interfaceData.recordInterval)
+        if self.recordPqData:
+            self.pData = _VectorHistory(n_left, self.interfaceData.recordInterval)
+            self.qData = _VectorHistory(n_right, self.interfaceData.recordInterval)
 
         self._p_curr, self._q_curr = self._initialize_transformed_state(c0, s0)
         self._p_prev = self._p_curr.copy()
         self._q_prev = self._q_curr.copy()
         self._s_curr = s0
         self._s_prev = s0
-        self.pData.record(0, self._p_curr)
-        self.qData.record(0, self._q_curr)
+        if self.recordPqData:
+            self.pData.record(0, self._p_curr)
+            self.qData.record(0, self._q_curr)
 
         self.data.currentY = self._reconstruct_physical_profile(self._p_curr, self._q_curr, s0)[:, np.newaxis]
         self._initialInventory = self.getTotalInventory(time=0)
@@ -1041,7 +1050,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         Returns the recorded left transformed composition vector ``p``.
         """
         if self.pData is None:
-            raise ValueError("Transformed left-state history is not initialized.")
+            raise ValueError("Transformed left-state history is not available; set record_pq_data=True.")
         return self.pData.y(time)
 
     def getTransformedStateRight(self, time=None):
@@ -1049,7 +1058,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         Returns the recorded right transformed composition vector ``q``.
         """
         if self.qData is None:
-            raise ValueError("Transformed right-state history is not initialized.")
+            raise ValueError("Transformed right-state history is not available; set record_pq_data=True.")
         return self.qData.y(time)
 
     def postProcess(self, time, x):
@@ -1064,8 +1073,9 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         
         self.data.record(time, physical)
         self.interfaceData.record(time, s)
-        self.pData.record(time, p)
-        self.qData.record(time, q)
+        if self.recordPqData:
+            self.pData.record(time, p)
+            self.qData.record(time, q)
         
         averageConc = self.checkMassIntegral(p=p, q=q, s=s)
         self.concData.record(time, averageConc)
