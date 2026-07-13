@@ -161,11 +161,12 @@ FIG3_PRESENT_WORK_PARAMS = {
     # Semi-log mode uses natural-log spacing. For example, semiLogT0=1e-4 and
     # semiLog_dt=0.1 generate targets exp(log(1e-4) + n*0.1), plus t_end_s.
     "semiLog_dt": 0.00025,
-    "semiLogT0": 1e-5,
-    "t_end_s": 8.5e4,
+    "semiLogT0": 1e-6,
+    "t_end_s": 1e2, #8.5e4,
     "record": 1,
     "record_transformed": True,
     "plot_conc": True,
+    "timeProfiling": True,
     "checkAgainstAuthorsCPP": False,
     "cpp_compiler": None,
     "cpp_build_dir": None,
@@ -248,7 +249,7 @@ def run_python_default():
     """Runs the Python default comparison case and returns ``(time, interface)``."""
     p = AUTHOR_DEFAULT_PARAMS
     model = build_python_default_model(record=True)
-    model.solve(p["n_time_steps"] * p["time_step"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True, vIt=50)
+    model.solve(p["n_time_steps"] * p["time_step"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True, vIt=100)
     n = model.interfaceData.N + 1
     return model.interfaceData._time[:n].copy(), model.interfaceData._y[:n].copy()
 
@@ -292,7 +293,10 @@ def build_illingworth_run_payload(result, label=None):
     Builds the saved-run payload for Figure-3 present-work comparisons.
 
     The payload uses seconds and micrometers so it can be overlaid directly
-    with the saved Olaye Figure-5 output.
+    with the saved Olaye Figure-5 output. The saved parameter JSON also stores
+    ``n_phase_a_nodes`` and ``n_phase_b_nodes`` aliases so shared comparison
+    utilities can display node counts across model families, along with the
+    timestep controls that are active for the selected ``dt_mode``.
     """
     params = result["params"]
     payload_params = {
@@ -300,6 +304,21 @@ def build_illingworth_run_payload(result, label=None):
         for key, value in params.items()
         if key not in {"show", "out", "save_run", "save_run_path", "label"}
     }
+    if "n_alpha" in params and "n_phase_a_nodes" not in payload_params:
+        payload_params["n_phase_a_nodes"] = params["n_alpha"]
+    if "n_beta" in params and "n_phase_b_nodes" not in payload_params:
+        payload_params["n_phase_b_nodes"] = params["n_beta"]
+    dt_mode = str(params.get("dt_mode", "fixed"))
+    payload_params["dt_mode"] = dt_mode
+    payload_params["timestep_label"] = _format_fig3_timestep_label(params)
+    if dt_mode == "fixed":
+        if "time_step_s" in params:
+            payload_params["active_time_step_s"] = params["time_step_s"]
+    elif dt_mode == "semi_log":
+        if "semiLogT0" in params:
+            payload_params["active_semiLogT0"] = params["semiLogT0"]
+        if "semiLog_dt" in params:
+            payload_params["active_semiLog_dt"] = params["semiLog_dt"]
     return {
         "time_s": np.asarray(result["time_s"], dtype=np.float64),
         "half_width_um": np.asarray(result["liquid_half_width_um"], dtype=np.float64),
@@ -414,7 +433,7 @@ def run_fig3_present_work(params=None):
         )
     model = build_fig3_present_work_model(p, record=p["record"])
     python_start = time.perf_counter()
-    model.solve(p["t_end_s"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True, vIt=50)
+    model.solve(p["t_end_s"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True, vIt=100)
     python_runtime_s = time.perf_counter() - python_start
     # debugInPlace()
     n = model.interfaceData.N + 1
@@ -564,7 +583,8 @@ def plot_fig3_present_work(params=None, ax=None):
                 label="Idealized conc",
             )
             ax_twin.legend(fontsize=8, loc="center right")
-    return result, ax
+    if p.get("timeProfiling"):
+        return result, ax
     out = p.get("out")
     if out:
         ax.figure.savefig(out, bbox_inches="tight")

@@ -132,9 +132,20 @@ def _build_parameter_summary_text(olaye, illingworth):
             lines.append(f"  {key}={olaye['metadata'][key]:.8g}")
 
     lines.append("Illingworth:")
-    for key in ["spatial_step_um", "time_step_s", "t_end_s", "record", "plot_conc"]:
+    for key in ["n_phase_a_nodes", "n_phase_b_nodes", "spatial_step_um", "dt_mode", "t_end_s", "record", "plot_conc"]:
         if key in illingworth_params:
             lines.append(f"  {key}={illingworth_params[key]}")
+    if "timestep_label" in illingworth_params:
+        lines.append(f"  timestep={illingworth_params['timestep_label']}")
+    dt_mode = illingworth_params.get("dt_mode", "fixed")
+    if dt_mode == "semi_log":
+        for key in ["active_semiLogT0", "active_semiLog_dt", "semiLogT0", "semiLog_dt"]:
+            if key in illingworth_params:
+                lines.append(f"  {key}={illingworth_params[key]}")
+    else:
+        for key in ["active_time_step_s", "time_step_s"]:
+            if key in illingworth_params:
+                lines.append(f"  {key}={illingworth_params[key]}")
     for key in ["mass_integral_initial", "mass_integral_final", "idealized_mass_integral"]:
         if key in illingworth["metadata"]:
             lines.append(f"  {key}={illingworth['metadata'][key]:.8g}")
@@ -201,7 +212,7 @@ def plot_saved_planar_comparison(config=None, ax=None):
         linewidth=2.0,
         color="tab:blue",
         label=cfg["olaye_label"] or _default_label(olaye, "Olaye saved run"),
-        zorder=2,
+        zorder=3,
     )
     ax.plot(
         illingworth["time_s"],
@@ -210,7 +221,7 @@ def plot_saved_planar_comparison(config=None, ax=None):
         linestyle="dotted",
         color="tab:orange",
         label=cfg["illingworth_label"] or _default_label(illingworth, "Illingworth saved run"),
-        zorder=2,
+        zorder=3,
     )
 
     lee_and_oh_overlay = None
@@ -286,12 +297,13 @@ def plot_saved_planar_comparison(config=None, ax=None):
             x_max += pad_x
         ax.set_xlim(x_min, x_max)
 
+    ax.set_ylim(12.5, 24)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Liquid half-width (um)")
     ax.set_title("Saved Olaye and Illingworth planar runs")
     ax.set_xscale(cfg["x_axis"])
     ax.grid(True, alpha=0.25)
-    ax.legend()
+    ax.legend(fontsize=7)
 
     parameter_summary_text = _build_parameter_summary_text(olaye, illingworth)
     if cfg.get("show_parameter_summary", False) and parameter_summary_text.strip():
