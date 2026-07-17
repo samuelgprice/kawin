@@ -601,15 +601,15 @@ class MovingBoundaryOlayeFD1DReworkModel(MovingBoundaryOlayeFD1DModel):
 
         # self.checkMassIntegral(p=self._p_prev.copy(), q=self._q_prev.copy(), s=self._s_prev)
         # self.averageConc = self.checkMassIntegral(p=p_curr, q=q_curr, s=s_curr)
-        self.checkMassIntegral(p=p_new, q=q_new, s=s_new)
-        self.getTotalInventory()/self._R
+        # self.checkMassIntegral(p=p_new, q=q_new, s=s_new)
+        # self.getTotalInventory()/self._R
 
 
         dpdt = (p_new - p_curr) / dt
         dqdt = (q_new - q_curr) / dt
 
-        fluxes, _, _ = self._build_physical_fluxes(t, p_curr, q_curr, s_curr)
-        self._lastFluxes = fluxes
+        # fluxes, _, _ = self._build_physical_fluxes(t, p_curr, q_curr, s_curr)
+        # self._lastFluxes = fluxes
         self._lastInterfaceFluxes = (-D_p[-1] * grad_left, -D_q[0] * grad_right)
         self._lastInterfaceVelocity = float(sdot)
         self._t_prev = t

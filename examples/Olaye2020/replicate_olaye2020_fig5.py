@@ -143,7 +143,7 @@ FIG5_BASE_PARAMS = {
     "D_solid_base": 18.0,
     "D_scale": 1e-12,
     "n_nodes": 3013 + 1,
-    "t_end_s": 1e2,
+    "t_end_s": 9.18e4,
     "dt_mode": "semi_log_optional",
     "semiLogT0": 1e-6,
     "exp_csv": r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_PresentModel_curve.csv",
@@ -190,7 +190,7 @@ OLAYE_NOTEBOOK_CONFIG = {
     "save_run_path": SCRIPT_DIR / "olaye2020_fig5_saved_run.npz",
     "label": None,
     "timeProfiling":True,
-    "record_pq_data": True,
+    "record_pq_data": False,
     "preallocate_recordings": True,
 }
 
@@ -254,10 +254,12 @@ def build_olaye_run_payload(
         "source_script": np.array("examples/Olaye2020/replicate_olaye2020_fig5.py"),
         "model_family": np.array("olaye_fig5"),
         "model_variant": np.array(str(model_variant)),
-        "theoretical_max_um": np.array([theoretical_fig5_max_liquid_half_width_um(params)], dtype=np.float64),
-        "idealized_mass_integral": np.array([compute_idealized_conc(params)], dtype=np.float64),
         "params_json": np.array(json.dumps(_jsonable(payload_params), sort_keys=True)),
     }
+    if {"s0_um", "c_liquid0_pct", "c_liquid_int_pct"}.issubset(params):
+        payload["theoretical_max_um"] = np.array([theoretical_fig5_max_liquid_half_width_um(params)], dtype=np.float64)
+    if {"s0_um", "R_um", "c_liquid0_pct", "c_solid0_pct"}.issubset(params):
+        payload["idealized_mass_integral"] = np.array([compute_idealized_conc(params)], dtype=np.float64)
     if mass_integral_initial is not None:
         payload["mass_integral_initial"] = np.array([float(mass_integral_initial)], dtype=np.float64)
     if mass_integral_final is not None:
@@ -433,7 +435,7 @@ def run_case(
 
     print(f"Estimated total number of time steps: {int((np.log(t_end_s) - np.log(model.semiLogT0)) / model.semiLog_dt)}")
     print(f"Estimated total number of time steps: {len(np.arange(np.log(model.semiLogT0), np.log(t_end_s), model.semiLog_dt))}")
-    model.solve(float(t_end_s), iterator=explicitEulerIterator, verbose=True, vIt=100, minDtFrac=1e-13)
+    model.solve(float(t_end_s), iterator=explicitEulerIterator, verbose=True, vIt=100, minDtFrac=1e-15)
 
     t_s = np.array(model.interfaceData._time[: model.interfaceData.N + 1], dtype=np.float64)
     s_m = np.array(model.interfaceData._y[: model.interfaceData.N + 1], dtype=np.float64)
@@ -576,7 +578,7 @@ def plot_olaye_fig5_notebook(config=None, ax=None):
     )
     ax.set_xscale("log")
     ax.set_xlim(0.00001, float(np.max(t_s_plot)))
-    ax.set_ylim(12.5, 24)
+    ax.set_ylim(0, 24) #ax.set_ylim(12.5, 24)
     ax.grid(True, alpha=0.25)
     ax.legend()
 
@@ -660,9 +662,9 @@ def main(argv=None):
 
 if __name__ == "__main__":
     if "ipykernel" in sys.modules:
-        plot_olaye_fig5_notebook()
+        result=plot_olaye_fig5_notebook()
     else:
-        plot_olaye_fig5_notebook()
+        result=plot_olaye_fig5_notebook()
         # main()
 
 r'''

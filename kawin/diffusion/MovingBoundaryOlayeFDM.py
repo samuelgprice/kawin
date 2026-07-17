@@ -321,22 +321,30 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.initialInterfacePosition = self._clipInterfacePosition(self.initialInterfacePosition, strict=True)
 
     def _clipInterfacePosition(self, interface_position: float, strict: bool = True) -> float:
-        z = np.ravel(self.mesh.z)
-        eps = max(float(self.mesh.dz) * 1e-8, 1e-14)
+        z = np.ravel(self.mesh.z) #z = flatten_1d_coordinates(self.mesh.z)
+        eps = max(float(z[-1] - z[0]) * 1e-14, 1e-14)
         lower = float(z[0] + eps)
         upper = float(z[-1] - eps)
         if strict and not (lower < interface_position < upper):
-            # debugInPlace()
+            debugInPlace()
             raise ValueError("Interface position must lie strictly inside the FD domain.")
-        clipped = float(np.clip(interface_position, lower, upper))
-        matches = np.where(np.isclose(z, clipped, atol=eps, rtol=0.0))[0]
-        if len(matches) > 0:
-            idx = int(matches[0])
-            if idx >= len(z) - 1:
-                clipped = float(max(lower, clipped - eps))
-            else:
-                clipped = float(min(upper, clipped + eps))
-        return clipped
+        return float(np.clip(interface_position, lower, upper))
+        # z = np.ravel(self.mesh.z)
+        # eps = max(float(self.mesh.dz) * 1e-8, 1e-14)
+        # lower = float(z[0] + eps)
+        # upper = float(z[-1] - eps)
+        # if strict and not (lower < interface_position < upper):
+        #     # debugInPlace()
+        #     raise ValueError("Interface position must lie strictly inside the FD domain.")
+        # clipped = float(np.clip(interface_position, lower, upper))
+        # matches = np.where(np.isclose(z, clipped, atol=eps, rtol=0.0))[0]
+        # if len(matches) > 0:
+        #     idx = int(matches[0])
+        #     if idx >= len(z) - 1:
+        #         clipped = float(max(lower, clipped - eps))
+        #     else:
+        #         clipped = float(min(upper, clipped + eps))
+        # return clipped
 
     def setTimeInfo(self, currTime, simTime):
         super().setTimeInfo(currTime, simTime)
@@ -1023,8 +1031,8 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         dpdt = (p_new - p_curr) / dt
         dqdt = (q_new - q_curr) / dt
 
-        fluxes, _, _ = self._build_physical_fluxes(t, p_curr, q_curr, s_curr)
-        self._lastFluxes = fluxes
+        # fluxes, _, _ = self._build_physical_fluxes(t, p_curr, q_curr, s_curr)
+        # self._lastFluxes = fluxes
         self._lastInterfaceFluxes = (-D_p[-1] * grad_left, -D_q[0] * grad_right)
         self._lastInterfaceVelocity = float(sdot)
         self._t_prev = t
@@ -1068,10 +1076,10 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         q = np.asarray(x[1], dtype=np.float64).reshape(-1)
         s = self._clipInterfacePosition(float(x[2]))
         p, q = self._apply_boundary_conditions(p, q)
-        physical = self._reconstruct_physical_profile(p, q, s)[:, np.newaxis]
+        # physical = self._reconstruct_physical_profile(p, q, s)[:, np.newaxis]
 
         
-        self.data.record(time, physical)
+        # self.data.record(time, physical)
         self.interfaceData.record(time, s)
         if self.recordPqData:
             self.pData.record(time, p)
@@ -1120,8 +1128,20 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         return self.getTotalInventory(time=time)
 
     def getFluxes(self, t, xCurr):
-        self._computeState(t, xCurr)
-        return self._lastFluxes[:, np.newaxis]
+        """
+        Reconstructs diagnostic physical-mesh fluxes without advancing state.
+
+        The Olaye recurrence evolves the transformed phase fields and interface
+        position. Fluxes are an output projection onto the fixed physical mesh,
+        so querying them should not recompute the next Olaye step or mutate the
+        cached timestep/interface diagnostics.
+        """
+        p_curr = np.asarray(xCurr[0], dtype=np.float64).reshape(-1)
+        q_curr = np.asarray(xCurr[1], dtype=np.float64).reshape(-1)
+        s_curr = self._clipInterfacePosition(float(xCurr[2]))
+        p_curr, q_curr = self._apply_boundary_conditions(p_curr, q_curr)
+        fluxes, _, _ = self._build_physical_fluxes(t, p_curr, q_curr, s_curr)
+        return fluxes[:, np.newaxis]
 
     def _isClosedSystem(self):
         bc = self._getBoundaryConditions()
