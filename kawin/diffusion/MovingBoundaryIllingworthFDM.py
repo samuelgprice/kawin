@@ -195,7 +195,10 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     default, but may be disabled with ``record_pq_data=False`` to reduce
     memory use in long runs. Recording arrays can also be preallocated once the
     timestep schedule is known; this avoids repeated padding but may allocate
-    large full-profile histories up front.
+    large full-profile histories up front. Custom transformed grids may be
+    supplied with ``transformed_u_grid`` and ``transformed_v_grid`` for planar
+    validation cases that use nonuniform Landau-coordinate spacing; grids must
+    be finite, strictly increasing, and span exactly from 0 to 1.
 
     Notes
     -----
@@ -225,6 +228,8 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         record=False,
         record_pq_data: bool = True,
         preallocate_recordings: bool = False,
+        transformed_u_grid=None,
+        transformed_v_grid=None,
     ):
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceCompositions = tuple(float(v) for v in interface_compositions)
@@ -239,6 +244,16 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self.maxIterations = int(max_iterations)
         self.recordPqData = bool(record_pq_data)
         self.preallocateRecordings = bool(preallocate_recordings)
+        self._inputUGrid = self._validate_transformed_grid(transformed_u_grid, "transformed_u_grid")
+        self._inputVGrid = self._validate_transformed_grid(transformed_v_grid, "transformed_v_grid")
+        if self._inputUGrid is not None:
+            if self.phaseANodes is not None and self.phaseANodes != len(self._inputUGrid):
+                raise ValueError("phase_a_nodes must match the length of transformed_u_grid.")
+            self.phaseANodes = len(self._inputUGrid)
+        if self._inputVGrid is not None:
+            if self.phaseBNodes is not None and self.phaseBNodes != len(self._inputVGrid):
+                raise ValueError("phase_b_nodes must match the length of transformed_v_grid.")
+            self.phaseBNodes = len(self._inputVGrid)
 
         self.interfaceData = _ScalarHistory(record)
         self.concData = _ScalarHistory(record)
@@ -275,6 +290,23 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._validateModelConfiguration()
         self.interfaceData.currentY = self.initialInterfacePosition
         self.interfaceData._y[0] = self.initialInterfacePosition
+
+    def _validate_transformed_grid(self, grid, name):
+        """Validates an optional planar Landau-coordinate grid."""
+        if grid is None:
+            return None
+        values = np.asarray(grid, dtype=np.float64).reshape(-1)
+        if len(values) < 3:
+            raise ValueError(f"{name} must contain at least three nodes.")
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"{name} must contain only finite values.")
+        if not np.isclose(values[0], 0.0, rtol=0.0, atol=1e-14) or not np.isclose(values[-1], 1.0, rtol=0.0, atol=1e-14):
+            raise ValueError(f"{name} must start at 0 and end at 1.")
+        if not np.all(np.diff(values) > 0.0):
+            raise ValueError(f"{name} must be strictly increasing.")
+        values[0] = 0.0
+        values[-1] = 1.0
+        return values
 
     def _validateModelConfiguration(self):
         if not isinstance(self.mesh, CartesianFD1D):
@@ -365,8 +397,18 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         n_left = self.phaseANodes if self.phaseANodes is not None else max(3, int(np.searchsorted(self._z, s0, side="right")))
         n_right = self.phaseBNodes if self.phaseBNodes is not None else max(3, len(self._z) - int(np.searchsorted(self._z, s0, side="left")))
 
-        self._u_grid = np.linspace(0.0, 1.0, int(n_left), dtype=np.float64)
-        self._v_grid = np.linspace(0.0, 1.0, int(n_right), dtype=np.float64)
+        self._u_grid = (
+            self._inputUGrid.copy()
+            if self._inputUGrid is not None
+            else np.linspace(0.0, 1.0, int(n_left), dtype=np.float64)
+        )
+        self._v_grid = (
+            self._inputVGrid.copy()
+            if self._inputVGrid is not None
+            else np.linspace(0.0, 1.0, int(n_right), dtype=np.float64)
+        )
+        n_left = len(self._u_grid)
+        n_right = len(self._v_grid)
         if self.recordPqData:
             self.pData = _VectorHistory(int(n_left), self.interfaceData.recordInterval)
             self.qData = _VectorHistory(int(n_right), self.interfaceData.recordInterval)
@@ -768,6 +810,11 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         if self.recordPqData:
             self.pData.record(time, p)
             self.qData.record(time, q)
+        if time>1e3:
+            debugInPlace()
+            self.checkMassIntegral(p, q, s)
+            self.getTotalInventoryFromState(p, q, s)
+
         self.concData.record(time, self.checkMassIntegral(p, q, s))
 
         self._s_old = float(self._s_curr)
@@ -844,14 +891,11 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         return float(total_mass / self._R)
     
     def checkMassIntegral(self, p, q, s):
-        # debugInPlace()
-        [du] = np.unique(np.diff(self._u_grid.copy()).round(15)).tolist()
-        [dv] = np.unique(np.diff(self._v_grid.copy()).round(15)).tolist()
-        assert abs((((len(p)-2) * du) + du/2 + du/2)-1)<1e-10, ((((len(p)-2) * du) + du/2 + du/2)-1, len(p), du)
-        assert abs((((len(q)-2) * dv) + dv/2 + dv/2)-1)<1e-10, ((((len(q)-2) * dv) + dv/2 + dv/2)-1, len(q), dv)
+        """
+        Returns the transformed-coordinate average composition.
 
-        left_mass = s * ( (du/2)*p[0] + (du*p[1:-1]).sum() + (du/2)*p[-1] )
-        right_mass = (self._R - s) * ( (dv/2)*q[0] + (dv*q[1:-1]).sum() + (dv/2)*q[-1] )
-        total_mass = left_mass + right_mass
-        total_conc = total_mass/self._R
-        return total_conc
+        The trapezoidal integration supports both the standard uniform Landau
+        grids and custom nonuniform grids used for validation against the MAP
+        implementation.
+        """
+        return float(self.getTotalInventoryFromState(p, q, s) / self._R)

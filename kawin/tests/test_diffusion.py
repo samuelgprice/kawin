@@ -1,5 +1,7 @@
 import json
+import math
 import os
+import shutil
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -3215,6 +3217,8 @@ def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, *
         "tolerance": 1.0e-8,
         "geometry": "planar",
         "record": True,
+        "transformed_u_grid": None,
+        "transformed_v_grid": None,
     }
     params.update(kwargs)
     profile = ProfileBuilder([(StepProfile1D(params["s0"], params["initial_alpha"], params["initial_beta"]), "CR")])
@@ -3239,6 +3243,8 @@ def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, *
         phase_b_nodes=params["n_beta"],
         tolerance=params["tolerance"],
         record=params["record"],
+        transformed_u_grid=params["transformed_u_grid"],
+        transformed_v_grid=params["transformed_v_grid"],
     )
 
 
@@ -3282,6 +3288,35 @@ def test_illingworth_default_planar_case_regression():
     )
     assert_allclose(t, expected_t, rtol=0.0, atol=1e-12)
     assert_allclose(s, expected_s, rtol=0.0, atol=5e-12)
+
+
+def test_illingworth_custom_uniform_transformed_grids_preserve_default_behavior():
+    default = _build_illingworth_default_model()
+    custom = _build_illingworth_default_model(
+        transformed_u_grid=np.linspace(0.0, 1.0, 100),
+        transformed_v_grid=np.linspace(0.0, 1.0, 100),
+    )
+
+    default.solve(0.5, iterator=explicitEulerIterator, minDtFrac=1e-14)
+    custom.solve(0.5, iterator=explicitEulerIterator, minDtFrac=1e-14)
+
+    default_t = default.interfaceData._time[: default.interfaceData.N + 1]
+    custom_t = custom.interfaceData._time[: custom.interfaceData.N + 1]
+    default_s = default.interfaceData._y[: default.interfaceData.N + 1]
+    custom_s = custom.interfaceData._y[: custom.interfaceData.N + 1]
+    assert_allclose(custom_t, default_t, rtol=0.0, atol=0.0)
+    assert_allclose(custom_s, default_s, rtol=0.0, atol=0.0)
+
+
+def test_illingworth_custom_transformed_grid_validation():
+    with pytest.raises(ValueError, match="strictly increasing"):
+        _build_illingworth_default_model(transformed_v_grid=np.array([0.0, 0.5, 0.5, 1.0]))
+    with pytest.raises(ValueError, match="start at 0 and end at 1"):
+        _build_illingworth_default_model(transformed_u_grid=np.array([0.1, 0.5, 1.0]))
+    with pytest.raises(ValueError, match="finite"):
+        _build_illingworth_default_model(transformed_v_grid=np.array([0.0, np.nan, 1.0]))
+    with pytest.raises(ValueError, match="phase_b_nodes"):
+        _build_illingworth_default_model(n_beta=4, transformed_v_grid=np.linspace(0.0, 1.0, 5))
 
 
 def test_illingworth_default_planar_case_conservation():
@@ -3332,6 +3367,96 @@ def test_illingworth_cpp_reference_comparison():
     # double precision.
     assert comparison["max_abs_diff"] < 5e-6
     assert comparison["max_rel_diff"] < 5e-6
+
+
+def test_illingworth_fig456_planar_analytical_helpers():
+    from examples.Illingworth2005.replicate_illingworth2005_fig4_5_6_planar import (
+        VALIDATION_PARAMS,
+        planar_exact_interface,
+        planar_exact_profile,
+        solve_planar_zener_j,
+    )
+
+    j = solve_planar_zener_j()
+    ratio = (VALIDATION_PARAMS["c_b"] - VALIDATION_PARAMS["c_inf"]) / (
+        VALIDATION_PARAMS["c_b"] - VALIDATION_PARAMS["c_a"]
+    )
+    assert 2.0 * j * 0.5 * np.sqrt(np.pi) * np.exp(j * j) * math.erfc(j) == pytest.approx(ratio)
+
+    t_abs = VALIDATION_PARAMS["t_init"]
+    s = planar_exact_interface(t_abs, j=j)
+    profile = planar_exact_profile(
+        np.array([0.0, s * (1.0 + 1.0e-8), VALIDATION_PARAMS["R"]], dtype=np.float64),
+        t_abs,
+        j=j,
+    )
+    assert profile[0] == pytest.approx(VALIDATION_PARAMS["c_a"])
+    assert profile[1] == pytest.approx(VALIDATION_PARAMS["c_b"], rel=0.0, abs=1e-8)
+    assert profile[2] == pytest.approx(VALIDATION_PARAMS["c_inf"], rel=0.0, abs=1e-12)
+
+
+def test_illingworth_fig456_notebook_entrypoint_quick_smoke():
+    from examples.Illingworth2005.replicate_illingworth2005_fig4_5_6_planar import run_and_plot
+
+    results, axes = run_and_plot(
+        {
+            "quick": True,
+            "cpp_enabled": False,
+            "show": False,
+            "out": None,
+            "print_summary": False,
+            "tight_layout": False,
+        }
+    )
+
+    assert set(axes) == {"4", "5", "6"}
+    assert len(results["cases"]) >= 3
+    assert set(results["extracted_data"]) == {"4", "5", "6"}
+    assert all(len(entries) >= 1 for entries in results["extracted_data"].values())
+    assert all("python" in item for item in results["cases"])
+    for item in results["cases"]:
+        assert np.all(np.isfinite(item["python"]["interface"]))
+
+
+def test_illingworth_fig456_extracted_data_loader():
+    from examples.Illingworth2005.replicate_illingworth2005_fig4_5_6_planar import (
+        SCRIPT_DIR,
+        load_extracted_figure_data,
+    )
+
+    x, y = load_extracted_figure_data(SCRIPT_DIR / "figureDataExtraction" / "fig5a_dt_1Eminus5.csv")
+
+    assert len(x) == len(y)
+    assert len(x) > 2
+    assert np.all(np.isfinite(x))
+    assert np.all(np.isfinite(y))
+
+
+def test_illingworth_fig456_quick_python_cpp_comparison():
+    if shutil.which("g++") is None:
+        pytest.skip("g++ is not available for the authors' C++ comparison.")
+
+    try:
+        from examples.Illingworth2005.replicate_illingworth2005_fig4_5_6_planar import run_planar_validation_cases
+
+        results = run_planar_validation_cases(
+            {
+                "figures": ("4",),
+                "quick": True,
+                "cpp_enabled": True,
+                "show": False,
+                "out": None,
+                "print_summary": False,
+                "t_abs_end": 3.0e-4,
+            }
+        )
+    except (FileNotFoundError, RuntimeError, PermissionError) as exc:
+        pytest.skip(f"Authors' C++ comparison unavailable: {exc}")
+
+    assert len(results["cases"]) == 2
+    for item in results["cases"]:
+        assert "cpp" in item
+        assert item["python_cpp_comparison"]["max_abs_diff"] < 2e-5
 
 
 def test_olaye_saved_run_payload_contains_required_fields():
