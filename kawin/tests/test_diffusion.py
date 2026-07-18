@@ -1,3 +1,4 @@
+import json
 import os
 
 import matplotlib.pyplot as plt
@@ -3448,3 +3449,117 @@ def test_saved_planar_run_plotter_uses_label_fallbacks_and_supports_log_scale(tm
     assert "Olaye saved run" in labels
     assert "Illingworth saved run" in labels
     plt.close(fig)
+
+
+def test_saved_planar_run_analytical_constants_normalize_saved_units():
+    from examples.compare_saved_planar_runs import _analytical_constants_from_saved_params
+
+    run = {
+        "metadata": {
+            "params_json": json.dumps(
+                {
+                    "R_um": 3012.5,
+                    "s0_um": 12.5,
+                    "c_liquid0_pct": 19.0,
+                    "c_solid0_pct": 0.0,
+                    "c_liquid_int_pct": 10.223,
+                    "c_solid_int_pct": 0.166,
+                    "D_liquid_base": 500.0,
+                    "D_solid_base": 18.0,
+                    "D_scale": 1e-12,
+                }
+            )
+        }
+    }
+
+    constants = _analytical_constants_from_saved_params(run, "Synthetic Olaye")
+
+    assert constants["c_a0"] == pytest.approx(0.19)
+    assert constants["c_b_eq"] == pytest.approx(0.00166)
+    assert constants["d_a_um2_s"] == pytest.approx(500.0)
+    assert constants["d_b_um2_s"] == pytest.approx(18.0)
+    assert constants["R_um"] == pytest.approx(3012.5)
+    assert constants["s0_um"] == pytest.approx(12.5)
+    assert constants["beta_um_sqrt_s"] > 0.0
+
+
+def test_saved_planar_run_plotter_can_add_analytical_comparison():
+    from examples.compare_saved_planar_runs import _plot_analytical_early_time_comparison
+
+    params_json = json.dumps(
+        {
+            "s0_um": 12.5,
+            "c_liquid0_atpct": 19.0,
+            "c_solid0_atpct": 0.0,
+            "c_liquid_int_atpct": 10.223,
+            "c_solid_int_atpct": 0.166,
+            "D_liquid_um2_s": 500.0,
+            "D_solid_um2_s": 18.0,
+        }
+    )
+    run = {
+        "time_s": np.array([0.0, 1.0e-6, 4.0e-6, 9.0e-6], dtype=np.float64),
+        "half_width_um": np.array([12.5, 12.501, 12.502, 12.503], dtype=np.float64),
+        "metadata": {"params_json": params_json},
+    }
+
+    analytical = _plot_analytical_early_time_comparison(
+        run,
+        run,
+        {
+            "show": False,
+            "analytical_out": None,
+            "analytical_time_max_s": 1.0e-5,
+            "analytical_max_points_per_run": 3,
+            "olaye_label": None,
+            "illingworth_label": None,
+        },
+    )
+
+    labels = [line.get_label() for line in analytical["axes"].lines]
+    assert any(label.startswith("Analytical: 2 beta sqrt(t)") for label in labels)
+    assert len(analytical["axes"].lines[0].get_xdata()) == 3
+    assert analytical["illingworth_constants"]["beta_um_sqrt_s"] == pytest.approx(
+        analytical["olaye_constants"]["beta_um_sqrt_s"]
+    )
+    plt.close(analytical["figure"])
+
+
+def test_saved_planar_run_analytical_comparison_can_auto_limit_to_semi_infinite_window():
+    from examples.compare_saved_planar_runs import _plot_analytical_early_time_comparison
+
+    params_json = json.dumps(
+        {
+            "R_um": 48.0,
+            "s0_um": 12.0,
+            "c_liquid0_atpct": 19.0,
+            "c_solid0_atpct": 0.0,
+            "c_liquid_int_atpct": 10.223,
+            "c_solid_int_atpct": 0.166,
+            "D_liquid_um2_s": 1.0,
+            "D_solid_um2_s": 4.0,
+        }
+    )
+    run = {
+        "time_s": np.array([0.0, 1.0, 4.0, 9.0], dtype=np.float64),
+        "half_width_um": np.array([12.0, 13.0, 14.0, 15.0], dtype=np.float64),
+        "metadata": {"params_json": params_json},
+    }
+
+    analytical = _plot_analytical_early_time_comparison(
+        run,
+        run,
+        {
+            "show": False,
+            "analytical_out": None,
+            "analytical_time_max_s": "semi_infinite",
+            "semi_infinite_erfc_argument_min": 3.0,
+            "analytical_max_points_per_run": None,
+            "olaye_label": None,
+            "illingworth_label": None,
+        },
+    )
+
+    assert analytical["semi_infinite_cutoff"]["time_max_s"] == pytest.approx(4.0)
+    assert list(analytical["axes"].lines[0].get_xdata()) == pytest.approx([0.0, 1.0, 2.0])
+    plt.close(analytical["figure"])
