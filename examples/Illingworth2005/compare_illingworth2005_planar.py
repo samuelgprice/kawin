@@ -126,6 +126,8 @@ FIG3_NOTEBOOK_CONFIG = {
     "save_run": True,
     "save_run_path": SCRIPT_DIR / "illingworth2005_fig3_saved_run.npz",
     "label": None,
+    "show_grid_plot": True,
+    "grid_plot_out": None,
     # "dt_mode": "fixed",
     # "semiLog_dt": None,
     # "semiLogT0": None,
@@ -149,7 +151,14 @@ FIG3_PRESENT_WORK_PARAMS = {
     # The paper notes a similar initial step size of 1 um for the comparison.
     # "spatial_step_um": 0.25,
     "n_alpha": 51,
-    "n_beta": 5001,
+    "n_beta": 227, #5001,
+    # Options: "constant" or "geometric". For geometric grids,
+    # geometric_ratio is the interval growth factor moving away from the
+    # interface. Values > 1 cluster nodes near the interface; 0 < values < 1
+    # cluster nodes toward the fixed far boundaries.
+    "grid_type": "geometric", #"constant",
+    "geometric_ratio": 1.03,
+    "min_transformed_interval": 1e-12,
     # The text mentions a 0.01 s time step for the comparison setup. That is
     # very expensive in pure Python out to 1e5 s, so the default here is a
     # runtime-friendly value. Set this to 0.01 for the literal paper timestep.
@@ -162,9 +171,9 @@ FIG3_PRESENT_WORK_PARAMS = {
     # semiLog_dt=0.1 generate targets exp(log(1e-4) + n*0.1), plus t_end_s.
     "semiLog_dt": 0.00025,
     "semiLogT0": 1e-6,
-    "t_end_s": 1e2, #8.5e4,
+    "t_end_s": 8.5e4, #7e4,
     "record": 1,
-    "record_pq_data": True,
+    "record_pq_data": False,
     "preallocate_recordings": True,
     "plot_conc": True,
     "timeProfiling": False,
@@ -250,7 +259,7 @@ def run_python_default():
     """Runs the Python default comparison case and returns ``(time, interface)``."""
     p = AUTHOR_DEFAULT_PARAMS
     model = build_python_default_model(record=True)
-    model.solve(p["n_time_steps"] * p["time_step"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True, vIt=100)
+    model.solve(p["n_time_steps"] * p["time_step"], iterator=explicitEulerIterator, minDtFrac=1e-15, verbose=True, vIt=100)
     n = model.interfaceData.N + 1
     return model.interfaceData._time[:n].copy(), model.interfaceData._y[:n].copy()
 
@@ -276,10 +285,227 @@ def compute_fig3_idealized_conc(params=None):
     ) / p["R_um"]
 
 
+def _fig3_phase_node_counts(params):
+    """Returns the transformed phase-node counts used by the Figure-3 run."""
+    if params.get("spatial_step_um") is not None:
+        phase_a_nodes = int(round(params["s0_um"] / params["spatial_step_um"])) + 1
+        phase_b_nodes = int(round((params["R_um"] - params["s0_um"]) / params["spatial_step_um"])) + 1
+        n_mesh = int(round(params["R_um"] / params["spatial_step_um"])) + 1
+    else:
+        if params.get("n_alpha") is None or params.get("n_beta") is None:
+            raise ValueError("Either spatial_step_um or both n_alpha and n_beta must be specified.")
+        phase_a_nodes = int(params["n_alpha"])
+        phase_b_nodes = int(params["n_beta"])
+        n_mesh = phase_a_nodes + phase_b_nodes - 1
+    return phase_a_nodes, phase_b_nodes, n_mesh
+
+
+def _geometric_intervals_away_from_interface(n_nodes, ratio):
+    """
+    Builds normalized interval widths ordered from interface to far boundary.
+
+    ``ratio`` is the geometric growth factor between neighboring intervals as
+    distance from the interface increases. The widths are normalized to sum to
+    one in transformed coordinates, so only the relative spacing is controlled.
+    """
+    n_intervals = int(n_nodes) - 1
+    if n_intervals < 2:
+        raise ValueError("Geometric transformed grids require at least three nodes per phase.")
+    ratio = float(ratio)
+    if not np.isfinite(ratio) or ratio <= 0:
+        raise ValueError("geometric_ratio must be a positive finite number.")
+    if np.isclose(ratio, 1.0, rtol=0.0, atol=1e-14):
+        return np.full(n_intervals, 1.0 / n_intervals, dtype=np.float64)
+    powers = np.arange(n_intervals, dtype=np.float64)
+    log_widths = powers * np.log(ratio)
+    widths = np.exp(log_widths - np.max(log_widths))
+    return widths / np.sum(widths)
+
+
+def build_symmetric_fig3_transformed_grids(params=None):
+    """
+    Builds optional transformed grids for the Illingworth Figure-3 run.
+
+    ``grid_type="constant"`` returns ``None`` grids so the model follows its
+    original uniform-grid setup. ``grid_type="geometric"`` constructs
+    ratio-controlled interval widths that are mirrored about the interface:
+    the last phase-A ``u`` interval and first phase-B ``v`` interval are the
+    interface-adjacent intervals. A ratio greater than one clusters both
+    phases at the interface; a ratio between zero and one clusters them toward
+    the fixed far boundaries.
+    """
+    p = FIG3_PRESENT_WORK_PARAMS if params is None else {**FIG3_PRESENT_WORK_PARAMS, **dict(params)}
+    phase_a_nodes, phase_b_nodes, n_mesh = _fig3_phase_node_counts(p)
+    grid_type = str(p.get("grid_type", "constant")).lower()
+    if grid_type not in {"constant", "geometric"}:
+        raise ValueError("grid_type must be 'constant' or 'geometric'.")
+
+    ratio = float(p.get("geometric_ratio", 1.0))
+    min_interval = float(p.get("min_transformed_interval", 1e-12))
+    if not np.isfinite(min_interval) or min_interval <= 0:
+        raise ValueError("min_transformed_interval must be a positive finite number.")
+    metadata = {
+        "grid_type": grid_type,
+        "geometric_ratio": ratio,
+        "min_transformed_interval": min_interval,
+        "grid_spacing_convention": (
+            "geometric_ratio is the interval growth factor moving away from the interface; "
+            "u intervals are mirrored against v intervals about the interface."
+        ),
+        "n_phase_a_nodes": phase_a_nodes,
+        "n_phase_b_nodes": phase_b_nodes,
+        "n_mesh": n_mesh,
+    }
+    if grid_type == "constant":
+        metadata.update(
+            {
+                "phase_a_interface_interval": 1.0 / (phase_a_nodes - 1),
+                "phase_b_interface_interval": 1.0 / (phase_b_nodes - 1),
+                "phase_a_far_interval": 1.0 / (phase_a_nodes - 1),
+                "phase_b_far_interval": 1.0 / (phase_b_nodes - 1),
+            }
+        )
+        return None, None, metadata
+
+    v_intervals = _geometric_intervals_away_from_interface(phase_b_nodes, ratio)
+    u_intervals = _geometric_intervals_away_from_interface(phase_a_nodes, ratio)[::-1]
+    u_grid = np.concatenate(([0.0], np.cumsum(u_intervals))).astype(np.float64)
+    v_grid = np.concatenate(([0.0], np.cumsum(v_intervals))).astype(np.float64)
+    u_grid[-1] = 1.0
+    v_grid[-1] = 1.0
+    u_diff = np.diff(u_grid)
+    v_diff = np.diff(v_grid)
+    min_actual_interval = float(min(np.min(u_diff), np.min(v_diff)))
+    if min_actual_interval < min_interval:
+        raise ValueError(
+            "The requested geometric grid is too strongly clustered for the selected node count. "
+            f"Smallest transformed interval is {min_actual_interval:.3e}, below "
+            f"min_transformed_interval={min_interval:.3e}. "
+            "Reduce geometric_ratio toward 1, reduce n_alpha/n_beta, or lower "
+            "min_transformed_interval only if you intentionally want a very ill-conditioned grid."
+        )
+    metadata.update(
+        {
+            "phase_a_interface_interval": float(u_diff[-1]),
+            "phase_b_interface_interval": float(v_diff[0]),
+            "phase_a_far_interval": float(u_diff[0]),
+            "phase_b_far_interval": float(v_diff[-1]),
+            "min_actual_transformed_interval": min_actual_interval,
+        }
+    )
+    
+    # print(np.diff(u_grid)[-1], np.diff(v_grid)[0])
+    # print(np.diff(u_grid)[-1]*params['s0_um'], np.diff(v_grid)[0]*(params['R_um']-params['s0_um']))
+    debugInPlace()
+    u_mid = (u_grid[1:] + u_grid[:-1]) / 2
+    v_mid = (v_grid[1:] + v_grid[:-1]) / 2
+    du = np.diff(np.concatenate(([0], u_mid, [1])))
+    dv = np.diff(np.concatenate(([0], v_mid, [1])))
+
+    left_int_widthFraction = du[-1]
+    right_int_widthFraction = dv[0]
+
+    print(f"left_int_widthFraction: {left_int_widthFraction}")
+    print(f"right_int_widthFraction: {right_int_widthFraction}")
+    print(f"left_int_widthFraction/right_int_widthFraction: {left_int_widthFraction/right_int_widthFraction}")
+    print("\n")
+    def widthsFromIntWidthFrac(left_int_widthFraction, right_int_widthFraction):
+
+        left_int_width = left_int_widthFraction * params['s0_um']
+        left_bulk_width = (1-left_int_widthFraction) * params['s0_um']
+        
+        right_int_width = right_int_widthFraction * (params['R_um'] - params['s0_um'])
+        right_bulk_width = (1-right_int_widthFraction) * (params['R_um'] - params['s0_um'])
+
+        return left_int_width, left_bulk_width, right_int_width, right_bulk_width
+    
+    left_int_width, left_bulk_width, right_int_width, right_bulk_width = widthsFromIntWidthFrac(left_int_widthFraction, right_int_widthFraction)
+    
+    left_bulk = params['c_liquid0_atpct'] / 100.0
+    right_bulk = params['c_solid0_atpct'] / 100.0
+    left_int = params['c_liquid_int_atpct'] / 100.0
+    right_int = params['c_solid_int_atpct'] / 100.0
+
+    # debugInPlace()
+
+    left_mass = left_int_width*left_int + left_bulk_width*left_bulk
+    right_mass = right_int_width*right_int + right_bulk_width*right_bulk
+    total_mass = left_mass + right_mass
+    average_conc = total_mass / params['R_um']
+
+    left_mass_idealized = left_bulk*params['s0_um']
+    right_mass_idealized = right_bulk*(params['R_um']-params['s0_um'])
+    idealized_conc = (left_mass_idealized + right_mass_idealized) / params['R_um']
+    idealized_conc = compute_fig3_idealized_conc(params) # (left_bulk*params['s0_um'] + right_bulk*(params['R_um']-params['s0_um'])) / params['R_um']
+
+    # left_int_widthFraction_cnst, right_int_widthFraction_cnst = 1/len(np.diff(u_grid)), 1/len(np.diff(v_grid))
+    left_int_widthFraction_cnst, right_int_widthFraction_cnst = (1/len(np.diff(u_grid)))/2, (1/len(np.diff(v_grid)))/2
+    print(f"left_int_widthFraction_cnst: {left_int_widthFraction_cnst}")
+    print(f"right_int_widthFraction_cnst: {right_int_widthFraction_cnst}")
+    print(f"left_int_widthFraction_cnst/right_int_widthFraction_cnst: {left_int_widthFraction_cnst/right_int_widthFraction_cnst}")
+    print("\n")
+    left_int_width_cnst, left_bulk_width_cnst, right_int_width_cnst, right_bulk_width_cnst = widthsFromIntWidthFrac(left_int_widthFraction_cnst, right_int_widthFraction_cnst)
+    left_mass_cnst = left_int_width_cnst*left_int + left_bulk_width_cnst*left_bulk
+    right_mass_cnst = right_int_width_cnst*right_int + right_bulk_width_cnst*right_bulk
+    total_mass_cnst = left_mass_cnst + right_mass_cnst
+    average_conc_cnst = total_mass_cnst / params['R_um']
+
+    print(f"idealized_conc:    {idealized_conc}   ({left_mass_idealized} + {right_mass_idealized})")
+    print(f"average_conc_geo:  {average_conc}   ({left_mass} + {right_mass})")
+    print(f"average_conc_cnst: {average_conc_cnst}   ({left_mass_cnst} + {right_mass_cnst})")
+    return u_grid, v_grid, metadata
+
+
+def plot_fig3_transformed_grids(params=None, ax=None):
+    """
+    Plots the transformed phase grids used by a non-constant Figure-3 run.
+
+    Phase A is shown as ``u - 1`` and phase B as ``v`` so the interface is at
+    zero and mirrored spacing is visually checkable before the calculation.
+    """
+    p = FIG3_PRESENT_WORK_PARAMS if params is None else {**FIG3_PRESENT_WORK_PARAMS, **dict(params)}
+    u_grid, v_grid, metadata = build_symmetric_fig3_transformed_grids(p)
+    if metadata["grid_type"] == "constant":
+        return None, None
+
+    import matplotlib.pyplot as plt
+
+    created_figure = ax is None
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7.2, 2.4), dpi=140)
+
+    phase_a_x = u_grid - 1.0
+    phase_b_x = v_grid
+    ax.plot(phase_a_x, np.zeros_like(phase_a_x), "|", markersize=16, color="tab:blue", label="phase A: u - 1")
+    ax.plot(phase_b_x, np.ones_like(phase_b_x), "|", markersize=16, color="tab:orange", label="phase B: v")
+    ax.axvline(0.0, color="0.25", linewidth=1.0, linestyle="--", label="interface")
+    ax.set_yticks([0, 1], ["phase A", "phase B"])
+    ax.set_xlabel("Transformed coordinate relative to interface")
+    ax.set_title(
+        f"Fig. 3 transformed grids: {metadata['grid_type']}, "
+        f"geometric_ratio={metadata['geometric_ratio']:.6g}"
+    )
+    ax.set_xlim(-1.02, 1.02)
+    ax.grid(True, axis="x", alpha=0.25)
+    ax.legend(fontsize=8, loc="upper center", ncol=3)
+
+    out = p.get("grid_plot_out")
+    if out:
+        ax.figure.savefig(out, bbox_inches="tight")
+        print(f"Saved transformed-grid preview: {out}")
+    if created_figure and p.get("show_grid_plot", True):
+        plt.show()
+    elif created_figure:
+        plt.close(ax.figure)
+    return ax.figure, ax
+
+
 def _jsonable(value):
     """Converts notebook config values into JSON-serializable objects."""
     if isinstance(value, pathlib.Path):
         return str(value)
+    if isinstance(value, np.ndarray):
+        return [_jsonable(v) for v in value.tolist()]
     if isinstance(value, dict):
         return {str(k): _jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -303,7 +529,7 @@ def build_illingworth_run_payload(result, label=None):
     payload_params = {
         key: value
         for key, value in params.items()
-        if key not in {"show", "out", "save_run", "save_run_path", "label"}
+        if key not in {"show", "out", "save_run", "save_run_path", "label", "show_grid_plot", "grid_plot_out"}
     }
     if "n_alpha" in params and "n_phase_a_nodes" not in payload_params:
         payload_params["n_phase_a_nodes"] = params["n_alpha"]
@@ -320,7 +546,10 @@ def build_illingworth_run_payload(result, label=None):
             payload_params["active_semiLogT0"] = params["semiLogT0"]
         if "semiLog_dt" in params:
             payload_params["active_semiLog_dt"] = params["semiLog_dt"]
-    return {
+    grid_metadata = result.get("grid_metadata")
+    if grid_metadata:
+        payload_params["grid_metadata"] = grid_metadata
+    payload = {
         "time_s": np.asarray(result["time_s"], dtype=np.float64),
         "half_width_um": np.asarray(result["liquid_half_width_um"], dtype=np.float64),
         "label": np.array(label or "Illingworth Figure 3 present work"),
@@ -332,6 +561,11 @@ def build_illingworth_run_payload(result, label=None):
         "mass_integral_final": np.array([float(result["model"].concData.y())], dtype=np.float64),
         "params_json": np.array(json.dumps(_jsonable(payload_params), sort_keys=True)),
     }
+    if result.get("transformed_u_grid") is not None:
+        payload["transformed_u_grid"] = np.asarray(result["transformed_u_grid"], dtype=np.float64)
+    if result.get("transformed_v_grid") is not None:
+        payload["transformed_v_grid"] = np.asarray(result["transformed_v_grid"], dtype=np.float64)
+    return payload
 
 
 def save_illingworth_run_result(path, payload):
@@ -365,17 +599,8 @@ def build_fig3_present_work_model(params=None, record=None):
     c_liquid_int = p["c_liquid_int_atpct"] / 100.0
     c_solid_int = p["c_solid_int_atpct"] / 100.0
 
-    if p.get("spatial_step_um") is not None:
-        n_mesh = int(round(p["R_um"] / p["spatial_step_um"])) + 1
-        phase_a_nodes = int(round(p["s0_um"] / p["spatial_step_um"])) + 1
-        phase_b_nodes = int(round((p["R_um"] - p["s0_um"]) / p["spatial_step_um"])) + 1
-    else:
-        if p.get("n_alpha") is None or p.get("n_beta") is None:
-            raise ValueError("Either spatial_step_um or both n_alpha and n_beta must be specified.")
-        else:
-            phase_a_nodes = int(p["n_alpha"])
-            phase_b_nodes = int(p["n_beta"])
-            n_mesh = phase_a_nodes + phase_b_nodes - 1
+    phase_a_nodes, phase_b_nodes, n_mesh = _fig3_phase_node_counts(p)
+    transformed_u_grid, transformed_v_grid, _ = build_symmetric_fig3_transformed_grids(p)
 
     profile = ProfileBuilder([(StepProfile1D(p["s0_um"], c_liquid0, c_solid0), "P")])
     mesh = CartesianFD1D(["P"], [0.0, p["R_um"]], n_mesh)
@@ -401,6 +626,8 @@ def build_fig3_present_work_model(params=None, record=None):
         semiLogT0=p.get("semiLogT0"),
         phase_a_nodes=phase_a_nodes,
         phase_b_nodes=phase_b_nodes,
+        transformed_u_grid=transformed_u_grid,
+        transformed_v_grid=transformed_v_grid,
         tolerance=1.0e-8,
         record=record,
         record_pq_data=p.get("record_pq_data", True),
@@ -410,8 +637,15 @@ def build_fig3_present_work_model(params=None, record=None):
 
 
 def run_fig3_present_work(params=None):
-    """Runs and returns data for the Figure 3 present-work liquid half-width curve."""
+    """
+    Runs and returns data for the Figure 3 present-work liquid half-width curve.
+
+    Non-constant transformed grids are previewed before the solve when
+    ``show_grid_plot`` is true, and their metadata is returned for saved-run
+    provenance.
+    """
     p = FIG3_PRESENT_WORK_PARAMS if params is None else {**FIG3_PRESENT_WORK_PARAMS, **dict(params)}
+    transformed_u_grid, transformed_v_grid, grid_metadata = build_symmetric_fig3_transformed_grids(p)
     dt_mode = p.get("dt_mode", "fixed")
     if dt_mode == "fixed":
         n_steps = int(np.ceil(p["t_end_s"] / p["time_step_s"]))
@@ -433,9 +667,13 @@ def run_fig3_present_work(params=None):
             "increase semiLog_dt for semi-log exploratory plotting, "
             "or run a shorter t_end_s."
         )
+    print(f"Estimated number of time-steps: {n_steps}")
+    if grid_metadata["grid_type"] != "constant" and p.get("show_grid_plot", True):
+        plot_fig3_transformed_grids(p)
     model = build_fig3_present_work_model(p, record=p["record"])
     python_start = time.perf_counter()
-    model.solve(p["t_end_s"], iterator=explicitEulerIterator, minDtFrac=1e-14, verbose=True, vIt=100)
+    # debugInPlace()
+    model.solve(p["t_end_s"], iterator=explicitEulerIterator, minDtFrac=1e-15, verbose=True, vIt=100)
     python_runtime_s = time.perf_counter() - python_start
     # debugInPlace()
     n = model.interfaceData.N + 1
@@ -448,6 +686,9 @@ def run_fig3_present_work(params=None):
         "model": model,
         "params": p,
         "python_runtime_s": python_runtime_s,
+        "grid_metadata": grid_metadata,
+        "transformed_u_grid": transformed_u_grid,
+        "transformed_v_grid": transformed_v_grid,
     }
     if p.get("checkAgainstAuthorsCPP", False):
         if dt_mode != "fixed":
@@ -539,6 +780,11 @@ def plot_fig3_present_work(params=None, ax=None):
         titleStr = f"{_format_fig3_timestep_label(p)}, transformed step~{p['spatial_step_um']} um"
     else:
         titleStr = f"{_format_fig3_timestep_label(p)}, n (alpha,beta)~{(p['n_alpha'], p['n_beta'])} um"
+    grid_label = str(p.get("grid_type", "constant"))
+    if grid_label == "geometric":
+        titleStr += f", {grid_label} grid r={float(p.get('geometric_ratio', 1.0)):.6g}"
+    else:
+        titleStr += f", {grid_label} grid"
     ax.set_title(
         "Illingworth and Golosnoy 2005 Fig. 3 present-work curve\n"
         + titleStr
@@ -637,20 +883,24 @@ def fig3_params_to_author_cpp_params(params):
             "C++ comparison requires t_end_s to be an integer multiple of time_step_s; "
             f"got t_end_s/time_step_s={n_time_steps_float}."
         )
+    phase_a_nodes, phase_b_nodes, _ = _fig3_phase_node_counts(p)
+    _, _, grid_metadata = build_symmetric_fig3_transformed_grids(p)
     return {
         "s0": float(p["s0_um"]),
         "R": float(p["R_um"]),
-        "n_alpha": int(round(p["s0_um"] / p["spatial_step_um"])) + 1,
+        "n_alpha": phase_a_nodes,
         "d_alpha": float(p["D_liquid_um2_s"]),
         "initial_alpha": float(p["c_liquid0_atpct"]) / 100.0,
         "interface_alpha": float(p["c_liquid_int_atpct"]) / 100.0,
-        "n_beta": int(round((p["R_um"] - p["s0_um"]) / p["spatial_step_um"])) + 1,
+        "n_beta": phase_b_nodes,
         "d_beta": float(p["D_solid_um2_s"]),
         "initial_beta": float(p["c_solid0_atpct"]) / 100.0,
         "interface_beta": float(p["c_solid_int_atpct"]) / 100.0,
         "time_step": float(p["time_step_s"]),
         "n_time_steps": n_time_steps,
         "tolerance": 1.0e-8,
+        "grid_type": grid_metadata["grid_type"],
+        "geometric_ratio": grid_metadata["geometric_ratio"],
     }
 
 
@@ -659,9 +909,49 @@ def _render_author_cpp_driver(params):
     p = params
     return f"""#include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "data_structures.h"
 #include "subroutines.h"
 #include "InOut.h"
+
+static void fill_transformed_grid(double *u, int n, const char *side, const char *grid_type, double ratio)
+{{
+    int i;
+    double total = 0.0;
+    double cumulative = 0.0;
+    double log_ratio;
+    double max_log_width;
+    if (n < 2)
+    {{
+        return;
+    }}
+    u[0] = 0.0;
+    u[n - 1] = 1.0;
+    if (grid_type[0] != 'g' || fabs(ratio - 1.0) < 1.0e-14)
+    {{
+        for (i = 1; i < n - 1; i++)
+        {{
+            u[i] = double(i) / double(n - 1);
+        }}
+        return;
+    }}
+    log_ratio = log(ratio);
+    max_log_width = double(n - 2) * log_ratio;
+    if (max_log_width < 0.0)
+    {{
+        max_log_width = 0.0;
+    }}
+    for (i = 0; i < n - 1; i++)
+    {{
+        total += exp(double(i) * log_ratio - max_log_width);
+    }}
+    for (i = 0; i < n - 2; i++)
+    {{
+        double exponent = (side[0] == 'l') ? double(n - 2 - i) : double(i);
+        cumulative += exp(exponent * log_ratio - max_log_width) / total;
+        u[i + 1] = cumulative;
+    }}
+}}
 
 int main(void)
 {{
@@ -678,6 +968,8 @@ int main(void)
     const double time_step = {_format_cpp_float(p["time_step"])};
     const int n_time_steps = {int(p["n_time_steps"])};
     const double tol = {_format_cpp_float(p["tolerance"])};
+    const char *grid_type = "{p["grid_type"]}";
+    const double geometric_ratio = {_format_cpp_float(p["geometric_ratio"])};
 
     int i;
     int tmp;
@@ -694,9 +986,9 @@ int main(void)
     whole_system->left->u = (double *) calloc(whole_system->left->n, sizeof(double));
     whole_system->left->c = (double *) calloc(whole_system->left->n, sizeof(double));
     whole_system->left->future_c = (double *) calloc(whole_system->left->n, sizeof(double));
+    fill_transformed_grid(whole_system->left->u, whole_system->left->n, "left", grid_type, geometric_ratio);
     for (i = 0; i < whole_system->left->n; i++)
     {{
-        whole_system->left->u[i] = double(i) / double(whole_system->left->n - 1);
         whole_system->left->c[i] = initialAlpha;
         whole_system->left->future_c[i] = whole_system->left->c[i];
     }}
@@ -710,9 +1002,9 @@ int main(void)
     whole_system->right->u = (double *) calloc(whole_system->right->n, sizeof(double));
     whole_system->right->c = (double *) calloc(whole_system->right->n, sizeof(double));
     whole_system->right->future_c = (double *) calloc(whole_system->right->n, sizeof(double));
+    fill_transformed_grid(whole_system->right->u, whole_system->right->n, "right", grid_type, geometric_ratio);
     for (i = 0; i < whole_system->right->n; i++)
     {{
-        whole_system->right->u[i] = double(i) / double(whole_system->right->n - 1);
         whole_system->right->c[i] = initialBeta;
         whole_system->right->future_c[i] = whole_system->right->c[i];
     }}

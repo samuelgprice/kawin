@@ -413,9 +413,37 @@ def _build_parameter_summary_text(olaye, illingworth):
             lines.append(f"  {key}={olaye['metadata'][key]:.8g}")
 
     lines.append("Illingworth:")
-    for key in ["n_phase_a_nodes", "n_phase_b_nodes", "spatial_step_um", "dt_mode", "t_end_s", "record", "plot_conc"]:
+    for key in [
+        "n_phase_a_nodes",
+        "n_phase_b_nodes",
+        "spatial_step_um",
+        "grid_type",
+        "dt_mode",
+        "t_end_s",
+        "record",
+        "plot_conc",
+    ]:
         if key in illingworth_params:
             lines.append(f"  {key}={illingworth_params[key]}")
+    illingworth_grid_type = str(illingworth_params.get("grid_type", "constant")).lower()
+    if illingworth_grid_type == "geometric":
+        for key in ["geometric_ratio", "min_transformed_interval"]:
+            if key in illingworth_params:
+                lines.append(f"  {key}={illingworth_params[key]}")
+    elif "grid_type" in illingworth_params:
+        lines.append("  geometric_ratio=N/A")
+        lines.append("  min_transformed_interval=N/A")
+    grid_metadata = illingworth_params.get("grid_metadata")
+    if illingworth_grid_type == "geometric" and isinstance(grid_metadata, dict):
+        for key in [
+            "phase_a_interface_interval",
+            "phase_b_interface_interval",
+            "phase_a_far_interval",
+            "phase_b_far_interval",
+            "min_actual_transformed_interval",
+        ]:
+            if key in grid_metadata:
+                lines.append(f"  {key}={grid_metadata[key]:.8g}")
     if "timestep_label" in illingworth_params:
         lines.append(f"  timestep={illingworth_params['timestep_label']}")
     dt_mode = illingworth_params.get("dt_mode", "fixed")
