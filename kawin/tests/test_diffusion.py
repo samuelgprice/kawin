@@ -3028,7 +3028,8 @@ def test_olaye_moving_boundary_k1_then_lfdf_transition():
 
 def test_olaye_moving_boundary_conservation_constant_and_variable_diffusivity():
     for therm_class in (ConstantBinaryThermodynamics, VariableBinaryThermodynamics):
-        profile = ProfileBuilder([(StepProfile1D(0.5, 0.25, 0.75), 'CR')])
+        interface_position = 0.50625
+        profile = ProfileBuilder([(StepProfile1D(interface_position, 0.25, 0.75), 'CR')])
         mesh = CartesianFD1D(['CR'], [0, 1], 81)
         mesh.setResponseProfile(profile)
         therm = therm_class(
@@ -3042,18 +3043,18 @@ def test_olaye_moving_boundary_conservation_constant_and_variable_diffusivity():
             ['ALPHA', 'BETA'],
             thermodynamics=therm,
             temperature=TemperatureParameters(1000),
-            interfacePosition=0.5,
+            interfacePosition=interface_position,
             interface_compositions=(0.3, 0.7),
             first_step_mode="classical_explicit",
             main_step_mode="leapfrog_dufort_frankel",
-            dt_mode="cfl",
+            dt_mode="semi_log_optional",
             geometry="planar",
             semiLog_dt=0.05,
             semiLogT0=1e-6,
             record=True,
         )
-        initial_inventory = model.getTotalInventory()
         model.solve(0.12, iterator=explicitEulerIterator)
+        initial_inventory = model.getTotalInventory(time=0)
         final_inventory = model.getTotalInventory()
         assert np.isfinite(final_inventory)
         assert abs(final_inventory - initial_inventory) < 3e-3

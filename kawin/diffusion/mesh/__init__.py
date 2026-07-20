@@ -9,6 +9,6 @@ from .MovingBoundary1D import MovingBoundaryGeometry, get_moving_boundary_geomet
 from .MovingBoundary1D import summarize_moving_boundary_state, debug_moving_boundary_state
 from .MovingBoundaryFD1D import MovingBoundaryFDGeometry, get_moving_boundary_fd_geometry, integrate_binary_fd_profile
 from .MovingBoundaryFD1D import summarize_moving_boundary_fd_state, debug_moving_boundary_fd_state
-from .MovingBoundaryOlayeFD1D import OlayeFDGeometry, get_olaye_fd_geometry, integrate_binary_olaye_fd_profile
+from .MovingBoundaryOlayeFD1D import OlayeFDGeometry, get_olaye_fd_geometry
 from .MovingBoundaryIllingworthFD1D import IllingworthFDState, integrate_planar_transformed_profile
 from .FVM2D import Cartesian2D

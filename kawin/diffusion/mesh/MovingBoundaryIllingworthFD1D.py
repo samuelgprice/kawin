@@ -107,7 +107,21 @@ def integrate_planar_transformed_profile(p, q, s: float, domain_length: float, u
     Integrates a sharp-interface planar profile in transformed coordinates.
 
     The integral is ``s int_0^1 p du + (R-s) int_0^1 q dv``. It is the
-    conserved solute inventory used by the planar Illingworth discretization.
+    conserved solute inventory used by the planar Olaye/Illingworth discretization.
+
+    NOTE the trapezoid integration used here is equivalent to:
+            u_mid = (self._u_grid[1:] + self._u_grid[:-1]) / 2
+            v_mid = (self._v_grid[1:] + self._v_grid[:-1]) / 2
+            du = np.diff(np.concatenate(([0], u_mid, [1])))
+            dv = np.diff(np.concatenate(([0], v_mid, [1])))
+            assert abs(du.sum()-1)<1e-10
+            assert abs(dv.sum()-1)<1e-10
+            assert len(du)==len(p)
+            assert len(dv)==len(q)
+            left_mass = s * (du * p).sum()
+            right_mass = (self._R - s) * (dv * q).sum()
+            total_mass = left_mass + right_mass
+            total_conc = total_mass/self._R
     """
     p = np.asarray(p, dtype=np.float64)
     q = np.asarray(q, dtype=np.float64)

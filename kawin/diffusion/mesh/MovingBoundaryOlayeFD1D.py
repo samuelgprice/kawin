@@ -96,26 +96,34 @@ def augment_profile_with_interface_compositions(
     return z_aug, c_aug
 
 
-def integrate_binary_olaye_fd_profile(
-    z,
-    composition,
-    interface_position: float,
-    interface_compositions: tuple[float, float],
-) -> float:
+def integrate_planar_transformed_profile(p, q, s: float, domain_length: float, u, v):
     """
-    Integrates the binary profile across the full domain with a sharp interface.
+    Integrates a sharp-interface planar profile in transformed coordinates.
 
-    The integral uses trapezoidal quadrature over an augmented profile that
-    contains duplicated interface coordinates and side-specific interface values.
+    The integral is ``s int_0^1 p du + (R-s) int_0^1 q dv``. It is the
+    conserved solute inventory used by the planar Olaye/Illingworth discretization.
+
+    NOTE the trapezoid integration used here is equivalent to:
+            u_mid = (self._u_grid[1:] + self._u_grid[:-1]) / 2
+            v_mid = (self._v_grid[1:] + self._v_grid[:-1]) / 2
+            du = np.diff(np.concatenate(([0], u_mid, [1])))
+            dv = np.diff(np.concatenate(([0], v_mid, [1])))
+            assert abs(du.sum()-1)<1e-10
+            assert abs(dv.sum()-1)<1e-10
+            assert len(du)==len(p)
+            assert len(dv)==len(q)
+            left_mass = s * (du * p).sum()
+            right_mass = (self._R - s) * (dv * q).sum()
+            total_mass = left_mass + right_mass
+            total_conc = total_mass/self._R
     """
-    z_aug, c_aug = augment_profile_with_interface_compositions(
-        z=z,
-        composition=composition,
-        interface_position=interface_position,
-        interface_compositions=interface_compositions,
-    )
-    return float(np.trapezoid(c_aug, z_aug))
-
+    p = np.asarray(p, dtype=np.float64)
+    q = np.asarray(q, dtype=np.float64)
+    u = np.asarray(u, dtype=np.float64)
+    v = np.asarray(v, dtype=np.float64)
+    left = float(s) * float(np.trapezoid(p, u))
+    right = (float(domain_length) - float(s)) * float(np.trapezoid(q, v))
+    return left + right
 
 def build_piecewise_diffusivity_nodes(
     therm,

@@ -810,10 +810,6 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         if self.recordPqData:
             self.pData.record(time, p)
             self.qData.record(time, q)
-        if time>1e3:
-            debugInPlace()
-            self.checkMassIntegral(p, q, s)
-            self.getTotalInventoryFromState(p, q, s)
 
         self.concData.record(time, self.checkMassIntegral(p, q, s))
 
@@ -849,10 +845,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     def getTotalInventory(self, time=None):
         if time is None:
             return self.getTotalInventoryFromState(self._p_curr, self._q_curr, self._s_curr)
-        if self.concData is not None:
-            return self.concData.y(time) * self._R
-        composition = np.asarray(self.data.y(time), dtype=np.float64).reshape(-1)
-        return float(np.trapezoid(composition, self._z))
+        return self.concData.y(time) * self._R
 
     def getTotalMass(self, time=None):
         return self.getTotalInventory(time=time)
@@ -876,19 +869,6 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
                 stacklevel=2,
             )
         return drift
-
-    def checkMassIntegral_old(self, p, q, s):
-        """
-        Returns the conserved average composition of the transformed state.
-
-        Illingworth's planar scheme conserves solute in the Landau coordinates,
-        so the numerically meaningful inventory is
-        ``s int_0^1 p du + (R-s) int_0^1 q dv``. This helper records the
-        corresponding average composition, matching ``concData`` in the Olaye
-        model while avoiding any extra interpolation through the physical mesh.
-        """
-        total_mass = self.getTotalInventoryFromState(p, q, s)
-        return float(total_mass / self._R)
     
     def checkMassIntegral(self, p, q, s):
         """

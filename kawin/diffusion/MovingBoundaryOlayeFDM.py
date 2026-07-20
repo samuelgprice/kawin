@@ -8,7 +8,7 @@ from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundar
 from kawin.diffusion.mesh.MovingBoundaryOlayeFD1D import (
     build_piecewise_diffusivity_nodes,
     get_olaye_fd_geometry,
-    integrate_binary_olaye_fd_profile,
+    integrate_planar_transformed_profile,
 )
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
@@ -226,7 +226,6 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceData = _ScalarHistory(record)
         self.concData = _ScalarHistory(record)
-        self.concData_alt = _ScalarHistory(record)
         self.pData = None
         self.qData = None
         self.interfaceCompositions = tuple(float(v) for v in interface_compositions)
@@ -394,7 +393,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         step_count = self._estimateStepCount(simTime)
         if step_count <= 0:
             return
-        histories = [self.data, self.interfaceData, self.concData, self.concData_alt]
+        histories = [self.data, self.interfaceData, self.concData]
         if self.recordPqData:
             histories.extend([self.pData, self.qData])
         for history in histories:
@@ -408,7 +407,6 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.interfaceData.reset()
         self.interfaceData.record(0, self.initialInterfacePosition)
         self.concData.reset()
-        self.concData_alt.reset()
         self.pData = None
         self.qData = None
         self._currdt = np.inf
@@ -477,11 +475,9 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             self.qData.record(0, self._q_curr)
 
         self.data.currentY = self._reconstruct_physical_profile(self._p_curr, self._q_curr, s0)[:, np.newaxis]
-        self._initialInventory = self.getTotalInventory(time=0)
         averageConc = self.checkMassIntegral(p=self._p_curr.copy(), q=self._q_curr.copy(), s=self._s_curr)
         self.concData.record(0, averageConc)
-        averageConc_alt = self.getTotalInventory(time=0) / self._R
-        self.concData_alt.record(0, averageConc_alt)
+        self._initialInventory = self.getTotalInventory(time=0)
         
 
 
@@ -1087,8 +1083,6 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         
         averageConc = self.checkMassIntegral(p=p, q=q, s=s)
         self.concData.record(time, averageConc)
-        averageConc_alt = self.getTotalInventory() / self._R
-        self.concData_alt.record(time, averageConc_alt)
 
         self._p_prev = self._p_curr.copy()
         self._q_prev = self._q_curr.copy()
@@ -1105,7 +1099,6 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self.data.finalize()
         self.interfaceData.finalize()
         self.concData.finalize()
-        self.concData_alt.finalize()
         if self.pData is not None:
             self.pData.finalize()
         if self.qData is not None:
@@ -1114,15 +1107,20 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
     def getInterfacePosition(self, time=None):
         return self.interfaceData.y(time)
 
-    def getTotalInventory(self, time=None):
-        composition = np.asarray(self.data.y(time), dtype=np.float64).reshape(-1)
-        interface_position = self.getInterfacePosition(time)
-        return integrate_binary_olaye_fd_profile(
-            z=self.mesh.z,
-            composition=composition,
-            interface_position=interface_position,
-            interface_compositions=self.interfaceCompositions,
+    def getTotalInventoryFromState(self, p, q, s):
+        return integrate_planar_transformed_profile(
+            p=p,
+            q=q,
+            s=s,
+            domain_length=self._R,
+            u=self._u_grid,
+            v=self._v_grid,
         )
+
+    def getTotalInventory(self, time=None):
+        if time is None:
+            return self.getTotalInventoryFromState(self._p_curr, self._q_curr, self._s_curr)
+        return self.concData.y(time) * self._R
 
     def getTotalMass(self, time=None):
         return self.getTotalInventory(time=time)
@@ -1177,12 +1175,4 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         return drift
     
     def checkMassIntegral(self, p, q, s):
-        # debugInPlace()
-        assert abs((((len(p)-2) * self._du) + self._du/2 + self._du/2)-1)<1e-10
-        assert abs((((len(q)-2) * self._dv) + self._dv/2 + self._dv/2)-1)<1e-10
-
-        left_mass = s * ( (self._du/2)*p[0] + (self._du*p[1:-1]).sum() + (self._du/2)*p[-1] )
-        right_mass = (self._R - s) * ( (self._dv/2)*q[0] + (self._dv*q[1:-1]).sum() + (self._dv/2)*q[-1] )
-        total_mass = left_mass + right_mass
-        total_conc = total_mass/self._R
-        return total_conc
+        return float(self.getTotalInventoryFromState(p, q, s) / self._R)
