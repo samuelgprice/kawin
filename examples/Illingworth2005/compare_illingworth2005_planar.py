@@ -151,12 +151,12 @@ FIG3_PRESENT_WORK_PARAMS = {
     # The paper notes a similar initial step size of 1 um for the comparison.
     # "spatial_step_um": 0.25,
     "n_alpha": 51,
-    "n_beta": 227, #5001,
+    "n_beta": 228, #5001,
     # Options: "constant" or "geometric". For geometric grids,
     # geometric_ratio is the interval growth factor moving away from the
     # interface. Values > 1 cluster nodes near the interface; 0 < values < 1
     # cluster nodes toward the fixed far boundaries.
-    "grid_type": "geometric", #"constant",
+    "grid_type": "constant", #"constant",
     "geometric_ratio": 1.03,
     "min_transformed_interval": 1e-12,
     # The text mentions a 0.01 s time step for the comparison setup. That is
@@ -394,9 +394,6 @@ def build_symmetric_fig3_transformed_grids(params=None):
         }
     )
     
-    # print(np.diff(u_grid)[-1], np.diff(v_grid)[0])
-    # print(np.diff(u_grid)[-1]*params['s0_um'], np.diff(v_grid)[0]*(params['R_um']-params['s0_um']))
-    debugInPlace()
     u_mid = (u_grid[1:] + u_grid[:-1]) / 2
     v_mid = (v_grid[1:] + v_grid[:-1]) / 2
     du = np.diff(np.concatenate(([0], u_mid, [1])))
@@ -426,7 +423,6 @@ def build_symmetric_fig3_transformed_grids(params=None):
     left_int = params['c_liquid_int_atpct'] / 100.0
     right_int = params['c_solid_int_atpct'] / 100.0
 
-    # debugInPlace()
 
     left_mass = left_int_width*left_int + left_bulk_width*left_bulk
     right_mass = right_int_width*right_int + right_bulk_width*right_bulk
@@ -831,6 +827,16 @@ def plot_fig3_present_work(params=None, ax=None):
                 label="Idealized conc",
             )
             ax_twin.legend(fontsize=8, loc="center right")
+
+            initial_conc = conc_arr[0]
+            print(f"Initial Conc:   {initial_conc}")
+            print(f"Idealized Conc: {idealized_conc}")
+            print(f"Initial vs Idealized Conc Frac Diff: {(initial_conc-idealized_conc)/idealized_conc}")
+            conc_diffFromInitial_arr = conc_arr - initial_conc
+            conc_diffFromIdealized_arr = conc_arr - idealized_conc
+            print(f"Diff from Initial: {float(conc_diffFromInitial_arr.min()/initial_conc), float(conc_diffFromInitial_arr.max()/initial_conc)}")
+            print(f"Diff from Idealized: {float(conc_diffFromIdealized_arr.min()/idealized_conc), float(conc_diffFromIdealized_arr.max()/idealized_conc)}")
+
     if p.get("timeProfiling"):
         return result, ax
     out = p.get("out")

@@ -143,10 +143,10 @@ FIG5_BASE_PARAMS = {
     "D_solid_base": 18.0,
     "D_scale": 1e-12,
     "n_nodes": 3013 + 1,
-    "t_end_s": 9.18e4,
+    "t_end_s": 8.765e4,
     "dt_mode": "semi_log_optional",
     "semiLogT0": 1e-6,
-    "exp_csv": r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_PresentModel_curve.csv",
+    "exp_csv": r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\figureDataExtraction\Olaye2020_fig5_PresentModel_curve.csv",
     "out": None,
     "show": True,
 }
@@ -181,7 +181,7 @@ SCRIPT_DIR = THIS_FILE.parent
 
 OLAYE_NOTEBOOK_CONFIG = {
     "n_phase_a_nodes": 51,
-    "n_phase_b_nodes": 5001,
+    "n_phase_b_nodes": 228,
     "semiLog_dt": 0.0025 / 10.0, #0.002763654842561367 / 1.0,
     "model_variant": MODEL_VARIANT,
     "out": None,
@@ -189,7 +189,7 @@ OLAYE_NOTEBOOK_CONFIG = {
     "save_run": True,
     "save_run_path": SCRIPT_DIR / "olaye2020_fig5_saved_run.npz",
     "label": None,
-    "timeProfiling":True,
+    "timeProfiling":False,
     "record_pq_data": False,
     "preallocate_recordings": True,
 }
@@ -342,7 +342,7 @@ def run_case(
     ax.plot(x_arr[:indexToPlotTo_beta], 2*beta*x_arr[:indexToPlotTo_beta] + self.interfaceData._y[0], label=f'Analytic Solution, beta={beta}')
 
     import pandas as pd
-    fig5_df = pd.read_csv("C:\\Users\\samth\\OneDrive - Northwestern University\\WS_DL\\Lab Data\\Price\\code\\kawin\\examples\\Olaye2020\\Olaye2020_fig5_PresentModel_curve.csv")
+    fig5_df = pd.read_csv("C:\\Users\\samth\\OneDrive - Northwestern University\\WS_DL\\Lab Data\\Price\\code\\kawin\\examples\\Olaye2020\\figureDataExtraction\\Olaye2020_fig5_PresentModel_curve.csv")
     fig5_df = fig5_df.sort_values(by=['time_s'])
     fig5_df['half_width_m'] = fig5_df['half_width_um']*1e-6
     if (np.sqrt(fig5_df['time_s'])<x_arr[indexToPlotTo]).any():
@@ -380,7 +380,7 @@ def run_case(
     ax.plot(x_arr[:indexToPlotTo_beta], 2*beta*x_arr[:indexToPlotTo_beta] + model.interfaceData._y[0], label=f'Analytic Solution, beta={beta}')
 
     import pandas as pd
-    fig5_df = pd.read_csv("C:\\Users\\samth\\OneDrive - Northwestern University\\WS_DL\\Lab Data\\Price\\code\\kawin\\examples\\Olaye2020\\Olaye2020_fig5_PresentModel_curve.csv")
+    fig5_df = pd.read_csv("C:\\Users\\samth\\OneDrive - Northwestern University\\WS_DL\\Lab Data\\Price\\code\\kawin\\examples\\Olaye2020\\figureDataExtraction\\Olaye2020_fig5_PresentModel_curve.csv")
     fig5_df = fig5_df.sort_values(by=['time_s'])
     fig5_df['half_width_m'] = fig5_df['half_width_um']*1e-6
     if (np.sqrt(fig5_df['time_s'])<x_arr[indexToPlotTo]).any():
@@ -432,10 +432,9 @@ def run_case(
         record= True,
         **model_kwargs,
     )
-
     print(f"Estimated total number of time steps: {int((np.log(t_end_s) - np.log(model.semiLogT0)) / model.semiLog_dt)}")
     print(f"Estimated total number of time steps: {len(np.arange(np.log(model.semiLogT0), np.log(t_end_s), model.semiLog_dt))}")
-    model.solve(float(t_end_s), iterator=explicitEulerIterator, verbose=True, vIt=100, minDtFrac=1e-15)
+    model.solve(float(t_end_s), iterator=explicitEulerIterator, verbose=True, vIt=100, minDtFrac=1e-16)
 
     t_s = np.array(model.interfaceData._time[: model.interfaceData.N + 1], dtype=np.float64)
     s_m = np.array(model.interfaceData._y[: model.interfaceData.N + 1], dtype=np.float64)
@@ -555,7 +554,7 @@ def plot_olaye_fig5_notebook(config=None, ax=None):
             label="Experimental (digitized)",
         )
 
-    alt_csv = SCRIPT_DIR / "Olaye2020_fig5_alt_PresentModelRough2_curve.csv"
+    alt_csv = SCRIPT_DIR / "figureDataExtraction\\Olaye2020_fig5_alt_PresentModelRough2_curve.csv"
     exp_t_s, exp_w_um = _load_experimental_csv(alt_csv)
     exp_mask = np.isfinite(exp_t_s) & np.isfinite(exp_w_um)
     ax.scatter(
@@ -577,7 +576,7 @@ def plot_olaye_fig5_notebook(config=None, ax=None):
         fontsize=10,
     )
     ax.set_xscale("log")
-    ax.set_xlim(0.00001, float(np.max(t_s_plot)))
+    ax.set_xlim(0.00001, 1e5) #ax.set_xlim(0.00001, float(np.max(t_s_plot)))
     ax.set_ylim(0, 24) #ax.set_ylim(12.5, 24)
     ax.grid(True, alpha=0.25)
     ax.legend()
@@ -605,6 +604,15 @@ def plot_olaye_fig5_notebook(config=None, ax=None):
     ax_twin_w.plot(intermediate_time_arr_out, 1 / w_arr_out, lw=1.0, color="tab:brown", label="1/w")
     ax_twin_w.hlines(1, intermediate_time_arr_out[0], intermediate_time_arr_out[-1], lw=1.0, color="tab:brown", linestyle="dashdot", label="1/w=1")
     ax_twin_w.spines["right"].set_position(("outward", 120))
+
+    initial_conc = conc_arr[0]
+    print(f"Initial Conc:   {initial_conc}")
+    print(f"Idealized Conc: {idealized_conc}")
+    print(f"Initial vs Idealized Conc Frac Diff: {(initial_conc-idealized_conc)/idealized_conc}")
+    conc_diffFromInitial_arr = conc_arr - initial_conc
+    conc_diffFromIdealized_arr = conc_arr - idealized_conc
+    print(f"Diff from Initial: {float(conc_diffFromInitial_arr.min()/initial_conc), float(conc_diffFromInitial_arr.max()/initial_conc)}")
+    print(f"Diff from Idealized: {float(conc_diffFromIdealized_arr.min()/idealized_conc), float(conc_diffFromIdealized_arr.max()/idealized_conc)}")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, bbox_inches="tight")
@@ -754,7 +762,7 @@ plotly_fig.add_trace(
     )
 )
 
-fig5_df = pd.read_csv("C:\\Users\\samth\\OneDrive - Northwestern University\\WS_DL\\Lab Data\\Price\\code\\kawin\\examples\\Olaye2020\\Olaye2020_fig5_PresentModel_curve.csv")
+fig5_df = pd.read_csv("C:\\Users\\samth\\OneDrive - Northwestern University\\WS_DL\\Lab Data\\Price\\code\\kawin\\examples\\Olaye2020\\figureDataExtraction\\Olaye2020_fig5_PresentModel_curve.csv")
 fig5_df = fig5_df.sort_values(by=["time_s"])
 fig5_df["half_width_m"] = fig5_df["half_width_um"] * 1e-6
 if (np.sqrt(fig5_df["time_s"]) < x_arr[indexToPlotTo]).any():
@@ -770,7 +778,7 @@ if (np.sqrt(fig5_df["time_s"]) < x_arr[indexToPlotTo]).any():
         )
     )
 
-fig5_alt_df = pd.read_csv(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\Olaye2020_fig5_alt_PresentModelRough_curve.csv")
+fig5_alt_df = pd.read_csv(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\Olaye2020\figureDataExtraction\Olaye2020_fig5_alt_PresentModelRough_curve.csv")
 fig5_alt_df = fig5_alt_df.sort_values(by=["time_s"])
 fig5_alt_df["half_width_m"] = fig5_alt_df["half_width_um"] * 1e-6
 if (np.sqrt(fig5_alt_df["time_s"]) < x_arr[indexToPlotTo]).any():
