@@ -2,16 +2,18 @@
 
 # %matplotlib inline
 """
-Replicate Olaye & Ojo (2020) Figure 5 with the Olaye moving-boundary FD model.
+Replicate selected Olaye & Ojo (2020) figures with the Olaye moving-boundary FD model.
 
-This script runs the binary planar moving-interface solver and plots liquid
-half-width versus time for a Ni-P TLP-style setup.
+This script runs the binary planar moving-interface solver and plots either
+Figure 5 liquid half-width for a Ni-P TLP-style setup or Figure 6 interface
+displacement for alpha-beta brass diffusion couples.
 
 Notes
 -----
 - The model implementation currently supports planar geometry only.
-- By default this script uses Table-2-style Ni-P parameters from the paper
-  (converted from percent to mole-fraction-like units and micrometers to SI).
+- By default this script uses Figure 5 Table-2-style Ni-P parameters from the
+  paper (converted from percent to mole-fraction-like units and micrometers to
+  SI).
 - If you have digitized Figure 5 experimental points, pass them with
   ``--exp-csv`` (columns: ``time_h`` and ``half_width_um``).
 """
@@ -180,9 +182,20 @@ THIS_FILE = _resolve_this_file()
 SCRIPT_DIR = THIS_FILE.parent
 
 OLAYE_NOTEBOOK_CONFIG = {
+    "figures": ("fig6",),
     "n_phase_a_nodes": 51,
     "n_phase_b_nodes": 228,
     "semiLog_dt": 0.0025 / 10.0, #0.002763654842561367 / 1.0,
+    "fig6_layers": ("thin"),#, "thick"),
+    "fig6_d_alpha_cm2_s": (2.5e-8,),# 1.4e-8,),
+    "fig6_n_phase_a_nodes": 50,#51,
+    "fig6_n_phase_b_nodes": 132, #68,
+    "fig6_semiLog_dt": 0.0025 / 10.0,
+    "fig6_t_end_s": 7e5,
+    "fig6_out": None,
+    "fig6_plot_extracted_data": True,
+    "fig6_plot_concentration_info": True,
+    "fig6_save_run_path": None,
     "model_variant": MODEL_VARIANT,
     "out": None,
     "show": True,
@@ -193,6 +206,181 @@ OLAYE_NOTEBOOK_CONFIG = {
     "record_pq_data": False,
     "preallocate_recordings": True,
 }
+
+
+FIG6_LAYER_PARAMS = {
+    "thin": {
+        "label": "Thin initial beta layer",
+        "s0_um": 190.5,
+        "R_um": 565.0,
+    },
+    "thick": {
+        "label": "Thick initial beta layer",
+        "s0_um": 381.0,
+        "R_um": 755.5,
+    },
+}
+
+FIG6_BASE_PARAMS = {
+    "c_beta0_pct": 39.4,
+    "c_alpha0_pct": 29.1,
+    "c_beta_int_pct": 36.9,
+    "c_alpha_int_pct": 32.5,
+    "D_beta_um2_s": 100.0,
+    "D_scale": 1e-12,
+    "dt_mode": "semi_log_optional",
+    "semiLogT0": 1e-5,
+}
+
+FIG6_VALID_D_ALPHA_CM2_S = (1.4e-8, 2.5e-8)
+
+FIG6_EXTRACTED_DATA_FILES = {
+    ("thin", 1.4e-8): {
+        "filename": "Olaye2020_fig6_ThinBeta_D1pt4_DF_curve.csv",
+        "label": "Digitized Fig. 6 thin beta, D_alpha=1.4E-8",
+        "color": "tab:blue",
+        "marker": "o",
+    },
+    ("thin", 2.5e-8): {
+        "filename": "Olaye2020_fig6_ThinBeta_D2pt5_DF_curve.csv",
+        "label": "Digitized Fig. 6 thin beta, D_alpha=2.5E-8",
+        "color": "tab:red",
+        "marker": "o",
+    },
+    ("thick", 1.4e-8): {
+        "filename": "Olaye2020_fig6_ThickBeta_D1pt4_DF_curve.csv",
+        "label": "Digitized Fig. 6 thick beta, D_alpha=1.4E-8",
+        "color": "tab:orange",
+        "marker": "D",
+    },
+    ("thick", 2.5e-8): {
+        "filename": "Olaye2020_fig6_ThickBeta_D2pt5_DF_curve.csv",
+        "label": "Digitized Fig. 6 thick beta, D_alpha=2.5E-8",
+        "color": "tab:purple",
+        "marker": "D",
+    },
+}
+
+
+def _normalize_requested_items(value, valid_values, *, label):
+    """Normalizes a string or sequence selector against allowed values."""
+    valid = tuple(valid_values)
+    if isinstance(value, str):
+        requested = (value,)
+    else:
+        requested = tuple(value)
+    normalized = []
+    for item in requested:
+        item_text = str(item).strip().lower()
+        if item_text in {"all", "both"}:
+            normalized.extend(valid)
+            continue
+        if all(str(v).startswith("fig") for v in valid):
+            if item_text.startswith("fig"):
+                item_text = f"fig{item_text[3:]}"
+            elif item_text.isdigit():
+                item_text = f"fig{item_text}"
+        if item_text not in valid:
+            raise ValueError(f"Unknown {label}: {item!r}. Expected one of {valid}.")
+        normalized.append(item_text)
+    return tuple(dict.fromkeys(normalized))
+
+
+def _selected_figures(config):
+    """Returns normalized figure names requested by the notebook config."""
+    figures = config.get("figures", ("fig5",))
+    normalized = _normalize_requested_items(figures, ("fig5", "fig6"), label="figure")
+    return normalized
+
+
+def _selected_fig6_layers(config):
+    """Returns normalized Figure-6 beta-layer selections."""
+    return _normalize_requested_items(config.get("fig6_layers", ("thin", "thick")), ("thin", "thick"), label="Figure 6 layer")
+
+
+def _selected_fig6_d_alpha_cm2_s(config):
+    """Returns normalized Figure-6 alpha diffusivity selections in ``cm^2/s``."""
+    values = config.get("fig6_d_alpha_cm2_s", FIG6_VALID_D_ALPHA_CM2_S)
+    if isinstance(values, str):
+        if values.strip().lower() in {"all", "both"}:
+            requested = FIG6_VALID_D_ALPHA_CM2_S
+        else:
+            requested = (float(values),)
+    else:
+        requested = tuple(float(value) for value in values)
+    normalized = []
+    for value in requested:
+        matches = [valid for valid in FIG6_VALID_D_ALPHA_CM2_S if np.isclose(value, valid, rtol=1e-12, atol=0.0)]
+        if not matches:
+            raise ValueError(
+                "Unknown Figure 6 alpha diffusivity "
+                f"{value!r}. Expected one of {FIG6_VALID_D_ALPHA_CM2_S} cm^2/s."
+            )
+        normalized.append(matches[0])
+    return tuple(dict.fromkeys(normalized))
+
+
+def _cm2_s_to_um2_s(value):
+    """Converts diffusivity from ``cm^2/s`` to ``um^2/s``."""
+    return float(value) * 1e8
+
+
+def _load_no_header_xy_csv(path_or_file):
+    """
+    Loads a no-header two-column digitized figure CSV.
+
+    Returns finite ``x`` and ``y`` arrays in the units encoded by the file.
+    """
+    data = np.loadtxt(path_or_file, delimiter=",", dtype=np.float64)
+    data = np.atleast_2d(data)
+    if data.shape[1] < 2:
+        raise ValueError(f"{path_or_file} must contain at least two columns.")
+    mask = np.isfinite(data[:, 0]) & np.isfinite(data[:, 1])
+    return data[mask, 0], data[mask, 1]
+
+
+def build_fig6_case_params(layer, d_alpha_cm2_s, config=None):
+    """
+    Builds corrected Table-2 Figure-6 inputs for one brass validation case.
+
+    The brass rows are interpreted with phase A as beta and phase B as alpha.
+    The printed beta-layer thicknesses are corrected to the half-widths used as
+    the initial planar interface positions.
+    """
+    cfg = OLAYE_NOTEBOOK_CONFIG if config is None else {**OLAYE_NOTEBOOK_CONFIG, **dict(config)}
+    layer_key = _normalize_requested_items((layer,), ("thin", "thick"), label="Figure 6 layer")[0]
+    d_alpha_value = _selected_fig6_d_alpha_cm2_s({"fig6_d_alpha_cm2_s": (d_alpha_cm2_s,)})[0]
+    layer_params = FIG6_LAYER_PARAMS[layer_key]
+    return {
+        "figure": "fig6",
+        "layer": layer_key,
+        "d_alpha_cm2_s": d_alpha_value,
+        "d_alpha_um2_s": _cm2_s_to_um2_s(d_alpha_value),
+        "R_um": layer_params["R_um"],
+        "s0_um": layer_params["s0_um"],
+        "c_liquid0_pct": FIG6_BASE_PARAMS["c_beta0_pct"],
+        "c_solid0_pct": FIG6_BASE_PARAMS["c_alpha0_pct"],
+        "c_liquid_int_pct": FIG6_BASE_PARAMS["c_beta_int_pct"],
+        "c_solid_int_pct": FIG6_BASE_PARAMS["c_alpha_int_pct"],
+        "D_liquid_base": FIG6_BASE_PARAMS["D_beta_um2_s"],
+        "D_solid_base": _cm2_s_to_um2_s(d_alpha_value),
+        "D_scale": FIG6_BASE_PARAMS["D_scale"],
+        "n_nodes": int(round(layer_params["R_um"])) + 1,
+        "n_phase_a_nodes": int(cfg["fig6_n_phase_a_nodes"]),
+        "n_phase_b_nodes": int(cfg["fig6_n_phase_b_nodes"]),
+        "t_end_s": float(cfg["fig6_t_end_s"]),
+        "dt_mode": FIG6_BASE_PARAMS["dt_mode"],
+        "semiLog_dt": float(cfg["fig6_semiLog_dt"]),
+        "semiLogT0": FIG6_BASE_PARAMS["semiLogT0"],
+        "model_variant": cfg["model_variant"],
+        "response_name": "ZN",
+        "elements": ("CU", "ZN"),
+        "phase_a_name": "BETA",
+        "phase_b_name": "ALPHA",
+        "label": f"{layer_params['label']}, D_alpha={d_alpha_value:.1E} cm^2/s",
+        "record_pq_data": bool(cfg.get("record_pq_data", True)),
+        "preallocate_recordings": bool(cfg.get("preallocate_recordings", False)),
+    }
 
 
 def compute_idealized_conc(params):
@@ -229,36 +417,44 @@ def _jsonable(value):
 def build_olaye_run_payload(
     *,
     time_s,
-    half_width_um,
     params,
     model_variant,
+    half_width_um=None,
+    interface_displacement_um=None,
+    model_family="olaye_fig5",
     label=None,
     mass_integral_initial=None,
     mass_integral_final=None,
 ):
     """
-    Builds the saved-run payload for notebook-friendly Figure-5 comparisons.
+    Builds the saved-run payload for notebook-friendly Olaye comparisons.
 
-    The saved arrays use seconds and micrometers so they can be overlaid
-    directly with the Illingworth Figure-3 present-work results.
+    The saved arrays use seconds and micrometers. Figure 5 stores
+    ``half_width_um``; Figure 6 stores ``interface_displacement_um``.
     """
+    if half_width_um is None and interface_displacement_um is None:
+        raise ValueError("At least one plotted quantity must be supplied.")
     payload_params = {
         key: value
         for key, value in params.items()
-        if key not in {"show", "out", "save_run", "save_run_path", "label"}
+        if key not in {"show", "out", "fig6_out", "save_run", "save_run_path", "fig6_save_run_path", "label"}
     }
+    default_label = f"Olaye Figure 5 ({model_variant})" if str(model_family) == "olaye_fig5" else f"Olaye Figure 6 ({model_variant})"
     payload = {
         "time_s": np.asarray(time_s, dtype=np.float64),
-        "half_width_um": np.asarray(half_width_um, dtype=np.float64),
-        "label": np.array(label or f"Olaye Figure 5 ({model_variant})"),
+        "label": np.array(label or default_label),
         "source_script": np.array("examples/Olaye2020/replicate_olaye2020_fig5.py"),
-        "model_family": np.array("olaye_fig5"),
+        "model_family": np.array(str(model_family)),
         "model_variant": np.array(str(model_variant)),
         "params_json": np.array(json.dumps(_jsonable(payload_params), sort_keys=True)),
     }
-    if {"s0_um", "c_liquid0_pct", "c_liquid_int_pct"}.issubset(params):
+    if half_width_um is not None:
+        payload["half_width_um"] = np.asarray(half_width_um, dtype=np.float64)
+    if interface_displacement_um is not None:
+        payload["interface_displacement_um"] = np.asarray(interface_displacement_um, dtype=np.float64)
+    if str(model_family) == "olaye_fig5" and {"s0_um", "c_liquid0_pct", "c_liquid_int_pct"}.issubset(params):
         payload["theoretical_max_um"] = np.array([theoretical_fig5_max_liquid_half_width_um(params)], dtype=np.float64)
-    if {"s0_um", "R_um", "c_liquid0_pct", "c_solid0_pct"}.issubset(params):
+    if str(model_family) == "olaye_fig5" and {"s0_um", "R_um", "c_liquid0_pct", "c_solid0_pct"}.issubset(params):
         payload["idealized_mass_integral"] = np.array([compute_idealized_conc(params)], dtype=np.float64)
     if mass_integral_initial is not None:
         payload["mass_integral_initial"] = np.array([float(mass_integral_initial)], dtype=np.float64)
@@ -297,9 +493,14 @@ def run_case(
     model_variant: str,
     record_pq_data: bool = True,
     preallocate_recordings: bool = False,
+    response_name: str = "P",
+    elements=("NI", "P"),
+    phase_a_name: str = "LIQUID",
+    phase_b_name: str = "SOLID",
+    print_beta: bool = True,
 
 ):
-    """Runs one Figure-5-style simulation and returns time and liquid half-width."""
+    """Runs one planar Olaye simulation and returns time and phase-A width."""
     R_m = float(R_um) * 1e-6
     s0_m = float(s0_um) * 1e-6
     interface_position_m = s0_m
@@ -310,22 +511,22 @@ def run_case(
     c_liquid_int = float(c_liquid_int_pct) / 100.0
     c_solid_int = float(c_solid_int_pct) / 100.0
 
-    # Match the paper convention directly:
-    # left phase A = liquid, right phase B = solid base metal.
-    profile = ProfileBuilder([(StepProfile1D(interface_position_m, c_liquid0, c_solid0), "P")])
-    mesh = CartesianFD1D(["P"], [0.0, R_m], int(n_nodes))
+    # Match the paper convention directly: left side is phase A, right side is phase B.
+    profile = ProfileBuilder([(StepProfile1D(interface_position_m, c_liquid0, c_solid0), response_name)])
+    mesh = CartesianFD1D([response_name], [0.0, R_m], int(n_nodes))
     mesh.setResponseProfile(profile)
 
     therm = ConstantBinaryThermodynamics(
-        phases=["LIQUID", "SOLID"],
+        phases=[phase_a_name, phase_b_name],
         diffusivities={
-            "LIQUID": float(D_liquid_base) * float(D_scale),
-            "SOLID": float(D_solid_base) * float(D_scale),
+            phase_a_name: float(D_liquid_base) * float(D_scale),
+            phase_b_name: float(D_solid_base) * float(D_scale),
         },
     )
 
 
-    print(f"beta = {solve_beta(c_a0=c_liquid0, c_b0=c_solid0, c_a_eq=c_liquid_int, c_b_eq=c_solid_int, d_a=float(D_liquid_base) * float(D_scale), d_b=float(D_solid_base) * float(D_scale), left=-100.0, right=100.0)}")
+    if print_beta:
+        print(f"beta = {solve_beta(c_a0=c_liquid0, c_b0=c_solid0, c_a_eq=c_liquid_int, c_b_eq=c_solid_int, d_a=float(D_liquid_base) * float(D_scale), d_b=float(D_solid_base) * float(D_scale), left=-100.0, right=100.0)}")
 
     '''
     ## To plot in console use:
@@ -414,8 +615,8 @@ def run_case(
 
     model = model_class(
         mesh,
-        ["NI", "P"],
-        ["LIQUID", "SOLID"],
+        list(elements),
+        [phase_a_name, phase_b_name],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000.0),
         interfacePosition=interface_position_m,
@@ -434,7 +635,7 @@ def run_case(
     )
     print(f"Estimated total number of time steps: {int((np.log(t_end_s) - np.log(model.semiLogT0)) / model.semiLog_dt)}")
     print(f"Estimated total number of time steps: {len(np.arange(np.log(model.semiLogT0), np.log(t_end_s), model.semiLog_dt))}")
-    model.solve(float(t_end_s), iterator=explicitEulerIterator, verbose=True, vIt=100, minDtFrac=1e-16)
+    model.solve(float(t_end_s), iterator=explicitEulerIterator, verbose=True, vIt=100, minDtFrac=1e-17)
 
     t_s = np.array(model.interfaceData._time[: model.interfaceData.N + 1], dtype=np.float64)
     s_m = np.array(model.interfaceData._y[: model.interfaceData.N + 1], dtype=np.float64)
@@ -446,6 +647,7 @@ def run_case(
 def build_parser():
     """Builds the optional CLI parser retained for backward compatibility."""
     parser = argparse.ArgumentParser(description="Replicate Olaye & Ojo 2020 Figure 5 using the Olaye FD model.")
+    parser.add_argument("--figures", nargs="+", default=OLAYE_NOTEBOOK_CONFIG["figures"], help="Figures to run: fig5, fig6, or all.")
     parser.add_argument("--n-phase-a-nodes", type=int, default=OLAYE_NOTEBOOK_CONFIG["n_phase_a_nodes"])
     parser.add_argument("--n-phase-b-nodes", type=int, default=OLAYE_NOTEBOOK_CONFIG["n_phase_b_nodes"])
     parser.add_argument("--semiLog-dt", type=float, default=OLAYE_NOTEBOOK_CONFIG["semiLog_dt"])
@@ -650,10 +852,287 @@ def plot_olaye_fig5_notebook(config=None, ax=None):
     }
 
 
+def _fig6_style(layer, d_alpha_cm2_s):
+    """Returns a stable Matplotlib style for one Figure-6 case."""
+    color_lookup = {
+        ("thin", 1.4e-8): "tab:cyan",
+        ("thin", 2.5e-8): "tab:pink",
+        ("thick", 1.4e-8): "tab:blue",
+        ("thick", 2.5e-8): "black",
+    }
+    linestyle_lookup = {
+        "thin": "--",
+        "thick": "-.",
+    }
+    matched_d = _selected_fig6_d_alpha_cm2_s({"fig6_d_alpha_cm2_s": (d_alpha_cm2_s,)})[0]
+    return {
+        "color": color_lookup.get((layer, matched_d), None),
+        "linestyle": linestyle_lookup.get(layer, "-"),
+        "linewidth": 2.0,
+    }
+
+
+def _save_fig6_run_result(path, case_results):
+    """Saves selected Figure-6 case arrays to one compressed ``.npz`` file."""
+    payload = {"case_count": np.array([len(case_results)], dtype=np.int64)}
+    for index, item in enumerate(case_results):
+        prefix = f"case_{index}"
+        payload[f"{prefix}_time_s"] = np.asarray(item["time_s"], dtype=np.float64)
+        payload[f"{prefix}_interface_displacement_um"] = np.asarray(item["interface_displacement_um"], dtype=np.float64)
+        payload[f"{prefix}_label"] = np.array(item["params"]["label"])
+        payload[f"{prefix}_params_json"] = np.array(json.dumps(_jsonable(item["params"]), sort_keys=True))
+    return save_olaye_run_result(path, payload)
+
+
+def _plot_fig6_concentration_info(ax, case_results):
+    """
+    Adds a Figure-6 concentration-history twin axis.
+
+    Each concentration curve reuses the interface-curve color for the same
+    case, with lighter reference lines for the initial and idealized average
+    concentrations.
+    """
+    ax_conc = ax.twinx()
+    ax_conc.set_ylabel("conc", color="green")
+    plotted_any = False
+    for item in case_results:
+        params = item["params"]
+        style = _fig6_style(params["layer"], params["d_alpha_cm2_s"])
+        color = style.get("color")
+        model = item["model"]
+        conc_time_arr = np.asarray(model.concData._time, dtype=np.float64)
+        conc_arr = np.asarray(model.concData._y, dtype=np.float64)
+        mask = np.isfinite(conc_time_arr) & np.isfinite(conc_arr)
+        if np.count_nonzero(mask) < 2:
+            continue
+        conc_time_plot = conc_time_arr[mask]
+        conc_plot = conc_arr[mask]
+        ax_conc.plot(
+            conc_time_plot,
+            conc_plot,
+            lw=1.0,
+            color=color,
+            linestyle=":",
+            label=f"{params['label']} conc",
+        )
+        ax_conc.plot(
+            [conc_time_plot[0], conc_time_plot[-1]],
+            [conc_plot[0], conc_plot[0]],
+            lw=0.8,
+            color=color,
+            linestyle="dashdot",
+            alpha=0.45,
+            label=f"{params['label']} initial conc",
+        )
+        idealized_conc = compute_idealized_conc(params)
+        ax_conc.plot(
+            [conc_time_plot[0], conc_time_plot[-1]],
+            [idealized_conc, idealized_conc],
+            lw=0.8,
+            color=color,
+            linestyle="dashed",
+            alpha=0.45,
+            label=f"{params['label']} idealized conc",
+        )
+        plotted_any = True
+        
+        print("\n")
+        print(f"Conc Info for {params['label']}")
+        initial_conc = conc_arr[0]
+        print(f"Initial Conc:   {initial_conc}")
+        print(f"Idealized Conc: {idealized_conc}")
+        print(f"Initial vs Idealized Conc Frac Diff: {(initial_conc-idealized_conc)/idealized_conc}")
+        conc_diffFromInitial_arr = conc_arr - initial_conc
+        conc_diffFromIdealized_arr = conc_arr - idealized_conc
+        print(f"Diff from Initial: {float(conc_diffFromInitial_arr.min()/initial_conc), float(conc_diffFromInitial_arr.max()/initial_conc)}")
+        print(f"Diff from Idealized: {float(conc_diffFromIdealized_arr.min()/idealized_conc), float(conc_diffFromIdealized_arr.max()/idealized_conc)}")
+
+
+    if plotted_any:
+        ax_conc.legend(loc="center right", fontsize=7)
+    return ax_conc
+
+
+def _fig6_extracted_data_specs_for_cases(case_results):
+    """Returns digitized Figure-6 overlay specs matching completed case results."""
+    selected_cases = set()
+    for item in case_results:
+        params = item["params"]
+        d_alpha = _selected_fig6_d_alpha_cm2_s({"fig6_d_alpha_cm2_s": (params["d_alpha_cm2_s"],)})[0]
+        selected_cases.add((params["layer"], d_alpha))
+
+    specs = []
+    for key, spec in FIG6_EXTRACTED_DATA_FILES.items():
+        if key not in selected_cases:
+            continue
+        specs.append(
+            {
+                **spec,
+                "layer": key[0],
+                "d_alpha_cm2_s": key[1],
+                "path": SCRIPT_DIR / "figureDataExtraction" / spec["filename"],
+            }
+        )
+    return specs
+
+
+def plot_olaye_fig6_notebook(config=None, ax=None):
+    """
+    Runs the corrected Figure-6 brass cases and plots interface displacement.
+
+    Figure 6 uses phase A as beta and phase B as alpha. The plotted quantity is
+    ``s(t) - s0`` in micrometers, matching the paper's interface displacement
+    convention for the selected beta-layer half-width.
+    """
+    cfg = OLAYE_NOTEBOOK_CONFIG if config is None else {**OLAYE_NOTEBOOK_CONFIG, **dict(config)}
+    out_path = (
+        pathlib.Path(cfg["fig6_out"]).resolve()
+        if cfg.get("fig6_out") is not None
+        else SCRIPT_DIR / "olaye2020_fig6_replication.png"
+    )
+
+    created_figure = ax is None
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(7.2, 4.8), dpi=140)
+    else:
+        fig = ax.figure
+
+    case_results = []
+    for layer in _selected_fig6_layers(cfg):
+        for d_alpha_cm2_s in _selected_fig6_d_alpha_cm2_s(cfg):
+            params = build_fig6_case_params(layer, d_alpha_cm2_s, cfg)
+            t_s, phase_a_width_um, model = run_case(
+                R_um=params["R_um"],
+                s0_um=params["s0_um"],
+                c_liquid0_pct=params["c_liquid0_pct"],
+                c_solid0_pct=params["c_solid0_pct"],
+                c_liquid_int_pct=params["c_liquid_int_pct"],
+                c_solid_int_pct=params["c_solid_int_pct"],
+                D_liquid_base=params["D_liquid_base"],
+                D_solid_base=params["D_solid_base"],
+                D_scale=params["D_scale"],
+                n_nodes=params["n_nodes"],
+                n_phase_a_nodes=params["n_phase_a_nodes"],
+                n_phase_b_nodes=params["n_phase_b_nodes"],
+                t_end_s=params["t_end_s"],
+                dt_mode=params["dt_mode"],
+                semiLog_dt=params["semiLog_dt"],
+                semiLogT0=params["semiLogT0"],
+                model_variant=params["model_variant"],
+                record_pq_data=params["record_pq_data"],
+                preallocate_recordings=params["preallocate_recordings"],
+                response_name=params["response_name"],
+                elements=params["elements"],
+                phase_a_name=params["phase_a_name"],
+                phase_b_name=params["phase_b_name"],
+                print_beta=False,
+            )
+
+            displacement_um = phase_a_width_um - params["s0_um"]
+            mask = np.isfinite(t_s) & np.isfinite(displacement_um)
+            t_s_plot = t_s[mask]
+            displacement_um_plot = displacement_um[mask]
+            if t_s_plot.size < 2:
+                raise ValueError(f"Figure 6 case {params['label']} did not produce enough finite points to plot.")
+
+            ax.plot(t_s_plot, displacement_um_plot, label=params["label"], **_fig6_style(layer, d_alpha_cm2_s))
+            payload = build_olaye_run_payload(
+                time_s=t_s_plot,
+                interface_displacement_um=displacement_um_plot,
+                params=params,
+                model_variant=params["model_variant"],
+                model_family="olaye_fig6",
+                label=params["label"],
+            )
+            case_results.append(
+                {
+                    "model": model,
+                    "time_s": t_s_plot,
+                    "phase_a_width_um": phase_a_width_um[mask],
+                    "interface_displacement_um": displacement_um_plot,
+                    "payload": payload,
+                    "params": params,
+                }
+            )
+
+    ax_conc = None
+    if cfg.get("fig6_plot_concentration_info", True):
+        ax_conc = _plot_fig6_concentration_info(ax, case_results)
+
+    if cfg.get("fig6_plot_extracted_data", True):
+        for extracted_spec in _fig6_extracted_data_specs_for_cases(case_results):
+            if not extracted_spec["path"].exists():
+                continue
+            exp_t_s, exp_disp_um = _load_no_header_xy_csv(extracted_spec["path"])
+            ax.scatter(
+                exp_t_s,
+                exp_disp_um,
+                s=20,
+                color=extracted_spec["color"],
+                marker=extracted_spec["marker"],
+                facecolor='none',
+                label=extracted_spec["label"],
+                zorder=3,
+            )
+
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Interface displacement (um)")
+    ax.set_title(
+        f"Figure 6 Olaye Dufort-Frankel, "
+        f"nA:{cfg['fig6_n_phase_a_nodes']}, nB:{cfg['fig6_n_phase_b_nodes']}, "
+        f"semiLog_dt:{float(cfg['fig6_semiLog_dt']):.10f}",
+        fontsize=10,
+    )
+    ax.set_xscale("log")
+    ax.set_xlim(10, float(cfg["fig6_t_end_s"]))
+    ax.set_ylim(-200, 100)
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=8)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    print(f"Saved figure: {out_path}")
+
+    save_path = None
+    if cfg.get("fig6_save_run_path") is not None:
+        save_path = _save_fig6_run_result(cfg["fig6_save_run_path"], case_results)
+        print(f"Saved Figure 6 run: {save_path}")
+
+    if created_figure:
+        if cfg["show"]:
+            plt.show()
+        else:
+            plt.close(fig)
+
+    return {
+        "figure": fig,
+        "axes": ax,
+        "concentration_axes": ax_conc,
+        "cases": case_results,
+        "save_path": save_path,
+        "params": cfg,
+    }
+
+
+def run_and_plot(config=None):
+    """Runs and plots each selected Olaye figure, returning results by figure."""
+    cfg = OLAYE_NOTEBOOK_CONFIG if config is None else {**OLAYE_NOTEBOOK_CONFIG, **dict(config)}
+    results = {}
+    for figure in _selected_figures(cfg):
+        if figure == "fig5":
+            results[figure] = plot_olaye_fig5_notebook(cfg)
+        elif figure == "fig6":
+            results[figure] = plot_olaye_fig6_notebook(cfg)
+        else:
+            raise ValueError(f"Unsupported figure selection: {figure!r}")
+    return results
+
+
 def main(argv=None):
     """Runs the Figure-5 example using CLI overrides on top of notebook defaults."""
     args = build_parser().parse_args(argv)
     config = {
+        "figures": tuple(args.figures),
         "n_phase_a_nodes": args.n_phase_a_nodes,
         "n_phase_b_nodes": args.n_phase_b_nodes,
         "semiLog_dt": args.semiLog_dt,
@@ -665,14 +1144,14 @@ def main(argv=None):
         "record_pq_data": not args.no_record_pq_data,
         "preallocate_recordings": args.preallocate_recordings,
     }
-    return plot_olaye_fig5_notebook(config)
+    return run_and_plot(config)
 
 
 if __name__ == "__main__":
     if "ipykernel" in sys.modules:
-        result=plot_olaye_fig5_notebook()
+        results=run_and_plot()
     else:
-        result=plot_olaye_fig5_notebook()
+        results=run_and_plot()
         # main()
 
 r'''
@@ -1075,6 +1554,27 @@ filter_page_html = f"""<!DOCTYPE html>
 plotly_html_path.write_text(filter_page_html, encoding="utf-8")
 print(f"Saved interactive Plotly filter page: {plotly_html_path}")
 webbrowser.open(plotly_html_path.resolve().as_uri())
+
+'''
+
+'''
+Useful code
+
+model = results['fig6']['cases'][0]['model']
+finalConc = model.concData._y[0]
+concDiffBasedOnPhaseFrac = lambda x, C_A, C_B: ((x*C_B) + (1-x)*C_A) - finalConc
+finalPhaseFrac = lambda C_avg, C_A, C_B: (C_avg-C_A)/(C_B-C_A)
+print(finalPhaseFrac(finalConc, 0.325, 0.369))
+sol = optimize.root_scalar(
+            concDiffBasedOnPhaseFrac,
+            bracket=[0, 1],
+            args=(0.325, 0.369),
+            method='brentq',
+            maxiter=100,
+            rtol=1e-14,
+            xtol=1e-14,
+        )
+sol
 
 '''
 
