@@ -3,6 +3,8 @@ from .Homogenization import HomogenizationModel
 from .MovingBoundary import MovingBoundary1DModel
 from .MovingBoundaryFDM import MovingBoundaryFD1DModel
 from .MovingBoundaryIllingworthFDM import MovingBoundaryIllingworthFD1DModel
+from .MovingBoundaryIllingworthTernaryFDM import MovingBoundaryIllingworthTernaryFD1DModel
+from .MovingBoundaryEquilibrium import CallableTernaryInterfaceEquilibrium, FixedTernaryInterfaceEquilibrium, ThermodynamicTernaryInterfaceEquilibrium
 from .MovingBoundaryOlayeFDM import MovingBoundaryOlayeFD1DModel
 from .MovingBoundaryOlayeFDM_rework import MovingBoundaryOlayeFD1DReworkModel
 from .DiffusionParameters import HashTable, TemperatureParameters, computeMobility

@@ -11,4 +11,5 @@ from .MovingBoundaryFD1D import MovingBoundaryFDGeometry, get_moving_boundary_fd
 from .MovingBoundaryFD1D import summarize_moving_boundary_fd_state, debug_moving_boundary_fd_state
 from .MovingBoundaryOlayeFD1D import OlayeFDGeometry, get_olaye_fd_geometry
 from .MovingBoundaryIllingworthFD1D import IllingworthFDState, integrate_planar_transformed_profile
+from .MovingBoundaryIllingworthTernaryFD1D import TernaryIllingworthFDState, integrate_planar_transformed_profile_components
 from .FVM2D import Cartesian2D
