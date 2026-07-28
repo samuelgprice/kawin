@@ -1216,7 +1216,18 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         return solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
 
-    def _interface_residual(self, p_future, q_future, s, old_s, future_s, dt, c_left, c_right, D_left, D_right):
+    def _interface_residual(self, p_future, q_future, s, old_s, future_s, dt, c_left, c_right, c_left_old, c_right_old, D_left, D_right):
+        """
+        Returns the two-component planar interface inventory residual.
+
+        The original planar Illingworth residual assumes fixed phase-side
+        interface compositions. In the ternary eta formulation those endpoint
+        compositions may change during a step, and the trapezoidal transformed
+        inventory stores those endpoint values in the interface-adjacent
+        half-cells. The endpoint correction below accounts for that inventory
+        change using the accepted old geometry ``s`` and the old discrete
+        endpoint values from ``p[-1]`` and ``q[0]``.
+        """
         velocity_probe = future_s - s
         if abs(velocity_probe) <= 1e-15:
             velocity_probe = s - old_s
@@ -1230,7 +1241,20 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             lhs = c_left - q_future[1] * (1.0 - self._v_grid[1] / 2.0) - c_right * self._v_grid[1] / 2.0
         else:
             lhs = p_future[-2] * (0.5 + self._u_grid[-2] / 2.0) + c_left * (0.5 - self._u_grid[-2] / 2.0) - c_right
-        return (future_s - s) * lhs - rhs
+        residual = (future_s - s) * lhs - rhs
+        left_endpoint_change = (
+            float(s)
+            * 0.5
+            * (1.0 - self._u_grid[-2])
+            * (np.asarray(c_left, dtype=np.float64) - np.asarray(c_left_old, dtype=np.float64))
+        )
+        right_endpoint_change = (
+            (self._R - float(s))
+            * 0.5
+            * self._v_grid[1]
+            * (np.asarray(c_right, dtype=np.float64) - np.asarray(c_right_old, dtype=np.float64))
+        )
+        return residual + left_endpoint_change + right_endpoint_change
 
     def _active_interface_variables(self):
         eta_lower, eta_upper = tuple(float(v) for v in self.interfaceEquilibrium.eta_bounds)
@@ -1244,6 +1268,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         upper = np.asarray([self._R - z_eps, eta_upper] if eta_active else [self._R - z_eps], dtype=np.float64)
         x = np.asarray([s, eta] if eta_active else [s], dtype=np.float64)
         x = np.clip(x, lower, upper)
+        c_left_old = np.asarray(p[-1], dtype=np.float64).copy()
+        c_right_old = np.asarray(q[0], dtype=np.float64).copy()
         best = None
 
         def evaluate(params):
@@ -1254,7 +1280,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             D_right = self._phase_diffusivity_matrix(c_right, self.phases[1], self.currentTime, future_s)
             p_future = self._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left)
             q_future = self._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right)
-            residual = self._interface_residual(p_future, q_future, s, old_s, future_s, dt, c_left, c_right, D_left, D_right)
+            residual = self._interface_residual(p_future, q_future, s, old_s, future_s, dt, c_left, c_right, c_left_old, c_right_old, D_left, D_right)
             return residual, p_future, q_future, c_left, c_right, D_left, D_right
 
         for count in range(self.maxIterations):

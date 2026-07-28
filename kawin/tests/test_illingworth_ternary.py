@@ -10,7 +10,10 @@ from kawin.diffusion import (
     estimate_initial_eta_from_stefan_residual,
 )
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
-from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import solve_illingworth_block_tridiagonal
+from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
+    integrate_planar_transformed_profile_components,
+    solve_illingworth_block_tridiagonal,
+)
 
 
 class _ConstantTernaryThermodynamics:
@@ -34,6 +37,16 @@ class _IdentityTernaryThermodynamics:
         if self.invalid:
             return np.asarray([[1.0, 0.0], [0.0, -1.0]], dtype=np.float64)
         return np.eye(2, dtype=np.float64)
+
+
+class _CoupledTernaryThermodynamics:
+    def clearCache(self):
+        pass
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        if phase == "ALPHA":
+            return np.asarray([[1.0e-3, 2.0e-4], [1.0e-4, 8.0e-4]], dtype=np.float64)
+        return np.asarray([[7.0e-4, -1.0e-4], [2.0e-4, 1.1e-3]], dtype=np.float64)
 
 
 class _LinearInterfaceEquilibrium:
@@ -108,6 +121,46 @@ def _block_times_vector(block, vector):
     )
 
 
+def _legacy_interface_residual(model, p_future, q_future, s, old_s, future_s, dt, c_left, c_right, D_left, D_right):
+    velocity_probe = future_s - s
+    if abs(velocity_probe) <= 1e-15:
+        velocity_probe = s - old_s
+    diff_l = _block_times_vector(D_left, (c_left - p_future[-2]) / (1.0 - model._u_grid[-2])) / future_s
+    diff_r = _block_times_vector(D_right, (q_future[1] - c_right) / model._v_grid[1]) / (model._R - future_s)
+    rhs = (diff_r - diff_l) * dt
+    if velocity_probe >= 0:
+        lhs = c_left - q_future[1] * (1.0 - model._v_grid[1] / 2.0) - c_right * model._v_grid[1] / 2.0
+    else:
+        lhs = p_future[-2] * (0.5 + model._u_grid[-2] / 2.0) + c_left * (0.5 - model._u_grid[-2] / 2.0) - c_right
+    return (future_s - s) * lhs - rhs
+
+
+def _make_residual_identity_state():
+    left, right = _LinearInterfaceEquilibrium().interface_compositions(0.2)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 31)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.45, left, right), ["X", "Y"])]))
+    model = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_IdentityTernaryThermodynamics(),
+        temperature=1000.0,
+        interfacePosition=0.45,
+        interface_equilibrium=_LinearInterfaceEquilibrium(),
+        initial_eta_method="instantaneous_balance",
+        initial_eta_bracket=(0.0, 1.0),
+        time_step=1.0e-4,
+        tolerance=1e-12,
+        record=True,
+    )
+    model.setup()
+    p = model._p_curr.copy()
+    q = model._q_curr.copy()
+    p[:-1] += np.asarray([0.005, -0.003], dtype=np.float64) * np.linspace(0.0, 1.0, len(p) - 1)[:, None]
+    q[1:] += np.asarray([-0.004, 0.002], dtype=np.float64) * np.linspace(0.0, 1.0, len(q) - 1)[:, None]
+    return model, p, q
+
+
 def test_ternary_block_solve_preserves_component_coupling():
     diagonal_block = np.asarray([[2.0, 0.5], [0.25, 3.0]], dtype=np.float64)
     expected = np.asarray([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float64)
@@ -119,6 +172,82 @@ def test_ternary_block_solve_preserves_component_coupling():
     actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
 
     assert np.allclose(actual, expected)
+
+
+@pytest.mark.parametrize("future_s", [0.47, 0.43])
+def test_ternary_interface_residual_matches_inventory_change_when_interface_compositions_change(future_s):
+    model, p, q = _make_residual_identity_state()
+    s = float(model._s_curr)
+    dt = 1.0e-4
+    c_left, c_right = model._interface_compositions(0.8)
+    c_left_old = p[-1].copy()
+    c_right_old = q[0].copy()
+    D_left = _CoupledTernaryThermodynamics().getInterdiffusivity(c_left, 1000.0, phase="ALPHA")
+    D_right = _CoupledTernaryThermodynamics().getInterdiffusivity(c_right, 1000.0, phase="BETA")
+    p_future = model._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left)
+    q_future = model._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right)
+
+    residual = model._interface_residual(
+        p_future,
+        q_future,
+        s,
+        s,
+        future_s,
+        dt,
+        c_left,
+        c_right,
+        c_left_old,
+        c_right_old,
+        D_left,
+        D_right,
+    )
+    old_inventory = integrate_planar_transformed_profile_components(p, q, s, model._R, model._u_grid, model._v_grid)
+    future_inventory = integrate_planar_transformed_profile_components(
+        p_future,
+        q_future,
+        future_s,
+        model._R,
+        model._u_grid,
+        model._v_grid,
+    )
+
+    assert not np.allclose(c_left, c_left_old)
+    assert not np.allclose(c_right, c_right_old)
+    assert np.allclose(residual, future_inventory - old_inventory, rtol=1e-11, atol=1e-13)
+
+
+@pytest.mark.parametrize("future_s", [0.47, 0.43])
+def test_ternary_interface_residual_reduces_to_legacy_formula_when_interface_compositions_do_not_change(future_s):
+    model, p, q = _make_residual_identity_state()
+    s = float(model._s_curr)
+    dt = 1.0e-4
+    c_left = p[-1].copy()
+    c_right = q[0].copy()
+    D_left = _CoupledTernaryThermodynamics().getInterdiffusivity(c_left, 1000.0, phase="ALPHA")
+    D_right = _CoupledTernaryThermodynamics().getInterdiffusivity(c_right, 1000.0, phase="BETA")
+    p_future = model._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left)
+    q_future = model._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right)
+
+    residual = model._interface_residual(
+        p_future,
+        q_future,
+        s,
+        s,
+        future_s,
+        dt,
+        c_left,
+        c_right,
+        p[-1],
+        q[0],
+        D_left,
+        D_right,
+    )
+    legacy = _legacy_interface_residual(model, p_future, q_future, s, s, future_s, dt, c_left, c_right, D_left, D_right)
+    endpoint_change = s * 0.5 * (1.0 - model._u_grid[-2]) * (c_left - p[-1])
+    endpoint_change += (model._R - s) * 0.5 * model._v_grid[1] * (c_right - q[0])
+
+    assert np.allclose(endpoint_change, np.zeros(2))
+    assert np.allclose(residual, legacy, rtol=1e-13, atol=1e-15)
 
 
 def test_initial_eta_estimator_selects_known_stefan_minimum():
@@ -326,6 +455,35 @@ def test_ternary_illingworth_can_use_instantaneous_initial_eta_method():
 
     assert np.isclose(model.initialEta, eta_true, atol=1e-10)
     assert model.initialEtaEstimate.method == "instantaneous_balance"
+
+
+def test_ternary_illingworth_conserves_inventory_with_eta_dependent_interface_compositions():
+    left = np.asarray([0.25, 0.12], dtype=np.float64)
+    right = np.asarray([0.33, 0.15], dtype=np.float64)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.45, left, right), ["X", "Y"])]))
+    model = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_CoupledTernaryThermodynamics(),
+        temperature=1000.0,
+        interfacePosition=0.45,
+        interface_equilibrium=_LinearInterfaceEquilibrium(),
+        initial_eta_method="instantaneous_balance",
+        initial_eta_bracket=(0.0, 1.0),
+        time_step=1.0e-4,
+        tolerance=1.0e-10,
+        max_iterations=40,
+        record=True,
+    )
+
+    model.solve(1.0e-2, minDtFrac=1.0e-10)
+
+    inventory = np.asarray(model.inventoryData._y[: model.inventoryData.N + 1], dtype=np.float64)
+    eta = np.asarray(model.etaData._y[: model.etaData.N + 1], dtype=np.float64)
+    assert np.ptp(eta) > 1.0e-8
+    assert np.allclose(inventory, inventory[0], rtol=0.0, atol=1.0e-11)
 
 
 def _build_surrogate(**kwargs):
