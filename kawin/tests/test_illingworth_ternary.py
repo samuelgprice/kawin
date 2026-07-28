@@ -50,6 +50,18 @@ class _CoupledTernaryThermodynamics:
         return np.asarray([[7.0e-4, -1.0e-4], [2.0e-4, 1.1e-3]], dtype=np.float64)
 
 
+class _LengthScaledCoupledTernaryThermodynamics:
+    def __init__(self, length_scale):
+        self.length_scale = float(length_scale)
+        self.base = _CoupledTernaryThermodynamics()
+
+    def clearCache(self):
+        pass
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        return self.base.getInterdiffusivity(composition, temperature, phase=phase, **kwargs) * self.length_scale * self.length_scale
+
+
 class _LinearInterfaceEquilibrium:
     eta_bounds = (0.0, 1.0)
 
@@ -74,6 +86,16 @@ class _EtaVaryingInterfaceEquilibrium:
         eta = float(eta)
         left = np.asarray([0.20 + 0.08 * eta, 0.08 + 0.03 * eta], dtype=np.float64)
         right = np.asarray([0.34 + 0.04 * eta, 0.16 - 0.02 * eta], dtype=np.float64)
+        return left, right
+
+
+class _ShiftedEtaVaryingInterfaceEquilibrium:
+    eta_bounds = (2.0, 5.0)
+
+    def interface_compositions(self, eta):
+        eta_hat = (float(eta) - self.eta_bounds[0]) / (self.eta_bounds[1] - self.eta_bounds[0])
+        left = np.asarray([0.20 + 0.08 * eta_hat, 0.08 + 0.03 * eta_hat], dtype=np.float64)
+        right = np.asarray([0.34 + 0.04 * eta_hat, 0.16 - 0.02 * eta_hat], dtype=np.float64)
         return left, right
 
 
@@ -218,6 +240,77 @@ def _recorded_planar_inventories(model):
     )
 
 
+def _make_length_scaled_illingworth_model(domain_length, interface_equilibrium=None):
+    domain_length = float(domain_length)
+    interface_equilibrium = _EtaVaryingInterfaceEquilibrium() if interface_equilibrium is None else interface_equilibrium
+    mesh = CartesianFD1D(["X", "Y"], [0.0, domain_length], 21)
+    mesh.setResponseProfile(
+        ProfileBuilder(
+            [
+                (
+                    StepProfile1D(
+                        0.45 * domain_length,
+                        np.asarray([0.35, 0.10], dtype=np.float64),
+                        np.asarray([0.25, 0.16], dtype=np.float64),
+                    ),
+                    ["X", "Y"],
+                )
+            ]
+        ),
+        boundaryConditions=MixedBoundary1D(2),
+    )
+    return MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_LengthScaledCoupledTernaryThermodynamics(domain_length),
+        temperature=1000.0,
+        interfacePosition=0.45 * domain_length,
+        interface_equilibrium=interface_equilibrium,
+        initial_eta_method="instantaneous_balance",
+        initial_eta_bracket=interface_equilibrium.eta_bounds,
+        time_step=1.0e-4,
+        tolerance=1.0e-11,
+        max_iterations=50,
+        record=True,
+    )
+
+
+def _record_scaled_jacobian_perturbations(domain_length=1.0e-6):
+    model = _make_length_scaled_illingworth_model(
+        domain_length,
+        interface_equilibrium=_ShiftedEtaVaryingInterfaceEquilibrium(),
+    )
+    model.setup()
+    p = model._p_curr.copy()
+    q = model._q_curr.copy()
+    s = float(model._s_curr)
+    eta = float(model._eta_curr)
+    future_s_calls = []
+    eta_calls = []
+    left_original = model._new_concentration_left_planar
+    interface_original = model._interface_compositions
+
+    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
+        future_s_calls.append(float(future_s_arg))
+        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch)
+
+    def interface_spy(eta_arg):
+        eta_calls.append(float(eta_arg))
+        return interface_original(eta_arg)
+
+    def stop_after_jacobian(jacobian, residual):
+        raise RuntimeError("stop after scaled Jacobian probes")
+
+    model._new_concentration_left_planar = left_spy
+    model._interface_compositions = interface_spy
+    model._least_squares_step_2xN = stop_after_jacobian
+    model.residualTolerance = -1.0
+    with pytest.raises(RuntimeError, match="stop after scaled Jacobian probes"):
+        model._solve_interface_planar(p, q, s, model._s_old, eta, 1.0e-4)
+    return model, np.asarray(future_s_calls, dtype=np.float64), np.asarray(eta_calls, dtype=np.float64)
+
+
 def test_ternary_block_solve_preserves_component_coupling():
     diagonal_block = np.asarray([[2.0, 0.5], [0.25, 3.0]], dtype=np.float64)
     expected = np.asarray([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float64)
@@ -229,6 +322,131 @@ def test_ternary_block_solve_preserves_component_coupling():
     actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
 
     assert np.allclose(actual, expected)
+
+
+def test_ternary_scaled_interface_solve_is_invariant_to_length_units():
+    reference = _make_length_scaled_illingworth_model(1.0)
+    rescaled = _make_length_scaled_illingworth_model(1000.0)
+
+    reference.solve(2.0e-3, minDtFrac=1.0e-10)
+    rescaled.solve(2.0e-3, minDtFrac=1.0e-10)
+
+    reference_s_hat = np.asarray(reference.interfaceData._y[: reference.interfaceData.N + 1], dtype=np.float64) / reference._R
+    rescaled_s_hat = np.asarray(rescaled.interfaceData._y[: rescaled.interfaceData.N + 1], dtype=np.float64) / rescaled._R
+    reference_eta = np.asarray(reference.etaData._y[: reference.etaData.N + 1], dtype=np.float64)
+    rescaled_eta = np.asarray(rescaled.etaData._y[: rescaled.etaData.N + 1], dtype=np.float64)
+
+    assert reference_s_hat.shape == rescaled_s_hat.shape
+    assert np.allclose(rescaled_s_hat, reference_s_hat, rtol=0.0, atol=1.0e-12)
+    assert np.allclose(rescaled_eta, reference_eta, rtol=0.0, atol=1.0e-12)
+    assert np.isclose(rescaled._lastImplicitResidual, reference._lastImplicitResidual, rtol=1.0e-8, atol=1.0e-18)
+
+
+def test_ternary_scaled_interface_jacobian_perturbs_position_with_domain_length():
+    domain_length = 1.0e-6
+    model, future_s_calls, _ = _record_scaled_jacobian_perturbations(domain_length)
+    base_s = float(model._s_curr)
+    positive_perturbations = future_s_calls[future_s_calls > base_s] - base_s
+    expected_physical_step = domain_length * np.sqrt(np.finfo(float).eps)
+
+    assert positive_perturbations.size > 0
+    assert np.isclose(np.min(positive_perturbations), expected_physical_step, rtol=1.0e-6, atol=1.0e-20)
+    assert np.min(positive_perturbations) < 1.0e-12
+
+
+def test_ternary_scaled_interface_jacobian_perturbs_eta_with_eta_interval():
+    model, _, eta_calls = _record_scaled_jacobian_perturbations()
+    base_eta = float(model._eta_curr)
+    eta_span = model.interfaceEquilibrium.eta_bounds[1] - model.interfaceEquilibrium.eta_bounds[0]
+    positive_perturbations = eta_calls[eta_calls > base_eta] - base_eta
+    expected_eta_step = eta_span * np.sqrt(np.finfo(float).eps) * max(1.0, abs((base_eta - model.interfaceEquilibrium.eta_bounds[0]) / eta_span))
+
+    assert positive_perturbations.size > 0
+    assert np.isclose(np.min(positive_perturbations), expected_eta_step, rtol=1.0e-6, atol=1.0e-14)
+
+
+@pytest.mark.parametrize(
+    "eta_hat, outward_eta_step",
+    [
+        (1.0e-16, -1.0),
+        (1.0 - 1.0e-16, 1.0),
+    ],
+)
+def test_ternary_scaled_line_search_removes_outward_eta_component_at_active_bounds(eta_hat, outward_eta_step):
+    model = _make_length_scaled_illingworth_model(1.0)
+    model.setup()
+    lower, upper = model._interface_scaled_bounds()
+    x_hat = np.asarray([0.45, eta_hat], dtype=np.float64)
+    newton_step = np.asarray([1.0e-3, outward_eta_step], dtype=np.float64)
+
+    bounded_step, alpha = model._bounded_scaled_newton_step(x_hat, newton_step, lower, upper)
+    trial = x_hat + alpha * bounded_step
+
+    assert bounded_step[0] == newton_step[0]
+    assert bounded_step[1] == 0.0
+    assert alpha > 0.0
+    assert trial[0] > x_hat[0]
+    assert lower[1] <= trial[1] <= upper[1]
+    assert np.all(trial >= lower)
+    assert np.all(trial <= upper)
+
+
+def test_ternary_scaled_line_search_limits_alpha_to_eta_upper_bound_without_clipping():
+    model = _make_length_scaled_illingworth_model(1.0)
+    model.setup()
+    lower, upper = model._interface_scaled_bounds()
+    x_hat = np.asarray([0.45, 0.80], dtype=np.float64)
+    newton_step = np.asarray([1.0e-3, 1.0], dtype=np.float64)
+
+    bounded_step, alpha = model._bounded_scaled_newton_step(x_hat, newton_step, lower, upper)
+    trial = x_hat + alpha * bounded_step
+
+    assert np.allclose(bounded_step, newton_step)
+    assert 0.0 < alpha < 0.20
+    assert trial[1] < upper[1]
+    assert np.all(trial >= lower)
+    assert np.all(trial <= upper)
+
+
+def test_ternary_scaled_line_search_keeps_forced_outward_eta_trials_feasible():
+    model = _make_length_scaled_illingworth_model(1.0)
+    model.setup()
+    lower, upper = model._interface_scaled_bounds()
+    eta_lower, _, eta_span = model._eta_scaling_bounds()
+    p = model._p_curr.copy()
+    q = model._q_curr.copy()
+    s = float(model._s_curr)
+    eta = eta_lower
+    p[-1], q[0] = model.interfaceEquilibrium.interface_compositions(eta)
+    evaluated = []
+    left_original = model._new_concentration_left_planar
+    interface_original = model._interface_compositions
+
+    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
+        evaluated.append(("s", float(future_s_arg) / model._R))
+        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch)
+
+    def interface_spy(eta_arg):
+        evaluated.append(("eta", (float(eta_arg) - eta_lower) / eta_span))
+        return interface_original(eta_arg)
+
+    def forced_step(jacobian, residual):
+        return np.asarray([1.0e-4, -1.0], dtype=np.float64)
+
+    model._new_concentration_left_planar = left_spy
+    model._interface_compositions = interface_spy
+    model._least_squares_step_2xN = forced_step
+    model.residualTolerance = -1.0
+
+    with pytest.raises(RuntimeError, match="failed to converge"):
+        model._solve_interface_planar(p, q, s, model._s_old, eta, 1.0e-4)
+
+    s_trials = np.asarray([value for kind, value in evaluated if kind == "s"], dtype=np.float64)
+    eta_trials = np.asarray([value for kind, value in evaluated if kind == "eta"], dtype=np.float64)
+
+    assert np.any(s_trials > s / model._R)
+    assert np.all((s_trials >= lower[0]) & (s_trials <= upper[0]))
+    assert np.all((eta_trials >= lower[1]) & (eta_trials <= upper[1]))
 
 
 @pytest.mark.parametrize(

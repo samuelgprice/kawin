@@ -758,6 +758,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._nearFinalNoop = False
         self._lastImplicitIterations = 0
         self._lastImplicitResidual = np.nan
+        self._lastImplicitPhysicalResidual = np.nan
         self._lastStepRetries = 0
         self._lastInterfaceCompositions = None
         self.initialEtaEstimate = None
@@ -889,6 +890,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._nearFinalNoop = False
         self._lastImplicitIterations = 0
         self._lastImplicitResidual = np.nan
+        self._lastImplicitPhysicalResidual = np.nan
         self._lastStepRetries = 0
         self._lastInterfaceCompositions = None
         self.initialEtaEstimate = None
@@ -1303,20 +1305,121 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         eta_active = not np.isclose(eta_lower, eta_upper, rtol=0.0, atol=1e-14)
         return eta_lower, eta_upper, eta_active
 
+    def _eta_scaling_bounds(self):
+        """
+        Returns finite non-degenerate eta bounds for scaled nonlinear variables.
+
+        The ternary Illingworth interface solve treats eta as a dimensionless
+        nonlinear unknown on ``[0, 1]`` after affine scaling from the physical
+        tie-line coordinate. Collapsed or invalid eta intervals cannot be scaled
+        robustly and are rejected explicitly.
+        """
+        eta_bounds = getattr(self.interfaceEquilibrium, "eta_bounds", None)
+        if eta_bounds is None or len(eta_bounds) != 2:
+            raise ValueError("interface_equilibrium must expose two finite eta_bounds.")
+        eta_lower, eta_upper = tuple(float(v) for v in eta_bounds)
+        if not np.isfinite(eta_lower) or not np.isfinite(eta_upper) or eta_upper <= eta_lower:
+            raise ValueError("interface_equilibrium eta_bounds must be finite and non-degenerate for scaled solving.")
+        return eta_lower, eta_upper, eta_upper - eta_lower
+
+    def _interface_scaled_bounds(self):
+        """
+        Returns scaled nonlinear-variable bounds for ``[s_hat, eta_hat]``.
+
+        ``s_hat`` is kept strictly inside the planar domain by a dimensionless
+        margin. ``eta_hat`` is allowed to reach either endpoint of the
+        eta interval.
+        """
+        s_hat_eps = 1e-14
+        return (
+            np.asarray([s_hat_eps, 0.0], dtype=np.float64),
+            np.asarray([1.0 - s_hat_eps, 1.0], dtype=np.float64),
+        )
+
+    def _interface_physical_to_scaled(self, future_s, future_eta, eta_lower, eta_span):
+        """Converts physical nonlinear variables to ``[s_hat, eta_hat]``."""
+        if not np.isfinite(self._R) or self._R <= 0.0:
+            raise ValueError("Domain length must be positive and finite for scaled interface solving.")
+        return np.asarray(
+            [float(future_s) / self._R, (float(future_eta) - eta_lower) / eta_span],
+            dtype=np.float64,
+        )
+
+    def _interface_scaled_to_physical(self, x_hat, eta_lower, eta_span):
+        """Converts scaled nonlinear variables ``[s_hat, eta_hat]`` to physical values."""
+        x_hat = np.asarray(x_hat, dtype=np.float64).reshape(2)
+        return float(x_hat[0] * self._R), float(eta_lower + x_hat[1] * eta_span)
+
+    def _interface_residual_scale(self, p, q, s):
+        """
+        Builds fixed componentwise residual scales for one implicit timestep.
+
+        The physical residual has units of composition times length. Scaling by
+        the accepted old inventory or by ``R`` times an O(1) composition scale
+        gives a dimensionless residual norm whose tolerance is independent of
+        the chosen length units.
+        """
+        old_inventory = integrate_planar_transformed_profile_components(p, q, s, self._R, self._u_grid, self._v_grid)
+        composition_scale = 1.0
+        floor = 1e-300
+        return np.maximum(np.maximum(np.abs(old_inventory), self._R * composition_scale), floor)
+
+    def _bounded_scaled_newton_step(self, x_hat, newton_step, lower, upper):
+        """
+        Returns an active-bound-aware Newton direction and feasible first alpha.
+
+        Variables already at a bound have outward Newton components zeroed so
+        they do not block feasible motion in other components. The first line
+        search length is the largest alpha satisfying the scaled bounds, with a
+        small fraction-to-boundary safety factor only when a nominally interior
+        variable would otherwise land exactly on a limiting bound.
+        """
+        x_hat = np.asarray(x_hat, dtype=np.float64)
+        step = np.asarray(newton_step, dtype=np.float64).copy()
+        lower = np.asarray(lower, dtype=np.float64)
+        upper = np.asarray(upper, dtype=np.float64)
+        if not np.all(np.isfinite(step)):
+            raise RuntimeError("Interface Newton step is non-finite.")
+        active_tol = 10.0 * np.finfo(float).eps
+        for i in range(step.size):
+            if x_hat[i] <= lower[i] + active_tol and step[i] < 0.0:
+                step[i] = 0.0
+            elif x_hat[i] >= upper[i] - active_tol and step[i] > 0.0:
+                step[i] = 0.0
+        if not np.any(step):
+            return step, 0.0
+
+        alpha_max = 1.0
+        limited_by_interior_variable = False
+        for i in range(step.size):
+            if step[i] > 0.0:
+                limit = (upper[i] - x_hat[i]) / step[i]
+            elif step[i] < 0.0:
+                limit = (lower[i] - x_hat[i]) / step[i]
+            else:
+                continue
+            if limit < alpha_max:
+                alpha_max = float(limit)
+                limited_by_interior_variable = lower[i] + active_tol < x_hat[i] < upper[i] - active_tol
+
+        alpha_max = max(0.0, alpha_max)
+        if alpha_max < 1.0 and limited_by_interior_variable:
+            alpha_max *= 1.0 - 1e-12
+        return step, alpha_max
+
     def _solve_interface_planar(self, p, q, s, old_s, eta, dt):
-        z_eps = max(self._R * 1e-14, 1e-14)
-        eta_lower, eta_upper, eta_active = self._active_interface_variables()
-        lower = np.asarray([z_eps, eta_lower] if eta_active else [z_eps], dtype=np.float64)
-        upper = np.asarray([self._R - z_eps, eta_upper] if eta_active else [self._R - z_eps], dtype=np.float64)
-        x = np.asarray([s, eta] if eta_active else [s], dtype=np.float64)
-        x = np.clip(x, lower, upper)
+        eta_lower, _, eta_span = self._eta_scaling_bounds()
+        lower, upper = self._interface_scaled_bounds()
+        x_hat = self._interface_physical_to_scaled(s, eta, eta_lower, eta_span)
+        if np.any(x_hat < lower) or np.any(x_hat > upper):
+            raise ValueError("Initial nonlinear interface iterate lies outside scaled solve bounds.")
+        residual_scale = self._interface_residual_scale(p, q, s)
         c_left_old = np.asarray(p[-1], dtype=np.float64).copy()
         c_right_old = np.asarray(q[0], dtype=np.float64).copy()
         best = None
 
         def evaluate(params, motion_branch=None):
-            future_s = float(params[0])
-            future_eta = float(params[1]) if eta_active else float(eta_lower)
+            future_s, future_eta = self._interface_scaled_to_physical(params, eta_lower, eta_span)
             if motion_branch is None:
                 motion_branch = _select_interface_motion_branch(s, old_s, future_s)
             c_left, c_right = self._interface_compositions(future_eta)
@@ -1342,40 +1445,47 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             return residual, p_future, q_future, c_left, c_right, D_left, D_right
 
         for count in range(self.maxIterations):
-            motion_branch = _select_interface_motion_branch(s, old_s, float(x[0]))
-            residual, p_future, q_future, c_left, c_right, D_left, D_right = evaluate(x, motion_branch)
-            norm = float(np.max(np.abs(residual)))
+            future_s, future_eta = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
+            motion_branch = _select_interface_motion_branch(s, old_s, future_s)
+            residual, p_future, q_future, c_left, c_right, D_left, D_right = evaluate(x_hat, motion_branch)
+            scaled_residual = residual / residual_scale
+            norm = float(np.max(np.abs(scaled_residual)))
+            physical_norm = float(np.max(np.abs(residual)))
             if best is None or norm < best[0]:
-                best = (norm, x.copy(), p_future.copy(), q_future.copy(), c_left.copy(), c_right.copy(), D_left.copy(), D_right.copy())
+                best = (norm, physical_norm, x_hat.copy(), p_future.copy(), q_future.copy(), c_left.copy(), c_right.copy(), D_left.copy(), D_right.copy())
             if norm <= self.residualTolerance:
                 self._lastImplicitIterations = count + 1
                 self._lastImplicitResidual = norm
-                future_s = float(x[0])
-                future_eta = float(x[1]) if eta_active else float(eta_lower)
+                self._lastImplicitPhysicalResidual = physical_norm
                 return p_future, q_future, future_s, future_eta, c_left, c_right, D_left, D_right
 
-            jacobian = np.zeros((2, len(x)), dtype=np.float64)
-            for variable in range(len(x)):
-                step = np.sqrt(np.finfo(float).eps) * max(1.0, abs(x[variable]))
+            jacobian = np.zeros((2, len(x_hat)), dtype=np.float64)
+            for variable in range(len(x_hat)):
+                step = np.sqrt(np.finfo(float).eps) * max(1.0, abs(x_hat[variable]))
                 step = min(step, 0.25 * max(upper[variable] - lower[variable], 1e-15))
-                x_perturbed = x.copy()
-                if x[variable] + step <= upper[variable]:
+                x_perturbed = x_hat.copy()
+                if x_hat[variable] + step <= upper[variable]:
                     x_perturbed[variable] += step
-                    residual_perturbed = evaluate(x_perturbed, motion_branch)[0]
-                    jacobian[:, variable] = (residual_perturbed - residual) / step
+                    residual_perturbed = evaluate(x_perturbed, motion_branch)[0] / residual_scale
+                    jacobian[:, variable] = (residual_perturbed - scaled_residual) / step
                 else:
                     x_perturbed[variable] -= step
-                    residual_perturbed = evaluate(x_perturbed, motion_branch)[0]
-                    jacobian[:, variable] = (residual - residual_perturbed) / step
+                    residual_perturbed = evaluate(x_perturbed, motion_branch)[0] / residual_scale
+                    jacobian[:, variable] = (scaled_residual - residual_perturbed) / step
 
-            step = self._least_squares_step_2xN(jacobian, residual)
+            step = self._least_squares_step_2xN(jacobian, scaled_residual)
+            step, alpha_start = self._bounded_scaled_newton_step(x_hat, step, lower, upper)
             accepted = False
-            for scale in (1.0, 0.5, 0.25, 0.125, 0.0625):
-                trial = np.clip(x + scale * step, lower, upper)
-                trial_residual = evaluate(trial, motion_branch)[0]
+            for scale in (alpha_start, 0.5 * alpha_start, 0.25 * alpha_start, 0.125 * alpha_start, 0.0625 * alpha_start):
+                if scale <= 0.0:
+                    continue
+                trial = x_hat + scale * step
+                if np.any(trial < lower) or np.any(trial > upper):
+                    continue
+                trial_residual = evaluate(trial, motion_branch)[0] / residual_scale
                 trial_norm = float(np.max(np.abs(trial_residual)))
                 if np.isfinite(trial_norm) and trial_norm < norm:
-                    x = trial
+                    x_hat = trial
                     accepted = True
                     break
             if not accepted:
@@ -1384,6 +1494,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if best is not None:
             self._lastImplicitIterations = self.maxIterations
             self._lastImplicitResidual = best[0]
+            self._lastImplicitPhysicalResidual = best[1]
         raise RuntimeError(
             "Ternary Illingworth interface solve failed to converge; "
             f"best residual was {np.inf if best is None else best[0]:.3e}."
