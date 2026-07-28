@@ -10,6 +10,7 @@ from kawin.diffusion import (
     estimate_initial_eta_from_stefan_residual,
 )
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
+from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import _select_interface_motion_branch
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
     integrate_planar_transformed_profile_components,
     solve_illingworth_block_tridiagonal,
@@ -121,14 +122,11 @@ def _block_times_vector(block, vector):
     )
 
 
-def _legacy_interface_residual(model, p_future, q_future, s, old_s, future_s, dt, c_left, c_right, D_left, D_right):
-    velocity_probe = future_s - s
-    if abs(velocity_probe) <= 1e-15:
-        velocity_probe = s - old_s
+def _legacy_interface_residual(model, p_future, q_future, s, future_s, dt, c_left, c_right, D_left, D_right, motion_branch):
     diff_l = _block_times_vector(D_left, (c_left - p_future[-2]) / (1.0 - model._u_grid[-2])) / future_s
     diff_r = _block_times_vector(D_right, (q_future[1] - c_right) / model._v_grid[1]) / (model._R - future_s)
     rhs = (diff_r - diff_l) * dt
-    if velocity_probe >= 0:
+    if motion_branch == "positive":
         lhs = c_left - q_future[1] * (1.0 - model._v_grid[1] / 2.0) - c_right * model._v_grid[1] / 2.0
     else:
         lhs = p_future[-2] * (0.5 + model._u_grid[-2] / 2.0) + c_left * (0.5 - model._u_grid[-2] / 2.0) - c_right
@@ -161,6 +159,37 @@ def _make_residual_identity_state():
     return model, p, q
 
 
+def _record_solve_interface_branches(previous_delta_s, max_iterations=1):
+    model, p, q = _make_residual_identity_state()
+    s = float(model._s_curr)
+    old_s = s - float(previous_delta_s)
+    records = []
+    left_original = model._new_concentration_left_planar
+    right_original = model._new_concentration_right_planar
+    residual_original = model._interface_residual
+
+    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
+        records.append(("left", float(future_s_arg), motion_branch))
+        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch)
+
+    def right_spy(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch):
+        records.append(("right", float(future_s_arg), motion_branch))
+        return right_original(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch)
+
+    def residual_spy(*args):
+        records.append(("residual", float(args[4]), args[-1]))
+        return residual_original(*args)
+
+    model._new_concentration_left_planar = left_spy
+    model._new_concentration_right_planar = right_spy
+    model._interface_residual = residual_spy
+    model.maxIterations = int(max_iterations)
+    model.residualTolerance = -1.0
+    with pytest.raises(RuntimeError, match="failed to converge"):
+        model._solve_interface_planar(p, q, s, old_s, 0.2, 1.0e-4)
+    return s, records
+
+
 def test_ternary_block_solve_preserves_component_coupling():
     diagonal_block = np.asarray([[2.0, 0.5], [0.25, 3.0]], dtype=np.float64)
     expected = np.asarray([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float64)
@@ -174,6 +203,35 @@ def test_ternary_block_solve_preserves_component_coupling():
     assert np.allclose(actual, expected)
 
 
+@pytest.mark.parametrize(
+    "previous_delta_s, expected_branch",
+    [
+        (-1.0e-3, "negative"),
+        (1.0e-3, "positive"),
+        (-0.5e-15, "positive"),
+    ],
+)
+def test_ternary_solver_uses_consistent_fallback_branch_when_future_position_is_unchanged(previous_delta_s, expected_branch):
+    s, records = _record_solve_interface_branches(previous_delta_s)
+    first_residual_index = next(i for i, item in enumerate(records) if item[0] == "residual")
+    first_evaluation = records[: first_residual_index + 1]
+
+    assert _select_interface_motion_branch(s, s - previous_delta_s, s) == expected_branch
+    assert [name for name, _, _ in first_evaluation] == ["left", "right", "residual"]
+    assert all(np.isclose(future_s, s) for _, future_s, _ in first_evaluation)
+    assert {branch for _, _, branch in first_evaluation} == {expected_branch}
+
+
+def test_ternary_solver_freezes_upwind_branch_for_finite_difference_jacobian_near_zero_motion():
+    s, records = _record_solve_interface_branches(-1.0e-3)
+    perturbed_records = [
+        item for item in records if item[0] in {"left", "right", "residual"} and item[1] > s + 1.0e-10
+    ]
+
+    assert perturbed_records
+    assert {branch for _, _, branch in perturbed_records} == {"negative"}
+
+
 @pytest.mark.parametrize("future_s", [0.47, 0.43])
 def test_ternary_interface_residual_matches_inventory_change_when_interface_compositions_change(future_s):
     model, p, q = _make_residual_identity_state()
@@ -184,8 +242,9 @@ def test_ternary_interface_residual_matches_inventory_change_when_interface_comp
     c_right_old = q[0].copy()
     D_left = _CoupledTernaryThermodynamics().getInterdiffusivity(c_left, 1000.0, phase="ALPHA")
     D_right = _CoupledTernaryThermodynamics().getInterdiffusivity(c_right, 1000.0, phase="BETA")
-    p_future = model._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left)
-    q_future = model._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right)
+    motion_branch = _select_interface_motion_branch(s, s, future_s)
+    p_future = model._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
+    q_future = model._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
 
     residual = model._interface_residual(
         p_future,
@@ -200,6 +259,7 @@ def test_ternary_interface_residual_matches_inventory_change_when_interface_comp
         c_right_old,
         D_left,
         D_right,
+        motion_branch,
     )
     old_inventory = integrate_planar_transformed_profile_components(p, q, s, model._R, model._u_grid, model._v_grid)
     future_inventory = integrate_planar_transformed_profile_components(
@@ -225,8 +285,9 @@ def test_ternary_interface_residual_reduces_to_legacy_formula_when_interface_com
     c_right = q[0].copy()
     D_left = _CoupledTernaryThermodynamics().getInterdiffusivity(c_left, 1000.0, phase="ALPHA")
     D_right = _CoupledTernaryThermodynamics().getInterdiffusivity(c_right, 1000.0, phase="BETA")
-    p_future = model._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left)
-    q_future = model._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right)
+    motion_branch = _select_interface_motion_branch(s, s, future_s)
+    p_future = model._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
+    q_future = model._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
 
     residual = model._interface_residual(
         p_future,
@@ -241,8 +302,9 @@ def test_ternary_interface_residual_reduces_to_legacy_formula_when_interface_com
         q[0],
         D_left,
         D_right,
+        motion_branch,
     )
-    legacy = _legacy_interface_residual(model, p_future, q_future, s, s, future_s, dt, c_left, c_right, D_left, D_right)
+    legacy = _legacy_interface_residual(model, p_future, q_future, s, future_s, dt, c_left, c_right, D_left, D_right, motion_branch)
     endpoint_change = s * 0.5 * (1.0 - model._u_grid[-2]) * (c_left - p[-1])
     endpoint_change += (model._R - s) * 0.5 * model._v_grid[1] * (c_right - q[0])
 

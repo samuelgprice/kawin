@@ -52,6 +52,27 @@ def _matvec_2x2(matrix, vector):
     )
 
 
+def _select_interface_motion_branch(s, old_s, future_s, atol=1e-15):
+    """
+    Selects the conservative interface upwind branch for one residual evaluation.
+
+    The branch is determined first from ``future_s - s``. If that displacement
+    is effectively zero, the previous accepted displacement ``s - old_s`` is
+    used as a deterministic fallback; if both are effectively zero the positive
+    branch is chosen. The returned string must be passed unchanged to the two
+    phase solves and the interface residual for face-flux cancellation.
+    """
+    delta_s = float(future_s) - float(s)
+    if delta_s > atol:
+        return "positive"
+    if delta_s < -atol:
+        return "negative"
+    previous_delta_s = float(s) - float(old_s)
+    if previous_delta_s < -atol:
+        return "negative"
+    return "positive"
+
+
 @dataclass(frozen=True)
 class InitialEtaEstimate:
     """
@@ -1118,7 +1139,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     def _identity(self):
         return np.eye(2, dtype=np.float64)
 
-    def _new_concentration_left_planar(self, p, s, future_s, dt, c_left, D_left):
+    def _new_concentration_left_planar(self, p, s, future_s, dt, c_left, D_left, motion_branch):
+        """Solves the left transformed bulk system using the selected upwind branch."""
+        if motion_branch not in {"positive", "negative"}:
+            raise ValueError("motion_branch must be 'positive' or 'negative'.")
         n = len(p)
         lower = np.zeros((n, 2, 2), dtype=np.float64)
         diagonal = np.zeros((n, 2, 2), dtype=np.float64)
@@ -1129,7 +1153,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         tmpB = float(future_s) - float(s)
         u = self._u_grid
 
-        if future_s >= s:
+        if motion_branch == "positive":
             diagonal[0] = -tmpA / u[1] - I * (future_s * u[1] / 2.0)
             upper[0] = tmpA / u[1] + I * (tmpB * u[1] / 2.0)
             rhs[0] = -p[0] * s * u[1] / 2.0
@@ -1164,7 +1188,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         rhs[-1] = -np.asarray(c_left, dtype=np.float64)
         return solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
 
-    def _new_concentration_right_planar(self, q, s, future_s, dt, c_right, D_right):
+    def _new_concentration_right_planar(self, q, s, future_s, dt, c_right, D_right, motion_branch):
+        """Solves the right transformed bulk system using the selected upwind branch."""
+        if motion_branch not in {"positive", "negative"}:
+            raise ValueError("motion_branch must be 'positive' or 'negative'.")
         n = len(q)
         lower = np.zeros((n, 2, 2), dtype=np.float64)
         diagonal = np.zeros((n, 2, 2), dtype=np.float64)
@@ -1178,7 +1205,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         diagonal[0] = -I
         rhs[0] = -np.asarray(c_right, dtype=np.float64)
-        if future_s >= s:
+        if motion_branch == "positive":
             for i in range(1, n - 1):
                 left_diff = v[i] - v[i - 1]
                 right_diff = v[i + 1] - v[i]
@@ -1216,7 +1243,22 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         return solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
 
-    def _interface_residual(self, p_future, q_future, s, old_s, future_s, dt, c_left, c_right, c_left_old, c_right_old, D_left, D_right):
+    def _interface_residual(
+        self,
+        p_future,
+        q_future,
+        s,
+        old_s,
+        future_s,
+        dt,
+        c_left,
+        c_right,
+        c_left_old,
+        c_right_old,
+        D_left,
+        D_right,
+        motion_branch,
+    ):
         """
         Returns the two-component planar interface inventory residual.
 
@@ -1226,18 +1268,18 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         inventory stores those endpoint values in the interface-adjacent
         half-cells. The endpoint correction below accounts for that inventory
         change using the accepted old geometry ``s`` and the old discrete
-        endpoint values from ``p[-1]`` and ``q[0]``.
+        endpoint values from ``p[-1]`` and ``q[0]``. ``motion_branch`` must be
+        the same branch used by both phase bulk solves for this residual.
         """
-        velocity_probe = future_s - s
-        if abs(velocity_probe) <= 1e-15:
-            velocity_probe = s - old_s
+        if motion_branch not in {"positive", "negative"}:
+            raise ValueError("motion_branch must be 'positive' or 'negative'.")
         diff_l = _matvec_2x2(D_left, (c_left - p_future[-2]) / (1.0 - self._u_grid[-2]))
         diff_l = diff_l / future_s
         diff_r = _matvec_2x2(D_right, (q_future[1] - c_right) / self._v_grid[1])
         diff_r = diff_r / (self._R - future_s)
         rhs = (diff_r - diff_l) * dt
 
-        if velocity_probe >= 0:
+        if motion_branch == "positive":
             lhs = c_left - q_future[1] * (1.0 - self._v_grid[1] / 2.0) - c_right * self._v_grid[1] / 2.0
         else:
             lhs = p_future[-2] * (0.5 + self._u_grid[-2] / 2.0) + c_left * (0.5 - self._u_grid[-2] / 2.0) - c_right
@@ -1272,19 +1314,36 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         c_right_old = np.asarray(q[0], dtype=np.float64).copy()
         best = None
 
-        def evaluate(params):
+        def evaluate(params, motion_branch=None):
             future_s = float(params[0])
             future_eta = float(params[1]) if eta_active else float(eta_lower)
+            if motion_branch is None:
+                motion_branch = _select_interface_motion_branch(s, old_s, future_s)
             c_left, c_right = self._interface_compositions(future_eta)
             D_left = self._phase_diffusivity_matrix(c_left, self.phases[0], self.currentTime, future_s)
             D_right = self._phase_diffusivity_matrix(c_right, self.phases[1], self.currentTime, future_s)
-            p_future = self._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left)
-            q_future = self._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right)
-            residual = self._interface_residual(p_future, q_future, s, old_s, future_s, dt, c_left, c_right, c_left_old, c_right_old, D_left, D_right)
+            p_future = self._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
+            q_future = self._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
+            residual = self._interface_residual(
+                p_future,
+                q_future,
+                s,
+                old_s,
+                future_s,
+                dt,
+                c_left,
+                c_right,
+                c_left_old,
+                c_right_old,
+                D_left,
+                D_right,
+                motion_branch,
+            )
             return residual, p_future, q_future, c_left, c_right, D_left, D_right
 
         for count in range(self.maxIterations):
-            residual, p_future, q_future, c_left, c_right, D_left, D_right = evaluate(x)
+            motion_branch = _select_interface_motion_branch(s, old_s, float(x[0]))
+            residual, p_future, q_future, c_left, c_right, D_left, D_right = evaluate(x, motion_branch)
             norm = float(np.max(np.abs(residual)))
             if best is None or norm < best[0]:
                 best = (norm, x.copy(), p_future.copy(), q_future.copy(), c_left.copy(), c_right.copy(), D_left.copy(), D_right.copy())
@@ -1302,18 +1361,18 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 x_perturbed = x.copy()
                 if x[variable] + step <= upper[variable]:
                     x_perturbed[variable] += step
-                    residual_perturbed = evaluate(x_perturbed)[0]
+                    residual_perturbed = evaluate(x_perturbed, motion_branch)[0]
                     jacobian[:, variable] = (residual_perturbed - residual) / step
                 else:
                     x_perturbed[variable] -= step
-                    residual_perturbed = evaluate(x_perturbed)[0]
+                    residual_perturbed = evaluate(x_perturbed, motion_branch)[0]
                     jacobian[:, variable] = (residual - residual_perturbed) / step
 
             step = self._least_squares_step_2xN(jacobian, residual)
             accepted = False
             for scale in (1.0, 0.5, 0.25, 0.125, 0.0625):
                 trial = np.clip(x + scale * step, lower, upper)
-                trial_residual = evaluate(trial)[0]
+                trial_residual = evaluate(trial, motion_branch)[0]
                 trial_norm = float(np.max(np.abs(trial_residual)))
                 if np.isfinite(trial_norm) and trial_norm < norm:
                     x = trial
