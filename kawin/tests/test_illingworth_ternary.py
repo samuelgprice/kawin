@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import kawin.diffusion.MovingBoundaryIllingworthTernaryFDM as ternary_fdm
 from kawin.diffusion import (
     MovingBoundaryIllingworthTernaryFD1DModel,
     TernaryMovingBoundaryThermodynamicsSurrogate,
@@ -11,7 +12,11 @@ from kawin.diffusion import (
 )
 from kawin.diffusion.DiffusionParameters import TemperatureParameters
 from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D, ProfileBuilder, StepProfile1D
-from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import _select_interface_motion_branch
+from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import (
+    _get_stefan_interdiffusivity,
+    _select_interface_motion_branch,
+    _validate_ternary_diffusivity_matrix,
+)
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
     integrate_planar_transformed_profile_components,
     solve_illingworth_block_tridiagonal,
@@ -366,6 +371,83 @@ def test_ternary_block_solve_preserves_component_coupling():
     actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
 
     assert np.allclose(actual, expected)
+
+
+@pytest.mark.parametrize(
+    "matrix",
+    [
+        np.asarray([[2.0, 0.0], [0.0, 3.0]], dtype=np.float64),
+        np.asarray([[2.0, 1.0], [0.0, 3.0]], dtype=np.float64),
+        np.asarray([[2.0, 1.0], [0.0, 2.0]], dtype=np.float64),
+    ],
+)
+def test_ternary_diffusivity_validation_accepts_positive_real_eigenvalues(matrix):
+    actual = _validate_ternary_diffusivity_matrix(matrix, "ALPHA", context="test diffusivity")
+
+    assert np.allclose(actual, matrix)
+
+
+@pytest.mark.parametrize("scale", [1.0e-300, 1.0e-150, 1.0, 1.0e150, 1.0e300])
+def test_ternary_diffusivity_validation_is_invariant_to_positive_unit_scaling(scale):
+    matrix = scale * np.asarray([[2.0, 1.0], [0.0, 3.0]], dtype=np.float64)
+
+    actual = _validate_ternary_diffusivity_matrix(matrix, "ALPHA", context="scaled test diffusivity")
+
+    assert np.allclose(actual, matrix)
+
+
+@pytest.mark.parametrize(
+    "matrix, match",
+    [
+        (np.asarray([[1.0, 0.0], [0.0, -1.0]], dtype=np.float64), "scaled eigenvalues"),
+        (np.asarray([[1.0, 0.0], [0.0, 0.0]], dtype=np.float64), "scaled eigenvalues"),
+        (np.asarray([[0.0, -1.0], [1.0, 0.0]], dtype=np.float64), "scaled eigenvalues"),
+        (np.asarray([[1.0, np.nan], [0.0, 1.0]], dtype=np.float64), "finite"),
+        (np.asarray([1.0, 2.0], dtype=np.float64), "shape"),
+    ],
+)
+def test_ternary_diffusivity_validation_rejects_invalid_matrices(matrix, match):
+    with pytest.raises(ValueError, match=match):
+        _validate_ternary_diffusivity_matrix(matrix, "ALPHA", context="invalid test diffusivity")
+
+
+def test_ternary_diffusivity_validation_rejects_complex_valued_matrix():
+    matrix = np.asarray([[1.0 + 1.0e-8j, 0.0], [0.0, 1.0]], dtype=np.complex128)
+
+    with pytest.raises(ValueError, match="real-valued"):
+        _validate_ternary_diffusivity_matrix(matrix, "ALPHA", context="complex test diffusivity")
+
+
+def test_ternary_diffusivity_validation_call_sites_share_helper(monkeypatch):
+    model = _make_scope_validation_model()
+    model.setup()
+    matrix = np.asarray([[2.0, 1.0], [0.0, 3.0]], dtype=np.float64)
+    diffusivity_calls = []
+    validation_calls = []
+
+    class _SharedValidationThermodynamics:
+        def clearCache(self):
+            pass
+
+        def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+            diffusivity_calls.append((phase, kwargs.get("query_context")))
+            return matrix
+
+    def validation_spy(D, phase, context="ternary Illingworth diffusivity"):
+        validation_calls.append((phase, context))
+        return np.asarray(D, dtype=np.float64)
+
+    monkeypatch.setattr(ternary_fdm, "_validate_ternary_diffusivity_matrix", validation_spy)
+    thermodynamics = _SharedValidationThermodynamics()
+    stefan = _get_stefan_interdiffusivity(thermodynamics, [0.2, 0.1], 1000.0, "ALPHA")
+    model.therm = thermodynamics
+    transient = model._phase_diffusivity_matrix([0.2, 0.1], "ALPHA", 0.0, 0.5)
+
+    assert np.allclose(stefan, matrix)
+    assert np.allclose(transient, matrix)
+    assert diffusivity_calls == [("ALPHA", "interface"), ("ALPHA", "interface")]
+    assert validation_calls == [("ALPHA", "initial-eta diffusivity"), ("ALPHA", "transient diffusivity")]
+    assert not hasattr(model, "_validate_diffusivity_matrix")
 
 
 def test_ternary_scope_validation_accepts_default_zero_flux_boundaries():

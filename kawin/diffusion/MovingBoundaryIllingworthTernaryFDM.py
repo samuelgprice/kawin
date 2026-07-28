@@ -102,28 +102,38 @@ class InitialEtaEstimate:
     branch: str | None = None
 
 
-def _validate_stefan_diffusivity_matrix(D, phase):
-    """Validates a ternary 2x2 diffusivity matrix used by the Stefan estimator."""
-    D = np.asarray(D, dtype=np.float64)
-    if D.shape != (2, 2) or not np.all(np.isfinite(D)):
-        raise ValueError(f"Diffusivity for phase {phase} must be a finite 2x2 matrix.")
-    trace = float(D[0, 0] + D[1, 1])
-    determinant = float(D[0, 0] * D[1, 1] - D[0, 1] * D[1, 0])
-    discriminant = trace * trace - 4.0 * determinant
-    scale = max(trace * trace, abs(determinant), 1.0)
-    if discriminant < -1e-12 * scale:
-        raise ValueError(f"Diffusivity for phase {phase} must have positive real eigenvalues.")
-    root = float(np.sqrt(max(discriminant, 0.0)))
-    eigenvalues = (0.5 * (trace + root), 0.5 * (trace - root))
-    if eigenvalues[0] <= 0.0 or eigenvalues[1] <= 0.0:
-        raise ValueError(f"Diffusivity for phase {phase} must have positive real eigenvalues.")
-    if abs(determinant) <= 1e-300:
-        raise ValueError(f"Diffusivity for phase {phase} is singular.")
-    inverse = np.asarray([[D[1, 1], -D[0, 1]], [-D[1, 0], D[0, 0]]], dtype=np.float64) / determinant
-    condition_estimate = np.max(np.sum(np.abs(D), axis=1)) * np.max(np.sum(np.abs(inverse), axis=1))
-    if condition_estimate > 1e12:
-        raise ValueError(f"Diffusivity for phase {phase} is too ill-conditioned for the ternary Illingworth solve.")
-    return D.astype(np.float64)
+def _validate_ternary_diffusivity_matrix(D, phase, context="ternary Illingworth diffusivity"):
+    """
+    Validates a ternary 2x2 diffusion matrix with scale-invariant eigen tests.
+
+    Eigenvalues are computed from ``D / ||D||_inf`` so acceptance does not
+    depend on diffusivity units. ``imaginary_tol`` and ``positive_tol`` are
+    dimensionless tolerances on those scaled eigenvalues; values at or below the
+    positivity tolerance are treated as nonpositive. The original unscaled
+    matrix is returned after validation.
+    """
+    values = np.asarray(D)
+    label = f"{context} for phase {phase}"
+    if values.shape != (2, 2):
+        raise ValueError(f"{label} must have shape (2, 2); received {values.shape}.")
+    if np.iscomplexobj(values) and np.any(np.imag(values) != 0.0):
+        raise ValueError(f"{label} must be real-valued.")
+    values = np.asarray(np.real(values), dtype=np.float64)
+    if not np.all(np.isfinite(values)):
+        raise ValueError(f"{label} must contain only finite values.")
+
+    matrix_norm = float(np.linalg.norm(values, ord=np.inf))
+    if not np.isfinite(matrix_norm) or matrix_norm <= 0.0:
+        raise ValueError(f"{label} must have a positive finite matrix norm.")
+    scaled_eigenvalues = np.linalg.eigvals(values / matrix_norm)
+    imaginary_tol = 1.0e-12
+    positive_tol = 1.0e-14
+    if np.any(np.abs(np.imag(scaled_eigenvalues)) > imaginary_tol):
+        raise ValueError(f"{label} must have real positive eigenvalues; scaled eigenvalues={scaled_eigenvalues}.")
+    real_eigenvalues = np.real(scaled_eigenvalues)
+    if np.any(real_eigenvalues <= positive_tol):
+        raise ValueError(f"{label} must have strictly positive real eigenvalues; scaled eigenvalues={scaled_eigenvalues}.")
+    return values
 
 
 def _validate_eta_bounds(interface_equilibrium):
@@ -170,7 +180,7 @@ def _get_stefan_interdiffusivity(thermodynamics, composition, temperature, phase
         D = thermodynamics.getInterdiffusivity(composition, temperature, phase=phase, query_context="interface")
     except TypeError:
         D = thermodynamics.getInterdiffusivity(composition, temperature, phase=phase)
-    return _validate_stefan_diffusivity_matrix(D, phase)
+    return _validate_ternary_diffusivity_matrix(D, phase, context="initial-eta diffusivity")
 
 
 def estimate_initial_eta_from_stefan_residual(
@@ -1088,29 +1098,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             D = self.therm.getInterdiffusivity(composition, temperature, phase=phase, query_context="interface")
         except TypeError:
             D = self.therm.getInterdiffusivity(composition, temperature, phase=phase)
-        D = np.asarray(D, dtype=np.float64).reshape(2, 2)
-        return self._validate_diffusivity_matrix(D, phase)
-
-    def _validate_diffusivity_matrix(self, D, phase):
-        if D.shape != (2, 2) or not np.all(np.isfinite(D)):
-            raise ValueError(f"Diffusivity for phase {phase} must be a finite 2x2 matrix.")
-        trace = float(D[0, 0] + D[1, 1])
-        determinant = float(D[0, 0] * D[1, 1] - D[0, 1] * D[1, 0])
-        discriminant = trace * trace - 4.0 * determinant
-        scale = max(trace * trace, abs(determinant), 1.0)
-        if discriminant < -1e-12 * scale:
-            raise ValueError(f"Diffusivity for phase {phase} must have positive real eigenvalues.")
-        root = float(np.sqrt(max(discriminant, 0.0)))
-        eigenvalues = (0.5 * (trace + root), 0.5 * (trace - root))
-        if eigenvalues[0] <= 0.0 or eigenvalues[1] <= 0.0:
-            raise ValueError(f"Diffusivity for phase {phase} must have positive real eigenvalues.")
-        if abs(determinant) <= 1e-300:
-            raise ValueError(f"Diffusivity for phase {phase} is singular.")
-        inverse = np.asarray([[D[1, 1], -D[0, 1]], [-D[1, 0], D[0, 0]]], dtype=np.float64) / determinant
-        condition_estimate = np.max(np.sum(np.abs(D), axis=1)) * np.max(np.sum(np.abs(inverse), axis=1))
-        if condition_estimate > 1e12:
-            raise ValueError(f"Diffusivity for phase {phase} is too ill-conditioned for the ternary Illingworth solve.")
-        return D.astype(np.float64)
+        return _validate_ternary_diffusivity_matrix(D, phase, context="transient diffusivity")
 
     def setTimeInfo(self, currTime, simTime):
         """Stores solve-time bounds and prepares optional semi-log target times."""
