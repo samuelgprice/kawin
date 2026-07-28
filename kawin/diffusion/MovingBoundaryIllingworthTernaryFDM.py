@@ -826,12 +826,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             raise TypeError("MovingBoundaryIllingworthTernaryFD1DModel requires a CartesianFD1D mesh.")
         if len(self.allElements) != 3 or self.mesh.numResponses != 2:
             raise ValueError("MovingBoundaryIllingworthTernaryFD1DModel requires ternary systems with two independent responses.")
+        self._validate_external_boundary_conditions()
+        self._validate_isothermal_temperature()
         if any(e in interstitials for e in self.allElements):
             raise ValueError("MovingBoundaryIllingworthTernaryFD1DModel supports only substitutional systems.")
         if len(self.phases) != 2:
             raise ValueError("MovingBoundaryIllingworthTernaryFD1DModel requires exactly two explicit phases.")
-        if isinstance(getattr(self.mesh, "boundaryConditions", None), PeriodicBoundary1D):
-            raise ValueError("Periodic boundary conditions are not supported.")
         if self.geometry != "planar":
             raise NotImplementedError("MovingBoundaryIllingworthTernaryFD1DModel currently implements only planar geometry.")
         if not np.isfinite(self.timeStep) or self.timeStep <= 0:
@@ -858,6 +858,67 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if self.phaseBNodes is not None and self.phaseBNodes < 3:
             raise ValueError("phase_b_nodes must be at least 3 when specified.")
         self.initialInterfacePosition = self._clipInterfacePosition(self.initialInterfacePosition, strict=True)
+
+    def _validate_external_boundary_conditions(self):
+        """
+        Validates that the fixed external boundaries are homogeneous zero flux.
+
+        The ternary Illingworth discretization implemented here is conservative
+        for a closed planar domain. Nonzero Neumann fluxes, fixed-composition
+        boundaries, periodic wrapping, mixed/Robin-like objects, or
+        time-dependent boundary objects require extra terms that are not part of
+        this solver and are rejected before setup.
+        """
+        bc = getattr(self.mesh, "boundaryConditions", None)
+        if bc is None:
+            return
+        if isinstance(bc, PeriodicBoundary1D):
+            raise NotImplementedError("Ternary Illingworth currently supports only homogeneous zero-flux external boundaries; periodic boundaries are unsupported.")
+        if not isinstance(bc, MixedBoundary1D):
+            raise NotImplementedError("Ternary Illingworth currently supports only MixedBoundary1D homogeneous zero-flux external boundaries.")
+
+        expected_shape = (self.mesh.numResponses,)
+        for attr in ("LBCtype", "RBCtype", "LBCvalue", "RBCvalue"):
+            values = np.asarray(getattr(bc, attr, None))
+            if values.shape != expected_shape:
+                raise NotImplementedError("Boundary-condition arrays must match the independent-component count for ternary Illingworth.")
+
+        left_type = np.asarray(bc.LBCtype)
+        right_type = np.asarray(bc.RBCtype)
+        if not np.all(left_type == MixedBoundary1D.NEUMANN) or not np.all(right_type == MixedBoundary1D.NEUMANN):
+            raise NotImplementedError("Ternary Illingworth currently supports only Neumann zero-flux external boundaries; fixed-composition or mixed boundaries are unsupported.")
+
+        left_value = np.asarray(bc.LBCvalue, dtype=np.float64)
+        right_value = np.asarray(bc.RBCvalue, dtype=np.float64)
+        if not np.all(np.isfinite(left_value)) or not np.all(np.isfinite(right_value)):
+            raise NotImplementedError("Ternary Illingworth boundary flux values must be finite zero constants.")
+        if not np.all(left_value == 0.0) or not np.all(right_value == 0.0):
+            raise NotImplementedError("Ternary Illingworth currently supports only homogeneous zero-flux external boundaries; nonzero fluxes are unsupported.")
+
+    def _validate_isothermal_temperature(self):
+        """
+        Validates that the configured temperature is demonstrably constant.
+
+        The current ternary interface-equilibrium and diffusivity path is
+        isothermal. Scalar temperatures and temperature-array wrappers with
+        identical finite values are accepted; callable or varying temperature
+        specifications are rejected instead of being sampled once and treated as
+        constant.
+        """
+        params = getattr(self.temperatureParameters, "Tparameters", None)
+        if isinstance(params, tuple) and len(params) == 2:
+            temperatures = np.asarray(params[1], dtype=np.float64).reshape(-1)
+            if temperatures.size == 0 or not np.all(np.isfinite(temperatures)):
+                raise ValueError("Temperature values must be finite.")
+            if not np.all(temperatures == temperatures[0]):
+                raise NotImplementedError("Ternary Illingworth currently supports only isothermal temperature; time-dependent temperature arrays are unsupported.")
+            return
+        if callable(params):
+            raise NotImplementedError("Ternary Illingworth currently supports only isothermal temperature; callable temperature functions are unsupported.")
+
+        values = np.asarray(params, dtype=np.float64).reshape(-1)
+        if values.size != 1 or not np.isfinite(values[0]):
+            raise ValueError("Ternary Illingworth requires a finite scalar isothermal temperature.")
 
     def _clipInterfacePosition(self, interface_position: float, strict: bool = True) -> float:
         z = flatten_1d_coordinates(self.mesh.z)

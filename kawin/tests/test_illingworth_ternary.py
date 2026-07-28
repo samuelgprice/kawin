@@ -9,7 +9,8 @@ from kawin.diffusion import (
     estimate_initial_eta_from_instantaneous_balance,
     estimate_initial_eta_from_stefan_residual,
 )
-from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, ProfileBuilder, StepProfile1D
+from kawin.diffusion.DiffusionParameters import TemperatureParameters
+from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D, ProfileBuilder, StepProfile1D
 from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import _select_interface_motion_branch
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
     integrate_planar_transformed_profile_components,
@@ -276,6 +277,49 @@ def _make_length_scaled_illingworth_model(domain_length, interface_equilibrium=N
     )
 
 
+def _make_scope_validation_model(boundary_conditions=None, temperature=1000.0):
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    profile = ProfileBuilder([(StepProfile1D(0.5, np.asarray([0.25, 0.10]), np.asarray([0.35, 0.15])), ["X", "Y"])])
+    if boundary_conditions is None:
+        mesh.setResponseProfile(profile)
+    else:
+        mesh.setResponseProfile(profile, boundaryConditions=boundary_conditions)
+    return MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_IdentityTernaryThermodynamics(),
+        temperature=temperature,
+        interfacePosition=0.5,
+        interface_equilibrium=_LinearInterfaceEquilibrium(),
+        initial_eta_method="instantaneous_balance",
+        initial_eta_bracket=(0.0, 1.0),
+        time_step=1.0e-4,
+        tolerance=1.0e-10,
+        max_iterations=25,
+        record=True,
+    )
+
+
+def _nonzero_flux_boundary_conditions():
+    bc = MixedBoundary1D(2)
+    bc.setLBC(0, "flux", 1.0e-6)
+    return bc
+
+
+def _fixed_composition_boundary_conditions():
+    bc = MixedBoundary1D(2)
+    bc.setLBC(0, "composition", 0.2)
+    return bc
+
+
+def _mixed_boundary_type_conditions():
+    bc = MixedBoundary1D(2)
+    bc.setLBC(0, "flux", 0.0)
+    bc.setRBC(0, "composition", 0.3)
+    return bc
+
+
 def _record_scaled_jacobian_perturbations(domain_length=1.0e-6):
     model = _make_length_scaled_illingworth_model(
         domain_length,
@@ -322,6 +366,70 @@ def test_ternary_block_solve_preserves_component_coupling():
     actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
 
     assert np.allclose(actual, expected)
+
+
+def test_ternary_scope_validation_accepts_default_zero_flux_boundaries():
+    model = _make_scope_validation_model()
+
+    model.setup()
+
+    assert isinstance(model.mesh.boundaryConditions, MixedBoundary1D)
+
+
+def test_ternary_scope_validation_accepts_explicit_zero_flux_boundaries():
+    boundary_conditions = MixedBoundary1D(2)
+    boundary_conditions.setLBC(0, "flux", 0.0)
+    boundary_conditions.setRBC(0, "flux", 0.0)
+    boundary_conditions.setLBC(1, MixedBoundary1D.NEUMANN, 0.0)
+    boundary_conditions.setRBC(1, MixedBoundary1D.NEUMANN, 0.0)
+    model = _make_scope_validation_model(boundary_conditions=boundary_conditions)
+
+    model.setup()
+
+    assert np.all(boundary_conditions.LBCvalue == 0.0)
+    assert np.all(boundary_conditions.RBCvalue == 0.0)
+
+
+@pytest.mark.parametrize(
+    "boundary_conditions, match",
+    [
+        pytest.param(_nonzero_flux_boundary_conditions(), "nonzero fluxes", id="nonzero_flux"),
+        pytest.param(_fixed_composition_boundary_conditions(), "fixed-composition", id="fixed_composition"),
+        pytest.param(_mixed_boundary_type_conditions(), "fixed-composition or mixed", id="mixed_boundary_types"),
+        pytest.param(PeriodicBoundary1D(), "periodic", id="periodic"),
+    ],
+)
+def test_ternary_scope_validation_rejects_unsupported_boundaries_before_solve(boundary_conditions, match):
+    with pytest.raises(NotImplementedError, match=match):
+        _make_scope_validation_model(boundary_conditions=boundary_conditions)
+
+
+@pytest.mark.parametrize(
+    "temperature",
+    [
+        1000.0,
+        TemperatureParameters(1000.0),
+        TemperatureParameters([0.0, 1.0, 2.0], [1000.0, 1000.0, 1000.0]),
+    ],
+)
+def test_ternary_scope_validation_accepts_constant_temperatures(temperature):
+    model = _make_scope_validation_model(temperature=temperature)
+
+    model.setup()
+
+    assert np.isfinite(model.temperatureParameters(np.asarray([[0.5]], dtype=np.float64), 0.0)[0])
+
+
+@pytest.mark.parametrize(
+    "temperature, match",
+    [
+        (TemperatureParameters([0.0, 1.0], [1000.0, 1100.0]), "time-dependent"),
+        (lambda z, t: 1000.0 + np.asarray(z, dtype=np.float64).reshape(-1), "callable"),
+    ],
+)
+def test_ternary_scope_validation_rejects_state_dependent_temperature_before_solve(temperature, match):
+    with pytest.raises(NotImplementedError, match=match):
+        _make_scope_validation_model(temperature=temperature)
 
 
 def test_ternary_scaled_interface_solve_is_invariant_to_length_units():
