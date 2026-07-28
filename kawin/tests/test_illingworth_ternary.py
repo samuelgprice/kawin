@@ -9,7 +9,7 @@ from kawin.diffusion import (
     estimate_initial_eta_from_instantaneous_balance,
     estimate_initial_eta_from_stefan_residual,
 )
-from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
+from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, ProfileBuilder, StepProfile1D
 from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import _select_interface_motion_branch
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
     integrate_planar_transformed_profile_components,
@@ -64,6 +64,16 @@ class _LinearInterfaceEquilibrium:
             left[0] = np.nan
         elif self.mode == "degenerate":
             right = left.copy()
+        return left, right
+
+
+class _EtaVaryingInterfaceEquilibrium:
+    eta_bounds = (0.0, 1.0)
+
+    def interface_compositions(self, eta):
+        eta = float(eta)
+        left = np.asarray([0.20 + 0.08 * eta, 0.08 + 0.03 * eta], dtype=np.float64)
+        right = np.asarray([0.34 + 0.04 * eta, 0.16 - 0.02 * eta], dtype=np.float64)
         return left, right
 
 
@@ -188,6 +198,24 @@ def _record_solve_interface_branches(previous_delta_s, max_iterations=1):
     with pytest.raises(RuntimeError, match="failed to converge"):
         model._solve_interface_planar(p, q, s, old_s, 0.2, 1.0e-4)
     return s, records
+
+
+def _recorded_planar_inventories(model):
+    """Recomputes recorded ternary Illingworth inventories with the production helper."""
+    return np.asarray(
+        [
+            integrate_planar_transformed_profile_components(
+                np.asarray(model.pData._y[i], dtype=np.float64),
+                np.asarray(model.qData._y[i], dtype=np.float64),
+                float(model.interfaceData._y[i]),
+                model._R,
+                model._u_grid,
+                model._v_grid,
+            )
+            for i in range(model.pData.N + 1)
+        ],
+        dtype=np.float64,
+    )
 
 
 def test_ternary_block_solve_preserves_component_coupling():
@@ -517,6 +545,85 @@ def test_ternary_illingworth_can_use_instantaneous_initial_eta_method():
 
     assert np.isclose(model.initialEta, eta_true, atol=1e-10)
     assert model.initialEtaEstimate.method == "instantaneous_balance"
+
+
+@pytest.mark.parametrize(
+    "case_name, left_bulk, right_bulk, direction",
+    [
+        ("moves_right", np.asarray([0.35, 0.10], dtype=np.float64), np.asarray([0.25, 0.16], dtype=np.float64), 1.0),
+        ("moves_left", np.asarray([0.22, 0.10], dtype=np.float64), np.asarray([0.37, 0.15], dtype=np.float64), -1.0),
+    ],
+)
+def test_ternary_illingworth_conserves_inventory_for_moving_eta_dependent_tielines(case_name, left_bulk, right_bulk, direction):
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(
+        ProfileBuilder([(StepProfile1D(0.45, left_bulk, right_bulk), ["X", "Y"])]),
+        boundaryConditions=MixedBoundary1D(2),
+    )
+    model = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_CoupledTernaryThermodynamics(),
+        temperature=1000.0,
+        interfacePosition=0.45,
+        interface_equilibrium=_EtaVaryingInterfaceEquilibrium(),
+        initial_eta_method="instantaneous_balance",
+        initial_eta_bracket=(0.0, 1.0),
+        time_step=1.0e-4,
+        tolerance=1.0e-11,
+        max_iterations=50,
+        record=True,
+    )
+
+    model.solve(2.0e-2, minDtFrac=1.0e-10)
+
+    motion_tol = 1.0e-9
+    eta_tol = 1.0e-9
+    composition_tol = 1.0e-10
+    total_motion_tol = 1.0e-7
+    total_eta_tol = 1.0e-7
+    total_composition_tol = 1.0e-8
+    inventory_tol = 5.0e-11
+    simplex_tol = 1.0e-12
+    positions = np.asarray(model.interfaceData._y[: model.interfaceData.N + 1], dtype=np.float64)
+    etas = np.asarray(model.etaData._y[: model.etaData.N + 1], dtype=np.float64)
+    p_history = np.asarray(model.pData._y[: model.pData.N + 1], dtype=np.float64)
+    q_history = np.asarray(model.qData._y[: model.qData.N + 1], dtype=np.float64)
+    inventories = _recorded_planar_inventories(model)
+    inventory_drift = np.max(np.abs(inventories - inventories[0]), axis=0)
+    assert positions.size == etas.size == p_history.shape[0] == q_history.shape[0] == inventories.shape[0]
+
+    interface_history = np.asarray(
+        [model.interfaceEquilibrium.interface_compositions(float(eta)) for eta in etas],
+        dtype=np.float64,
+    )
+    left_history = interface_history[:, 0, :]
+    right_history = interface_history[:, 1, :]
+    delta_s = np.diff(positions)
+    delta_eta = np.diff(etas)
+    delta_c_left = np.max(np.abs(np.diff(left_history, axis=0)), axis=1)
+    delta_c_right = np.max(np.abs(np.diff(right_history, axis=0)), axis=1)
+    simultaneous = (
+        (direction * delta_s > motion_tol)
+        & (np.abs(delta_eta) > eta_tol)
+        & (delta_c_left > composition_tol)
+        & (delta_c_right > composition_tol)
+    )
+    all_compositions = np.concatenate((p_history.reshape(-1, 2), q_history.reshape(-1, 2)), axis=0)
+    dependent_compositions = 1.0 - np.sum(all_compositions, axis=1)
+
+    assert case_name in {"moves_right", "moves_left"}
+    assert model.interfaceData.N >= 5
+    assert np.any(simultaneous)
+    assert direction * (positions[-1] - positions[0]) > total_motion_tol
+    assert abs(etas[-1] - etas[0]) > total_eta_tol
+    assert np.linalg.norm(left_history[-1] - left_history[0], ord=np.inf) > total_composition_tol
+    assert np.linalg.norm(right_history[-1] - right_history[0], ord=np.inf) > total_composition_tol
+    assert np.all(inventory_drift <= inventory_tol)
+    assert np.all(np.isfinite(all_compositions))
+    assert np.all(all_compositions >= -simplex_tol)
+    assert np.all(dependent_compositions >= -simplex_tol)
 
 
 def test_ternary_illingworth_conserves_inventory_with_eta_dependent_interface_compositions():
