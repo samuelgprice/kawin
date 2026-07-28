@@ -60,12 +60,18 @@ INITIAL_ETA_METHOD = ["stefan_cross_brentq", "instantaneous_balance"][1]
 INITIAL_ETA_BRACKET = (1e-3, 1-1e-3)
 INITIAL_ETA_GUESS = None
 INITIAL_VELOCITY_GUESS = None
+PLOT_LEE_OH_FIG9_DATA = True
+LEE_OH_FIG9_LOWER_CR_PATH = EXAMPLES_DIR / "leeAndOh1996_data" / "fig9_lowerCurve_Cr.csv"
+LEE_OH_FIG9_UPPER_NI_PATH = EXAMPLES_DIR / "leeAndOh1996_data" / "fig9_upperCurve_Ni.csv"
+LEE_OH_FIG9_TIME_UNIT_SECONDS = 3600.0
 
 LENGTH = 30.0e-6
-NODES = 31
+NODES = 61
 INTERFACE_POSITION = 12.0e-6 + 1.0e-12
 LEFT_BULK = np.array([0.38, 0.001], dtype=np.float64)
 RIGHT_BULK = np.array([0.13, 0.15], dtype=np.float64)
+
+idealized_comp = LEFT_BULK * (INTERFACE_POSITION/LENGTH) + RIGHT_BULK * (1 - INTERFACE_POSITION/LENGTH)
 
 # Two diffusivity modes are supported:
 #   "explicit"       -> set FIXED_DIFFUSIVITY_MATRICES below.
@@ -93,14 +99,14 @@ else:
     SEMI_LOG_BASE_TIME_STEP = 1.0
     SEMI_LOG_DT = 0.25 / 10
     SEMI_LOG_T0 = 1.0e-6
-SOLVE_TIME = [3600*1e0, 3600*1e2][0]
+SOLVE_TIME = [3600*1e0, 3600*1e2, 3600*1e3][2]
 PHASE_A_NODES = None
 PHASE_B_NODES = None
-TOLERANCE = 1.0e-17
+TOLERANCE = 3.0e-13
 MAX_ITERATIONS = 25
 VERBOSE = True
 VERBOSE_INTERVAL = 10
-MIN_DT_FRAC = 1.0e-12
+MIN_DT_FRAC = 1.0e-16
 
 # Leave this False when you only want to build the surrogate and model without
 # starting a solve after running all cells.
@@ -310,8 +316,32 @@ def _show_if_interactive():
         plt.show()
 
 
-def plot_interface_position(model, *, scale_time=1.0, normalize_to=None):
-    """Plots the recorded interface position normalized by its initial value."""
+def _load_lee_oh_fig9_curve(path):
+    """Loads a two-column Lee and Oh Fig. 9 digitized interface-position curve."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Could not find Lee and Oh Fig. 9 data at {path}.")
+    values = np.loadtxt(path, delimiter=",", dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64).reshape((-1, 2))
+    if values.size == 0 or not np.all(np.isfinite(values)):
+        raise ValueError(f"Lee and Oh Fig. 9 data at {path} must contain finite two-column data.")
+    return values[np.argsort(values[:, 0])]
+
+
+def _plot_lee_oh_fig9_interface_data(ax, *, scale_time=1.0):
+    """Overlays digitized Lee and Oh Fig. 9 normalized interface-position data."""
+    curves = [
+        (LEE_OH_FIG9_LOWER_CR_PATH, "Lee & Oh Fig. 9 lower curve (Cr)", "dimgray"),
+        (LEE_OH_FIG9_UPPER_NI_PATH, "Lee & Oh Fig. 9 upper curve (Ni)", "k"),
+    ]
+    for path, label, color in curves:
+        data = _load_lee_oh_fig9_curve(path)
+        times = data[:, 0] * float(LEE_OH_FIG9_TIME_UNIT_SECONDS) / float(scale_time)
+        ax.plot(times, data[:, 1], linestyle="-", linewidth=1.5, color=color, label=label)
+
+
+def plot_interface_position(model, *, scale_time=1.0, normalize_to=None, plot_lee_oh_fig9_data=False, xlims=None):
+    """Plots normalized interface position with optional Lee and Oh Fig. 9 data."""
     times = np.asarray(model.interfaceData._time[: model.interfaceData.N + 1], dtype=np.float64) / scale_time
     positions = np.asarray(model.interfaceData._y[: model.interfaceData.N + 1], dtype=np.float64)
     reference_position = float(positions[0] if normalize_to is None else normalize_to)
@@ -321,12 +351,17 @@ def plot_interface_position(model, *, scale_time=1.0, normalize_to=None):
     positive_time = times > 0.0
 
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(times[positive_time], normalized_positions[positive_time], marker="o", linewidth=1.5)
+    ax.plot(times[positive_time], normalized_positions[positive_time], marker="o", linewidth=1.5, label="Illingworth ternary")
+    if plot_lee_oh_fig9_data:
+        _plot_lee_oh_fig9_interface_data(ax, scale_time=scale_time)
     ax.axhline(1.0, color="0.5", linestyle="--", linewidth=1)
     ax.set_xscale("log")
     ax.set_xlabel(f"time / {scale_time:g}")
     ax.set_ylabel("normalized interface position")
     ax.set_title("Ternary Illingworth normalized interface position")
+    if xlims is not None:
+        ax.set_xlim(*xlims)
+    ax.legend()
     fig.tight_layout()
     _show_if_interactive()
     return fig, ax
@@ -352,8 +387,8 @@ def plot_integrated_inventory(model, *, scale_time=1.0):
         lines.append(line)
         compDiff_arr = average_composition[:, i]-average_composition[0, i]
         compDiffPercent_arr = (compDiff_arr/average_composition[0, i])*100
-        print(f"{element} min and max comp diff from initial:         {compDiff_arr.min()}, {compDiff_arr.max()}")
-        print(f"{element} min and max percent comp diff from initial: {compDiffPercent_arr.min()}%, {compDiffPercent_arr.max()}%")
+        print(f"{element} min and max comp diff from initial:         {compDiff_arr.min():.4}, {compDiff_arr.max():.4}")
+        print(f"{element} min and max percent comp diff from initial: {compDiffPercent_arr.min():.4}%, {compDiffPercent_arr.max():.4}%")
 
     ax_left.set_xscale("log")
     ax_left.set_xlabel(f"time / {scale_time:g}")
@@ -450,7 +485,7 @@ else:
 # Plot interface position over time
 
 if model.currentTime > 0:
-    plot_interface_position(model)
+    fig, ax = plot_interface_position(model, plot_lee_oh_fig9_data=PLOT_LEE_OH_FIG9_DATA, xlims=(1e-1, 1e7))
 else:
     print("No solve has been run yet, so there is no interface-position history to plot.")
 
@@ -473,3 +508,14 @@ else:
     print("No solve has been run yet, so there is no interface-composition history to plot.")
 
 # %%
+left, right, meta = tieline_surrogate.getTielineOfGlobalComposition(
+    idealized_comp,
+    T=TEMPERATURE,
+    returnMeta=True,
+)
+left, right, meta
+finalIdealizedFraction = meta['phase_fraction'] if meta['phase_fraction_phase']=="BCC_A2" else 1-meta['phase_fraction']
+print(f"idealized final normalized interface position: {(finalIdealizedFraction * model._R) / model.interfaceData._y[0]}")
+print(f"calculated final normalized interface position: {model.interfaceData._y[-1] / model.interfaceData._y[0]}")
+
+#%%
