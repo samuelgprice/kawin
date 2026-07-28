@@ -527,6 +527,44 @@ def test_ternary_surrogate_interpolates_tielines_and_returns_metadata():
     assert meta["endpoints"][1]["phase"] == "BETA"
 
 
+def test_ternary_surrogate_finds_tieline_for_global_composition():
+    surrogate = _build_surrogate()
+    expected_left, expected_right = surrogate.interface_compositions(0.25)
+    global_comp = expected_left + 0.4 * (expected_right - expected_left)
+
+    left, right, meta = surrogate.getTielineOfGlobalComposition(global_comp, T=1000.0, returnMeta=True)
+
+    assert np.allclose(left, expected_left)
+    assert np.allclose(right, expected_right)
+    assert np.isclose(meta["eta"], 0.25)
+    assert np.isclose(meta["phase_fraction"], 0.4)
+    assert meta["phase_fraction_phase"] == "BETA"
+    assert meta["endpoint_phases"] == ("ALPHA", "BETA")
+    assert np.allclose(meta["global_composition"], global_comp)
+    assert np.allclose(meta["residual"], np.zeros(2), atol=1.0e-10)
+
+
+def test_ternary_surrogate_finds_tieline_for_full_ternary_global_composition():
+    surrogate = _build_surrogate()
+    expected_left, expected_right = surrogate.interface_compositions(0.75)
+    independent_global = expected_left + 0.25 * (expected_right - expected_left)
+    full_global = np.asarray([1.0 - np.sum(independent_global), *independent_global], dtype=np.float64)
+
+    left, right = surrogate.getTielineOfGlobalComposition(full_global, T=1000.0)
+
+    assert np.allclose(left, expected_left)
+    assert np.allclose(right, expected_right)
+
+
+def test_ternary_surrogate_rejects_global_composition_on_tieline_extension():
+    surrogate = _build_surrogate()
+    left, right = surrogate.interface_compositions(0.25)
+    global_comp = left - 0.2 * (right - left)
+
+    with pytest.raises(ValueError, match="tie-line extension"):
+        surrogate.getTielineOfGlobalComposition(global_comp, T=1000.0)
+
+
 def test_ternary_surrogate_returns_nearest_interface_and_general_diffusivities():
     bulk_point = np.asarray([[0.45, 0.05]], dtype=np.float64)
     surrogate = _build_surrogate(diffusivity_bulk_points=bulk_point)

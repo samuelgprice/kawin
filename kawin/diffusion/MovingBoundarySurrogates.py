@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from scipy import optimize
 
 from kawin.thermo import MulticomponentThermodynamics
 
@@ -421,6 +422,147 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             )
             for phase in self.tieline_phases
         )
+
+    def _signed_tieline_distance(self, composition, eta):
+        """
+        Returns the signed normal distance from a composition to a tie-line.
+
+        A zero means the composition is collinear with the phase-endpoint
+        segment at ``eta``; normalization keeps the value in composition units.
+        """
+        left, right = self.interface_compositions(eta)
+        direction = right - left
+        length = float(np.linalg.norm(direction))
+        if not np.isfinite(length) or length <= 0.0:
+            return np.nan
+        delta = composition - left
+        return float(direction[0] * delta[1] - direction[1] * delta[0]) / length
+
+    def getTielineOfGlobalComposition(
+        self,
+        composition,
+        T=None,
+        returnMeta=False,
+        *,
+        tolerance=1e-8,
+        xtol=1e-10,
+        maxiter=100,
+        eta_bracket=None,
+        **kwargs,
+    ):
+        """
+        Finds the surrogate tie-line containing a global composition.
+
+        The method solves a 1D collinearity condition over ``eta`` and then
+        checks the lever-rule fraction, rejecting compositions that sit on a
+        tie-line extension rather than inside the two-phase segment.
+        """
+        self._validate_temperature(T)
+        target = _as_independent_ternary_components(composition, self.elements, "global composition")
+        target = _validate_independent_composition(target, self.min_composition, "global composition")
+        tolerance, xtol, maxiter = float(tolerance), float(xtol), int(maxiter)
+        for name, value in (("tolerance", tolerance), ("xtol", xtol)):
+            if not np.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be positive and finite.")
+        if maxiter <= 0:
+            raise ValueError("maxiter must be positive.")
+
+        if eta_bracket is None:
+            eta_lower, eta_upper = self.eta_bounds
+        else:
+            bracket = np.asarray(eta_bracket, dtype=np.float64).reshape(-1)
+            if bracket.size != 2:
+                raise ValueError("eta_bracket must contain exactly two values.")
+            eta_lower, eta_upper = float(bracket[0]), float(bracket[1])
+            if (
+                not np.isfinite(eta_lower)
+                or not np.isfinite(eta_upper)
+                or eta_upper <= eta_lower
+                or eta_lower < self.eta_bounds[0]
+                or eta_upper > self.eta_bounds[1]
+            ):
+                raise ValueError(f"eta_bracket must lie within eta_bounds={self.eta_bounds} and be increasing.")
+
+        interior = self.eta_samples[(self.eta_samples > eta_lower) & (self.eta_samples < eta_upper)]
+        eta_grid = np.asarray([eta_lower, *interior.tolist(), eta_upper], dtype=np.float64)
+        signed_values = np.asarray([self._signed_tieline_distance(target, eta) for eta in eta_grid], dtype=np.float64)
+
+        candidates = []
+        eta_mid = 0.5 * (eta_lower + eta_upper)
+
+        def add_candidate(eta):
+            left, right = self.interface_compositions(float(eta))
+            direction = right - left
+            denom = float(np.dot(direction, direction))
+            if not np.isfinite(denom) or denom <= 0.0:
+                return
+            phase_fraction = float(np.dot(target - left, direction) / denom)
+            residual = left + phase_fraction * direction - target
+            residual_norm = float(np.max(np.abs(residual)))
+            if not np.isfinite(phase_fraction) or not np.isfinite(residual_norm):
+                return
+            candidates.append((residual_norm, abs(float(eta) - eta_mid), float(eta), phase_fraction, left, right, residual))
+
+        for eta, value in zip(eta_grid, signed_values):
+            if np.isfinite(value) and abs(value) <= tolerance:
+                add_candidate(eta)
+
+        for i in range(eta_grid.size - 1):
+            f0 = signed_values[i]
+            f1 = signed_values[i + 1]
+            if not np.isfinite(f0) or not np.isfinite(f1) or f0 == 0.0 or f1 == 0.0 or f0 * f1 > 0.0:
+                continue
+            result = optimize.root_scalar(
+                lambda eta: self._signed_tieline_distance(target, eta),
+                bracket=(float(eta_grid[i]), float(eta_grid[i + 1])),
+                method="brentq",
+                xtol=xtol,
+                maxiter=maxiter,
+            )
+            if result.converged:
+                add_candidate(result.root)
+
+        if not candidates:
+            finite_values = signed_values[np.isfinite(signed_values)]
+            best_distance = None if finite_values.size == 0 else float(np.min(np.abs(finite_values)))
+            raise ValueError(
+                "Could not locate a surrogate tie-line containing global composition "
+                f"{target.tolist()} within eta range [{eta_lower}, {eta_upper}]. "
+                f"Best sampled signed distance was {best_distance}."
+            )
+
+        candidates.sort()
+        valid = [c for c in candidates if c[0] <= tolerance and -tolerance <= c[3] <= 1.0 + tolerance]
+        residual_norm, _, eta, phase_fraction, left, right, residual = (valid or candidates)[0]
+        if residual_norm > tolerance:
+            raise ValueError(
+                "No surrogate tie-line matched global composition "
+                f"{target.tolist()} within tolerance {tolerance}; best residual was {residual_norm} at eta={eta}."
+            )
+        if phase_fraction < -tolerance or phase_fraction > 1.0 + tolerance:
+            raise ValueError(
+                "Global composition lies on a surrogate tie-line extension, not inside the two-phase segment: "
+                f"composition={target.tolist()}, eta={eta}, phase_fraction={phase_fraction}."
+            )
+
+        phase_fraction = float(np.clip(phase_fraction, 0.0, 1.0))
+        left, right = left.copy(), right.copy()
+        if not returnMeta:
+            return left, right
+        metadata = {
+            "eta": eta,
+            "phase_fraction": phase_fraction,
+            "phase_fraction_phase": self.tieline_phases[1],
+            "endpoint_phases": self.tieline_phases,
+            "global_composition": target.copy(),
+            "residual": residual.copy(),
+            "residual_norm": residual_norm,
+            "endpoints": (
+                {"phase": self.tieline_phases[0], "composition": left.copy()},
+                {"phase": self.tieline_phases[1], "composition": right.copy()},
+            ),
+        }
+        return left, right, metadata
 
     def getInterfacialComposition(self, eta, T=None, returnMeta=False, **kwargs):
         """Returns surrogate tie-line compositions for thermodynamics-like APIs."""
