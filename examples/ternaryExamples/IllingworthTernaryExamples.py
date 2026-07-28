@@ -56,7 +56,10 @@ TDB_PATH = EXAMPLES_DIR / "FeCrNi_Lee1993_L_style_ternary_checked_withMobility.t
 PROBE_START = np.array([0.1233, 0.0001], dtype=np.float64)
 PROBE_END = np.array([0.4993, 0.2257], dtype=np.float64)
 ETA_SAMPLES = np.linspace(0.0, 1.0, 21)
-INITIAL_ETA = 0.5
+INITIAL_ETA_METHOD = ["stefan_cross_brentq", "instantaneous_balance"][1]
+INITIAL_ETA_BRACKET = (1e-3, 1-1e-3)
+INITIAL_ETA_GUESS = None
+INITIAL_VELOCITY_GUESS = None
 
 LENGTH = 30.0e-6
 NODES = 31
@@ -93,7 +96,7 @@ else:
 SOLVE_TIME = [3600*1e0, 3600*1e2][0]
 PHASE_A_NODES = None
 PHASE_B_NODES = None
-TOLERANCE = 1.0e-14
+TOLERANCE = 1.0e-17
 MAX_ITERATIONS = 25
 VERBOSE = True
 VERBOSE_INTERVAL = 10
@@ -266,7 +269,10 @@ def build_model(tieline_surrogate, fixed_diffusivity):
         temperature=TEMPERATURE,
         interfacePosition=INTERFACE_POSITION,
         interface_equilibrium=tieline_surrogate,
-        initial_eta=INITIAL_ETA,
+        initial_eta_method=INITIAL_ETA_METHOD,
+        initial_eta_bracket=INITIAL_ETA_BRACKET,
+        initial_eta_guess=INITIAL_ETA_GUESS,
+        initial_velocity_guess=INITIAL_VELOCITY_GUESS,
         time_step=time_step_options["time_step"],
         dt_mode=time_step_options["dt_mode"],
         semiLog_dt=time_step_options["semiLog_dt"],
@@ -277,6 +283,26 @@ def build_model(tieline_surrogate, fixed_diffusivity):
         max_iterations=MAX_ITERATIONS,
         record=True,
     )
+
+
+def print_initial_eta_estimate(model):
+    """Prints the model-selected initial eta and interface compositions."""
+    estimate = model.initialEtaEstimate
+    if estimate is None:
+        print("Initial eta estimate is not available until model.setup() or model.solve() has run.")
+        return
+    print(f"Initial eta method = {estimate.method}")
+    print(f"Estimated initial eta = {estimate.eta}")
+    print(f"Initial Stefan residual norm = {estimate.residual_norm}")
+    print(f"Initial fitted interface velocity = {estimate.velocity}")
+    if estimate.branch is not None:
+        print(f"Initial swept-inventory branch = {estimate.branch}")
+    print(f"Initial residual vector [CR, NI] = {estimate.residual}")
+    print(f"Initial flux imbalance [CR, NI] = {estimate.flux_delta}")
+    print(f"Initial eta bracket = {estimate.bracket}")
+    print(f"Initial eta solver iterations/function calls = {estimate.iterations}/{estimate.function_calls}")
+    print(f"{TIELINE_PHASES[0]} interface composition [CR, NI] = {estimate.left_interface_composition}")
+    print(f"{TIELINE_PHASES[1]} interface composition [CR, NI] = {estimate.right_interface_composition}")
 
 
 def _show_if_interactive():
@@ -324,6 +350,10 @@ def plot_integrated_inventory(model, *, scale_time=1.0):
         ax.set_ylabel(f"{element} average composition", color=color)
         ax.tick_params(axis="y", labelcolor=color)
         lines.append(line)
+        compDiff_arr = average_composition[:, i]-average_composition[0, i]
+        compDiffPercent_arr = (compDiff_arr/average_composition[0, i])*100
+        print(f"{element} min and max comp diff from initial:         {compDiff_arr.min()}, {compDiff_arr.max()}")
+        print(f"{element} min and max percent comp diff from initial: {compDiffPercent_arr.min()}%, {compDiffPercent_arr.max()}%")
 
     ax_left.set_xscale("log")
     ax_left.set_xlabel(f"time / {scale_time:g}")
@@ -371,12 +401,10 @@ def plot_interface_compositions(model, tieline_surrogate, *, scale_time=1.0):
 
 source_thermodynamics = build_source_thermodynamics()
 tieline_surrogate = build_tieline_surrogate(source_thermodynamics)
-initial_left_interface, initial_right_interface = tieline_surrogate.interface_compositions(INITIAL_ETA)
 
 print(f"Built tie-line surrogate with eta bounds {tieline_surrogate.eta_bounds}.")
-print(f"Initial eta = {INITIAL_ETA}")
-print(f"{TIELINE_PHASES[0]} interface composition [CR, NI] = {initial_left_interface}")
-print(f"{TIELINE_PHASES[1]} interface composition [CR, NI] = {initial_right_interface}")
+initial_eta_bracket_to_print = tieline_surrogate.eta_bounds if INITIAL_ETA_BRACKET is None else INITIAL_ETA_BRACKET
+print(f"Initial eta will be estimated with method '{INITIAL_ETA_METHOD}' over {initial_eta_bracket_to_print}.")
 
 
 # %%
@@ -396,7 +424,7 @@ fixed_diffusivity = FixedMatrixTernaryDiffusivity(
 model = build_model(tieline_surrogate, fixed_diffusivity)
 print("Built MovingBoundaryIllingworthTernaryFD1DModel.")
 print(f"Initial interface position = {INTERFACE_POSITION}")
-print(f"Initial inventory estimate will be available after setup/solve.")
+print("Initial eta and inventory estimates will be available after setup/solve.")
 
 
 # %%
@@ -410,6 +438,7 @@ if RUN_SOLVE:
         vIt=VERBOSE_INTERVAL,
         minDtFrac=MIN_DT_FRAC,
     )
+    print_initial_eta_estimate(model)
     print(f"Finished solve at t = {model.currentTime}.")
     print(f"Final interface position = {model.getInterfacePosition()}")
     print(f"Final integrated inventory [CR, NI] = {model.getTotalInventory()}")

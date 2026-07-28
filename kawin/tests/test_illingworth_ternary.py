@@ -3,7 +3,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from kawin.diffusion import MovingBoundaryIllingworthTernaryFD1DModel, TernaryMovingBoundaryThermodynamicsSurrogate
+from kawin.diffusion import (
+    MovingBoundaryIllingworthTernaryFD1DModel,
+    TernaryMovingBoundaryThermodynamicsSurrogate,
+    estimate_initial_eta_from_instantaneous_balance,
+    estimate_initial_eta_from_stefan_residual,
+)
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import solve_illingworth_block_tridiagonal
 
@@ -16,6 +21,36 @@ class _ConstantTernaryThermodynamics:
         if phase == "ALPHA":
             return np.asarray([[1.0e-15, 1.0e-16], [2.0e-16, 0.8e-15]], dtype=np.float64)
         return np.asarray([[0.7e-15, -0.5e-16], [0.1e-16, 1.2e-15]], dtype=np.float64)
+
+
+class _IdentityTernaryThermodynamics:
+    def __init__(self, invalid=False):
+        self.invalid = invalid
+
+    def clearCache(self):
+        pass
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        if self.invalid:
+            return np.asarray([[1.0, 0.0], [0.0, -1.0]], dtype=np.float64)
+        return np.eye(2, dtype=np.float64)
+
+
+class _LinearInterfaceEquilibrium:
+    eta_bounds = (0.0, 1.0)
+
+    def __init__(self, mode="valid"):
+        self.mode = mode
+
+    def interface_compositions(self, eta):
+        eta = float(eta)
+        left = np.asarray([0.20 + 0.10 * eta, 0.10], dtype=np.float64)
+        right = np.asarray([0.30 + 0.10 * eta, 0.15], dtype=np.float64)
+        if self.mode == "nonfinite":
+            left[0] = np.nan
+        elif self.mode == "degenerate":
+            right = left.copy()
+        return left, right
 
 
 class _TieLineSamplingThermodynamics:
@@ -86,30 +121,211 @@ def test_ternary_block_solve_preserves_component_coupling():
     assert np.allclose(actual, expected)
 
 
-def test_ternary_illingworth_fixed_interface_no_motion_step_conserves_inventory():
+def test_initial_eta_estimator_selects_known_stefan_minimum():
+    eta_true = 0.5
+    left = np.asarray([0.20 + 0.10 * eta_true, 0.10], dtype=np.float64)
+    right = np.asarray([0.30 + 0.10 * eta_true, 0.15], dtype=np.float64)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.5, left, right), ["X", "Y"])]))
+
+    estimate = estimate_initial_eta_from_stefan_residual(
+        composition=mesh.y,
+        z=mesh.z,
+        interface_position=0.5,
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_IdentityTernaryThermodynamics(),
+        temperature=1000.0,
+        interface_equilibrium=_LinearInterfaceEquilibrium(),
+        transformed_u_grid=np.linspace(0.0, 1.0, 5),
+        transformed_v_grid=np.linspace(0.0, 1.0, 5),
+        eta_bracket=(0.0, 1.0),
+    )
+
+    assert np.isclose(estimate.eta, eta_true)
+    assert np.isclose(estimate.residual_norm, 0.0)
+    assert estimate.residual.shape == (2,)
+    assert estimate.flux_delta.shape == (2,)
+    assert np.allclose(estimate.left_interface_composition, left)
+    assert np.allclose(estimate.right_interface_composition, right)
+    assert estimate.converged
+    assert estimate.bracket == (0.0, 1.0)
+
+
+def test_initial_eta_estimator_uses_transformed_adjacent_nodes_not_interface_endpoint():
+    eta_true = 0.5
+    eta_bad_endpoint = 0.0
+    z = np.asarray([0.0, 0.25, 0.5, 0.75, 1.0], dtype=np.float64)
+    equilibrium = _LinearInterfaceEquilibrium()
+    left_true, right_true = equilibrium.interface_compositions(eta_true)
+    left_bad, _ = equilibrium.interface_compositions(eta_bad_endpoint)
+    composition = np.asarray(
+        [
+            left_true,
+            left_true,
+            left_bad,
+            right_true,
+            right_true,
+        ],
+        dtype=np.float64,
+    )
+
+    estimate = estimate_initial_eta_from_stefan_residual(
+        composition=composition,
+        z=z,
+        interface_position=0.5,
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_IdentityTernaryThermodynamics(),
+        temperature=1000.0,
+        interface_equilibrium=equilibrium,
+        transformed_u_grid=np.asarray([0.0, 0.5, 1.0]),
+        transformed_v_grid=np.asarray([0.0, 0.5, 1.0]),
+        eta_bracket=(0.0, 1.0),
+    )
+
+    assert np.isclose(estimate.eta, eta_true)
+
+
+def test_instantaneous_balance_estimator_solves_velocity_and_eta():
+    eta_true = 0.25
+    left, right = _LinearInterfaceEquilibrium().interface_compositions(eta_true)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.5, left, right), ["X", "Y"])]))
+
+    estimate = estimate_initial_eta_from_instantaneous_balance(
+        composition=mesh.y,
+        z=mesh.z,
+        interface_position=0.5,
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_IdentityTernaryThermodynamics(),
+        temperature=1000.0,
+        interface_equilibrium=_LinearInterfaceEquilibrium(),
+        transformed_u_grid=np.linspace(0.0, 1.0, 5),
+        transformed_v_grid=np.linspace(0.0, 1.0, 5),
+        eta_bracket=(0.0, 1.0),
+    )
+
+    assert np.isclose(estimate.eta, eta_true, atol=1e-10)
+    assert np.isclose(estimate.residual_norm, 0.0, atol=1e-10)
+    assert np.isclose(estimate.velocity, 0.0, atol=1e-10)
+    assert estimate.method == "instantaneous_balance"
+    assert estimate.branch in {"positive", "negative"}
+    assert estimate.converged
+
+
+def test_ternary_illingworth_rejects_fixed_interface_compositions():
     left = np.asarray([0.20, 0.10], dtype=np.float64)
     right = np.asarray([0.30, 0.15], dtype=np.float64)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.5, left, right), ["X", "Y"])]))
+
+    with pytest.raises(ValueError, match="eta-capable"):
+        MovingBoundaryIllingworthTernaryFD1DModel(
+            mesh=mesh,
+            elements=["Z", "X", "Y"],
+            phases=["ALPHA", "BETA"],
+            thermodynamics=_ConstantTernaryThermodynamics(),
+            temperature=1000.0,
+            interfacePosition=0.5,
+            interface_compositions=(left, right),
+            time_step=1.0,
+            record=True,
+        )
+
+
+def test_initial_eta_estimator_rejects_collapsed_bounds():
+    class _CollapsedEquilibrium(_LinearInterfaceEquilibrium):
+        eta_bounds = (0.0, 0.0)
+
+    with pytest.raises(ValueError, match="eta_bounds"):
+        estimate_initial_eta_from_stefan_residual(
+            composition=np.asarray([[0.2, 0.1], [0.3, 0.15], [0.3, 0.15]], dtype=np.float64),
+            z=np.asarray([0.0, 0.5, 1.0], dtype=np.float64),
+            interface_position=0.5,
+            phases=["ALPHA", "BETA"],
+            thermodynamics=_IdentityTernaryThermodynamics(),
+            temperature=1000.0,
+            interface_equilibrium=_CollapsedEquilibrium(),
+            transformed_u_grid=np.asarray([0.0, 0.5, 1.0]),
+            transformed_v_grid=np.asarray([0.0, 0.5, 1.0]),
+        )
+
+
+@pytest.mark.parametrize(
+    "equilibrium, thermodynamics, match",
+    [
+        (_LinearInterfaceEquilibrium(mode="nonfinite"), _IdentityTernaryThermodynamics(), "non-finite"),
+        (_LinearInterfaceEquilibrium(mode="degenerate"), _IdentityTernaryThermodynamics(), "degenerate"),
+        (_LinearInterfaceEquilibrium(), _IdentityTernaryThermodynamics(invalid=True), "positive real eigenvalues"),
+    ],
+)
+def test_initial_eta_estimator_rejects_invalid_candidates(equilibrium, thermodynamics, match):
+    with pytest.raises(ValueError, match=match):
+        estimate_initial_eta_from_stefan_residual(
+            composition=np.asarray([[0.2, 0.1], [0.25, 0.1], [0.35, 0.15], [0.35, 0.15]], dtype=np.float64),
+            z=np.asarray([0.0, 0.25, 0.75, 1.0], dtype=np.float64),
+            interface_position=0.5,
+            phases=["ALPHA", "BETA"],
+            thermodynamics=thermodynamics,
+            temperature=1000.0,
+            interface_equilibrium=equilibrium,
+            transformed_u_grid=np.asarray([0.0, 0.5, 1.0]),
+            transformed_v_grid=np.asarray([0.0, 0.5, 1.0]),
+            eta_bracket=(0.0, 1.0),
+        )
+
+
+def test_ternary_illingworth_setup_estimates_and_records_initial_eta():
+    eta_true = 0.5
+    left, right = _LinearInterfaceEquilibrium().interface_compositions(eta_true)
     mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
     mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.5, left, right), ["X", "Y"])]))
     model = MovingBoundaryIllingworthTernaryFD1DModel(
         mesh=mesh,
         elements=["Z", "X", "Y"],
         phases=["ALPHA", "BETA"],
-        thermodynamics=_ConstantTernaryThermodynamics(),
+        thermodynamics=_IdentityTernaryThermodynamics(),
         temperature=1000.0,
         interfacePosition=0.5,
-        interface_compositions=(left, right),
+        interface_equilibrium=_LinearInterfaceEquilibrium(),
+        initial_eta_bracket=(0.0, 1.0),
         time_step=1.0,
         record=True,
     )
 
-    model.solve(1.0)
+    model.setup()
 
     assert np.isclose(model.getInterfacePosition(), 0.5)
-    assert np.isclose(model.getInterfaceEta(), 0.0)
-    assert np.allclose(model.getTotalInventory(), np.asarray([0.25, 0.125]))
-    assert np.allclose(model.checkConservation(1e-12), np.zeros(2))
-    assert model.getCompositions().shape == (21, 3)
+    assert np.isclose(model.initialEta, eta_true)
+    assert np.isclose(model.getInterfaceEta(), eta_true)
+    assert np.isclose(model.etaData._y[0], eta_true)
+    assert np.allclose(model.getInterfaceCompositions()[0], left)
+    assert np.allclose(model.getInterfaceCompositions()[1], right)
+    assert model.initialEtaEstimate is not None
+
+
+def test_ternary_illingworth_can_use_instantaneous_initial_eta_method():
+    eta_true = 0.25
+    left, right = _LinearInterfaceEquilibrium().interface_compositions(eta_true)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.5, left, right), ["X", "Y"])]))
+    model = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_IdentityTernaryThermodynamics(),
+        temperature=1000.0,
+        interfacePosition=0.5,
+        interface_equilibrium=_LinearInterfaceEquilibrium(),
+        initial_eta_method="instantaneous_balance",
+        initial_eta_bracket=(0.0, 1.0),
+        time_step=1.0,
+        record=True,
+    )
+
+    model.setup()
+
+    assert np.isclose(model.initialEta, eta_true, atol=1e-10)
+    assert model.initialEtaEstimate.method == "instantaneous_balance"
 
 
 def _build_surrogate(**kwargs):
@@ -203,7 +419,7 @@ def test_ternary_illingworth_accepts_surrogate_for_thermo_and_equilibrium():
         temperature=1000.0,
         interfacePosition=0.5,
         interface_equilibrium=surrogate,
-        initial_eta=0.0,
+        initial_eta_bracket=(0.0, 1.0),
         time_step=1.0,
         record=True,
     )
