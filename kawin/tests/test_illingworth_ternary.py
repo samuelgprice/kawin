@@ -18,6 +18,12 @@ from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import (
     _validate_ternary_diffusivity_matrix,
 )
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
+    _BLOCK_PIVOT_RCOND_LIMIT,
+    _BLOCK_PIVOT_STATUS_NONFINITE,
+    _BLOCK_PIVOT_STATUS_SINGULAR,
+    _BLOCK_PIVOT_STATUS_VALID,
+    _check_block_pivot,
+    _estimate_2x2_rcond,
     integrate_planar_transformed_profile_components,
     solve_illingworth_block_tridiagonal,
 )
@@ -158,6 +164,56 @@ def _block_times_vector(block, vector):
         ],
         dtype=np.float64,
     )
+
+
+def _assemble_test_block_tridiagonal(lower, diagonal, upper):
+    n_nodes = diagonal.shape[0]
+    matrix = np.zeros((2 * n_nodes, 2 * n_nodes), dtype=np.float64)
+    for node in range(n_nodes):
+        rows = slice(2 * node, 2 * node + 2)
+        matrix[rows, rows] = diagonal[node]
+        if node > 0:
+            matrix[rows, slice(2 * (node - 1), 2 * node)] = lower[node]
+        if node < n_nodes - 1:
+            matrix[rows, slice(2 * (node + 1), 2 * (node + 2))] = upper[node]
+    return matrix
+
+
+def _representative_block_tridiagonal_system(n_nodes=4):
+    lower = np.zeros((n_nodes, 2, 2), dtype=np.float64)
+    diagonal = np.zeros((n_nodes, 2, 2), dtype=np.float64)
+    upper = np.zeros((n_nodes, 2, 2), dtype=np.float64)
+    for node in range(n_nodes):
+        diagonal[node] = np.asarray(
+            [[4.0 + 0.25 * node, 0.35], [-0.20, 3.5 + 0.15 * node]],
+            dtype=np.float64,
+        )
+        if node > 0:
+            lower[node] = np.asarray([[-0.30, 0.08], [0.04, -0.25]], dtype=np.float64)
+        if node < n_nodes - 1:
+            upper[node] = np.asarray([[-0.18, -0.05], [0.06, -0.22]], dtype=np.float64)
+    return lower, diagonal, upper
+
+
+def _reference_2x2_rcond(matrix):
+    scale = float(np.max(np.abs(matrix)))
+    if not np.isfinite(scale) or scale <= 0.0:
+        return 0.0
+    scaled = matrix / scale
+    a = float(scaled[0, 0])
+    b = float(scaled[0, 1])
+    c = float(scaled[1, 0])
+    d = float(scaled[1, 1])
+    determinant = a * d - b * c
+    matrix_norm = max(abs(a) + abs(b), abs(c) + abs(d))
+    inverse_adjugate_norm = max(abs(d) + abs(b), abs(c) + abs(a))
+    denominator = matrix_norm * inverse_adjugate_norm
+    if denominator <= 0.0 or not np.isfinite(denominator):
+        return 0.0
+    rcond = abs(determinant) / denominator
+    if not np.isfinite(rcond):
+        return 0.0
+    return float(rcond)
 
 
 def _legacy_interface_residual(model, p_future, q_future, s, future_s, dt, c_left, c_right, D_left, D_right, motion_branch):
@@ -371,6 +427,228 @@ def test_ternary_block_solve_preserves_component_coupling():
     actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
 
     assert np.allclose(actual, expected)
+
+
+@pytest.mark.parametrize(
+    "matrix",
+    [
+        np.asarray([[4.0, 0.35], [-0.20, 3.5]], dtype=np.float64),
+        np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64),
+        np.asarray([[1.0, 1.0], [1.0, 1.0 + 1.0e-10]], dtype=np.float64),
+        np.asarray([[1.0, 0.0], [0.0, 2.0e-12]], dtype=np.float64),
+        np.asarray([[0.0, 2.0], [-3.0, 0.5]], dtype=np.float64),
+    ],
+)
+def test_ternary_block_rcond_matches_reference_expression(matrix):
+    actual, status = _estimate_2x2_rcond(matrix)
+    expected = _reference_2x2_rcond(matrix)
+
+    assert status == _BLOCK_PIVOT_STATUS_VALID
+    assert actual == pytest.approx(expected, rel=1.0e-15, abs=0.0)
+
+
+@pytest.mark.parametrize("scale", [1.0e-250, 1.0e-125, 1.0, 1.0e125, 1.0e250])
+def test_ternary_block_rcond_is_invariant_to_global_scaling(scale):
+    matrix = np.asarray([[1.0, -3.0], [2.0, 4.0]], dtype=np.float64)
+    scaled_rcond, scaled_status = _estimate_2x2_rcond(scale * matrix)
+    reference_rcond, reference_status = _estimate_2x2_rcond(matrix)
+
+    assert scaled_status == reference_status == _BLOCK_PIVOT_STATUS_VALID
+    assert scaled_rcond == pytest.approx(reference_rcond)
+
+
+@pytest.mark.parametrize(
+    "matrix",
+    [
+        np.zeros((2, 2), dtype=np.float64),
+        np.asarray([[np.nan, 0.0], [0.0, 1.0]], dtype=np.float64),
+        np.asarray([[np.inf, 0.0], [0.0, 1.0]], dtype=np.float64),
+        np.asarray([[1.0, 0.0], [0.0, -np.inf]], dtype=np.float64),
+    ],
+)
+def test_ternary_block_rcond_rejects_zero_and_nonfinite_matrices(matrix):
+    rcond, status = _estimate_2x2_rcond(matrix)
+
+    assert rcond == 0.0
+    assert status in (_BLOCK_PIVOT_STATUS_NONFINITE, _BLOCK_PIVOT_STATUS_SINGULAR)
+
+
+def test_ternary_block_rcond_reports_finite_exactly_singular_matrix_as_singular():
+    matrix = np.asarray([[1.0, 2.0], [2.0, 4.0]], dtype=np.float64)
+
+    rcond, status = _estimate_2x2_rcond(matrix)
+
+    assert rcond == 0.0
+    assert status == _BLOCK_PIVOT_STATUS_SINGULAR
+
+
+@pytest.mark.parametrize(
+    "matrix, match, expected_status",
+    [
+        (np.asarray([[np.nan, 0.0], [0.0, 1.0]], dtype=np.float64), "nonfinite", _BLOCK_PIVOT_STATUS_NONFINITE),
+        (np.asarray([[np.inf, 0.0], [0.0, 1.0]], dtype=np.float64), "nonfinite", _BLOCK_PIVOT_STATUS_NONFINITE),
+        (np.asarray([[-np.inf, 0.0], [0.0, 1.0]], dtype=np.float64), "nonfinite", _BLOCK_PIVOT_STATUS_NONFINITE),
+        (np.zeros((2, 2), dtype=np.float64), "singular", _BLOCK_PIVOT_STATUS_SINGULAR),
+    ],
+)
+def test_ternary_block_pivot_messages_distinguish_nonfinite_and_singular(matrix, match, expected_status):
+    rcond, status = _estimate_2x2_rcond(matrix)
+
+    assert rcond == 0.0
+    assert status == expected_status
+    with pytest.raises(np.linalg.LinAlgError, match=match):
+        _check_block_pivot(matrix, "message probe")
+
+
+def test_ternary_block_rcond_threshold_decisions_are_preserved():
+    accepted = np.asarray([[1.0, 0.0], [0.0, 1.1 * _BLOCK_PIVOT_RCOND_LIMIT]], dtype=np.float64)
+    rejected = np.asarray([[1.0, 0.0], [0.0, 0.9 * _BLOCK_PIVOT_RCOND_LIMIT]], dtype=np.float64)
+    nearly_singular = np.asarray([[1.0, 0.0], [0.0, 0.5 * _BLOCK_PIVOT_RCOND_LIMIT]], dtype=np.float64)
+    accepted_rcond, accepted_status = _estimate_2x2_rcond(accepted)
+    rejected_rcond, rejected_status = _estimate_2x2_rcond(rejected)
+    nearly_singular_rcond, nearly_singular_status = _estimate_2x2_rcond(nearly_singular)
+
+    assert accepted_status == _BLOCK_PIVOT_STATUS_VALID
+    assert accepted_rcond > _BLOCK_PIVOT_RCOND_LIMIT
+    _check_block_pivot(accepted, "accepted threshold probe")
+    assert rejected_status == _BLOCK_PIVOT_STATUS_VALID
+    assert rejected_rcond < _BLOCK_PIVOT_RCOND_LIMIT
+    with pytest.raises(np.linalg.LinAlgError, match="ill-conditioned"):
+        _check_block_pivot(rejected, "rejected threshold probe")
+    assert nearly_singular_status == _BLOCK_PIVOT_STATUS_VALID
+    assert 0.0 < nearly_singular_rcond < _BLOCK_PIVOT_RCOND_LIMIT
+
+
+def test_ternary_block_pivot_success_path_avoids_numpy_reductions_and_linalg(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("pivot validation should use scalar arithmetic in the hot path.")
+
+    monkeypatch.setattr(np, "max", forbidden)
+    monkeypatch.setattr(np, "abs", forbidden)
+    monkeypatch.setattr(np, "all", forbidden)
+    monkeypatch.setattr(np, "isfinite", forbidden)
+    monkeypatch.setattr(np.linalg, "cond", forbidden)
+    monkeypatch.setattr(np.linalg, "svd", forbidden)
+    monkeypatch.setattr(np.linalg, "inv", forbidden)
+    matrix = np.asarray([[4.0, 0.35], [-0.20, 3.5]], dtype=np.float64)
+    rcond, status = _estimate_2x2_rcond(matrix)
+
+    assert status == _BLOCK_PIVOT_STATUS_VALID
+    assert rcond > _BLOCK_PIVOT_RCOND_LIMIT
+    _check_block_pivot(matrix, "hot path probe")
+
+
+def test_ternary_block_solve_matches_dense_nonsymmetric_system():
+    lower, diagonal, upper = _representative_block_tridiagonal_system()
+    matrix = _assemble_test_block_tridiagonal(lower, diagonal, upper)
+    rhs = np.asarray([0.2, -0.1, 0.4, 0.6, -0.3, 0.7, 0.9, -0.5], dtype=np.float64)
+    expected = np.linalg.solve(matrix, rhs).reshape(4, 2)
+
+    actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs.reshape(4, 2))
+
+    assert np.allclose(actual, expected)
+
+
+def test_ternary_block_solve_supports_multiple_right_hand_sides():
+    lower, diagonal, upper = _representative_block_tridiagonal_system()
+    matrix = _assemble_test_block_tridiagonal(lower, diagonal, upper)
+    rhs = np.asarray(
+        [
+            [0.20, 0.40, -0.10],
+            [-0.10, 0.30, 0.50],
+            [0.40, -0.20, 0.10],
+            [0.60, 0.25, -0.30],
+            [-0.30, 0.75, 0.20],
+            [0.70, -0.15, 0.45],
+            [0.90, 0.10, -0.40],
+            [-0.50, 0.55, 0.35],
+        ],
+        dtype=np.float64,
+    )
+    expected = np.linalg.solve(matrix, rhs).reshape(4, 2, 3)
+
+    actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs.reshape(4, 2, 3))
+
+    assert np.allclose(actual, expected)
+
+
+@pytest.mark.parametrize("scale", [1.0e-200, 1.0e-120, 1.0, 1.0e120, 1.0e200])
+def test_ternary_block_solve_is_invariant_to_global_equation_scaling(scale):
+    lower, diagonal, upper = _representative_block_tridiagonal_system()
+    matrix = _assemble_test_block_tridiagonal(lower, diagonal, upper)
+    rhs = np.asarray([0.2, -0.1, 0.4, 0.6, -0.3, 0.7, 0.9, -0.5], dtype=np.float64)
+    expected = np.linalg.solve(matrix, rhs).reshape(4, 2)
+
+    actual = solve_illingworth_block_tridiagonal(scale * lower, scale * diagonal, scale * upper, scale * rhs.reshape(4, 2))
+
+    assert np.allclose(actual, expected)
+
+
+def test_ternary_block_solve_does_not_call_dense_condition_check_on_success(monkeypatch):
+    lower, diagonal, upper = _representative_block_tridiagonal_system()
+    rhs = np.asarray([0.2, -0.1, 0.4, 0.6, -0.3, 0.7, 0.9, -0.5], dtype=np.float64).reshape(4, 2)
+
+    def fail_cond(matrix):
+        raise AssertionError("np.linalg.cond should not be called on the block Thomas success path.")
+
+    monkeypatch.setattr(np.linalg, "cond", fail_cond)
+
+    actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+
+    assert np.all(np.isfinite(actual))
+
+
+def test_ternary_block_solve_falls_back_when_intermediate_thomas_pivot_is_singular_but_full_system_is_solvable():
+    identity = np.eye(2, dtype=np.float64)
+    lower = np.zeros((3, 2, 2), dtype=np.float64)
+    diagonal = np.repeat(identity[np.newaxis, :, :], 3, axis=0)
+    upper = np.zeros((3, 2, 2), dtype=np.float64)
+    upper[0] = identity
+    upper[1] = identity
+    lower[1] = identity
+    lower[2] = identity
+    matrix = _assemble_test_block_tridiagonal(lower, diagonal, upper)
+    rhs = np.asarray([0.2, -0.1, 0.4, 0.6, -0.3, 0.7], dtype=np.float64)
+    expected = np.linalg.solve(matrix, rhs).reshape(3, 2)
+
+    actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs.reshape(3, 2))
+
+    assert np.allclose(actual, expected)
+
+
+def test_ternary_block_solve_raises_for_genuinely_singular_system():
+    lower = np.zeros((2, 2, 2), dtype=np.float64)
+    diagonal = np.zeros((2, 2, 2), dtype=np.float64)
+    upper = np.zeros((2, 2, 2), dtype=np.float64)
+    rhs = np.ones((2, 2), dtype=np.float64)
+
+    with pytest.raises(np.linalg.LinAlgError, match="full block-tridiagonal system is singular"):
+        solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+
+
+def test_ternary_block_solve_rejects_nonfinite_coefficients_and_rhs():
+    lower, diagonal, upper = _representative_block_tridiagonal_system()
+    rhs = np.ones((4, 2), dtype=np.float64)
+    bad_diagonal = diagonal.copy()
+    bad_diagonal[0, 0, 0] = np.nan
+
+    with pytest.raises(ValueError, match="coefficients must be finite"):
+        solve_illingworth_block_tridiagonal(lower, bad_diagonal, upper, rhs)
+
+    bad_rhs = rhs.copy()
+    bad_rhs[0, 0] = np.inf
+    with pytest.raises(ValueError, match="rhs must be finite"):
+        solve_illingworth_block_tridiagonal(lower, diagonal, upper, bad_rhs)
+
+
+def test_ternary_block_solve_validates_input_shapes():
+    lower, diagonal, upper = _representative_block_tridiagonal_system()
+
+    with pytest.raises(ValueError, match="matching shapes"):
+        solve_illingworth_block_tridiagonal(lower[:-1], diagonal, upper, np.ones((4, 2)))
+
+    with pytest.raises(ValueError, match="rhs must have shape"):
+        solve_illingworth_block_tridiagonal(lower, diagonal, upper, np.ones((4, 3)))
 
 
 @pytest.mark.parametrize(
