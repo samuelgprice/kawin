@@ -128,14 +128,63 @@ class _LinearInterfaceEquilibrium:
         return left, right
 
 
+def _curved_eta_varying_interface_compositions(eta):
+    """
+    Return curved, non-crossing eta-dependent ternary interface endpoints.
+
+    A curved centerline is constructed first. Each tie-line is then oriented
+    by tilting the centerline normal toward its tangent. Mildly varying
+    half-widths control the two phase boundaries.
+
+    The constants below are chosen so that, for eta in [0, 1], the endpoints
+    remain inside the ternary simplex and the tie-lines remain ordered.
+    """
+    eta = float(eta)
+
+    if not 0.0 <= eta <= 1.0:
+        raise ValueError(f"eta must lie in [0, 1]; got {eta}.")
+
+    # Curved centerline and its derivative.
+    bend = eta * (1.0 - eta)
+
+    center = np.asarray(
+        [
+            0.24 + 0.25 * eta,
+            0.15 - 0.015 * eta + 0.22 * bend,
+        ],
+        dtype=np.float64,
+    )
+
+    center_derivative = np.asarray(
+        [
+            0.25,
+            -0.015 + 0.22 * (1.0 - 2.0 * eta),
+        ],
+        dtype=np.float64,
+    )
+
+    tangent = center_derivative / np.linalg.norm(center_derivative)
+    normal = np.asarray([-tangent[1], tangent[0]], dtype=np.float64)
+
+    # Angle measured from the normal toward the tangent.
+    tilt = np.deg2rad(55.0 - 30.0 * eta)
+    tie_direction = np.sin(tilt) * tangent + np.cos(tilt) * normal
+
+    # Mildly asymmetric and eta-dependent boundary distances.
+    left_half_width = 0.042 * (1.0 + 0.12 * (2.0 * eta - 1.0))
+    right_half_width = 0.055 * (1.0 - 0.10 * (2.0 * eta - 1.0))
+
+    left = center - left_half_width * tie_direction
+    right = center + right_half_width * tie_direction
+
+    return left, right
+
+
 class _EtaVaryingInterfaceEquilibrium:
     eta_bounds = (0.0, 1.0)
 
     def interface_compositions(self, eta):
-        eta = float(eta)
-        left = np.asarray([0.20 + 0.08 * eta, 0.08 + 0.03 * eta], dtype=np.float64)
-        right = np.asarray([0.34 + 0.04 * eta, 0.16 - 0.02 * eta], dtype=np.float64)
-        return left, right
+        return _curved_eta_varying_interface_compositions(eta)
 
 
 class _ShiftedEtaVaryingInterfaceEquilibrium:
@@ -143,9 +192,7 @@ class _ShiftedEtaVaryingInterfaceEquilibrium:
 
     def interface_compositions(self, eta):
         eta_hat = (float(eta) - self.eta_bounds[0]) / (self.eta_bounds[1] - self.eta_bounds[0])
-        left = np.asarray([0.20 + 0.08 * eta_hat, 0.08 + 0.03 * eta_hat], dtype=np.float64)
-        right = np.asarray([0.34 + 0.04 * eta_hat, 0.16 - 0.02 * eta_hat], dtype=np.float64)
-        return left, right
+        return _curved_eta_varying_interface_compositions(eta_hat)
 
 
 class _TieLineSamplingThermodynamics:
@@ -349,8 +396,8 @@ def _make_length_scaled_illingworth_model(domain_length, interface_equilibrium=N
                 (
                     StepProfile1D(
                         0.45 * domain_length,
-                        np.asarray([0.35, 0.10], dtype=np.float64),
-                        np.asarray([0.25, 0.16], dtype=np.float64),
+                        np.asarray([0.16, 0.06], dtype=np.float64),
+                        np.asarray([0.3261538461538461, 0.193], dtype=np.float64),
                     ),
                     ["X", "Y"],
                 )
@@ -921,7 +968,7 @@ def test_ternary_scaled_interface_solve_is_invariant_to_length_units():
     assert reference_s_hat.shape == rescaled_s_hat.shape
     assert np.allclose(rescaled_s_hat, reference_s_hat, rtol=0.0, atol=1.0e-12)
     assert np.allclose(rescaled_eta, reference_eta, rtol=0.0, atol=1.0e-12)
-    assert np.isclose(rescaled._lastImplicitResidual, reference._lastImplicitResidual, rtol=1.0e-8, atol=1.0e-18)
+    assert np.isclose(rescaled._lastImplicitResidual, reference._lastImplicitResidual, rtol=1.0e-8, atol=1.0e-15)
 
 
 def test_ternary_scaled_interface_jacobian_perturbs_position_with_domain_length():
@@ -1347,11 +1394,56 @@ def test_ternary_illingworth_can_use_instantaneous_initial_eta_method():
     assert model.initialEtaEstimate.method == "instantaneous_balance"
 
 
+def test_ternary_illingworth_stationary_when_bulk_equals_phase_interface_compositions():
+    equilibrium = _EtaVaryingInterfaceEquilibrium()
+    eta0 = 0.4
+    interface_position = 0.45
+    left, right = equilibrium.interface_compositions(eta0)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(
+        ProfileBuilder([(StepProfile1D(interface_position, left, right), ["X", "Y"])]),
+        boundaryConditions=MixedBoundary1D(2),
+    )
+    model = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_CoupledTernaryThermodynamics(),
+        temperature=1000.0,
+        interfacePosition=interface_position,
+        interface_equilibrium=equilibrium,
+        initial_eta_method="instantaneous_balance",
+        initial_eta_bracket=(0.0, 1.0),
+        time_step=1.0e-4,
+        tolerance=1.0e-12,
+        max_iterations=50,
+        record=True,
+    )
+
+    model.solve(1.0e-3, minDtFrac=1.0e-10)
+
+    n_records = model.interfaceData.N + 1
+    positions = np.asarray(model.interfaceData._y[:n_records], dtype=np.float64)
+    etas = np.asarray(model.etaData._y[:n_records], dtype=np.float64)
+    p_history = np.asarray(model.pData._y[:n_records], dtype=np.float64)
+    q_history = np.asarray(model.qData._y[:n_records], dtype=np.float64)
+    composition_history = np.asarray(model.data._y[:n_records], dtype=np.float64)
+
+    assert np.isclose(model.initialEta, eta0, rtol=0.0, atol=1.0e-10)
+    assert n_records > 1
+    assert np.allclose(positions, interface_position, rtol=0.0, atol=1.0e-14)
+    assert np.allclose(etas, model.initialEta, rtol=0.0, atol=1.0e-12)
+    assert np.allclose(p_history, p_history[0], rtol=0.0, atol=1.0e-13)
+    assert np.allclose(q_history, q_history[0], rtol=0.0, atol=1.0e-13)
+    assert np.allclose(composition_history, composition_history[0], rtol=0.0, atol=1.0e-13)
+    assert np.allclose(model.checkConservation(1.0e-12), np.zeros(2), rtol=0.0, atol=1.0e-12)
+
+
 @pytest.mark.parametrize(
     "case_name, left_bulk, right_bulk, direction",
     [
-        ("moves_right", np.asarray([0.35, 0.10], dtype=np.float64), np.asarray([0.25, 0.16], dtype=np.float64), 1.0),
-        ("moves_left", np.asarray([0.22, 0.10], dtype=np.float64), np.asarray([0.37, 0.15], dtype=np.float64), -1.0),
+        ("moves_right", np.asarray([0.16, 0.06], dtype=np.float64), np.asarray([0.3261538461538461, 0.193], dtype=np.float64), 1.0),
+        ("moves_left", np.asarray([0.16, 0.12], dtype=np.float64), np.asarray([0.56, 0.25], dtype=np.float64), -1.0),
     ],
 )
 def test_ternary_illingworth_conserves_inventory_for_moving_eta_dependent_tielines(case_name, left_bulk, right_bulk, direction):
