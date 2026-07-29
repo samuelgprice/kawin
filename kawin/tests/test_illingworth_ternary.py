@@ -74,6 +74,43 @@ class _LengthScaledCoupledTernaryThermodynamics:
         return self.base.getInterdiffusivity(composition, temperature, phase=phase, **kwargs) * self.length_scale * self.length_scale
 
 
+class _RecordingCompositionDependentThermodynamics:
+    def __init__(self):
+        self.calls = []
+
+    def clearCache(self):
+        pass
+
+    def reset(self):
+        self.calls.clear()
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        composition = np.asarray(composition, dtype=np.float64).reshape(2)
+        self.calls.append(
+            {
+                "phase": phase,
+                "composition": composition.copy(),
+                "temperature": float(temperature),
+                "query_context": kwargs.get("query_context"),
+            }
+        )
+        if phase == "ALPHA":
+            return np.asarray(
+                [
+                    [1.0 + 0.10 * composition[0], 0.02 + 0.01 * composition[1]],
+                    [0.03 + 0.02 * composition[0], 1.2 + 0.10 * composition[1]],
+                ],
+                dtype=np.float64,
+            )
+        return np.asarray(
+            [
+                [1.4 + 0.10 * composition[0], -0.02 + 0.01 * composition[1]],
+                [0.04 + 0.01 * composition[0], 1.1 + 0.10 * composition[1]],
+            ],
+            dtype=np.float64,
+        )
+
+
 class _LinearInterfaceEquilibrium:
     eta_bounds = (0.0, 1.0)
 
@@ -726,6 +763,83 @@ def test_ternary_diffusivity_validation_call_sites_share_helper(monkeypatch):
     assert diffusivity_calls == [("ALPHA", "interface"), ("ALPHA", "interface")]
     assert validation_calls == [("ALPHA", "initial-eta diffusivity"), ("ALPHA", "transient diffusivity")]
     assert not hasattr(model, "_validate_diffusivity_matrix")
+
+
+def test_ternary_bulk_diffusivity_is_phase_uniform_and_evaluated_at_interface_compositions():
+    thermodynamics = _RecordingCompositionDependentThermodynamics()
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(
+        ProfileBuilder(
+            [
+                (
+                    StepProfile1D(
+                        0.45,
+                        np.asarray([0.25, 0.10], dtype=np.float64),
+                        np.asarray([0.35, 0.15], dtype=np.float64),
+                    ),
+                    ["X", "Y"],
+                )
+            ]
+        )
+    )
+    model = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=thermodynamics,
+        temperature=1000.0,
+        interfacePosition=0.45,
+        interface_equilibrium=_LinearInterfaceEquilibrium(),
+        initial_eta_method="instantaneous_balance",
+        initial_eta_bracket=(0.0, 1.0),
+        time_step=1.0e-4,
+        tolerance=1.0e-10,
+        max_iterations=25,
+        record=True,
+    )
+    model.setup()
+    p = model._p_curr.copy()
+    q = model._q_curr.copy()
+    p[:-1] = np.linspace([0.05, 0.05], [0.18, 0.20], len(p) - 1)
+    q[1:] = np.linspace([0.45, 0.05], [0.10, 0.35], len(q) - 1)
+    eta = float(model._eta_curr)
+    c_left, c_right = model._interface_compositions(eta)
+    expected_left = thermodynamics.getInterdiffusivity(c_left, 1000.0, phase="ALPHA", query_context="interface")
+    expected_right = thermodynamics.getInterdiffusivity(c_right, 1000.0, phase="BETA", query_context="interface")
+    thermodynamics.reset()
+    bulk_calls = []
+    left_original = model._new_concentration_left_planar
+    right_original = model._new_concentration_right_planar
+
+    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
+        bulk_calls.append(("ALPHA", np.asarray(D_left_arg, dtype=np.float64).copy()))
+        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch)
+
+    def right_spy(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch):
+        bulk_calls.append(("BETA", np.asarray(D_right_arg, dtype=np.float64).copy()))
+        return right_original(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch)
+
+    model._new_concentration_left_planar = left_spy
+    model._new_concentration_right_planar = right_spy
+    model.residualTolerance = np.inf
+
+    model._solve_interface_planar(p, q, model._s_curr, model._s_old, eta, 1.0e-4)
+
+    assert [(call["phase"], call["query_context"]) for call in thermodynamics.calls] == [
+        ("ALPHA", "interface"),
+        ("BETA", "interface"),
+    ]
+    assert np.allclose(thermodynamics.calls[0]["composition"], c_left)
+    assert np.allclose(thermodynamics.calls[1]["composition"], c_right)
+    assert not any(np.allclose(call["composition"], p[0]) for call in thermodynamics.calls)
+    assert not any(np.allclose(call["composition"], q[-1]) for call in thermodynamics.calls)
+    assert len(bulk_calls) == 2
+    assert bulk_calls[0][0] == "ALPHA"
+    assert bulk_calls[0][1].shape == (2, 2)
+    assert np.allclose(bulk_calls[0][1], expected_left)
+    assert bulk_calls[1][0] == "BETA"
+    assert bulk_calls[1][1].shape == (2, 2)
+    assert np.allclose(bulk_calls[1][1], expected_right)
 
 
 def test_ternary_scope_validation_accepts_default_zero_flux_boundaries():

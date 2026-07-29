@@ -680,6 +680,15 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     tie-line coordinate is estimated from the initial held-profile Stefan
     residual, so callers must provide an eta-capable interface equilibrium.
     Only planar Cartesian finite-difference meshes are supported.
+
+    Diffusivity scope is intentionally limited: during each nonlinear residual
+    evaluation the solver evaluates one 2-by-2 interdiffusivity matrix for each
+    phase at that phase's interface composition, current time, and interface
+    temperature. That matrix is then treated as spatially uniform throughout
+    the corresponding transformed phase bulk solve. Local bulk transport with
+    nodewise or facewise matrices of the form ``D = D(c(x), T)`` and fluxes
+    discretized as ``div(D(c) grad(c))`` is not implemented by this Illingworth
+    solver.
     """
 
     def __init__(
@@ -1091,6 +1100,14 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         return p, q
 
     def _phase_diffusivity_matrix(self, composition, phase, time, position):
+        """
+        Returns the phase-uniform 2x2 matrix used by one transformed bulk solve.
+
+        ``composition`` is expected to be the interface composition for
+        ``phase``. The resulting matrix may depend on that interface state,
+        temperature, and time, but it is not re-evaluated at bulk nodes or
+        faces inside the implicit phase solve.
+        """
         composition = np.asarray(composition, dtype=np.float64).reshape(2)
         T = np.asarray(self.temperatureParameters(np.asarray([[float(position)]], dtype=np.float64), float(time)), dtype=np.float64).reshape(-1)
         temperature = float(T[0])
@@ -1191,7 +1208,14 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         return np.eye(2, dtype=np.float64)
 
     def _new_concentration_left_planar(self, p, s, future_s, dt, c_left, D_left, motion_branch):
-        """Solves the left transformed bulk system using the selected upwind branch."""
+        """
+        Solves the left transformed bulk system using a phase-uniform matrix.
+
+        ``D_left`` is a single 2x2 interdiffusivity matrix evaluated before this
+        assembly, normally at the left interface composition. It is used for all
+        left-phase transformed-grid rows; local composition-dependent bulk
+        matrices are intentionally outside this solver's current scope.
+        """
         if motion_branch not in {"positive", "negative"}:
             raise ValueError("motion_branch must be 'positive' or 'negative'.")
         n = len(p)
@@ -1240,7 +1264,14 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         return solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
 
     def _new_concentration_right_planar(self, q, s, future_s, dt, c_right, D_right, motion_branch):
-        """Solves the right transformed bulk system using the selected upwind branch."""
+        """
+        Solves the right transformed bulk system using a phase-uniform matrix.
+
+        ``D_right`` is a single 2x2 interdiffusivity matrix evaluated before
+        this assembly, normally at the right interface composition. It is used
+        for all right-phase transformed-grid rows; local composition-dependent
+        bulk matrices are intentionally outside this solver's current scope.
+        """
         if motion_branch not in {"positive", "negative"}:
             raise ValueError("motion_branch must be 'positive' or 'negative'.")
         n = len(q)
