@@ -240,6 +240,45 @@ class _TieLineSamplingThermodynamics:
         return np.asarray([[base, -0.5 * composition[1]], [0.1 * composition[1], base + 0.25]], dtype=np.float64)
 
 
+class _QuasiBinaryCuZnDummyEquilibrium:
+    """Fixed Cu-Zn endpoints with eta-pinned dummy interface compositions."""
+
+    eta_bounds = (0.0, 1.0)
+
+    def __init__(self, zn_left, zn_right, dummy):
+        self.zn_left = float(zn_left)
+        self.zn_right = float(zn_right)
+        self.dummy = float(dummy)
+        assert dummy<(1-zn_left)
+        assert dummy<(1-zn_right)
+
+    def interface_compositions(self, eta):
+        return (
+            np.asarray([self.zn_left, self.dummy*eta], dtype=np.float64),
+            np.asarray([self.zn_right, self.dummy*eta], dtype=np.float64),
+        )
+
+
+class _QuasiBinaryTernaryThermodynamics:
+    """Diagonal ternary diffusivity closure for quasi-binary diagnostics."""
+
+    def __init__(self, diffusivities, dummy_diffusivity):
+        self.diffusivities = {phase: float(value) for phase, value in diffusivities.items()}
+        self.dummy_diffusivity = float(dummy_diffusivity)
+
+    def clearCache(self):
+        pass
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        return np.asarray(
+            [
+                [self.diffusivities[phase], 0.0],
+                [0.0, self.dummy_diffusivity],
+            ],
+            dtype=np.float64,
+        )
+
+
 def _block_times_vector(block, vector):
     return np.asarray(
         [
@@ -1437,6 +1476,101 @@ def test_ternary_illingworth_stationary_when_bulk_equals_phase_interface_composi
     assert np.allclose(q_history, q_history[0], rtol=0.0, atol=1.0e-13)
     assert np.allclose(composition_history, composition_history[0], rtol=0.0, atol=1.0e-13)
     assert np.allclose(model.checkConservation(1.0e-12), np.zeros(2), rtol=0.0, atol=1.0e-12)
+
+
+def test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case():
+    from examples.Illingworth2005.compare_illingworth2005_planar import (
+        build_fig3_present_work_model,
+        build_fig6_illingworth_case_params,
+    )
+
+    dummy_x = 0.02
+    params = build_fig6_illingworth_case_params(
+        "thin",
+        1.4e-8,
+        {
+            "fig6_dt_mode": ["fixed", "semi_log"][1],
+            "fig6_time_step_s": 0.5,
+            "fig6_semiLog_dt": 0.025, #0.00025,
+            "fig6_semiLogT0": 1e-5,
+            "fig6_t_end_s": 1e4, #1e3,
+            "fig6_n_phase_a_nodes": 12,
+            "fig6_n_phase_b_nodes": 16,
+            "fig6_record": 1,
+            "fig6_record_pq_data": True,
+            "fig6_preallocate_recordings": False,
+            "fig6_check_against_authors_cpp": False,
+            "tolerance":1.0e-15,
+        },
+    )
+    binary = build_fig3_present_work_model(params, record=True)
+    binary.solve(params["t_end_s"], minDtFrac=1.0e-14, verbose=True, vIt=10000)
+
+    left_bulk = np.asarray([params["c_liquid0_atpct"] / 100.0, dummy_x], dtype=np.float64)
+    right_bulk = np.asarray([params["c_solid0_atpct"] / 100.0, dummy_x], dtype=np.float64)
+    profile = ProfileBuilder([(StepProfile1D(params["s0_um"], left_bulk, right_bulk), ["ZN", "DUMMY"])])
+    mesh = CartesianFD1D(["ZN", "DUMMY"], [0.0, params["R_um"]], params["n_alpha"] + params["n_beta"] - 1)
+    mesh.setResponseProfile(profile, boundaryConditions=MixedBoundary1D(2))
+    equilibrium = _QuasiBinaryCuZnDummyEquilibrium(
+        zn_left=params["c_liquid_int_atpct"] / 100.0,
+        zn_right=params["c_solid_int_atpct"] / 100.0,
+        dummy=dummy_x,
+    )
+    thermodynamics = _QuasiBinaryTernaryThermodynamics(
+        diffusivities={
+            params["phase_a_name"]: params["D_liquid_um2_s"],
+            params["phase_b_name"]: params["D_solid_um2_s"],
+        },
+        dummy_diffusivity=0.5,
+    )
+
+    for phase in (params["phase_a_name"], params["phase_b_name"]):
+        D = thermodynamics.getInterdiffusivity(left_bulk, 1000.0, phase=phase)
+        assert D.shape == (2, 2)
+        assert D[0, 1] == 0.0
+        assert D[1, 0] == 0.0
+        assert D[1, 1] > 0.0
+
+    ternary = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["CU", "ZN", "DUMMY"],
+        phases=[params["phase_a_name"], params["phase_b_name"]],
+        thermodynamics=thermodynamics,
+        temperature=TemperatureParameters(1000.0),
+        interfacePosition=params["s0_um"],
+        interface_equilibrium=equilibrium,
+        initial_eta_method="instantaneous_balance",
+        initial_eta_bracket=(0.0, 1.0),
+        initial_eta_guess=0.5,
+        time_step=params["time_step_s"],
+        dt_mode=params["dt_mode"],
+        semiLog_dt=params["semiLog_dt"],
+        semiLogT0=params["semiLogT0"],
+        phase_a_nodes=params["n_alpha"],
+        phase_b_nodes=params["n_beta"],
+        tolerance=5.0e-16, #1.0e-17,
+        max_iterations=25,
+        record=True,
+    )
+    ternary.solve(params["t_end_s"], minDtFrac=1.0e-14, verbose=True, vIt=10000)
+
+    binary_n = binary.interfaceData.N + 1
+    ternary_n = ternary.interfaceData.N + 1
+    assert ternary_n == binary_n
+    assert np.allclose(ternary.interfaceData._time[:ternary_n], binary.interfaceData._time[:binary_n], rtol=0.0, atol=0.0)
+    assert np.allclose(ternary.interfaceData._y[:ternary_n], binary.interfaceData._y[:binary_n], rtol=0.0, atol=1.0e-10)
+
+    binary_p, binary_q = binary.getTransformedState()
+    ternary_p, ternary_q = ternary.getTransformedState()
+    assert np.allclose(ternary_p[:, 0], binary_p, rtol=0.0, atol=1.0e-10)
+    assert np.allclose(ternary_q[:, 0], binary_q, rtol=0.0, atol=1.0e-10)
+    assert np.allclose(ternary.data.y()[:, 0], binary.data.y()[:, 0], rtol=0.0, atol=1.0e-10)
+
+    assert np.allclose(ternary_p[:, 1], dummy_x, rtol=0.0, atol=1.0e-13)
+    assert np.allclose(ternary_q[:, 1], dummy_x, rtol=0.0, atol=1.0e-13)
+    assert np.allclose(ternary.data.y()[:, 1], dummy_x, rtol=0.0, atol=1.0e-13)
+    assert np.isclose(ternary.getTotalInventory()[1], dummy_x * params["R_um"], rtol=0.0, atol=1.0e-10)
+    assert np.allclose(ternary.checkConservation(1.0e-10), np.zeros(2), rtol=0.0, atol=1.0e-10)
 
 
 @pytest.mark.parametrize(
