@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import pathlib
 import shutil
@@ -12,6 +13,7 @@ import time
 import uuid
 
 import numpy as np
+from scipy import optimize
 
 def debugInPlace():
     try:
@@ -106,7 +108,7 @@ AUTHOR_DEFAULT_PARAMS = {
 
 
 SCRIPT_CONFIG = {
-    # Options: "cpp_comparison" or "fig3_present_work".
+    # Options: "cpp_comparison", "fig3_present_work", or "fig6_olaye_brass".
     "run_mode": "cpp_comparison",
     # Set this to a full path if PATH lookup fails or you want a specific compiler.
     "compiler": None,
@@ -118,6 +120,9 @@ SCRIPT_CONFIG = {
     # Optional overrides for FIG3_PRESENT_WORK_PARAMS when run_mode is
     # "fig3_present_work".
     "fig3_overrides": {},
+    # Optional overrides for FIG6_OLAYE_BRASS_CONFIG when run_mode is
+    # "fig6_olaye_brass".
+    "fig6_overrides": {},
 }
 
 FIG3_NOTEBOOK_CONFIG = {
@@ -148,6 +153,7 @@ FIG3_PRESENT_WORK_PARAMS = {
     "c_solid_int_atpct": 0.166,
     "D_liquid_um2_s": 500.0,
     "D_solid_um2_s": 18.0,
+    "tolerance":1.0e-10,
     # The paper notes a similar initial step size of 1 um for the comparison.
     # "spatial_step_um": 0.25,
     "n_alpha": 51,
@@ -186,18 +192,148 @@ FIG3_PRESENT_WORK_PARAMS = {
     "max_iterations":10000,
     "overlay_csvs": [
         {
-            "path": REPO_ROOT / "examples" / "Olaye2020" / "Olaye2020_fig5_alt_PresentModelRough_curve.csv",
+            "path": REPO_ROOT / "examples" / "Olaye2020" / "figureDataExtraction" / "Olaye2020_fig5_alt_PresentModelRough_curve.csv",
             "label": 'Olaye Fig. 5 "Present Model" rough digitization',
             "color": "tab:gray",
             "marker": "o",
         },
         {
-            "path": REPO_ROOT / "examples" / "Olaye2020" / "Olaye2020_fig5_alt_PresentModelRough2_curve.csv",
+            "path": REPO_ROOT / "examples" / "Olaye2020" / "figureDataExtraction" / "Olaye2020_fig5_alt_PresentModelRough2_curve.csv",
             "label": 'Olaye Fig. 5 "Present Model" rough2 digitization',
             "color": "tab:pink",
             "marker": "o",
         },
     ],
+}
+
+
+FIG6_LAYER_PARAMS = {
+    "thin": {
+        "label": "Thin initial beta layer",
+        "s0_um": 190.5,
+        "R_um": 565.0,
+    },
+    "thick": {
+        "label": "Thick initial beta layer",
+        "s0_um": 381.0,
+        "R_um": 755.5,
+    },
+}
+
+FIG6_BASE_PARAMS = {
+    "c_beta0_atpct": 39.4,
+    "c_alpha0_atpct": 29.1,
+    "c_beta_int_atpct": 36.9,
+    "c_alpha_int_atpct": 32.5,
+    "D_beta_um2_s": 100.0,
+    "dt_mode": "fixed", #"semi_log",
+    "semiLogT0": 1e-5,
+    "tolerance":1.0e-10,
+}
+
+FIG6_VALID_D_ALPHA_CM2_S = (1.4e-8, 2.5e-8)
+
+FIG6_EXTRACTED_DATA_FILES = {
+    # ("thick", 1.4e-8): {
+    #     "filename": "Olaye2020_fig6_ThickBeta_D1pt4_Illingworth_curve.csv",
+    #     "label": "Digitized Fig. 6 thick beta, D_alpha=1.4E-8 Illingworth",
+    #     "color": "tab:orange",
+    #     "marker": "D",
+    # },
+
+    ("thin", 1.4e-8): {
+        "filename": "otherPaper_fig3_ThinBeta_D1pt4.csv",
+        "label": "Digitized Fig. 6 thin beta, D_alpha=1.4E-8",
+        "color": "tab:blue",
+        "marker": "o",
+    },
+    ("thin", 2.5e-8): {
+        "filename": "otherPaper_fig3_ThinBeta_D2pt5.csv",
+        "label": "Digitized Fig. 6 thin beta, D_alpha=2.5E-8",
+        "color": "tab:red",
+        "marker": "o",
+    },
+    ("thick", 1.4e-8): {
+        "filename": "otherPaper_fig3_ThickBeta_D1pt4.csv",
+        "label": "Digitized Fig. 6 thick beta, D_alpha=1.4E-8",
+        "color": "tab:orange",
+        "marker": "D",
+    },
+    ("thick", 2.5e-8): {
+        "filename": "otherPaper_fig3_ThickBeta_D2pt5.csv",
+        "label": "Digitized Fig. 6 thick beta, D_alpha=2.5E-8",
+        "color": "tab:purple",
+        "marker": "D",
+    },
+}
+
+FIG6_EXPERIMENTAL_DATA_FILES = {
+    "thin": {
+        "filename": "Olaye2020_fig6_Exp_ThinBeta.csv",
+        "label": "Experimental thin initial beta layer",
+        "color": "tab:blue",
+        "marker": "o",
+    },
+    "thick": {
+        "filename": "Olaye2020_fig6_Exp_ThickBeta.csv",
+        "label": "Experimental thick initial beta layer",
+        "color": "tab:orange",
+        "marker": "D",
+    },
+
+}
+
+FIG6_OLAYE_BRASS_CONFIG = {
+    "fig6_layers": ("thick"), #thin
+    "fig6_d_alpha_cm2_s": (1.4e-8,), #2.5e-8
+    "fig6_n_phase_a_nodes": 50,
+    "fig6_n_phase_b_nodes": 132,
+    "fig6_grid_type": "constant",
+    "fig6_geometric_ratio": 1.03,
+    "fig6_min_transformed_interval": 1e-12,
+    "fig6_time_step_s": 0.05,
+    "fig6_dt_mode": FIG6_BASE_PARAMS["dt_mode"],
+    "fig6_semiLog_dt": 0.00025,
+    "fig6_semiLogT0": FIG6_BASE_PARAMS["semiLogT0"],
+    "fig6_t_end_s": 1e4, #7e5,
+    "fig6_record": 1,
+    "fig6_record_pq_data": False,
+    "fig6_preallocate_recordings": True,
+    "fig6_plot_concentration_info": True,
+    "fig6_plot_extracted_data": True,
+    "fig6_plot_experimental_data": True,
+    "fig6_check_against_authors_cpp": True,
+    "fig6_plot_cpp_comparison": True,
+    "fig6_cpp_compiler": None,
+    "fig6_cpp_build_dir": None,
+    "fig6_cpp_print_table": False,
+    "fig6_out": None,
+    "fig6_xlim": (10.0, None),
+    "fig6_ylim": (-200, 100),
+    "fig6_plot_sqrt_time_analytical": True,
+    "fig6_sqrt_time_out": None,
+    "fig6_sqrt_time_plot_extracted_data": True,
+    "fig6_sqrt_time_plot_experimental_data": True,
+    "fig6_sqrt_time_max_s": "auto",
+    "fig6_sqrt_time_max_points_per_case": None,
+    "fig6_sqrt_time_semi_infinite_erfc_argument_min": 1.05,
+    "fig6_make_overlay_png": True,
+    "fig6_overlay_out": None,
+    "fig6_overlay_source_image_path": REPO_ROOT / "examples" / "Olaye2020" / "figureDataExtraction" / "Olaye2020_fig6_forExtraction.jpg",
+    "fig6_overlay_axes_rect": (88.0 / 1521.0, (950.0 - 866.0) / 950.0, (553.0 - 88.0) / 1521.0, (866.0 - 7.0) / 950.0),
+    "fig6_overlay_xlim": (10.0 ** 1.6, 1.0e6),
+    "fig6_overlay_ylim": (-200, 100),
+    "fig6_overlay_dpi": 150,
+    "fig6_overlay_transparent": True,
+    "fig6_overlay_show_axes": True,
+    "fig6_overlay_show_grid": True,
+    "fig6_overlay_include_extracted_data": False,
+    "fig6_overlay_include_experimental_data": True,
+    "fig6_save_run": True,
+    "fig6_save_run_path": SCRIPT_DIR / "illingworth2005_fig6_saved_run.npz",
+    "fig6_max_iterations": 10000,
+    "show": True,
+    "timeProfiling": False,
 }
 
 
@@ -227,6 +363,127 @@ def _load_time_half_width_csv(path):
     if "time_s" not in data.dtype.names or "half_width_um" not in data.dtype.names:
         raise ValueError(f"{path} must contain columns: time_s, half_width_um")
     return np.asarray(data["time_s"], dtype=np.float64), np.asarray(data["half_width_um"], dtype=np.float64)
+
+
+def _normalize_requested_items(value, valid_values, *, label):
+    """Normalizes a string or sequence selector against allowed values."""
+    valid = tuple(valid_values)
+    if isinstance(value, str):
+        requested = (value,)
+    else:
+        requested = tuple(value)
+    normalized = []
+    for item in requested:
+        item_text = str(item).strip().lower()
+        if item_text in {"all", "both"}:
+            normalized.extend(valid)
+            continue
+        if item_text not in valid:
+            raise ValueError(f"Unknown {label}: {item!r}. Expected one of {valid}.")
+        normalized.append(item_text)
+    return tuple(dict.fromkeys(normalized))
+
+
+def _selected_fig6_layers(config):
+    """Returns normalized Figure-6 beta-layer selections."""
+    return _normalize_requested_items(config.get("fig6_layers", ("thin", "thick")), ("thin", "thick"), label="Figure 6 layer")
+
+
+def _selected_fig6_d_alpha_cm2_s(config):
+    """Returns normalized Figure-6 alpha diffusivity selections in ``cm^2/s``."""
+    values = config.get("fig6_d_alpha_cm2_s", FIG6_VALID_D_ALPHA_CM2_S)
+    if isinstance(values, str):
+        if values.strip().lower() in {"all", "both"}:
+            requested = FIG6_VALID_D_ALPHA_CM2_S
+        else:
+            requested = (float(values),)
+    else:
+        requested = tuple(float(value) for value in values)
+    normalized = []
+    for value in requested:
+        matches = [valid for valid in FIG6_VALID_D_ALPHA_CM2_S if np.isclose(value, valid, rtol=1e-12, atol=0.0)]
+        if not matches:
+            raise ValueError(
+                "Unknown Figure 6 alpha diffusivity "
+                f"{value!r}. Expected one of {FIG6_VALID_D_ALPHA_CM2_S} cm^2/s."
+            )
+        normalized.append(matches[0])
+    return tuple(dict.fromkeys(normalized))
+
+
+def _cm2_s_to_um2_s(value):
+    """Converts diffusivity from ``cm^2/s`` to ``um^2/s``."""
+    return float(value) * 1e8
+
+
+def _load_no_header_xy_csv(path_or_file):
+    """
+    Loads a no-header two-column digitized figure CSV.
+
+    Returns finite ``x`` and ``y`` arrays in the units encoded by the file.
+    """
+    data = np.loadtxt(path_or_file, delimiter=",", dtype=np.float64)
+    data = np.atleast_2d(data)
+    if data.shape[1] < 2:
+        raise ValueError(f"{path_or_file} must contain at least two columns.")
+    mask = np.isfinite(data[:, 0]) & np.isfinite(data[:, 1])
+    return data[mask, 0], data[mask, 1]
+
+
+def build_fig6_illingworth_case_params(layer, d_alpha_cm2_s, config=None):
+    """
+    Builds corrected Olaye Figure-6 brass inputs for the Illingworth model.
+
+    The brass rows are interpreted consistently with the Olaye replication:
+    phase A is beta and phase B is alpha. Diffusivities are returned in
+    ``um^2/s`` because the Illingworth planar model is run directly in
+    micrometers and seconds.
+    """
+    cfg = FIG6_OLAYE_BRASS_CONFIG if config is None else {**FIG6_OLAYE_BRASS_CONFIG, **dict(config)}
+    layer_key = _normalize_requested_items((layer,), ("thin", "thick"), label="Figure 6 layer")[0]
+    d_alpha_value = _selected_fig6_d_alpha_cm2_s({"fig6_d_alpha_cm2_s": (d_alpha_cm2_s,)})[0]
+    layer_params = FIG6_LAYER_PARAMS[layer_key]
+    return {
+        "figure": "fig6",
+        "model_family": "illingworth_fig6_olaye_brass",
+        "layer": layer_key,
+        "d_alpha_cm2_s": d_alpha_value,
+        "d_alpha_um2_s": _cm2_s_to_um2_s(d_alpha_value),
+        "R_um": layer_params["R_um"],
+        "s0_um": layer_params["s0_um"],
+        "c_liquid0_atpct": FIG6_BASE_PARAMS["c_beta0_atpct"],
+        "c_solid0_atpct": FIG6_BASE_PARAMS["c_alpha0_atpct"],
+        "c_liquid_int_atpct": FIG6_BASE_PARAMS["c_beta_int_atpct"],
+        "c_solid_int_atpct": FIG6_BASE_PARAMS["c_alpha_int_atpct"],
+        "D_liquid_um2_s": FIG6_BASE_PARAMS["D_beta_um2_s"],
+        "D_solid_um2_s": _cm2_s_to_um2_s(d_alpha_value),
+        "n_alpha": int(cfg["fig6_n_phase_a_nodes"]),
+        "n_beta": int(cfg["fig6_n_phase_b_nodes"]),
+        "grid_type": cfg.get("fig6_grid_type", "constant"),
+        "geometric_ratio": float(cfg.get("fig6_geometric_ratio", 1.03)),
+        "min_transformed_interval": float(cfg.get("fig6_min_transformed_interval", 1e-12)),
+        "time_step_s": float(cfg["fig6_time_step_s"]),
+        "dt_mode": cfg.get("fig6_dt_mode", FIG6_BASE_PARAMS["dt_mode"]),
+        "semiLog_dt": float(cfg["fig6_semiLog_dt"]),
+        "semiLogT0": float(cfg.get("fig6_semiLogT0", FIG6_BASE_PARAMS["semiLogT0"])),
+        "t_end_s": float(cfg["fig6_t_end_s"]),
+        "record": cfg.get("fig6_record", 1),
+        "record_pq_data": bool(cfg.get("fig6_record_pq_data", False)),
+        "preallocate_recordings": bool(cfg.get("fig6_preallocate_recordings", True)),
+        "checkAgainstAuthorsCPP": bool(cfg.get("fig6_check_against_authors_cpp", False)),
+        "plot_cpp_comparison": bool(cfg.get("fig6_plot_cpp_comparison", True)),
+        "cpp_compiler": cfg.get("fig6_cpp_compiler"),
+        "cpp_build_dir": cfg.get("fig6_cpp_build_dir"),
+        "cpp_print_table": bool(cfg.get("fig6_cpp_print_table", False)),
+        "response_name": "ZN",
+        "elements": ("CU", "ZN"),
+        "phase_a_name": "BETA",
+        "phase_b_name": "ALPHA",
+        "label": f"Illingworth {layer_params['label']}, D_alpha={d_alpha_value:.1E} cm^2/s",
+        "show": bool(cfg.get("show", True)),
+        "max_iterations": cfg.get("fig6_max_iterations", None),
+        "tolerance":FIG6_BASE_PARAMS['tolerance'],
+    }
 
 
 def build_python_default_model(record=True):
@@ -581,11 +838,14 @@ def _format_fig3_timestep_label(params):
 
 def build_fig3_present_work_model(params=None, record=None):
     """
-    Builds the planar Illingworth model for the paper's Figure 3 present-work curve.
+    Builds a planar Illingworth model using Figure-3-style parameter keys.
 
     Inputs are kept in the paper's units: micrometers, seconds, and atomic
     percent. The diffusion model is scale-consistent, so micrometers are used
-    directly for length and ``um^2/s`` for diffusivity.
+    directly for length and ``um^2/s`` for diffusivity. Optional
+    ``response_name``, ``elements``, ``phase_a_name``, ``phase_b_name``, and
+    ``tolerance`` entries allow the same builder to run customized Figure-3
+    and corrected Figure-6 brass cases.
     """
     p = FIG3_PRESENT_WORK_PARAMS if params is None else {**FIG3_PRESENT_WORK_PARAMS, **dict(params)}
     record = p["record"] if record is None else record
@@ -598,20 +858,25 @@ def build_fig3_present_work_model(params=None, record=None):
     phase_a_nodes, phase_b_nodes, n_mesh = _fig3_phase_node_counts(p)
     transformed_u_grid, transformed_v_grid, _ = build_symmetric_fig3_transformed_grids(p)
 
-    profile = ProfileBuilder([(StepProfile1D(p["s0_um"], c_liquid0, c_solid0), "P")])
-    mesh = CartesianFD1D(["P"], [0.0, p["R_um"]], n_mesh)
+    response_name = p.get("response_name", "P")
+    phase_a_name = p.get("phase_a_name", "LIQUID")
+    phase_b_name = p.get("phase_b_name", "SOLID")
+    elements = list(p.get("elements", ("NI", "P")))
+
+    profile = ProfileBuilder([(StepProfile1D(p["s0_um"], c_liquid0, c_solid0), response_name)])
+    mesh = CartesianFD1D([response_name], [0.0, p["R_um"]], n_mesh)
     mesh.setResponseProfile(profile)
     therm = ConstantBinaryThermodynamics(
-        phases=["LIQUID", "SOLID"],
-        diffusivities={"LIQUID": p["D_liquid_um2_s"], "SOLID": p["D_solid_um2_s"]},
+        phases=[phase_a_name, phase_b_name],
+        diffusivities={phase_a_name: p["D_liquid_um2_s"], phase_b_name: p["D_solid_um2_s"]},
     )
     additionalInputParms = {}
     if p.get('max_iterations', None) is not None:
         additionalInputParms.update({'max_iterations':p["max_iterations"]})
     return MovingBoundaryIllingworthFD1DModel(
         mesh,
-        ["NI", "P"],
-        ["LIQUID", "SOLID"],
+        elements,
+        [phase_a_name, phase_b_name],
         thermodynamics=therm,
         temperature=TemperatureParameters(1000.0),
         interfacePosition=p["s0_um"],
@@ -624,7 +889,7 @@ def build_fig3_present_work_model(params=None, record=None):
         phase_b_nodes=phase_b_nodes,
         transformed_u_grid=transformed_u_grid,
         transformed_v_grid=transformed_v_grid,
-        tolerance=1.0e-8,
+        tolerance=p["tolerance"],
         record=record,
         record_pq_data=p.get("record_pq_data", True),
         preallocate_recordings=p.get("preallocate_recordings", False),
@@ -857,6 +1122,767 @@ def plot_fig3_present_work(params=None, ax=None):
     return result, ax
 
 
+def _fig6_style(layer, d_alpha_cm2_s):
+    """Returns a stable Matplotlib style for one Figure-6 Illingworth case."""
+    color_lookup = {
+        ("thin", 1.4e-8): "tab:cyan",
+        ("thin", 2.5e-8): "tab:pink",
+        ("thick", 1.4e-8): "tab:blue",
+        ("thick", 2.5e-8): "black",
+    }
+    linestyle_lookup = {
+        "thin": "--",
+        "thick": "-.",
+    }
+    matched_d = _selected_fig6_d_alpha_cm2_s({"fig6_d_alpha_cm2_s": (d_alpha_cm2_s,)})[0]
+    return {
+        "color": color_lookup.get((layer, matched_d), None),
+        "linestyle": linestyle_lookup.get(layer, "-"),
+        "linewidth": 2.0,
+    }
+
+
+def _fig6_extracted_data_specs_for_cases(case_results):
+    """Returns digitized Figure-6 Illingworth overlay specs matching completed cases."""
+    selected_cases = set()
+    for item in case_results:
+        params = item["params"]
+        d_alpha = _selected_fig6_d_alpha_cm2_s({"fig6_d_alpha_cm2_s": (params["d_alpha_cm2_s"],)})[0]
+        selected_cases.add((params["layer"], d_alpha))
+
+    specs = []
+    for key, spec in FIG6_EXTRACTED_DATA_FILES.items():
+        if key not in selected_cases:
+            continue
+        specs.append(
+            {
+                **spec,
+                "layer": key[0],
+                "d_alpha_cm2_s": key[1],
+                "path": REPO_ROOT / "examples" / "Illingworth2005" / "figureDataExtraction" / spec["filename"],
+            }
+        )
+    return specs
+
+
+def _fig6_experimental_data_specs_for_cases(case_results):
+    """Returns Figure-6 experimental point specs matching completed case layers."""
+    selected_layers = []
+    for item in case_results:
+        layer = item["params"]["layer"]
+        if layer not in selected_layers:
+            selected_layers.append(layer)
+
+    specs = []
+    for layer in selected_layers:
+        if layer not in FIG6_EXPERIMENTAL_DATA_FILES:
+            continue
+        spec = FIG6_EXPERIMENTAL_DATA_FILES[layer]
+        specs.append(
+            {
+                **spec,
+                "layer": layer,
+                "path": REPO_ROOT / "examples" / "Olaye2020" / "figureDataExtraction" / spec["filename"],
+            }
+        )
+    return specs
+
+
+def equation_a11(beta, c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b):
+    """
+    Evaluates the two-phase semi-infinite planar moving-boundary equation.
+
+    Concentrations are fractions and diffusivities must use the same
+    length-squared/time units as the desired beta coefficient.
+    """
+    return (
+        ((c_a_eq - c_b_eq) * beta * np.sqrt(np.pi))
+        - ((np.sqrt(d_a) * (c_a0 - c_a_eq)) / (1 + math.erf(beta / np.sqrt(d_a)))) * np.exp(-(beta**2) / d_a)
+        + ((np.sqrt(d_b) * (c_b_eq - c_b0)) / (1 - math.erf(beta / np.sqrt(d_b)))) * np.exp(-(beta**2) / d_b)
+    )
+
+
+def solve_beta(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b, left=-1, right=1):
+    """
+    Solves the semi-infinite analytical beta coefficient by bracketing a sign change.
+
+    The returned beta has units of length/sqrt(time) when ``d_a`` and ``d_b``
+    are supplied in length-squared/time.
+    """
+    assert c_b0 < c_b_eq < c_a_eq < c_a0, "Expected: c_b0 < c_b_eq < c_a_eq < c_a0"
+    if left < 0 and right > 0:
+        grid = np.concatenate((-np.geomspace(1e-15, -left, 200)[::-1], np.geomspace(1e-15, right, 200)))
+    else:
+        grid = np.linspace(left, right, 4001)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+        values = np.array([equation_a11(x, c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b) for x in grid], dtype=np.float64)
+    indices_of_sign_flip = np.where(np.logical_and((np.diff(np.sign(values)) != 0), ~np.isnan(np.diff(np.sign(values)))))[0]
+    if indices_of_sign_flip.size != 1:
+        raise ValueError("Could not bracket an analytic moving-boundary root.")
+
+    x_left = grid[indices_of_sign_flip[0]]
+    x_right = grid[indices_of_sign_flip[0] + 1]
+    sol = optimize.root_scalar(
+        equation_a11,
+        bracket=[float(x_left), float(x_right)],
+        method="brentq",
+        args=(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b),
+        maxiter=100,
+        rtol=1e-14,
+        xtol=1e-14,
+    )
+    if sol.converged:
+        return float(sol.root)
+    raise ValueError("Root finding did not converge.")
+
+
+def _fig6_analytical_constants(params):
+    """
+    Returns semi-infinite analytical constants for one Figure-6 Illingworth case.
+
+    Figure-6 Illingworth case parameters already use micrometers and seconds,
+    so the analytical displacement is ``s(t) - s0 = 2*beta*sqrt(t)`` in
+    micrometers.
+    """
+    d_a_um2_s = float(params["D_liquid_um2_s"])
+    d_b_um2_s = float(params["D_solid_um2_s"])
+    beta_um_sqrt_s = solve_beta(
+        c_a0=float(params["c_liquid0_atpct"]) / 100.0,
+        c_b0=float(params["c_solid0_atpct"]) / 100.0,
+        c_a_eq=float(params["c_liquid_int_atpct"]) / 100.0,
+        c_b_eq=float(params["c_solid_int_atpct"]) / 100.0,
+        d_a=d_a_um2_s,
+        d_b=d_b_um2_s,
+        left=-100.0,
+        right=100.0,
+    )
+    return {
+        "d_a_um2_s": d_a_um2_s,
+        "d_b_um2_s": d_b_um2_s,
+        "s0_um": float(params["s0_um"]),
+        "R_um": float(params["R_um"]),
+        "beta_um_sqrt_s": beta_um_sqrt_s,
+    }
+
+
+def _fig6_semi_infinite_time_max_s(constants, erfc_argument_min):
+    """
+    Estimates a Figure-6 semi-infinite analytical comparison cutoff.
+
+    The cutoff is the earlier finite-domain time where either side reaches
+    ``eta = L/(2*sqrt(D*t)) == erfc_argument_min``.
+    """
+    erfc_argument_min = float(erfc_argument_min)
+    if erfc_argument_min <= 0:
+        raise ValueError("fig6_sqrt_time_semi_infinite_erfc_argument_min must be positive.")
+    phase_a_width_um = constants["s0_um"]
+    phase_b_width_um = constants["R_um"] - constants["s0_um"]
+    if phase_a_width_um <= 0 or phase_b_width_um <= 0:
+        raise ValueError("Figure 6 analytical comparison requires 0 < s0_um < R_um.")
+    phase_a_time_s = (phase_a_width_um / (2.0 * erfc_argument_min)) ** 2 / constants["d_a_um2_s"]
+    phase_b_time_s = (phase_b_width_um / (2.0 * erfc_argument_min)) ** 2 / constants["d_b_um2_s"]
+    return min(phase_a_time_s, phase_b_time_s)
+
+
+def _fig6_case_sqrt_time_max_s(cfg, constants):
+    """Resolves the optional time limit for one Figure-6 sqrt-time overlay."""
+    time_max_s = cfg.get("fig6_sqrt_time_max_s")
+    if time_max_s is None:
+        return None
+    if isinstance(time_max_s, str):
+        if time_max_s.lower() not in {"auto", "semi_infinite"}:
+            raise ValueError('fig6_sqrt_time_max_s must be numeric, None, "auto", or "semi_infinite".')
+        return _fig6_semi_infinite_time_max_s(
+            constants,
+            cfg.get("fig6_sqrt_time_semi_infinite_erfc_argument_min", 5.0),
+        )
+    time_max_s = float(time_max_s)
+    if time_max_s <= 0:
+        raise ValueError("fig6_sqrt_time_max_s must be positive when numeric.")
+    return time_max_s
+
+
+def _limit_plot_points(x, y, max_points):
+    """Returns an evenly thinned plotting view while preserving endpoints."""
+    if max_points is None or len(x) <= int(max_points):
+        return x, y
+    if int(max_points) < 2:
+        raise ValueError("fig6_sqrt_time_max_points_per_case must be at least 2 or None.")
+    indices = np.linspace(0, len(x) - 1, int(max_points), dtype=np.int64)
+    return x[indices], y[indices]
+
+
+def _estimate_illingworth_n_steps(params, *, figure_label):
+    """Estimates fixed or semi-log Illingworth steps and validates timestep controls."""
+    dt_mode = params.get("dt_mode", "fixed")
+    if dt_mode == "fixed":
+        n_steps = int(np.ceil(params["t_end_s"] / params["time_step_s"]))
+    elif dt_mode == "semi_log":
+        if params.get("semiLog_dt") is None or params.get("semiLogT0") is None:
+            raise ValueError("semiLog_dt and semiLogT0 must be set when dt_mode is 'semi_log'.")
+        if params["semiLog_dt"] <= 0 or params["semiLogT0"] <= 0:
+            raise ValueError("semiLog_dt and semiLogT0 must be positive when dt_mode is 'semi_log'.")
+        if params["t_end_s"] <= params["semiLogT0"]:
+            n_steps = 1
+        else:
+            n_steps = int(np.ceil((np.log(params["t_end_s"]) - np.log(params["semiLogT0"])) / params["semiLog_dt"])) + 1
+    else:
+        raise ValueError("dt_mode must be 'fixed' or 'semi_log'.")
+    if n_steps > 250_000:
+        raise ValueError(
+            f"{figure_label} run would require about {n_steps} Python implicit steps. "
+            "Increase the timestep, increase semiLog_dt for semi-log exploratory plotting, "
+            "or run a shorter t_end_s."
+        )
+    return n_steps
+
+
+def _save_fig6_illingworth_run_result(path, case_results):
+    """Saves selected Figure-6 Illingworth case arrays to one compressed ``.npz`` file."""
+    payload = {
+        "case_count": np.array([len(case_results)], dtype=np.int64),
+        "source_script": np.array("examples/Illingworth2005/compare_illingworth2005_planar.py"),
+        "model_family": np.array("illingworth_fig6_olaye_brass"),
+    }
+    for index, item in enumerate(case_results):
+        prefix = f"case_{index}"
+        payload[f"{prefix}_time_s"] = np.asarray(item["time_s"], dtype=np.float64)
+        payload[f"{prefix}_phase_a_width_um"] = np.asarray(item["phase_a_width_um"], dtype=np.float64)
+        payload[f"{prefix}_interface_displacement_um"] = np.asarray(item["interface_displacement_um"], dtype=np.float64)
+        payload[f"{prefix}_label"] = np.array(item["params"]["label"])
+        payload[f"{prefix}_params_json"] = np.array(json.dumps(_jsonable(item["params"]), sort_keys=True))
+    return save_illingworth_run_result(path, payload)
+
+
+def _image_size_px(path):
+    """Returns ``(width, height)`` in pixels for a raster image path."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("Pillow is required to infer the Figure 6 overlay canvas size.") from exc
+    with Image.open(path) as image:
+        return image.size
+
+
+def plot_fig6_olaye_brass_overlay_png(case_results, config=None):
+    """
+    Builds or saves a transparent Figure-6 overlay PNG aligned to the paper image.
+
+    The output canvas matches ``fig6_overlay_source_image_path`` in pixels, and
+    Matplotlib draws curves into ``fig6_overlay_axes_rect`` using the configured
+    paper x/y limits. ``bbox_inches='tight'`` and layout managers are avoided so
+    the exported PNG keeps the source image extent for later overlaying.
+    """
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    cfg = FIG6_OLAYE_BRASS_CONFIG if config is None else {**FIG6_OLAYE_BRASS_CONFIG, **dict(config)}
+    if not case_results:
+        raise ValueError("At least one Figure 6 case result is required for the overlay PNG.")
+    source_path = pathlib.Path(cfg["fig6_overlay_source_image_path"])
+    if not source_path.exists():
+        raise FileNotFoundError(f"Figure 6 overlay source image does not exist: {source_path}")
+
+    width_px, height_px = _image_size_px(source_path)
+    dpi = float(cfg.get("fig6_overlay_dpi", 150))
+    if dpi <= 0:
+        raise ValueError("fig6_overlay_dpi must be positive.")
+    fig = Figure(figsize=(width_px / dpi, height_px / dpi), dpi=dpi)
+    FigureCanvasAgg(fig)
+    transparent = bool(cfg.get("fig6_overlay_transparent", True))
+    if transparent:
+        fig.patch.set_alpha(0.0)
+    ax = fig.add_axes(tuple(float(v) for v in cfg["fig6_overlay_axes_rect"]))
+    if transparent:
+        ax.patch.set_alpha(0.0)
+
+    for item in case_results:
+        params = item["params"]
+        time_s = np.asarray(item["time_s"], dtype=np.float64)
+        displacement_um = np.asarray(item["interface_displacement_um"], dtype=np.float64)
+        mask = np.isfinite(time_s) & np.isfinite(displacement_um) & (time_s > 0)
+        if np.count_nonzero(mask) < 2:
+            continue
+        ax.plot(
+            time_s[mask],
+            displacement_um[mask],
+            label=params["label"],
+            **_fig6_style(params["layer"], params["d_alpha_cm2_s"]),
+        )
+
+    if cfg.get("fig6_overlay_include_extracted_data", False):
+        for extracted_spec in _fig6_extracted_data_specs_for_cases(case_results):
+            if not extracted_spec["path"].exists():
+                continue
+            exp_t_s, exp_disp_um = _load_no_header_xy_csv(extracted_spec["path"])
+            mask = np.isfinite(exp_t_s) & np.isfinite(exp_disp_um) & (exp_t_s > 0)
+            ax.scatter(
+                exp_t_s[mask],
+                exp_disp_um[mask],
+                s=20,
+                color=extracted_spec["color"],
+                marker=extracted_spec["marker"],
+                facecolors="none",
+                zorder=3,
+            )
+
+    if cfg.get("fig6_overlay_include_experimental_data", True):
+        for experimental_spec in _fig6_experimental_data_specs_for_cases(case_results):
+            if not experimental_spec["path"].exists():
+                continue
+            exp_t_s, exp_disp_um = _load_no_header_xy_csv(experimental_spec["path"])
+            mask = np.isfinite(exp_t_s) & np.isfinite(exp_disp_um) & (exp_t_s > 0)
+            ax.scatter(
+                exp_t_s[mask],
+                exp_disp_um[mask],
+                s=28,
+                color=experimental_spec["color"],
+                marker=experimental_spec["marker"],
+                label=experimental_spec["label"],
+                zorder=4,
+            )
+
+    ax.set_xscale("log")
+    ax.set_xlim(*cfg["fig6_overlay_xlim"])
+    ax.set_ylim(*cfg["fig6_overlay_ylim"])
+    if not cfg.get("fig6_overlay_show_axes", False):
+        ax.set_axis_off()
+    else:
+        ax.grid(True, alpha=0.25)
+
+    out_setting = cfg.get("fig6_overlay_out")
+    out_path = None if out_setting is False else (
+        pathlib.Path(out_setting).resolve()
+        if out_setting is not None
+        else SCRIPT_DIR / "illingworth2005_fig6_overlay.png"
+    )
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, dpi=dpi, transparent=transparent, bbox_inches=None, pad_inches=0)
+        print(f"Saved Figure 6 overlay PNG: {out_path}")
+    return {
+        "figure": fig,
+        "axes": ax,
+        "path": out_path,
+        "source_image_path": source_path,
+        "canvas_px": (width_px, height_px),
+        "axes_rect": tuple(float(v) for v in cfg["fig6_overlay_axes_rect"]),
+        "params": cfg,
+    }
+
+
+def run_fig6_olaye_brass_case(params):
+    """
+    Runs one corrected Olaye Figure-6 brass case with the Illingworth model.
+
+    Phase A is beta and phase B is alpha; the returned
+    ``interface_displacement_um`` is ``s(t) - s0`` in micrometers.
+    """
+    p = dict(params)
+    transformed_u_grid, transformed_v_grid, grid_metadata = build_symmetric_fig3_transformed_grids(p)
+    n_steps = _estimate_illingworth_n_steps(p, figure_label="Figure 6")
+    print(f"Estimated number of time-steps \n for {p['label']}: {n_steps}")
+    model = build_fig3_present_work_model(p, record=p["record"])
+    python_start = time.perf_counter()
+    model.solve(p["t_end_s"], iterator=explicitEulerIterator, minDtFrac=1e-15, verbose=True, vIt=100)
+    python_runtime_s = time.perf_counter() - python_start
+    n = model.interfaceData.N + 1
+    time_s = model.interfaceData._time[:n].copy()
+    phase_a_width_um = model.interfaceData._y[:n].copy()
+    interface_displacement_um = phase_a_width_um - p["s0_um"]
+    result = {
+        "time_s": time_s,
+        "phase_a_width_um": phase_a_width_um,
+        "interface_displacement_um": interface_displacement_um,
+        "model": model,
+        "params": p,
+        "python_runtime_s": python_runtime_s,
+        "grid_metadata": grid_metadata,
+        "transformed_u_grid": transformed_u_grid,
+        "transformed_v_grid": transformed_v_grid,
+    }
+    if p.get("checkAgainstAuthorsCPP", False):
+        if p.get("dt_mode", "fixed") != "fixed":
+            result["cpp_comparison_skipped"] = (
+                "Authors' generated C++ comparison is skipped for dt_mode='semi_log' "
+                "because that driver mirrors only fixed timesteps."
+            )
+            print(result["cpp_comparison_skipped"])
+        else:
+            comparison = compare_fig6_result_to_authors_cpp(
+                result,
+                compiler=p.get("cpp_compiler"),
+                build_dir=p.get("cpp_build_dir"),
+            )
+            result["cpp_comparison"] = comparison
+            print_comparison_summary(comparison, print_table=p.get("cpp_print_table", False))
+    return result
+
+
+def _plot_fig6_concentration_info(ax, case_results):
+    """Adds a Figure-6 concentration-history twin axis for Illingworth runs."""
+    ax_conc = ax.twinx()
+    ax_conc.set_ylabel("conc", color="tab:green")
+    ax_conc.tick_params(axis="y", colors="tab:green")
+    plotted_any = False
+    for item in case_results:
+        params = item["params"]
+        style = _fig6_style(params["layer"], params["d_alpha_cm2_s"])
+        color = style.get("color")
+        model = item["model"]
+        n_conc = model.concData.N + 1
+        conc_time_arr = model.concData._time[:n_conc].copy()
+        conc_arr = model.concData._y[:n_conc].copy()
+        mask = np.isfinite(conc_time_arr) & np.isfinite(conc_arr) & (conc_time_arr > 0)
+        if np.count_nonzero(mask) < 2:
+            continue
+        conc_time_plot = conc_time_arr[mask]
+        conc_plot = conc_arr[mask]
+        ax_conc.plot(
+            conc_time_plot,
+            conc_plot,
+            lw=1.0,
+            color=color,
+            linestyle=":",
+            label=f"{params['label']} conc",
+        )
+        ax_conc.plot(
+            [conc_time_plot[0], conc_time_plot[-1]],
+            [conc_arr[0], conc_arr[0]],
+            lw=0.8,
+            color=color,
+            linestyle="dashdot",
+            alpha=0.45,
+            label=f"{params['label']} initial conc",
+        )
+        idealized_conc = compute_fig3_idealized_conc(params)
+        ax_conc.plot(
+            [conc_time_plot[0], conc_time_plot[-1]],
+            [idealized_conc, idealized_conc],
+            lw=0.8,
+            color=color,
+            linestyle="dashed",
+            alpha=0.45,
+            label=f"{params['label']} idealized conc",
+        )
+        plotted_any = True
+
+        initial_conc = conc_arr[0]
+        print(f"Initial Conc:   {initial_conc}")
+        print(f"Idealized Conc: {idealized_conc}")
+        print(f"Initial vs Idealized Conc Frac Diff: {(initial_conc-idealized_conc)/idealized_conc}")
+        conc_diffFromInitial_arr = conc_arr - initial_conc
+        conc_diffFromIdealized_arr = conc_arr - idealized_conc
+        print(f"Diff from Initial: {float(conc_diffFromInitial_arr.min()/initial_conc), float(conc_diffFromInitial_arr.max()/initial_conc)}")
+        print(f"Diff from Idealized: {float(conc_diffFromIdealized_arr.min()/idealized_conc), float(conc_diffFromIdealized_arr.max()/idealized_conc)}")
+
+    # if plotted_any:
+    #     ax_conc.legend(loc="center right", fontsize=7)
+    return ax_conc
+
+
+def plot_fig6_olaye_brass_sqrt_time_analytical(case_results, config=None, ax=None):
+    """
+    Plots Illingworth Figure-6 results versus ``sqrt(t)`` with analytical lines.
+
+    The analytical overlay is the semi-infinite planar moving-boundary solution
+    ``s(t) - s0 = 2*beta*sqrt(t)``. It is a diagnostic early-time view of
+    completed Figure-6 Illingworth cases.
+    """
+    import matplotlib.pyplot as plt
+
+    cfg = FIG6_OLAYE_BRASS_CONFIG if config is None else {**FIG6_OLAYE_BRASS_CONFIG, **dict(config)}
+    if not case_results:
+        raise ValueError("At least one Figure 6 case result is required for the sqrt-time analytical plot.")
+    out_setting = cfg.get("fig6_sqrt_time_out")
+    out_path = None if out_setting is False else (
+        pathlib.Path(out_setting).resolve()
+        if out_setting is not None
+        else SCRIPT_DIR / "illingworth2005_fig6_sqrt_time_analytical.png"
+    )
+
+    created_figure = ax is None
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(7.2, 4.8), dpi=140)
+    else:
+        fig = ax.figure
+
+    plotted_any = False
+    for item in case_results:
+        params = item["params"]
+        constants = _fig6_analytical_constants(params)
+        time_max_s = _fig6_case_sqrt_time_max_s(cfg, constants)
+        time_s = np.asarray(item["time_s"], dtype=np.float64)
+        displacement_um = np.asarray(item["interface_displacement_um"], dtype=np.float64)
+        mask = np.isfinite(time_s) & np.isfinite(displacement_um) & (time_s >= 0)
+        if time_max_s is not None:
+            mask &= time_s <= time_max_s
+        if np.count_nonzero(mask) < 2:
+            raise ValueError(f"{params['label']} has fewer than two finite points in the sqrt-time comparison window.")
+
+        sqrt_time, displacement_plot_um = _limit_plot_points(
+            np.sqrt(time_s[mask]),
+            displacement_um[mask],
+            cfg.get("fig6_sqrt_time_max_points_per_case"),
+        )
+        style = _fig6_style(params["layer"], params["d_alpha_cm2_s"])
+        ax.plot(
+            sqrt_time,
+            displacement_plot_um,
+            label=params["label"],
+            **style,
+        )
+        analytical_sqrt_time = np.linspace(0.0, float(np.max(sqrt_time)), 250)
+        ax.plot(
+            analytical_sqrt_time,
+            2.0 * constants["beta_um_sqrt_s"] * analytical_sqrt_time,
+            color=style.get("color"),
+            linestyle=":",
+            linewidth=1.4,
+            label=f"{params['label']} analytical, beta={constants['beta_um_sqrt_s']:.6g} um/sqrt(s)",
+        )
+        plotted_any = True
+
+    plot_extracted = cfg.get("fig6_sqrt_time_plot_extracted_data", cfg.get("fig6_plot_extracted_data", True))
+    plot_experimental = cfg.get("fig6_sqrt_time_plot_experimental_data", cfg.get("fig6_plot_experimental_data", True))
+    if plot_extracted or plot_experimental:
+        non_data_xlim = ax.get_xlim()
+        x_min, x_max = sorted(non_data_xlim)
+
+        if plot_extracted:
+            for extracted_spec in _fig6_extracted_data_specs_for_cases(case_results):
+                if not extracted_spec["path"].exists():
+                    continue
+                exp_t_s, exp_disp_um = _load_no_header_xy_csv(extracted_spec["path"])
+                exp_sqrt_time = np.full_like(exp_t_s, np.nan, dtype=np.float64)
+                nonnegative_time = np.isfinite(exp_t_s) & (exp_t_s >= 0)
+                exp_sqrt_time[nonnegative_time] = np.sqrt(exp_t_s[nonnegative_time])
+                mask = (
+                    np.isfinite(exp_sqrt_time)
+                    & np.isfinite(exp_disp_um)
+                    & (x_min <= exp_sqrt_time)
+                    & (exp_sqrt_time <= x_max)
+                )
+                if np.count_nonzero(mask) == 0:
+                    continue
+                ax.scatter(
+                    exp_sqrt_time[mask],
+                    exp_disp_um[mask],
+                    s=20,
+                    color=extracted_spec["color"],
+                    marker=extracted_spec["marker"],
+                    facecolor="none",
+                    label=extracted_spec["label"],
+                    zorder=3,
+                )
+
+        if plot_experimental:
+            for experimental_spec in _fig6_experimental_data_specs_for_cases(case_results):
+                if not experimental_spec["path"].exists():
+                    continue
+                exp_t_s, exp_disp_um = _load_no_header_xy_csv(experimental_spec["path"])
+                exp_sqrt_time = np.full_like(exp_t_s, np.nan, dtype=np.float64)
+                nonnegative_time = np.isfinite(exp_t_s) & (exp_t_s >= 0)
+                exp_sqrt_time[nonnegative_time] = np.sqrt(exp_t_s[nonnegative_time])
+                mask = (
+                    np.isfinite(exp_sqrt_time)
+                    & np.isfinite(exp_disp_um)
+                    & (x_min <= exp_sqrt_time)
+                    & (exp_sqrt_time <= x_max)
+                )
+                if np.count_nonzero(mask) == 0:
+                    continue
+                ax.scatter(
+                    exp_sqrt_time[mask],
+                    exp_disp_um[mask],
+                    s=28,
+                    color=experimental_spec["color"],
+                    marker=experimental_spec["marker"],
+                    label=experimental_spec["label"],
+                    zorder=4,
+                )
+
+        ax.set_xlim(non_data_xlim)
+
+    ax.set_xlabel("sqrt(time) (sqrt(s))")
+    ax.set_ylabel("Interface displacement (um)")
+    ax.set_title(
+        f"Figure 6 Illingworth sqrt-time analytical comparison, "
+        f"nA:{cfg['fig6_n_phase_a_nodes']}, nB:{cfg['fig6_n_phase_b_nodes']}",
+        fontsize=10,
+    )
+    ax.grid(True, alpha=0.25)
+    if plotted_any:
+        ax.legend(fontsize=7)
+
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, bbox_inches="tight")
+        print(f"Saved Figure 6 sqrt-time analytical figure: {out_path}")
+
+    if created_figure:
+        if cfg.get("show", True):
+            plt.show()
+        else:
+            plt.close(fig)
+
+    return {
+        "figure": fig,
+        "axes": ax,
+        "cases": case_results,
+        "params": cfg,
+    }
+
+
+def plot_fig6_olaye_brass_illingworth(config=None, ax=None):
+    """
+    Runs selected Olaye Figure-6 brass cases with the Illingworth model.
+
+    The plotted quantity is beta/alpha interface displacement ``s(t) - s0`` in
+    micrometers. Layer and alpha-diffusivity selections are controlled by
+    ``fig6_layers`` and ``fig6_d_alpha_cm2_s`` in ``FIG6_OLAYE_BRASS_CONFIG``.
+    """
+    import matplotlib.pyplot as plt
+
+    cfg = FIG6_OLAYE_BRASS_CONFIG if config is None else {**FIG6_OLAYE_BRASS_CONFIG, **dict(config)}
+    out_setting = cfg.get("fig6_out")
+    out_path = None if out_setting is False else (
+        pathlib.Path(out_setting).resolve()
+        if out_setting is not None
+        else SCRIPT_DIR / "illingworth2005_fig6_olaye_brass.png"
+    )
+    created_figure = ax is None
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7.2, 4.8), dpi=140)
+
+    case_results = []
+    for layer in _selected_fig6_layers(cfg):
+        for d_alpha_cm2_s in _selected_fig6_d_alpha_cm2_s(cfg):
+            params = build_fig6_illingworth_case_params(layer, d_alpha_cm2_s, cfg)
+            result = run_fig6_olaye_brass_case(params)
+            mask = np.isfinite(result["time_s"]) & np.isfinite(result["interface_displacement_um"]) & (result["time_s"] > 0)
+            if np.count_nonzero(mask) < 2:
+                raise ValueError(f"Figure 6 case {params['label']} did not produce enough finite points to plot.")
+            plot_result = {
+                **result,
+                "time_s": result["time_s"][mask],
+                "phase_a_width_um": result["phase_a_width_um"][mask],
+                "interface_displacement_um": result["interface_displacement_um"][mask],
+            }
+            ax.plot(
+                plot_result["time_s"],
+                plot_result["interface_displacement_um"],
+                label=params["label"],
+                **_fig6_style(layer, d_alpha_cm2_s),
+            )
+            if params.get("plot_cpp_comparison", True) and "cpp_comparison" in plot_result:
+                comparison = plot_result["cpp_comparison"]
+                cpp_time = np.asarray(comparison.get("cpp_time", comparison["time"]), dtype=np.float64)
+                cpp_interface = np.asarray(comparison.get("cpp_interface", comparison["cpp_s"]), dtype=np.float64)
+                cpp_mask = np.isfinite(cpp_time) & np.isfinite(cpp_interface) & (cpp_time > 0)
+                style = _fig6_style(layer, d_alpha_cm2_s)
+                ax.plot(
+                    cpp_time[cpp_mask],
+                    cpp_interface[cpp_mask] - params["s0_um"],
+                    color='k', #style.get("color"),
+                    linestyle=":",
+                    linewidth=1.2,
+                    label=f"{params['label']} authors' C++",
+                    zorder=6,
+                )
+            case_results.append(plot_result)
+
+    ax_conc = None
+    if cfg.get("fig6_plot_concentration_info", True):
+        ax_conc = _plot_fig6_concentration_info(ax, case_results)
+
+    if cfg.get("fig6_plot_extracted_data", True):
+        for extracted_spec in _fig6_extracted_data_specs_for_cases(case_results):
+            if not extracted_spec["path"].exists():
+                continue
+            exp_t_s, exp_disp_um = _load_no_header_xy_csv(extracted_spec["path"])
+            mask = np.isfinite(exp_t_s) & np.isfinite(exp_disp_um) & (exp_t_s > 0)
+            ax.scatter(
+                exp_t_s[mask],
+                exp_disp_um[mask],
+                s=20,
+                color=extracted_spec["color"],
+                marker=extracted_spec["marker"],
+                facecolors="none",
+                label=extracted_spec["label"],
+                zorder=3,
+            )
+
+    if cfg.get("fig6_plot_experimental_data", True):
+        for experimental_spec in _fig6_experimental_data_specs_for_cases(case_results):
+            if not experimental_spec["path"].exists():
+                continue
+            exp_t_s, exp_disp_um = _load_no_header_xy_csv(experimental_spec["path"])
+            mask = np.isfinite(exp_t_s) & np.isfinite(exp_disp_um) & (exp_t_s > 0)
+            ax.scatter(
+                exp_t_s[mask],
+                exp_disp_um[mask],
+                s=28,
+                color=experimental_spec["color"],
+                marker=experimental_spec["marker"],
+                label=experimental_spec["label"],
+                zorder=4,
+            )
+
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Interface displacement (um)")
+    ax.set_title(
+        f"Figure 6 Illingworth brass cases, "
+        f"nA:{cfg['fig6_n_phase_a_nodes']}, nB:{cfg['fig6_n_phase_b_nodes']}, "
+        f"{_format_fig3_timestep_label(case_results[0]['params']) if case_results else ''}",
+        fontsize=10,
+    )
+    ax.set_xscale("log")
+    xlim = cfg.get("fig6_xlim", (10.0, None))
+    if xlim is not None:
+        x0, x1 = xlim
+        ax.set_xlim(x0, cfg["fig6_t_end_s"] if x1 is None else x1)
+    if cfg.get("fig6_ylim") is not None:
+        ax.set_ylim(*cfg["fig6_ylim"])
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=7)
+
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        ax.figure.savefig(out_path, bbox_inches="tight")
+        print(f"Saved figure: {out_path}")
+
+    save_path = None
+    if cfg.get("fig6_save_run", False):
+        save_path = _save_fig6_illingworth_run_result(cfg["fig6_save_run_path"], case_results)
+        print(f"Saved Figure 6 Illingworth run: {save_path}")
+
+    overlay = None
+    if cfg.get("fig6_make_overlay_png", False):
+        overlay = plot_fig6_olaye_brass_overlay_png(case_results, cfg)
+
+    sqrt_time_analytical = None
+    if cfg.get("fig6_plot_sqrt_time_analytical", False):
+        sqrt_time_analytical = plot_fig6_olaye_brass_sqrt_time_analytical(case_results, cfg)
+
+    if created_figure:
+        if cfg.get("show", True):
+            plt.show()
+        else:
+            plt.close(ax.figure)
+
+    return {
+        "figure": ax.figure,
+        "axes": ax,
+        "concentration_axes": ax_conc,
+        "cases": case_results,
+        "save_path": save_path,
+        "overlay": overlay,
+        "sqrt_time_analytical": sqrt_time_analytical,
+        "params": cfg,
+    }
+
+
 def parse_results(path):
     """Parses the authors' ``results.txt`` interface-position output."""
     data = np.loadtxt(path, skiprows=1, dtype=np.float64)
@@ -873,11 +1899,12 @@ def _format_cpp_float(value):
 
 def fig3_params_to_author_cpp_params(params):
     """
-    Converts Figure-3 Python parameters to the authors' planar C++ parameters.
+    Converts planar Python parameters to the authors' generated C++ parameters.
 
-    The authors' C++ driver requires an integer number of fixed timesteps. The
-    Python comparison therefore requires ``t_end_s`` to be an integer multiple
-    of ``time_step_s`` when running against generated C++ reference output.
+    Figure 3 and the corrected Figure 6 brass cases share the same two-phase
+    planar driver convention. The generated C++ driver requires an integer
+    number of fixed timesteps, so ``t_end_s`` must be an integer multiple of
+    ``time_step_s`` when running against generated C++ reference output.
     """
     p = FIG3_PRESENT_WORK_PARAMS if params is None else {**FIG3_PRESENT_WORK_PARAMS, **dict(params)}
     if p.get("dt_mode", "fixed") != "fixed":
@@ -904,7 +1931,7 @@ def fig3_params_to_author_cpp_params(params):
         "interface_beta": float(p["c_solid_int_atpct"]) / 100.0,
         "time_step": float(p["time_step_s"]),
         "n_time_steps": n_time_steps,
-        "tolerance": 1.0e-8,
+        "tolerance": p['tolerance'],
         "grid_type": grid_metadata["grid_type"],
         "geometric_ratio": grid_metadata["geometric_ratio"],
     }
@@ -1273,6 +2300,74 @@ def compare_fig3_result_to_authors_cpp(result, compiler=None, build_dir=None):
     }
 
 
+def compare_fig6_result_to_authors_cpp(result, compiler=None, build_dir=None):
+    """
+    Compares a Python Figure-6 Illingworth run against generated authors' C++.
+
+    The C++ driver writes the absolute interface position ``s`` for every fixed
+    timestep. The Python Figure-6 result is compared through
+    ``phase_a_width_um`` so the comparison is made in the same absolute
+    interface convention before downstream plots convert to ``s - s0``.
+    """
+    import pandas as pd
+
+    p = result["params"]
+    (cpp_time, cpp_s), runtime_info = compile_and_run_authors_cpp_with_params(
+        p,
+        compiler=compiler,
+        build_dir=build_dir,
+        return_runtime=True,
+    )
+    py_time = np.asarray(result["time_s"], dtype=np.float64)
+    py_s = np.asarray(result["phase_a_width_um"], dtype=np.float64)
+    dt = float(p["time_step_s"])
+    cpp_indices = np.rint(py_time / dt).astype(int)
+    if np.any(cpp_indices < 0) or np.any(cpp_indices >= len(cpp_time)):
+        raise ValueError("Python recorded times extend outside the generated C++ reference history.")
+    matched_cpp_time = cpp_time[cpp_indices]
+    time_atol = max(abs(dt) * 1e-8, 1e-12)
+    if not np.allclose(matched_cpp_time, py_time, rtol=0.0, atol=time_atol):
+        max_time_diff = float(np.max(np.abs(matched_cpp_time - py_time)))
+        print(f"C++ and Python output times do not match; max difference is {max_time_diff:.3e}.")
+        # raise ValueError(f"C++ and Python output times do not match; max difference is {max_time_diff:.3e}.")
+    matched_cpp_s = cpp_s[cpp_indices]
+    abs_diff = np.abs(matched_cpp_s - py_s)
+    rel_diff = abs_diff / np.maximum(np.abs(matched_cpp_s), 1e-300)
+    comparison_df = pd.DataFrame(
+        {
+            "time_s": py_time,
+            "python_interface_um": py_s,
+            "python_interface_displacement_um": py_s - p["s0_um"],
+            "authors_cpp_interface_um": matched_cpp_s,
+            "authors_cpp_interface_displacement_um": matched_cpp_s - p["s0_um"],
+            "interface_abs_diff_um": abs_diff,
+            "interface_rel_diff": rel_diff,
+            "authors_cpp_time_s": matched_cpp_time,
+            "authors_cpp_step_index": cpp_indices,
+        }
+    )
+    python_runtime_s = result.get("python_runtime_s")
+    runtime_ratio = np.nan
+    if python_runtime_s is not None and runtime_info["cpp_run_runtime_s"] > 0:
+        runtime_ratio = float(python_runtime_s / runtime_info["cpp_run_runtime_s"])
+    return {
+        "time": py_time,
+        "cpp_s": matched_cpp_s,
+        "python_s": py_s,
+        "abs_diff": abs_diff,
+        "rel_diff": rel_diff,
+        "max_abs_diff": float(np.max(abs_diff)),
+        "max_rel_diff": float(np.max(rel_diff)),
+        "cpp_time": cpp_time,
+        "cpp_interface": cpp_s,
+        "cpp_interface_displacement_um": cpp_s - p["s0_um"],
+        "dataframe": comparison_df,
+        "python_runtime_s": None if python_runtime_s is None else float(python_runtime_s),
+        **runtime_info,
+        "python_to_cpp_run_runtime_ratio": runtime_ratio,
+    }
+
+
 def print_comparison_summary(comparison, print_table=False):
     """Prints a compact comparison summary suitable for scripts or notebooks."""
     print(f"Rows compared: {len(comparison['time'])}")
@@ -1311,7 +2406,9 @@ def run_from_config(config=None):
         return comparison
     if config["run_mode"] == "fig3_present_work":
         return plot_fig3_present_work({**FIG3_NOTEBOOK_CONFIG, **config["fig3_overrides"]})
-    raise ValueError("SCRIPT_CONFIG['run_mode'] must be 'cpp_comparison' or 'fig3_present_work'.")
+    if config["run_mode"] in {"fig6", "fig6_olaye_brass"}:
+        return plot_fig6_olaye_brass_illingworth({**FIG6_OLAYE_BRASS_CONFIG, **config["fig6_overrides"]})
+    raise ValueError("SCRIPT_CONFIG['run_mode'] must be 'cpp_comparison', 'fig3_present_work', or 'fig6_olaye_brass'.")
 
 
 def build_parser():
@@ -1345,7 +2442,8 @@ def main(argv=None):
 
 if __name__ == "__main__":
     if "ipykernel" in sys.modules:
-        result, ax = plot_fig3_present_work(FIG3_NOTEBOOK_CONFIG)
+        # result, ax = plot_fig3_present_work(FIG3_NOTEBOOK_CONFIG)
+        result = plot_fig6_olaye_brass_illingworth(FIG6_OLAYE_BRASS_CONFIG)
         # comparison = run_from_config()
     else:
         result, ax = plot_fig3_present_work(FIG3_NOTEBOOK_CONFIG)

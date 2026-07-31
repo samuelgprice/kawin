@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import pathlib
 import shutil
 
 import matplotlib.pyplot as plt
@@ -3482,6 +3483,236 @@ def test_olaye_saved_run_payload_contains_required_fields():
     assert payload["label"] == "Synthetic Olaye"
 
 
+def test_olaye_figure_selector_normalizes_requested_figures():
+    from examples.Olaye2020.replicate_olaye2020_fig5 import _selected_figures
+
+    assert _selected_figures({"figures": "fig5"}) == ("fig5",)
+    assert _selected_figures({"figures": ["5", "fig6"]}) == ("fig5", "fig6")
+    assert _selected_figures({"figures": "all"}) == ("fig5", "fig6")
+
+
+def test_olaye_fig6_selection_validation():
+    from examples.Olaye2020.replicate_olaye2020_fig5 import (
+        _selected_fig6_d_alpha_cm2_s,
+        _selected_fig6_layers,
+    )
+
+    assert _selected_fig6_layers({"fig6_layers": "both"}) == ("thin", "thick")
+    assert _selected_fig6_layers({"fig6_layers": ["thick", "thin"]}) == ("thick", "thin")
+    assert _selected_fig6_d_alpha_cm2_s({"fig6_d_alpha_cm2_s": "both"}) == (1.4e-8, 2.5e-8)
+    assert _selected_fig6_d_alpha_cm2_s({"fig6_d_alpha_cm2_s": [2.5e-8]}) == (2.5e-8,)
+
+    with pytest.raises(ValueError, match="Unknown Figure 6 layer"):
+        _selected_fig6_layers({"fig6_layers": ["medium"]})
+    with pytest.raises(ValueError, match="Unknown Figure 6 alpha diffusivity"):
+        _selected_fig6_d_alpha_cm2_s({"fig6_d_alpha_cm2_s": [3.0e-8]})
+
+
+def test_olaye_fig6_case_params_use_corrected_brass_table_values():
+    from examples.Olaye2020.replicate_olaye2020_fig5 import build_fig6_case_params
+
+    thin = build_fig6_case_params(
+        "thin",
+        1.4e-8,
+        {
+            "fig6_n_phase_a_nodes": 12,
+            "fig6_n_phase_b_nodes": 34,
+            "fig6_semiLog_dt": 0.125,
+            "fig6_t_end_s": 10.0,
+        },
+    )
+    thick = build_fig6_case_params("thick", 2.5e-8)
+
+    assert thin["phase_a_name"] == "BETA"
+    assert thin["phase_b_name"] == "ALPHA"
+    assert thin["s0_um"] == 190.5
+    assert thin["R_um"] == 565.0
+    assert thin["c_liquid0_pct"] == 39.4
+    assert thin["c_solid0_pct"] == 29.1
+    assert thin["c_liquid_int_pct"] == 36.9
+    assert thin["c_solid_int_pct"] == 32.5
+    assert thin["D_liquid_base"] == 100.0
+    assert thin["D_solid_base"] == 1.4
+    assert thin["n_phase_a_nodes"] == 12
+    assert thin["n_phase_b_nodes"] == 34
+    assert thin["semiLog_dt"] == 0.125
+    assert thin["t_end_s"] == 10.0
+
+    assert thick["s0_um"] == 381.0
+    assert thick["R_um"] == 755.5
+    assert thick["D_solid_base"] == 2.5
+
+
+def test_olaye_fig6_analytical_constants_use_um2_per_s_units():
+    from examples.Olaye2020.replicate_olaye2020_fig5 import _fig6_analytical_constants, build_fig6_case_params, solve_beta
+
+    params = build_fig6_case_params("thin", 1.4e-8)
+    constants = _fig6_analytical_constants(params)
+
+    assert constants["d_a_um2_s"] == 100.0
+    assert constants["d_b_um2_s"] == 1.4
+    assert constants["s0_um"] == 190.5
+    assert constants["R_um"] == 565.0
+    assert_allclose(
+        constants["beta_um_sqrt_s"],
+        solve_beta(0.394, 0.291, 0.369, 0.325, 100.0, 1.4, left=-100.0, right=100.0),
+    )
+
+
+def test_olaye_no_header_xy_csv_loader():
+    from io import StringIO
+
+    from examples.Olaye2020.replicate_olaye2020_fig5 import _load_no_header_xy_csv
+
+    x, y = _load_no_header_xy_csv(StringIO("1.0,2.0\nnan,3.0\n4.0,5.0\n"))
+
+    assert_allclose(x, [1.0, 4.0])
+    assert_allclose(y, [2.0, 5.0])
+
+
+def test_olaye_fig6_payload_contains_interface_displacement():
+    from examples.Olaye2020.replicate_olaye2020_fig5 import build_olaye_run_payload
+
+    payload = build_olaye_run_payload(
+        time_s=np.array([10.0, 100.0]),
+        interface_displacement_um=np.array([1.0, -2.0]),
+        params={"figure": "fig6", "show": True},
+        model_variant="rework",
+        model_family="olaye_fig6",
+        label="Synthetic Figure 6",
+    )
+
+    assert "interface_displacement_um" in payload
+    assert "half_width_um" not in payload
+    assert payload["model_family"] == "olaye_fig6"
+    assert payload["label"] == "Synthetic Figure 6"
+
+
+def test_olaye_fig6_concentration_info_plot_helper_adds_twin_axis():
+    from examples.Olaye2020.replicate_olaye2020_fig5 import _plot_fig6_concentration_info, build_fig6_case_params
+
+    class FakeHistory:
+        def __init__(self):
+            self._time = np.array([1.0, 10.0, 100.0])
+            self._y = np.array([0.32, 0.33, 0.34])
+
+    class FakeModel:
+        def __init__(self):
+            self.concData = FakeHistory()
+
+    fig, ax = plt.subplots()
+    try:
+        params = build_fig6_case_params("thin", 1.4e-8)
+        ax_conc = _plot_fig6_concentration_info(
+            ax,
+            [
+                {
+                    "model": FakeModel(),
+                    "params": params,
+                }
+            ],
+        )
+
+        assert ax_conc is not ax
+        assert ax_conc.get_ylabel() == "conc"
+        assert len(ax_conc.lines) == 3
+    finally:
+        plt.close(fig)
+
+
+def test_olaye_fig6_extracted_data_specs_match_plotted_cases():
+    from examples.Olaye2020.replicate_olaye2020_fig5 import (
+        _fig6_extracted_data_specs_for_cases,
+        build_fig6_case_params,
+    )
+
+    thick_specs = _fig6_extracted_data_specs_for_cases(
+        [
+            {
+                "params": build_fig6_case_params("thick", 1.4e-8),
+            }
+        ]
+    )
+    thick_d2pt5_specs = _fig6_extracted_data_specs_for_cases(
+        [
+            {
+                "params": build_fig6_case_params("thick", 2.5e-8),
+            }
+        ]
+    )
+    both_specs = _fig6_extracted_data_specs_for_cases(
+        [
+            {
+                "params": build_fig6_case_params("thin", 1.4e-8),
+            },
+            {
+                "params": build_fig6_case_params("thick", 1.4e-8),
+            },
+        ]
+    )
+
+    assert [spec["filename"] for spec in thick_specs] == ["Olaye2020_fig6_ThickBeta_D1pt4_DF_curve.csv"]
+    assert [spec["filename"] for spec in thick_d2pt5_specs] == ["Olaye2020_fig6_ThickBeta_D2pt5_DF_curve.csv"]
+    assert [spec["filename"] for spec in both_specs] == [
+        "Olaye2020_fig6_ThinBeta_D1pt4_DF_curve.csv",
+        "Olaye2020_fig6_ThickBeta_D1pt4_DF_curve.csv",
+    ]
+
+
+def test_olaye_fig6_sqrt_time_analytical_plot_helper(monkeypatch):
+    from examples.Olaye2020 import replicate_olaye2020_fig5 as olaye
+
+    monkeypatch.setattr(
+        olaye,
+        "_fig6_extracted_data_specs_for_cases",
+        lambda case_results: [
+            {
+                "path": pathlib.Path(__file__),
+                "color": "black",
+                "marker": "o",
+                "label": "Synthetic extracted data",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        olaye,
+        "_load_no_header_xy_csv",
+        lambda path: (
+            np.array([100.0, 1.0e8, 100.0]),
+            np.array([8.0, 8.0, 30.0]),
+        ),
+    )
+
+    params = olaye.build_fig6_case_params("thin", 1.4e-8)
+    from matplotlib.figure import Figure
+    fig = Figure()
+    ax = fig.add_subplot(111)
+    result = olaye.plot_olaye_fig6_sqrt_time_analytical(
+        [
+            {
+                "time_s": np.array([0.0, 100.0, 400.0]),
+                "interface_displacement_um": np.array([0.0, 8.0, 16.0]),
+                "params": params,
+            }
+        ],
+        {
+            "show": False,
+            "fig6_sqrt_time_out": False,
+            "fig6_sqrt_time_plot_extracted_data": True,
+            "fig6_sqrt_time_max_s": None,
+        },
+        ax=ax,
+    )
+
+    assert result["axes"].get_xlabel() == "sqrt(time) (sqrt(s))"
+    assert result["axes"].get_ylabel() == "Interface displacement (um)"
+    assert len(result["axes"].lines) == 2
+    assert len(result["axes"].collections) == 1
+    assert_allclose(result["axes"].collections[0].get_offsets(), [[10.0, 8.0], [10.0, 30.0]])
+    assert result["axes"].get_xlim()[1] < np.sqrt(1.0e8)
+    assert result["axes"].get_ylim()[1] > 30.0
+
+
 def test_illingworth_saved_run_payload_contains_required_fields():
     from examples.Illingworth2005.compare_illingworth2005_planar import build_illingworth_run_payload
 
@@ -3498,6 +3729,383 @@ def test_illingworth_saved_run_payload_contains_required_fields():
     assert set(["time_s", "half_width_um", "label", "source_script", "model_family", "params_json", "theoretical_max_um"]).issubset(payload)
     assert payload["model_family"] == "illingworth_fig3_present_work"
     assert payload["label"] == "Synthetic Illingworth"
+
+
+def test_illingworth_fig6_case_params_use_corrected_brass_table_values():
+    from examples.Illingworth2005.compare_illingworth2005_planar import build_fig6_illingworth_case_params
+
+    thin = build_fig6_illingworth_case_params(
+        "thin",
+        1.4e-8,
+        {
+            "fig6_n_phase_a_nodes": 12,
+            "fig6_n_phase_b_nodes": 34,
+            "fig6_semiLog_dt": 0.125,
+            "fig6_t_end_s": 10.0,
+        },
+    )
+    thick = build_fig6_illingworth_case_params("thick", 2.5e-8)
+
+    assert thin["phase_a_name"] == "BETA"
+    assert thin["phase_b_name"] == "ALPHA"
+    assert thin["response_name"] == "ZN"
+    assert thin["elements"] == ("CU", "ZN")
+    assert thin["s0_um"] == 190.5
+    assert thin["R_um"] == 565.0
+    assert thin["c_liquid0_atpct"] == 39.4
+    assert thin["c_solid0_atpct"] == 29.1
+    assert thin["c_liquid_int_atpct"] == 36.9
+    assert thin["c_solid_int_atpct"] == 32.5
+    assert thin["D_liquid_um2_s"] == 100.0
+    assert thin["D_solid_um2_s"] == 1.4
+    assert thin["n_alpha"] == 12
+    assert thin["n_beta"] == 34
+    assert thin["semiLog_dt"] == 0.125
+    assert thin["t_end_s"] == 10.0
+    assert not thin["checkAgainstAuthorsCPP"]
+
+    assert thick["s0_um"] == 381.0
+    assert thick["R_um"] == 755.5
+    assert thick["D_solid_um2_s"] == 2.5
+
+    cpp_enabled = build_fig6_illingworth_case_params(
+        "thin",
+        1.4e-8,
+        {
+            "fig6_check_against_authors_cpp": True,
+            "fig6_plot_cpp_comparison": False,
+            "fig6_cpp_compiler": "custom-g++",
+            "fig6_cpp_build_dir": pathlib.Path("cpp-build"),
+            "fig6_cpp_print_table": True,
+        },
+    )
+
+    assert cpp_enabled["checkAgainstAuthorsCPP"]
+    assert not cpp_enabled["plot_cpp_comparison"]
+    assert cpp_enabled["cpp_compiler"] == "custom-g++"
+    assert cpp_enabled["cpp_build_dir"] == pathlib.Path("cpp-build")
+    assert cpp_enabled["cpp_print_table"]
+
+
+def test_illingworth_fig3_builder_accepts_tolerance_override():
+    from examples.Illingworth2005.compare_illingworth2005_planar import build_fig3_present_work_model
+
+    model = build_fig3_present_work_model(
+        {
+            "tolerance": 3.0e-12,
+            "n_alpha": 5,
+            "n_beta": 6,
+            "record_pq_data": False,
+            "preallocate_recordings": False,
+        },
+        record=False,
+    )
+
+    assert model.tolerance == pytest.approx(3.0e-12)
+
+
+def test_illingworth_fig6_analytical_constants_use_um2_per_s_units():
+    from examples.Illingworth2005.compare_illingworth2005_planar import (
+        _fig6_analytical_constants,
+        build_fig6_illingworth_case_params,
+        solve_beta,
+    )
+
+    params = build_fig6_illingworth_case_params("thin", 1.4e-8)
+    constants = _fig6_analytical_constants(params)
+
+    assert constants["d_a_um2_s"] == 100.0
+    assert constants["d_b_um2_s"] == 1.4
+    assert constants["s0_um"] == 190.5
+    assert constants["R_um"] == 565.0
+    assert_allclose(
+        constants["beta_um_sqrt_s"],
+        solve_beta(0.394, 0.291, 0.369, 0.325, 100.0, 1.4, left=-100.0, right=100.0),
+    )
+
+
+def test_illingworth_fig6_cpp_comparison_matches_fixed_step_history(monkeypatch):
+    from examples.Illingworth2005 import compare_illingworth2005_planar as illingworth
+
+    params = illingworth.build_fig6_illingworth_case_params(
+        "thin",
+        1.4e-8,
+        {
+            "fig6_dt_mode": "fixed",
+            "fig6_time_step_s": 0.5,
+            "fig6_t_end_s": 2.0,
+        },
+    )
+    cpp_time = np.array([0.0, 0.5, 1.0, 1.5, 2.0])
+    cpp_interface = np.array([190.5, 191.0, 191.5, 192.0, 192.5])
+
+    monkeypatch.setattr(
+        illingworth,
+        "compile_and_run_authors_cpp_with_params",
+        lambda params, compiler=None, build_dir=None, return_runtime=False: (
+            (cpp_time, cpp_interface),
+            {
+                "cpp_compile_runtime_s": 0.2,
+                "cpp_run_runtime_s": 0.1,
+                "cpp_total_runtime_s": 0.3,
+            },
+        ),
+    )
+
+    comparison = illingworth.compare_fig6_result_to_authors_cpp(
+        {
+            "time_s": np.array([0.0, 1.0, 2.0]),
+            "phase_a_width_um": np.array([190.5, 191.5, 192.5]),
+            "python_runtime_s": 0.4,
+            "params": params,
+        }
+    )
+
+    assert_allclose(comparison["time"], [0.0, 1.0, 2.0])
+    assert_allclose(comparison["cpp_s"], [190.5, 191.5, 192.5])
+    assert_allclose(comparison["cpp_interface_displacement_um"], [0.0, 0.5, 1.0, 1.5, 2.0])
+    assert comparison["max_abs_diff"] == 0.0
+    assert comparison["python_to_cpp_run_runtime_ratio"] == 4.0
+
+
+def test_illingworth_fig6_run_cpp_comparison_fixed_mode_and_skip(monkeypatch):
+    from examples.Illingworth2005 import compare_illingworth2005_planar as illingworth
+
+    class FakeHistory:
+        def __init__(self, time_s, values):
+            self._time = np.asarray(time_s, dtype=np.float64)
+            self._y = np.asarray(values, dtype=np.float64)
+            self.N = len(self._time) - 1
+
+    class FakeModel:
+        def __init__(self, params):
+            self.interfaceData = FakeHistory(
+                [0.0, params["time_step_s"], params["t_end_s"]],
+                [params["s0_um"], params["s0_um"] + 0.5, params["s0_um"] + 1.0],
+            )
+
+        def solve(self, *args, **kwargs):
+            return
+
+    monkeypatch.setattr(illingworth, "build_fig3_present_work_model", lambda params, record=None: FakeModel(params))
+    monkeypatch.setattr(
+        illingworth,
+        "compare_fig6_result_to_authors_cpp",
+        lambda result, compiler=None, build_dir=None: {
+            "time": result["time_s"],
+            "cpp_s": result["phase_a_width_um"],
+            "python_s": result["phase_a_width_um"],
+            "abs_diff": np.zeros_like(result["time_s"]),
+            "rel_diff": np.zeros_like(result["time_s"]),
+            "max_abs_diff": 0.0,
+            "max_rel_diff": 0.0,
+        },
+    )
+
+    fixed_params = illingworth.build_fig6_illingworth_case_params(
+        "thin",
+        1.4e-8,
+        {
+            "fig6_check_against_authors_cpp": True,
+            "fig6_dt_mode": "fixed",
+            "fig6_time_step_s": 0.5,
+            "fig6_t_end_s": 1.0,
+        },
+    )
+    fixed_result = illingworth.run_fig6_olaye_brass_case(fixed_params)
+
+    assert "cpp_comparison" in fixed_result
+    assert fixed_result["cpp_comparison"]["max_abs_diff"] == 0.0
+
+    semi_log_params = illingworth.build_fig6_illingworth_case_params(
+        "thin",
+        1.4e-8,
+        {
+            "fig6_check_against_authors_cpp": True,
+            "fig6_dt_mode": "semi_log",
+            "fig6_t_end_s": 1.0,
+        },
+    )
+    semi_log_result = illingworth.run_fig6_olaye_brass_case(semi_log_params)
+
+    assert "cpp_comparison" not in semi_log_result
+    assert "cpp_comparison_skipped" in semi_log_result
+
+
+def test_illingworth_fig6_plot_dispatch_uses_completed_case_overlays(monkeypatch):
+    from matplotlib.figure import Figure
+
+    from examples.Illingworth2005 import compare_illingworth2005_planar as illingworth
+
+    params = illingworth.build_fig6_illingworth_case_params("thick", 1.4e-8)
+
+    def fake_run(case_params):
+        return {
+            "time_s": np.array([0.0, 10.0, 100.0]),
+            "phase_a_width_um": np.array([case_params["s0_um"], case_params["s0_um"] + 1.0, case_params["s0_um"] + 2.0]),
+            "interface_displacement_um": np.array([0.0, 1.0, 2.0]),
+            "model": object(),
+            "params": case_params,
+            "grid_metadata": {},
+            "transformed_u_grid": None,
+            "transformed_v_grid": None,
+            "cpp_comparison": {
+                "time": np.array([0.0, 10.0, 100.0]),
+                "cpp_s": np.array([case_params["s0_um"], case_params["s0_um"] + 1.0, case_params["s0_um"] + 2.0]),
+                "python_s": np.array([case_params["s0_um"], case_params["s0_um"] + 1.0, case_params["s0_um"] + 2.0]),
+                "abs_diff": np.zeros(3),
+                "rel_diff": np.zeros(3),
+                "max_abs_diff": 0.0,
+                "max_rel_diff": 0.0,
+                "cpp_time": np.array([0.0, 10.0, 100.0]),
+                "cpp_interface": np.array([case_params["s0_um"], case_params["s0_um"] + 1.0, case_params["s0_um"] + 2.0]),
+            },
+        }
+
+    monkeypatch.setattr(illingworth, "run_fig6_olaye_brass_case", fake_run)
+    monkeypatch.setattr(
+        illingworth,
+        "plot_fig6_olaye_brass_sqrt_time_analytical",
+        lambda case_results, config: {"cases": case_results, "params": config},
+    )
+    fig = Figure()
+    ax = fig.add_subplot(111)
+    result = illingworth.plot_fig6_olaye_brass_illingworth(
+        {
+            "fig6_layers": ("thick",),
+            "fig6_d_alpha_cm2_s": (1.4e-8,),
+            "fig6_plot_concentration_info": False,
+            "fig6_plot_extracted_data": True,
+            "fig6_check_against_authors_cpp": True,
+            "fig6_make_overlay_png": False,
+            "fig6_plot_sqrt_time_analytical": True,
+            "fig6_sqrt_time_out": False,
+            "fig6_sqrt_time_plot_extracted_data": False,
+            "fig6_sqrt_time_plot_experimental_data": False,
+            "fig6_out": False,
+            "show": False,
+        },
+        ax=ax,
+    )
+
+    assert len(result["cases"]) == 1
+    assert result["cases"][0]["params"]["model_family"] == "illingworth_fig6_olaye_brass"
+    assert result["axes"].get_ylabel() == "Interface displacement (um)"
+    assert result["sqrt_time_analytical"] is not None
+    assert len(result["axes"].lines) == 2
+    assert len(result["axes"].collections) == 2
+
+
+def test_illingworth_fig6_sqrt_time_analytical_plot_helper(monkeypatch):
+    from matplotlib.figure import Figure
+
+    from examples.Illingworth2005 import compare_illingworth2005_planar as illingworth
+
+    monkeypatch.setattr(
+        illingworth,
+        "_fig6_extracted_data_specs_for_cases",
+        lambda case_results: [
+            {
+                "path": pathlib.Path(__file__),
+                "color": "black",
+                "marker": "o",
+                "label": "Synthetic extracted data",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        illingworth,
+        "_load_no_header_xy_csv",
+        lambda path: (
+            np.array([100.0, 1.0e8, 100.0]),
+            np.array([8.0, 8.0, 30.0]),
+        ),
+    )
+
+    params = illingworth.build_fig6_illingworth_case_params("thin", 1.4e-8)
+    fig = Figure()
+    ax = fig.add_subplot(111)
+    result = illingworth.plot_fig6_olaye_brass_sqrt_time_analytical(
+        [
+            {
+                "time_s": np.array([0.0, 100.0, 400.0]),
+                "interface_displacement_um": np.array([0.0, 8.0, 16.0]),
+                "params": params,
+            }
+        ],
+        {
+            "show": False,
+            "fig6_sqrt_time_out": False,
+            "fig6_sqrt_time_plot_extracted_data": True,
+            "fig6_sqrt_time_plot_experimental_data": False,
+            "fig6_sqrt_time_max_s": None,
+        },
+        ax=ax,
+    )
+
+    assert result["axes"].get_xlabel() == "sqrt(time) (sqrt(s))"
+    assert result["axes"].get_ylabel() == "Interface displacement (um)"
+    assert len(result["axes"].lines) == 2
+    assert len(result["axes"].collections) == 1
+    assert_allclose(result["axes"].collections[0].get_offsets(), [[10.0, 8.0], [10.0, 30.0]])
+    assert result["axes"].get_xlim()[1] < np.sqrt(1.0e8)
+    assert result["axes"].get_ylim()[1] > 30.0
+
+
+def test_illingworth_fig6_overlay_png_matches_source_canvas(monkeypatch):
+    from examples.Illingworth2005 import compare_illingworth2005_planar as illingworth
+
+    monkeypatch.setattr(illingworth, "_image_size_px", lambda path: (1521, 950))
+    params = illingworth.build_fig6_illingworth_case_params("thin", 1.4e-8)
+
+    overlay = illingworth.plot_fig6_olaye_brass_overlay_png(
+        [
+            {
+                "time_s": np.array([50.0, 100.0, 1000.0]),
+                "interface_displacement_um": np.array([5.0, 10.0, 20.0]),
+                "params": params,
+            }
+        ],
+        {
+            "fig6_overlay_source_image_path": pathlib.Path(__file__),
+            "fig6_overlay_out": False,
+            "fig6_overlay_axes_rect": (0.1, 0.2, 0.3, 0.4),
+            "fig6_overlay_xlim": (10.0, 1.0e6),
+            "fig6_overlay_ylim": (-200.0, 100.0),
+            "fig6_overlay_show_axes": False,
+        },
+    )
+
+    assert overlay["path"] is None
+    assert overlay["canvas_px"] == (1521, 950)
+    assert overlay["axes_rect"] == (0.1, 0.2, 0.3, 0.4)
+    assert len(overlay["axes"].lines) == 1
+    assert not overlay["axes"].axison
+
+    axes_overlay = illingworth.plot_fig6_olaye_brass_overlay_png(
+        [
+            {
+                "time_s": np.array([50.0, 100.0, 1000.0]),
+                "interface_displacement_um": np.array([5.0, 10.0, 20.0]),
+                "params": params,
+            }
+        ],
+        {
+            "fig6_overlay_source_image_path": pathlib.Path(__file__),
+            "fig6_overlay_out": False,
+            "fig6_overlay_axes_rect": (0.1, 0.2, 0.3, 0.4),
+            "fig6_overlay_xlim": (10.0, 1.0e6),
+            "fig6_overlay_ylim": (-200.0, 100.0),
+            "fig6_overlay_show_axes": True,
+            "fig6_overlay_show_grid": True,
+        },
+    )
+
+    assert axes_overlay["path"] is None
+    assert axes_overlay["figure"].get_size_inches()[0] * axes_overlay["figure"].dpi == 1521
+    assert axes_overlay["figure"].get_size_inches()[1] * axes_overlay["figure"].dpi == 950
+    assert axes_overlay["axes"].axison
+    assert len(axes_overlay["axes"].collections) == 1
 
 
 def test_saved_planar_run_loader_accepts_minimal_valid_npz(tmp_path):

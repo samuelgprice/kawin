@@ -71,7 +71,8 @@ def solve_beta(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b, left=-1, right=1):
         grid = np.concatenate((-np.geomspace(1e-15, -left, 200)[::-1], np.geomspace(1e-15, right, 200)))
     else:
         grid = np.linspace(left, right, 4001)
-    values = np.array([equation_a11(x, c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b) for x in grid], dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+        values = np.array([equation_a11(x, c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b) for x in grid], dtype=np.float64)
     indicesOfSignFlip = np.where(np.logical_and((np.diff(np.sign(values))!=0), ~np.isnan(np.diff(np.sign(values)))))[0]
     if indicesOfSignFlip.size != 1:
         raise ValueError("Could not bracket an analytic moving-boundary root.")
@@ -186,15 +187,21 @@ OLAYE_NOTEBOOK_CONFIG = {
     "n_phase_a_nodes": 51,
     "n_phase_b_nodes": 228,
     "semiLog_dt": 0.0025 / 10.0, #0.002763654842561367 / 1.0,
-    "fig6_layers": ("thin"),#, "thick"),
-    "fig6_d_alpha_cm2_s": (2.5e-8,),# 1.4e-8,),
+    "fig6_layers": ("thick"),#, "thin"),
+    "fig6_d_alpha_cm2_s": (2.5e-8,),# 2.5e-8,),
     "fig6_n_phase_a_nodes": 50,#51,
     "fig6_n_phase_b_nodes": 132, #68,
     "fig6_semiLog_dt": 0.0025 / 10.0,
-    "fig6_t_end_s": 7e5,
+    "fig6_t_end_s": 1e4, #7e5,
     "fig6_out": None,
     "fig6_plot_extracted_data": True,
     "fig6_plot_concentration_info": True,
+    "fig6_plot_sqrt_time_analytical": True,
+    "fig6_sqrt_time_out": None,
+    "fig6_sqrt_time_plot_extracted_data": True,
+    "fig6_sqrt_time_max_s": "auto",
+    "fig6_sqrt_time_max_points_per_case": None,
+    "fig6_sqrt_time_semi_infinite_erfc_argument_min": 1.05,
     "fig6_save_run_path": None,
     "model_variant": MODEL_VARIANT,
     "out": None,
@@ -976,6 +983,206 @@ def _fig6_extracted_data_specs_for_cases(case_results):
     return specs
 
 
+def _fig6_analytical_constants(params):
+    """
+    Returns the semi-infinite analytical constants for one Figure-6 case.
+
+    Diffusivities are converted to ``um^2/s`` before solving for beta so the
+    analytical displacement can be plotted directly as
+    ``s(t) - s0 = 2*beta*sqrt(t)`` in micrometers.
+    """
+    d_scale_to_um2_s = float(params["D_scale"]) * 1e12
+    d_a_um2_s = float(params["D_liquid_base"]) * d_scale_to_um2_s
+    d_b_um2_s = float(params["D_solid_base"]) * d_scale_to_um2_s
+    beta_um_sqrt_s = solve_beta(
+        c_a0=float(params["c_liquid0_pct"]) / 100.0,
+        c_b0=float(params["c_solid0_pct"]) / 100.0,
+        c_a_eq=float(params["c_liquid_int_pct"]) / 100.0,
+        c_b_eq=float(params["c_solid_int_pct"]) / 100.0,
+        d_a=d_a_um2_s,
+        d_b=d_b_um2_s,
+        left=-100.0,
+        right=100.0,
+    )
+    return {
+        "d_a_um2_s": d_a_um2_s,
+        "d_b_um2_s": d_b_um2_s,
+        "s0_um": float(params["s0_um"]),
+        "R_um": float(params["R_um"]),
+        "beta_um_sqrt_s": beta_um_sqrt_s,
+    }
+
+
+def _fig6_semi_infinite_time_max_s(constants, erfc_argument_min):
+    """
+    Estimates a Figure-6 semi-infinite analytical comparison cutoff.
+
+    This uses the smaller of the two finite-domain times at which the far
+    boundary reaches ``eta = L/(2*sqrt(D*t)) == erfc_argument_min``.
+    """
+    erfc_argument_min = float(erfc_argument_min)
+    if erfc_argument_min <= 0:
+        raise ValueError("fig6_sqrt_time_semi_infinite_erfc_argument_min must be positive.")
+    phase_a_width_um = constants["s0_um"]
+    phase_b_width_um = constants["R_um"] - constants["s0_um"]
+    if phase_a_width_um <= 0 or phase_b_width_um <= 0:
+        raise ValueError("Figure 6 analytical comparison requires 0 < s0_um < R_um.")
+    phase_a_time_s = (phase_a_width_um / (2.0 * erfc_argument_min)) ** 2 / constants["d_a_um2_s"]
+    phase_b_time_s = (phase_b_width_um / (2.0 * erfc_argument_min)) ** 2 / constants["d_b_um2_s"]
+    return min(phase_a_time_s, phase_b_time_s)
+
+
+def _fig6_case_sqrt_time_max_s(cfg, constants):
+    """Resolves the optional time limit for one Figure-6 sqrt-time overlay."""
+    time_max_s = cfg.get("fig6_sqrt_time_max_s")
+    if time_max_s is None:
+        return None
+    if isinstance(time_max_s, str):
+        if time_max_s.lower() not in {"auto", "semi_infinite"}:
+            raise ValueError('fig6_sqrt_time_max_s must be numeric, None, "auto", or "semi_infinite".')
+        return _fig6_semi_infinite_time_max_s(
+            constants,
+            cfg.get("fig6_sqrt_time_semi_infinite_erfc_argument_min", 5.0),
+        )
+    time_max_s = float(time_max_s)
+    if time_max_s <= 0:
+        raise ValueError("fig6_sqrt_time_max_s must be positive when numeric.")
+    return time_max_s
+
+
+def _limit_plot_points(x, y, max_points):
+    """Returns an evenly thinned plotting view while preserving endpoints."""
+    if max_points is None or len(x) <= int(max_points):
+        return x, y
+    if int(max_points) < 2:
+        raise ValueError("fig6_sqrt_time_max_points_per_case must be at least 2 or None.")
+    indices = np.linspace(0, len(x) - 1, int(max_points), dtype=np.int64)
+    return x[indices], y[indices]
+
+
+def plot_olaye_fig6_sqrt_time_analytical(case_results, config=None, ax=None):
+    """
+    Plots Figure-6 results against ``sqrt(t)`` with analytical beta overlays.
+
+    The analytical line is the semi-infinite planar moving-boundary solution
+    ``s(t) - s0 = 2*beta*sqrt(t)``. It is intended as a separate diagnostic
+    view of the same completed Figure-6 cases, not as a replacement for the
+    log-time replication plot.
+    """
+    cfg = OLAYE_NOTEBOOK_CONFIG if config is None else {**OLAYE_NOTEBOOK_CONFIG, **dict(config)}
+    if not case_results:
+        raise ValueError("At least one Figure 6 case result is required for the sqrt-time analytical plot.")
+    out_setting = cfg.get("fig6_sqrt_time_out")
+    out_path = None if out_setting is False else (
+        pathlib.Path(out_setting).resolve()
+        if out_setting is not None
+        else SCRIPT_DIR / "olaye2020_fig6_sqrt_time_analytical.png"
+    )
+
+    created_figure = ax is None
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(7.2, 4.8), dpi=140)
+    else:
+        fig = ax.figure
+
+    plotted_any = False
+    for item in case_results:
+        params = item["params"]
+        constants = _fig6_analytical_constants(params)
+        time_max_s = _fig6_case_sqrt_time_max_s(cfg, constants)
+        time_s = np.asarray(item["time_s"], dtype=np.float64)
+        displacement_um = np.asarray(item["interface_displacement_um"], dtype=np.float64)
+        mask = np.isfinite(time_s) & np.isfinite(displacement_um) & (time_s >= 0)
+        if time_max_s is not None:
+            mask &= time_s <= time_max_s
+        if np.count_nonzero(mask) < 2:
+            raise ValueError(f"{params['label']} has fewer than two finite points in the sqrt-time comparison window.")
+
+        sqrt_time, displacement_plot_um = _limit_plot_points(
+            np.sqrt(time_s[mask]),
+            displacement_um[mask],
+            cfg.get("fig6_sqrt_time_max_points_per_case"),
+        )
+        style = _fig6_style(params["layer"], params["d_alpha_cm2_s"])
+        ax.plot(
+            sqrt_time,
+            displacement_plot_um,
+            label=params["label"],
+            **style,
+        )
+
+        analytical_sqrt_time = np.linspace(0.0, float(np.max(sqrt_time)), 250)
+        ax.plot(
+            analytical_sqrt_time,
+            2.0 * constants["beta_um_sqrt_s"] * analytical_sqrt_time,
+            color=style.get("color"),
+            linestyle=":",
+            linewidth=1.4,
+            label=f"{params['label']} analytical, beta={constants['beta_um_sqrt_s']:.6g} um/sqrt(s)",
+        )
+        plotted_any = True
+
+    plot_extracted = cfg.get("fig6_sqrt_time_plot_extracted_data", cfg.get("fig6_plot_extracted_data", True))
+    if plot_extracted:
+        non_extracted_xlim = ax.get_xlim()
+        x_min, x_max = sorted(non_extracted_xlim)
+        for extracted_spec in _fig6_extracted_data_specs_for_cases(case_results):
+            if not extracted_spec["path"].exists():
+                continue
+            exp_t_s, exp_disp_um = _load_no_header_xy_csv(extracted_spec["path"])
+            exp_sqrt_time = np.full_like(exp_t_s, np.nan, dtype=np.float64)
+            nonnegative_time = np.isfinite(exp_t_s) & (exp_t_s >= 0)
+            exp_sqrt_time[nonnegative_time] = np.sqrt(exp_t_s[nonnegative_time])
+            mask = (
+                np.isfinite(exp_sqrt_time)
+                & np.isfinite(exp_disp_um)
+                & (x_min <= exp_sqrt_time)
+                & (exp_sqrt_time <= x_max)
+            )
+            if np.count_nonzero(mask) == 0:
+                continue
+            ax.scatter(
+                exp_sqrt_time[mask],
+                exp_disp_um[mask],
+                s=20,
+                color=extracted_spec["color"],
+                marker=extracted_spec["marker"],
+                facecolor='none',
+                label=extracted_spec["label"],
+                zorder=3,
+            )
+        ax.set_xlim(non_extracted_xlim)
+
+    ax.set_xlabel("sqrt(time) (sqrt(s))")
+    ax.set_ylabel("Interface displacement (um)")
+    ax.set_title(
+        f"Figure 6 Olaye sqrt-time analytical comparison, "
+        f"nA:{cfg['fig6_n_phase_a_nodes']}, nB:{cfg['fig6_n_phase_b_nodes']}",
+        fontsize=10,
+    )
+    ax.grid(True, alpha=0.25)
+    if plotted_any:
+        ax.legend(fontsize=7)
+
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, bbox_inches="tight")
+        print(f"Saved Figure 6 sqrt-time analytical figure: {out_path}")
+
+    if created_figure:
+        if cfg.get("show", True):
+            plt.show()
+        else:
+            plt.close(fig)
+
+    return {
+        "figure": fig,
+        "axes": ax,
+        "cases": case_results,
+        "params": cfg,
+    }
+
+
 def plot_olaye_fig6_notebook(config=None, ax=None):
     """
     Runs the corrected Figure-6 brass cases and plots interface displacement.
@@ -1098,6 +1305,10 @@ def plot_olaye_fig6_notebook(config=None, ax=None):
         save_path = _save_fig6_run_result(cfg["fig6_save_run_path"], case_results)
         print(f"Saved Figure 6 run: {save_path}")
 
+    sqrt_time_analytical = None
+    if cfg.get("fig6_plot_sqrt_time_analytical", False):
+        sqrt_time_analytical = plot_olaye_fig6_sqrt_time_analytical(case_results, cfg)
+
     if created_figure:
         if cfg["show"]:
             plt.show()
@@ -1110,6 +1321,7 @@ def plot_olaye_fig6_notebook(config=None, ax=None):
         "concentration_axes": ax_conc,
         "cases": case_results,
         "save_path": save_path,
+        "sqrt_time_analytical": sqrt_time_analytical,
         "params": cfg,
     }
 
