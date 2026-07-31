@@ -1036,6 +1036,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 eta_guess=self.initialEtaGuess,
                 velocity_guess=self.initialVelocityGuess,
             )
+        print(f"initialEtaEstimate: {self.initialEtaEstimate.eta}")
         eta0 = float(self.initialEtaEstimate.eta)
         self.initialEta = eta0
         self.etaData.reset()

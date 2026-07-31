@@ -68,8 +68,8 @@ LEE_OH_FIG9_TIME_UNIT_SECONDS = 3600.0
 LENGTH = 30.0e-6
 NODES = 61
 INTERFACE_POSITION = 12.0e-6 + 1.0e-12
-LEFT_BULK = np.array([0.38, 0.001], dtype=np.float64)
-RIGHT_BULK = np.array([0.13, 0.15], dtype=np.float64)
+LEFT_BULK = np.array([0.38, 0.001], dtype=np.float64) # np.array([0.31391446, 0.06419736], dtype=np.float64) 
+RIGHT_BULK = np.array([0.13, 0.15], dtype=np.float64) # np.array([0.22596712, 0.11443033], dtype=np.float64)
 
 idealized_comp = LEFT_BULK * (INTERFACE_POSITION/LENGTH) + RIGHT_BULK * (1 - INTERFACE_POSITION/LENGTH)
 
@@ -389,6 +389,8 @@ def plot_integrated_inventory(model, *, scale_time=1.0):
         compDiffPercent_arr = (compDiff_arr/average_composition[0, i])*100
         print(f"{element} min and max comp diff from initial:         {compDiff_arr.min():.4}, {compDiff_arr.max():.4}")
         print(f"{element} min and max percent comp diff from initial: {compDiffPercent_arr.min():.4}%, {compDiffPercent_arr.max():.4}%")
+    for i, (element, ax) in enumerate(zip(INDEPENDENT_ELEMENTS, axes)):
+        print(f"{element} absolute and percent comp diff from idealized: {average_composition[0, i]-idealized_comp[i]:.4}, {(average_composition[0, i]-idealized_comp[i])/idealized_comp[i]:.4}%")
 
     ax_left.set_xscale("log")
     ax_left.set_xlabel(f"time / {scale_time:g}")
@@ -508,14 +510,22 @@ else:
     print("No solve has been run yet, so there is no interface-composition history to plot.")
 
 # %%
-left, right, meta = tieline_surrogate.getTielineOfGlobalComposition(
+left_idealized, right_idealized, meta_idealized = tieline_surrogate.getTielineOfGlobalComposition(
     idealized_comp,
     T=TEMPERATURE,
     returnMeta=True,
 )
-left, right, meta
-finalIdealizedFraction = meta['phase_fraction'] if meta['phase_fraction_phase']=="BCC_A2" else 1-meta['phase_fraction']
-print(f"idealized final normalized interface position: {(finalIdealizedFraction * model._R) / model.interfaceData._y[0]}")
+finalIdealizedFraction = meta_idealized['phase_fraction'] if meta_idealized['phase_fraction_phase']=="BCC_A2" else 1-meta_idealized['phase_fraction']
+initial_comp = model.inventoryData._y[0] / model._R
+left_initial, right_initial, meta_initial = tieline_surrogate.getTielineOfGlobalComposition(
+    initial_comp,
+    T=TEMPERATURE,
+    returnMeta=True,
+)
+finalIdealizedFraction = meta_idealized['phase_fraction'] if meta_idealized['phase_fraction_phase']=="BCC_A2" else 1-meta_idealized['phase_fraction']
+finalInitialFraction = meta_initial['phase_fraction'] if meta_initial['phase_fraction_phase']=="BCC_A2" else 1-meta_initial['phase_fraction']
+print(f"idealized final normalized interface position:  {(finalIdealizedFraction * model._R) / model.interfaceData._y[0]}")
+print(f"initial final normalized interface position:    {(finalInitialFraction * model._R) / model.interfaceData._y[0]}")
 print(f"calculated final normalized interface position: {model.interfaceData._y[-1] / model.interfaceData._y[0]}")
 
 #%%
