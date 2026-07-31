@@ -470,6 +470,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         self._q_prev = self._q_curr.copy()
         self._s_curr = s0
         self._s_prev = s0
+        self._p_init, self._q_init = self._p_curr.copy(), self._q_curr.copy()
         if self.recordPqData:
             self.pData.record(0, self._p_curr)
             self.qData.record(0, self._q_curr)
@@ -723,7 +724,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         # a, b, _ = coeffsFromMathematicaSolve(**vals)
         # return float(a), float(b)
 
-        ## HACK: Use the winding coefficients to compute the half-node concentrations instead of the arithmetic average. Want to see if this fixes the mass drift issues
+        ## HACK: Use the winding coefficients to compute the half-node concentrations instead of the arithmetic average. Want to see if this fixes the mass drift issues (it seems that it does)
         vals1 = {
             "cA": c_ab,
             "cB": c_ba,
@@ -747,7 +748,14 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         }
 
         a1, b1, _ = coeffsFromMathematicaSolve(**vals1)
-        
+
+        # from datetime import date
+        # self._datetimeImported = True
+        # today = date.today()
+        # if today>date(2026, 7, 23):
+        #     raise ValueError("Review the use of this hack!")        
+        # else:
+        #     return float(a1), float(b1)
         alpha, beta = self._winding_coefficients_from_interface_step(-b1/a1, s_curr)
         
         vals2 = {

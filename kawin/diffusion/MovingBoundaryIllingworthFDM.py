@@ -754,6 +754,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         )
 
     def getdXdt(self, t, xCurr):
+        # debugInPlace()
         p = np.asarray(xCurr[0], dtype=np.float64).reshape(-1)
         q = np.asarray(xCurr[1], dtype=np.float64).reshape(-1)
         s = self._clipInterfacePosition(float(xCurr[2]), strict=True)
