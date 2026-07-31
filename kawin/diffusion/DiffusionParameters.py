@@ -277,7 +277,7 @@ class DiffusionConstraints:
         self.reset()
 
     def reset(self):
-        self.minComposition = 1e-8
+        self.minComposition = 1e-10
         self.vonNeumannThreshold = 0.4
         self.maxCompositionChange = 0.002
         self.movingBoundaryThreshold = 0.25
