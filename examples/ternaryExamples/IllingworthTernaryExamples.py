@@ -13,6 +13,7 @@ sampling, fixed diffusivity matrices, mesh sizes, and solve times.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -93,12 +94,10 @@ FIXED_DIFFUSIVITY_MATRICES = None
 #                           SEMI_LOG_BASE_TIME_STEP remains a positive fallback
 #                           scale used internally by the model.
 DT_MODE = "semi_log"
-if DT_MODE=="fixed":
-    FIXED_TIME_STEP = 1.0
-else:
-    SEMI_LOG_BASE_TIME_STEP = 1.0
-    SEMI_LOG_DT = 0.25 / 10
-    SEMI_LOG_T0 = 1.0e-6
+FIXED_TIME_STEP = 1.0
+SEMI_LOG_BASE_TIME_STEP = 1.0
+SEMI_LOG_DT = 0.25 / 10
+SEMI_LOG_T0 = 1.0e-6
 SOLVE_TIME = [3600*1e0, 3600*1e2, 3600*1e3][2]
 PHASE_A_NODES = None
 PHASE_B_NODES = None
@@ -115,6 +114,64 @@ RUN_SOLVE = True
 
 # %%
 # Helper classes and functions
+
+
+_OVERRIDE_KEY_ALIASES = {
+    "dt_mode": "DT_MODE",
+    "fixed_time_step": "FIXED_TIME_STEP",
+    "left_bulk": "LEFT_BULK",
+    "length": "LENGTH",
+    "max_iterations": "MAX_ITERATIONS",
+    "min_dt_frac": "MIN_DT_FRAC",
+    "nodes": "NODES",
+    "phase_a_nodes": "PHASE_A_NODES",
+    "phase_b_nodes": "PHASE_B_NODES",
+    "plot_lee_oh_fig9_data": "PLOT_LEE_OH_FIG9_DATA",
+    "right_bulk": "RIGHT_BULK",
+    "run_solve": "RUN_SOLVE",
+    "semi_log_base_time_step": "SEMI_LOG_BASE_TIME_STEP",
+    "semi_log_dt": "SEMI_LOG_DT",
+    "semi_log_t0": "SEMI_LOG_T0",
+    "solve_time": "SOLVE_TIME",
+    "tolerance": "TOLERANCE",
+    "verbose": "VERBOSE",
+    "verbose_interval": "VERBOSE_INTERVAL",
+}
+
+
+def _refresh_derived_config():
+    """Updates derived example globals after temporary configuration changes."""
+    global idealized_comp
+    idealized_comp = LEFT_BULK * (INTERFACE_POSITION / LENGTH) + RIGHT_BULK * (1 - INTERFACE_POSITION / LENGTH)
+
+
+def _normalize_override_key(key):
+    key = str(key)
+    if key in globals():
+        return key
+    upper_key = key.upper()
+    if upper_key in globals():
+        return upper_key
+    if key in _OVERRIDE_KEY_ALIASES:
+        return _OVERRIDE_KEY_ALIASES[key]
+    raise KeyError(f"Unknown Illingworth ternary example override '{key}'.")
+
+
+@contextmanager
+def _temporary_config(overrides=None):
+    """Temporarily applies module-level example configuration overrides."""
+    if not overrides:
+        yield
+        return
+    normalized = {_normalize_override_key(key): value for key, value in dict(overrides).items()}
+    old_values = {key: globals()[key] for key in normalized}
+    try:
+        globals().update(normalized)
+        _refresh_derived_config()
+        yield
+    finally:
+        globals().update(old_values)
+        _refresh_derived_config()
 
 
 class FixedMatrixTernaryDiffusivity:
@@ -188,7 +245,7 @@ def _print_diffusivity_matrices(matrices):
         print(f"{phase}:\n{np.asarray(matrices[phase], dtype=np.float64)}")
 
 
-def select_fixed_diffusivity_matrices(source_thermodynamics, tieline_surrogate):
+def select_fixed_diffusivity_matrices(source_thermodynamics, tieline_surrogate, *, print_matrices=True):
     """
     Selects one fixed 2x2 diffusivity matrix per phase.
 
@@ -218,8 +275,38 @@ def select_fixed_diffusivity_matrices(source_thermodynamics, tieline_surrogate):
     else:
         raise ValueError("DIFFUSIVITY_MODE must be either 'explicit' or 'sample_tieline'.")
 
-    _print_diffusivity_matrices(matrices)
+    if print_matrices:
+        _print_diffusivity_matrices(matrices)
     return matrices
+
+
+def build_case_context(overrides=None, *, print_matrices=True):
+    """
+    Builds reusable thermodynamics and fixed-diffusivity objects for this case.
+
+    The expensive Fe-Cr-Ni database and tie-line surrogate setup is independent
+    of mesh density and timestep controls, so convergence sweeps can build this
+    context once and pass it to ``run_case`` for each numerical variant.
+    """
+    with _temporary_config(overrides):
+        source_thermodynamics = build_source_thermodynamics()
+        tieline_surrogate = build_tieline_surrogate(source_thermodynamics)
+        fixed_diffusivity_matrices = select_fixed_diffusivity_matrices(
+            source_thermodynamics,
+            tieline_surrogate,
+            print_matrices=print_matrices,
+        )
+        fixed_diffusivity = FixedMatrixTernaryDiffusivity(
+            fixed_diffusivity_matrices,
+            phases=TIELINE_PHASES,
+            temperature=TEMPERATURE,
+        )
+        return {
+            "source_thermodynamics": source_thermodynamics,
+            "tieline_surrogate": tieline_surrogate,
+            "fixed_diffusivity_matrices": fixed_diffusivity_matrices,
+            "fixed_diffusivity": fixed_diffusivity,
+        }
 
 
 def make_mesh():
@@ -289,6 +376,44 @@ def build_model(tieline_surrogate, fixed_diffusivity):
         max_iterations=MAX_ITERATIONS,
         record=True,
     )
+
+
+def run_case(overrides=None, context=None, make_plots=False):
+    """
+    Builds and optionally solves one configured ternary Illingworth example.
+
+    Parameters in ``overrides`` temporarily replace module-level configuration
+    values such as ``NODES``, ``DT_MODE``, ``SEMI_LOG_DT``, ``FIXED_TIME_STEP``,
+    and ``SOLVE_TIME``. Passing a context from ``build_case_context`` reuses the
+    database-derived tie-line surrogate and fixed diffusivity object.
+    """
+    figures = {}
+    with _temporary_config(overrides):
+        if context is None:
+            context = build_case_context(print_matrices=VERBOSE)
+        model = build_model(context["tieline_surrogate"], context["fixed_diffusivity"])
+        if RUN_SOLVE:
+            model.solve(
+                SOLVE_TIME,
+                iterator=explicitEulerIterator,
+                verbose=VERBOSE,
+                vIt=VERBOSE_INTERVAL,
+                minDtFrac=MIN_DT_FRAC,
+            )
+        if make_plots and model.currentTime > 0:
+            figures["interface_position"] = plot_interface_position(
+                model,
+                plot_lee_oh_fig9_data=PLOT_LEE_OH_FIG9_DATA,
+                xlims=(1e-1, 1e7),
+            )
+            figures["integrated_inventory"] = plot_integrated_inventory(model)
+            figures["interface_compositions"] = plot_interface_compositions(model, context["tieline_surrogate"])
+        return {
+            "model": model,
+            "context": context,
+            "figures": figures,
+            "overrides": {} if overrides is None else dict(overrides),
+        }
 
 
 def print_initial_eta_estimate(model):
@@ -390,7 +515,7 @@ def plot_integrated_inventory(model, *, scale_time=1.0):
         print(f"{element} min and max comp diff from initial:         {compDiff_arr.min():.4}, {compDiff_arr.max():.4}")
         print(f"{element} min and max percent comp diff from initial: {compDiffPercent_arr.min():.4}%, {compDiffPercent_arr.max():.4}%")
     for i, (element, ax) in enumerate(zip(INDEPENDENT_ELEMENTS, axes)):
-        print(f"{element} absolute and percent comp diff from idealized: {average_composition[0, i]-idealized_comp[i]:.4}, {(average_composition[0, i]-idealized_comp[i])/idealized_comp[i]:.4}%")
+        print(f"{element} absolute and percent comp diff from idealized: {average_composition[0, i]-idealized_comp[i]:.4}, {((average_composition[0, i]-idealized_comp[i])/idealized_comp[i])*100:.4}%")
 
     ax_left.set_xscale("log")
     ax_left.set_xlabel(f"time / {scale_time:g}")
@@ -433,99 +558,94 @@ def plot_interface_compositions(model, tieline_surrogate, *, scale_time=1.0):
     return fig, axes
 
 
-# %%
-# Build Fe-Cr-Ni thermodynamics and the tie-line surrogate
-
-source_thermodynamics = build_source_thermodynamics()
-tieline_surrogate = build_tieline_surrogate(source_thermodynamics)
-
-print(f"Built tie-line surrogate with eta bounds {tieline_surrogate.eta_bounds}.")
-initial_eta_bracket_to_print = tieline_surrogate.eta_bounds if INITIAL_ETA_BRACKET is None else INITIAL_ETA_BRACKET
-print(f"Initial eta will be estimated with method '{INITIAL_ETA_METHOD}' over {initial_eta_bracket_to_print}.")
-
-
-# %%
-# Choose fixed diffusivity matrices
-
-fixed_diffusivity_matrices = select_fixed_diffusivity_matrices(source_thermodynamics, tieline_surrogate)
-fixed_diffusivity = FixedMatrixTernaryDiffusivity(
-    fixed_diffusivity_matrices,
-    phases=TIELINE_PHASES,
-    temperature=TEMPERATURE,
-)
-
-
-# %%
-# Build the mesh and model
-
-model = build_model(tieline_surrogate, fixed_diffusivity)
-print("Built MovingBoundaryIllingworthTernaryFD1DModel.")
-print(f"Initial interface position = {INTERFACE_POSITION}")
-print("Initial eta and inventory estimates will be available after setup/solve.")
-
-
-# %%
-# Solve
-
-if RUN_SOLVE:
-    model.solve(
-        SOLVE_TIME,
-        iterator=explicitEulerIterator,
-        verbose=VERBOSE,
-        vIt=VERBOSE_INTERVAL,
-        minDtFrac=MIN_DT_FRAC,
+def print_final_equilibrium_estimates(model, tieline_surrogate):
+    """Prints idealized, initial-inventory, and calculated final interface positions."""
+    left_idealized, right_idealized, meta_idealized = tieline_surrogate.getTielineOfGlobalComposition(
+        idealized_comp,
+        T=TEMPERATURE,
+        returnMeta=True,
     )
-    print_initial_eta_estimate(model)
-    print(f"Finished solve at t = {model.currentTime}.")
-    print(f"Final interface position = {model.getInterfacePosition()}")
-    print(f"Final integrated inventory [CR, NI] = {model.getTotalInventory()}")
-else:
-    print("RUN_SOLVE is False. Set RUN_SOLVE = True in the configuration cell to run the solve.")
+    initial_comp = model.inventoryData._y[0] / model._R
+    left_initial, right_initial, meta_initial = tieline_surrogate.getTielineOfGlobalComposition(
+        initial_comp,
+        T=TEMPERATURE,
+        returnMeta=True,
+    )
+    final_idealized_fraction = (
+        meta_idealized["phase_fraction"]
+        if meta_idealized["phase_fraction_phase"] == "BCC_A2"
+        else 1 - meta_idealized["phase_fraction"]
+    )
+    final_initial_fraction = (
+        meta_initial["phase_fraction"]
+        if meta_initial["phase_fraction_phase"] == "BCC_A2"
+        else 1 - meta_initial["phase_fraction"]
+    )
+    print(f"idealized final normalized interface position:  {(final_idealized_fraction * model._R) / model.interfaceData._y[0]}")
+    print(f"initial final normalized interface position:    {(final_initial_fraction * model._R) / model.interfaceData._y[0]}")
+    print(f"calculated final normalized interface position: {model.interfaceData._y[-1] / model.interfaceData._y[0]}")
+    return {
+        "idealized": (left_idealized, right_idealized, meta_idealized),
+        "initial_inventory": (left_initial, right_initial, meta_initial),
+    }
 
+
+def run_interactive_example(overrides=None):
+    """
+    Runs the original notebook-style Fe-Cr-Ni example flow.
+
+    This preserves the old script behavior for direct execution while keeping
+    module imports free of thermodynamics setup, solving, and plotting side
+    effects.
+    """
+    with _temporary_config(overrides):
+        context = build_case_context(print_matrices=True)
+        tieline_surrogate = context["tieline_surrogate"]
+        print(f"Built tie-line surrogate with eta bounds {tieline_surrogate.eta_bounds}.")
+        initial_eta_bracket_to_print = tieline_surrogate.eta_bounds if INITIAL_ETA_BRACKET is None else INITIAL_ETA_BRACKET
+        print(f"Initial eta will be estimated with method '{INITIAL_ETA_METHOD}' over {initial_eta_bracket_to_print}.")
+
+        run = run_case(context=context, make_plots=False)
+        model = run["model"]
+        print("Built MovingBoundaryIllingworthTernaryFD1DModel.")
+        print(f"Initial interface position = {INTERFACE_POSITION}")
+        print("Initial eta and inventory estimates will be available after setup/solve.")
+
+        if model.currentTime > 0:
+            print_initial_eta_estimate(model)
+            print(f"Finished solve at t = {model.currentTime}.")
+            print(f"Final interface position = {model.getInterfacePosition()}")
+            print(f"Final integrated inventory [CR, NI] = {model.getTotalInventory()}")
+            run["figures"]["interface_position"] = plot_interface_position(
+                model,
+                plot_lee_oh_fig9_data=PLOT_LEE_OH_FIG9_DATA,
+                xlims=(1e-1, 1e7),
+            )
+            run["figures"]["integrated_inventory"] = plot_integrated_inventory(model)
+            run["figures"]["interface_compositions"] = plot_interface_compositions(model, tieline_surrogate)
+            run["final_equilibrium_estimates"] = print_final_equilibrium_estimates(model, tieline_surrogate)
+        else:
+            print("RUN_SOLVE is False. Set RUN_SOLVE = True in the configuration cell to run the solve.")
+            print("No solve has been run yet, so there are no histories to plot.")
+        return run
+
+
+def run_convergence_demo():
+    """Runs a small two-node/timestep convergence sweep for interactive use."""
+    from examples.ternaryExamples import IllingworthTernaryConvergence as conv
+
+    cfg = conv.default_convergence_config()
+    cfg["nodes"] = [31, 61, 121]
+    cfg["semi_log_dt"] = [0.1, 0.05, 0.025, 0.01]
+    results = conv.run_convergence_sweep(cfg)
+    summary = conv.summarize_convergence(results)
+    return results, summary
+
+
+if __name__ == "__main__":
+    run_results = run_interactive_example()
 
 # %%
-# Plot interface position over time
-
-if model.currentTime > 0:
-    fig, ax = plot_interface_position(model, plot_lee_oh_fig9_data=PLOT_LEE_OH_FIG9_DATA, xlims=(1e-1, 1e7))
-else:
-    print("No solve has been run yet, so there is no interface-position history to plot.")
-
-
+if __name__ == "__main__":
+    results, summary = run_convergence_demo()
 # %%
-# Plot integrated mass/inventory of CR and NI over time
-
-if model.currentTime > 0:
-    plot_integrated_inventory(model)
-else:
-    print("No solve has been run yet, so there is no inventory history to plot.")
-
-
-# %%
-# Plot interface compositions over time
-
-if model.currentTime > 0:
-    plot_interface_compositions(model, tieline_surrogate)
-else:
-    print("No solve has been run yet, so there is no interface-composition history to plot.")
-
-# %%
-left_idealized, right_idealized, meta_idealized = tieline_surrogate.getTielineOfGlobalComposition(
-    idealized_comp,
-    T=TEMPERATURE,
-    returnMeta=True,
-)
-finalIdealizedFraction = meta_idealized['phase_fraction'] if meta_idealized['phase_fraction_phase']=="BCC_A2" else 1-meta_idealized['phase_fraction']
-initial_comp = model.inventoryData._y[0] / model._R
-left_initial, right_initial, meta_initial = tieline_surrogate.getTielineOfGlobalComposition(
-    initial_comp,
-    T=TEMPERATURE,
-    returnMeta=True,
-)
-finalIdealizedFraction = meta_idealized['phase_fraction'] if meta_idealized['phase_fraction_phase']=="BCC_A2" else 1-meta_idealized['phase_fraction']
-finalInitialFraction = meta_initial['phase_fraction'] if meta_initial['phase_fraction_phase']=="BCC_A2" else 1-meta_initial['phase_fraction']
-print(f"idealized final normalized interface position:  {(finalIdealizedFraction * model._R) / model.interfaceData._y[0]}")
-print(f"initial final normalized interface position:    {(finalInitialFraction * model._R) / model.interfaceData._y[0]}")
-print(f"calculated final normalized interface position: {model.interfaceData._y[-1] / model.interfaceData._y[0]}")
-
-#%%
