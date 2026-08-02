@@ -96,7 +96,7 @@ FIXED_DIFFUSIVITY_MATRICES = None
 DT_MODE = "semi_log"
 FIXED_TIME_STEP = 1.0
 SEMI_LOG_BASE_TIME_STEP = 1.0
-SEMI_LOG_DT = 0.25 / 10
+SEMI_LOG_DT = 0.25 / 100
 SEMI_LOG_T0 = 1.0e-6
 SOLVE_TIME = [3600*1e0, 3600*1e2, 3600*1e3][2]
 PHASE_A_NODES = None
@@ -392,6 +392,20 @@ def run_case(overrides=None, context=None, make_plots=False):
         if context is None:
             context = build_case_context(print_matrices=VERBOSE)
         model = build_model(context["tieline_surrogate"], context["fixed_diffusivity"])
+
+        if DT_MODE == "fixed":
+            n_steps = int(np.ceil(SOLVE_TIME / FIXED_TIME_STEP))
+        elif DT_MODE == "semi_log":
+            if SEMI_LOG_DT is None or SEMI_LOG_T0 is None:
+                raise ValueError("semiLog_dt and semiLogT0 must be set when dt_mode is 'semi_log'.")
+            if SEMI_LOG_DT <= 0 or SEMI_LOG_T0 <= 0:
+                raise ValueError("semiLog_dt and semiLogT0 must be positive when dt_mode is 'semi_log'.")
+            if SOLVE_TIME <= SEMI_LOG_T0:
+                n_steps = 1
+            else:
+                n_steps = int(np.ceil((np.log(SOLVE_TIME) - np.log(SEMI_LOG_T0)) / SEMI_LOG_DT)) + 1
+        print(f"Estimated number of time-steps: {n_steps}")
+
         if RUN_SOLVE:
             model.solve(
                 SOLVE_TIME,
@@ -590,7 +604,7 @@ def print_final_equilibrium_estimates(model, tieline_surrogate):
     }
 
 
-def run_interactive_example(overrides=None):
+def run_interactive_example(overrides=None, timeProfiling=False):
     """
     Runs the original notebook-style Fe-Cr-Ni example flow.
 
@@ -611,6 +625,9 @@ def run_interactive_example(overrides=None):
         print(f"Initial interface position = {INTERFACE_POSITION}")
         print("Initial eta and inventory estimates will be available after setup/solve.")
 
+        if timeProfiling:
+            return run
+        
         if model.currentTime > 0:
             print_initial_eta_estimate(model)
             print(f"Finished solve at t = {model.currentTime}.")
@@ -643,9 +660,9 @@ def run_convergence_demo():
 
 
 if __name__ == "__main__":
-    run_results = run_interactive_example()
+    run_results = run_interactive_example(timeProfiling=True)
 
 # %%
-if __name__ == "__main__":
-    results, summary = run_convergence_demo()
+# if __name__ == "__main__":
+#     results, summary = run_convergence_demo()
 # %%
