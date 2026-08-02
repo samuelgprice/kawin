@@ -52,6 +52,43 @@ def _matvec_2x2(matrix, vector):
     )
 
 
+def _bounded_finite_difference_perturbation(x, lower, upper, variable):
+    """
+    Returns the baseline one-sided finite-difference perturbation for one variable.
+
+    The step-size formula and forward/backward bound choice are shared by the
+    initial-eta and finite-step interface Newton loops.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    lower = np.asarray(lower, dtype=np.float64)
+    upper = np.asarray(upper, dtype=np.float64)
+    step = np.sqrt(np.finfo(float).eps) * max(1.0, abs(x[variable]))
+    if np.isfinite(upper[variable] - lower[variable]):
+        step = min(step, 0.25 * max(upper[variable] - lower[variable], 1e-15))
+    x_perturbed = x.copy()
+    if x[variable] + step <= upper[variable]:
+        x_perturbed[variable] += step
+        return step, x_perturbed, "forward"
+    x_perturbed[variable] -= step
+    return step, x_perturbed, "backward"
+
+
+def _newton_step_2x2(jacobian, residual):
+    """Returns the exact 2x2 Newton step used by the local ternary solves."""
+    jacobian = np.asarray(jacobian, dtype=np.float64)
+    residual = np.asarray(residual, dtype=np.float64).reshape(2)
+    a = float(jacobian[0, 0])
+    b = float(jacobian[0, 1])
+    c = float(jacobian[1, 0])
+    d = float(jacobian[1, 1])
+    determinant = a * d - b * c
+    if abs(determinant) <= 1e-300:
+        raise RuntimeError("Interface Jacobian is singular.")
+    r0 = -float(residual[0])
+    r1 = -float(residual[1])
+    return np.asarray([(d * r0 - b * r1) / determinant, (-c * r0 + a * r1) / determinant], dtype=np.float64)
+
+
 def _select_interface_motion_branch(s, old_s, future_s, atol=1e-15):
     """
     Selects the conservative interface upwind branch for one residual evaluation.
@@ -498,30 +535,19 @@ def estimate_initial_eta_from_instantaneous_balance(
 
             jacobian = np.zeros((2, 2), dtype=np.float64)
             for variable in range(2):
-                step = np.sqrt(np.finfo(float).eps) * max(1.0, abs(x[variable]))
-                if np.isfinite(upper[variable] - lower[variable]):
-                    step = min(step, 0.25 * max(upper[variable] - lower[variable], 1e-15))
-                x_perturbed = x.copy()
-                if x[variable] + step <= upper[variable]:
-                    x_perturbed[variable] += step
+                step, x_perturbed, difference_direction = _bounded_finite_difference_perturbation(x, lower, upper, variable)
+                if difference_direction == "forward":
                     residual_perturbed = residual_unknowns(x_perturbed)
                     jacobian[:, variable] = (residual_perturbed - residual_current) / step
                 else:
-                    x_perturbed[variable] -= step
                     residual_perturbed = residual_unknowns(x_perturbed)
                     jacobian[:, variable] = (residual_current - residual_perturbed) / step
                 nfev += 1
 
-            a = float(jacobian[0, 0])
-            b = float(jacobian[0, 1])
-            c = float(jacobian[1, 0])
-            d = float(jacobian[1, 1])
-            determinant = a * d - b * c
-            if abs(determinant) <= 1e-300:
+            try:
+                step = _newton_step_2x2(jacobian, residual_current)
+            except RuntimeError:
                 break
-            r0 = -float(residual_current[0])
-            r1 = -float(residual_current[1])
-            step = np.asarray([(d * r0 - b * r1) / determinant, (-c * r0 + a * r1) / determinant], dtype=np.float64)
 
             accepted = False
             for scale in (1.0, 0.5, 0.25, 0.125, 0.0625):
@@ -1677,11 +1703,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
             jacobian = np.zeros((2, len(x_hat)), dtype=np.float64)
             for variable in range(len(x_hat)):
-                step = np.sqrt(np.finfo(float).eps) * max(1.0, abs(x_hat[variable]))
-                step = min(step, 0.25 * max(upper[variable] - lower[variable], 1e-15))
-                x_perturbed = x_hat.copy()
-                if x_hat[variable] + step <= upper[variable]:
-                    x_perturbed[variable] += step
+                step, x_perturbed, difference_direction = _bounded_finite_difference_perturbation(x_hat, lower, upper, variable)
+                if difference_direction == "forward":
                     residual_perturbed = self._evaluate_interface_candidate(
                         p,
                         q,
@@ -1699,7 +1722,6 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     residual_evaluations += 1
                     jacobian[:, variable] = (residual_perturbed - scaled_residual) / step
                 else:
-                    x_perturbed[variable] -= step
                     residual_perturbed = self._evaluate_interface_candidate(
                         p,
                         q,
@@ -1777,17 +1799,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             if denom <= 1e-300:
                 raise RuntimeError("Interface Jacobian is singular.")
             return np.asarray([-float(j[0] * residual[0] + j[1] * residual[1]) / denom], dtype=np.float64)
-
-        a = float(jacobian[0, 0])
-        b = float(jacobian[0, 1])
-        c = float(jacobian[1, 0])
-        d = float(jacobian[1, 1])
-        determinant = a * d - b * c
-        if abs(determinant) <= 1e-300:
-            raise RuntimeError("Interface Jacobian is singular.")
-        r0 = -float(residual[0])
-        r1 = -float(residual[1])
-        return np.asarray([(d * r0 - b * r1) / determinant, (-c * r0 + a * r1) / determinant], dtype=np.float64)
+        return _newton_step_2x2(jacobian, residual)
 
     def _take_implicit_step_planar(self, p, q, s, old_s, eta, dt):
         return self._solve_interface_planar(p, q, s, old_s, eta, dt)
