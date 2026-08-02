@@ -1471,6 +1471,19 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         floor = 1e-300
         return np.maximum(np.maximum(np.abs(old_inventory), self._R * composition_scale), floor)
 
+    def _scaled_interface_variables_in_bounds(self, x_hat, lower, upper):
+        """Returns whether scaled interface variables satisfy the solver bounds."""
+        x_hat = np.asarray(x_hat, dtype=np.float64)
+        return not (np.any(x_hat < lower) or np.any(x_hat > upper))
+
+    def _interface_candidate_has_converged(self, candidate, lower, upper):
+        """Applies the final nonlinear convergence check without changing tolerance semantics."""
+        return self._scaled_interface_variables_in_bounds(candidate.x_hat, lower, upper) and candidate.scaled_norm <= self.residualTolerance
+
+    def _interface_candidate_improves(self, candidate, current_norm):
+        """Returns whether a backtracking trial improves the current scaled residual norm."""
+        return np.isfinite(candidate.scaled_norm) and candidate.scaled_norm < current_norm
+
     def _bounded_scaled_newton_step(self, x_hat, newton_step, lower, upper):
         """
         Returns an active-bound-aware Newton direction and feasible first alpha.
@@ -1579,7 +1592,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         eta_lower, _, eta_span = self._eta_scaling_bounds()
         lower, upper = self._interface_scaled_bounds()
         x_hat = self._interface_physical_to_scaled(s, eta, eta_lower, eta_span)
-        if np.any(x_hat < lower) or np.any(x_hat > upper):
+        if not self._scaled_interface_variables_in_bounds(x_hat, lower, upper):
             raise ValueError("Initial nonlinear interface iterate lies outside scaled solve bounds.")
         residual_scale = self._interface_residual_scale(p, q, s)
         c_left_old = np.asarray(p[-1], dtype=np.float64).copy()
@@ -1618,7 +1631,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     candidate.D_left.copy(),
                     candidate.D_right.copy(),
                 )
-            if norm <= self.residualTolerance:
+            if self._interface_candidate_has_converged(candidate, lower, upper):
                 self._lastImplicitIterations = count + 1
                 self._lastImplicitResidual = norm
                 self._lastImplicitPhysicalResidual = physical_norm
@@ -1680,7 +1693,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 if scale <= 0.0:
                     continue
                 trial = x_hat + scale * step
-                if np.any(trial < lower) or np.any(trial > upper):
+                if not self._scaled_interface_variables_in_bounds(trial, lower, upper):
                     continue
                 trial_candidate = self._evaluate_interface_candidate(
                     p,
@@ -1697,7 +1710,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     motion_branch,
                 )
                 trial_norm = trial_candidate.scaled_norm
-                if np.isfinite(trial_norm) and trial_norm < norm:
+                if self._interface_candidate_improves(trial_candidate, norm):
                     x_hat = trial
                     accepted = True
                     break
