@@ -83,7 +83,7 @@ def _newton_step_2x2(jacobian, residual):
     d = float(jacobian[1, 1])
     determinant = a * d - b * c
     if abs(determinant) <= 1e-300:
-        raise RuntimeError("Interface Jacobian is singular.")
+        raise RuntimeError("Ternary Newton Jacobian is singular.")
     r0 = -float(residual[0])
     r1 = -float(residual[1])
     return np.asarray([(d * r0 - b * r1) / determinant, (-c * r0 + a * r1) / determinant], dtype=np.float64)
@@ -162,6 +162,8 @@ class _InterfaceCandidate:
     The concentration profiles, interface compositions, diffusivity matrices,
     branch, and residuals all come from the same trial ``x_hat``. Keeping them
     grouped avoids mixing values from different nonlinear iterations.
+    ``frozen=True`` is shallow: fields cannot be rebound, but NumPy array
+    contents remain mutable.
     """
 
     x_hat: np.ndarray
@@ -1021,34 +1023,52 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         return bc
 
     def _reset_implicit_diagnostics(self):
-        """Resets diagnostics for the most recent nonlinear interface solve."""
+        """
+        Resets diagnostics for the most recent nonlinear interface solve.
+
+        ``_lastImplicitCandidateEvaluations`` counts attempted complete
+        interface-candidate builds. ``_lastImplicitFunctionEvaluations`` is
+        retained as a private compatibility alias with the same value.
+        """
         self._lastImplicitIterations = 0
         self._lastImplicitResidual = np.nan
         self._lastImplicitPhysicalResidual = np.nan
+        self._lastImplicitCandidateEvaluations = 0
         self._lastImplicitFunctionEvaluations = 0
         self._lastImplicitJacobianEvaluations = 0
         self._lastImplicitMotionBranch = None
+        self._lastImplicitConverged = False
         self._lastImplicitFailureReason = None
 
-    def _record_implicit_success(self, iterations, candidate, function_evaluations, jacobian_evaluations):
-        """Records diagnostics for a converged nonlinear interface solve."""
+    def _record_implicit_success(self, iterations, candidate, candidate_evaluations, jacobian_evaluations):
+        """
+        Records diagnostics for a converged nonlinear interface solve.
+
+        Candidate evaluations count attempted full interface-candidate builds.
+        One Jacobian evaluation means one complete finite-difference Jacobian
+        construction, not one perturbed candidate evaluation.
+        """
         self._lastImplicitIterations = int(iterations)
         self._lastImplicitResidual = candidate.scaled_norm
         self._lastImplicitPhysicalResidual = candidate.physical_norm
-        self._lastImplicitFunctionEvaluations = int(function_evaluations)
+        self._lastImplicitCandidateEvaluations = int(candidate_evaluations)
+        self._lastImplicitFunctionEvaluations = int(candidate_evaluations)
         self._lastImplicitJacobianEvaluations = int(jacobian_evaluations)
         self._lastImplicitMotionBranch = candidate.motion_branch
+        self._lastImplicitConverged = True
         self._lastImplicitFailureReason = None
 
-    def _record_implicit_failure(self, iterations, best, function_evaluations, jacobian_evaluations, reason):
+    def _record_implicit_failure(self, iterations, best_scaled_norm, best_physical_norm, best_motion_branch, candidate_evaluations, jacobian_evaluations, reason):
         """Records diagnostics for a failed nonlinear interface solve."""
         self._lastImplicitIterations = int(iterations)
-        self._lastImplicitFunctionEvaluations = int(function_evaluations)
+        self._lastImplicitResidual = float(best_scaled_norm)
+        self._lastImplicitPhysicalResidual = float(best_physical_norm)
+        self._lastImplicitCandidateEvaluations = int(candidate_evaluations)
+        self._lastImplicitFunctionEvaluations = int(candidate_evaluations)
         self._lastImplicitJacobianEvaluations = int(jacobian_evaluations)
+        self._lastImplicitMotionBranch = best_motion_branch
+        self._lastImplicitConverged = False
         self._lastImplicitFailureReason = reason
-        if best is not None:
-            self._lastImplicitResidual = best[0]
-            self._lastImplicitPhysicalResidual = best[1]
 
     def reset(self):
         super().reset()
@@ -1647,6 +1667,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         )
 
     def _solve_interface_planar(self, p, q, s, old_s, eta, dt):
+        self._reset_implicit_diagnostics()
         eta_lower, _, eta_span = self._eta_scaling_bounds()
         lower, upper = self._interface_scaled_bounds()
         x_hat = self._interface_physical_to_scaled(s, eta, eta_lower, eta_span)
@@ -1655,47 +1676,63 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         residual_scale = self._interface_residual_scale(p, q, s)
         c_left_old = np.asarray(p[-1], dtype=np.float64).copy()
         c_right_old = np.asarray(q[0], dtype=np.float64).copy()
-        best = None
-        residual_evaluations = 0
+        best_scaled_norm = np.inf
+        best_physical_norm = np.inf
+        best_motion_branch = None
+        candidate_evaluations = 0
         jacobian_evaluations = 0
         iterations_attempted = 0
+        failure_reason = "maximum iterations reached"
+
+        def record_failure(reason):
+            self._record_implicit_failure(
+                iterations_attempted,
+                best_scaled_norm,
+                best_physical_norm,
+                best_motion_branch,
+                candidate_evaluations,
+                jacobian_evaluations,
+                reason,
+            )
+
+        def evaluate_candidate(trial_x_hat, motion_branch):
+            nonlocal candidate_evaluations
+            candidate_evaluations += 1
+            return self._evaluate_interface_candidate(
+                p=p,
+                q=q,
+                s=s,
+                old_s=old_s,
+                dt=dt,
+                eta_lower=eta_lower,
+                eta_span=eta_span,
+                residual_scale=residual_scale,
+                c_left_old=c_left_old,
+                c_right_old=c_right_old,
+                x_hat=trial_x_hat,
+                motion_branch=motion_branch,
+            )
 
         for count in range(self.maxIterations):
             iterations_attempted = count + 1
-            future_s, future_eta = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
+            future_s, _ = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
             motion_branch = _select_interface_motion_branch(s, old_s, future_s)
-            candidate = self._evaluate_interface_candidate(
-                p,
-                q,
-                s,
-                old_s,
-                dt,
-                eta_lower,
-                eta_span,
-                residual_scale,
-                c_left_old,
-                c_right_old,
-                x_hat,
-                motion_branch,
-            )
-            residual_evaluations += 1
+            try:
+                candidate = evaluate_candidate(x_hat, motion_branch)
+            except Exception:
+                if best_motion_branch is None:
+                    best_motion_branch = motion_branch
+                record_failure("candidate evaluation failed")
+                raise
             scaled_residual = candidate.scaled_residual
             norm = candidate.scaled_norm
             physical_norm = candidate.physical_norm
-            if best is None or norm < best[0]:
-                best = (
-                    norm,
-                    physical_norm,
-                    x_hat.copy(),
-                    candidate.p_future.copy(),
-                    candidate.q_future.copy(),
-                    candidate.c_left.copy(),
-                    candidate.c_right.copy(),
-                    candidate.D_left.copy(),
-                    candidate.D_right.copy(),
-                )
+            if norm < best_scaled_norm:
+                best_scaled_norm = norm
+                best_physical_norm = physical_norm
+                best_motion_branch = motion_branch
             if self._interface_candidate_has_converged(candidate, lower, upper):
-                self._record_implicit_success(iterations_attempted, candidate, residual_evaluations, jacobian_evaluations)
+                self._record_implicit_success(iterations_attempted, candidate, candidate_evaluations, jacobian_evaluations)
                 return (
                     candidate.p_future,
                     candidate.q_future,
@@ -1711,43 +1748,31 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             for variable in range(len(x_hat)):
                 step, x_perturbed, difference_direction = _bounded_finite_difference_perturbation(x_hat, lower, upper, variable)
                 if difference_direction == "forward":
-                    residual_perturbed = self._evaluate_interface_candidate(
-                        p,
-                        q,
-                        s,
-                        old_s,
-                        dt,
-                        eta_lower,
-                        eta_span,
-                        residual_scale,
-                        c_left_old,
-                        c_right_old,
-                        x_perturbed,
-                        motion_branch,
-                    ).scaled_residual
-                    residual_evaluations += 1
+                    try:
+                        residual_perturbed = evaluate_candidate(x_perturbed, motion_branch).scaled_residual
+                    except Exception:
+                        if best_motion_branch is None:
+                            best_motion_branch = motion_branch
+                        record_failure("candidate evaluation failed")
+                        raise
                     jacobian[:, variable] = (residual_perturbed - scaled_residual) / step
                 else:
-                    residual_perturbed = self._evaluate_interface_candidate(
-                        p,
-                        q,
-                        s,
-                        old_s,
-                        dt,
-                        eta_lower,
-                        eta_span,
-                        residual_scale,
-                        c_left_old,
-                        c_right_old,
-                        x_perturbed,
-                        motion_branch,
-                    ).scaled_residual
-                    residual_evaluations += 1
+                    try:
+                        residual_perturbed = evaluate_candidate(x_perturbed, motion_branch).scaled_residual
+                    except Exception:
+                        if best_motion_branch is None:
+                            best_motion_branch = motion_branch
+                        record_failure("candidate evaluation failed")
+                        raise
                     jacobian[:, variable] = (scaled_residual - residual_perturbed) / step
             jacobian_evaluations += 1
 
-            step = self._least_squares_step_2xN(jacobian, scaled_residual)
-            step, alpha_start = self._bounded_scaled_newton_step(x_hat, step, lower, upper)
+            try:
+                step = self._least_squares_step_2xN(jacobian, scaled_residual)
+                step, alpha_start = self._bounded_scaled_newton_step(x_hat, step, lower, upper)
+            except RuntimeError:
+                record_failure("singular or unusable Jacobian/Newton step")
+                raise
             accepted = False
             for scale in (alpha_start, 0.5 * alpha_start, 0.25 * alpha_start, 0.125 * alpha_start, 0.0625 * alpha_start):
                 if scale <= 0.0:
@@ -1755,39 +1780,26 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 trial = x_hat + scale * step
                 if not self._scaled_interface_variables_in_bounds(trial, lower, upper):
                     continue
-                trial_candidate = self._evaluate_interface_candidate(
-                    p,
-                    q,
-                    s,
-                    old_s,
-                    dt,
-                    eta_lower,
-                    eta_span,
-                    residual_scale,
-                    c_left_old,
-                    c_right_old,
-                    trial,
-                    motion_branch,
-                )
-                residual_evaluations += 1
+                try:
+                    trial_candidate = evaluate_candidate(trial, motion_branch)
+                except Exception:
+                    if best_motion_branch is None:
+                        best_motion_branch = motion_branch
+                    record_failure("candidate evaluation failed")
+                    raise
                 trial_norm = trial_candidate.scaled_norm
                 if self._interface_candidate_improves(trial_candidate, norm):
                     x_hat = trial
                     accepted = True
                     break
             if not accepted:
+                failure_reason = "line search failed"
                 break
 
-        self._record_implicit_failure(
-            iterations_attempted,
-            best,
-            residual_evaluations,
-            jacobian_evaluations,
-            "line search failed" if iterations_attempted < self.maxIterations else "maximum iterations reached",
-        )
+        record_failure(failure_reason)
         raise RuntimeError(
             "Ternary Illingworth interface solve failed to converge; "
-            f"best residual was {np.inf if best is None else best[0]:.3e}."
+            f"best residual was {best_scaled_norm:.3e}."
         )
 
     def _least_squares_step_2xN(self, jacobian, residual):
@@ -1803,7 +1815,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             j = jacobian[:, 0]
             denom = float(j[0] * j[0] + j[1] * j[1])
             if denom <= 1e-300:
-                raise RuntimeError("Interface Jacobian is singular.")
+                raise RuntimeError("Ternary Newton Jacobian is singular.")
             return np.asarray([-float(j[0] * residual[0] + j[1] * residual[1]) / denom], dtype=np.float64)
         return _newton_step_2x2(jacobian, residual)
 

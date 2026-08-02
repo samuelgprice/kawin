@@ -1033,6 +1033,20 @@ def test_ternary_scaled_interface_jacobian_perturbs_eta_with_eta_interval():
     assert np.isclose(np.min(positive_perturbations), expected_eta_step, rtol=1.0e-6, atol=1.0e-14)
 
 
+def test_ternary_interface_scaled_bounds_preserve_minimum_phase_widths():
+    model = _make_length_scaled_illingworth_model(1.0)
+    model.setup()
+    lower, upper = model._interface_scaled_bounds()
+    eta_lower, _, eta_span = model._eta_scaling_bounds()
+    lower_s, lower_eta = model._interface_scaled_to_physical([lower[0], 0.5], eta_lower, eta_span)
+    upper_s, upper_eta = model._interface_scaled_to_physical([upper[0], 0.5], eta_lower, eta_span)
+
+    assert 0.0 < lower_s < upper_s < model._R
+    assert np.isclose(lower_s, model._R * 1.0e-14, rtol=1.0e-12, atol=1.0e-20)
+    assert np.isclose(model._R - upper_s, model._R * 1.0e-14, rtol=0.0, atol=1.0e-17)
+    assert lower_eta == upper_eta == 0.5
+
+
 @pytest.mark.parametrize(
     "eta_hat, outward_eta_step",
     [
@@ -1057,6 +1071,29 @@ def test_ternary_scaled_line_search_removes_outward_eta_component_at_active_boun
     assert lower[1] <= trial[1] <= upper[1]
     assert np.all(trial >= lower)
     assert np.all(trial <= upper)
+
+
+@pytest.mark.parametrize(
+    "eta_hat, inward_eta_step",
+    [
+        (0.0, 0.25),
+        (1.0, -0.25),
+    ],
+)
+def test_ternary_scaled_line_search_allows_inward_eta_motion_at_active_bounds(eta_hat, inward_eta_step):
+    model = _make_length_scaled_illingworth_model(1.0)
+    model.setup()
+    lower, upper = model._interface_scaled_bounds()
+    x_hat = np.asarray([0.45, eta_hat], dtype=np.float64)
+    newton_step = np.asarray([1.0e-3, inward_eta_step], dtype=np.float64)
+
+    bounded_step, alpha = model._bounded_scaled_newton_step(x_hat, newton_step, lower, upper)
+    trial = x_hat + alpha * bounded_step
+
+    assert np.allclose(bounded_step, newton_step)
+    assert alpha > 0.0
+    assert lower[1] <= trial[1] <= upper[1]
+    assert abs(trial[1] - eta_hat) > 0.0
 
 
 def test_ternary_scaled_line_search_limits_alpha_to_eta_upper_bound_without_clipping():
@@ -1115,6 +1152,121 @@ def test_ternary_scaled_line_search_keeps_forced_outward_eta_trials_feasible():
     assert np.any(s_trials > s / model._R)
     assert np.all((s_trials >= lower[0]) & (s_trials <= upper[0]))
     assert np.all((eta_trials >= lower[1]) & (eta_trials <= upper[1]))
+
+
+def test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work():
+    model = _make_length_scaled_illingworth_model(1.0)
+    model.setup()
+    x = model.getCurrentX()
+
+    model.getdXdt(model.currentTime, x)
+
+    assert model._lastImplicitConverged is True
+    assert model._lastImplicitIterations == 2
+    assert model._lastImplicitCandidateEvaluations == 5
+    assert model._lastImplicitFunctionEvaluations == model._lastImplicitCandidateEvaluations
+    assert model._lastImplicitJacobianEvaluations == 1
+    assert model._lastImplicitMotionBranch == "positive"
+    assert model._lastImplicitFailureReason is None
+    assert np.isclose(model._lastImplicitResidual, 4.499427273822066e-15, rtol=0.0, atol=1.0e-27)
+
+
+def test_ternary_interface_failure_diagnostics_record_line_search_failure():
+    model = _make_length_scaled_illingworth_model(1.0)
+    model.setup()
+    p = model._p_curr.copy()
+    q = model._q_curr.copy()
+    s = float(model._s_curr)
+    eta = float(model._eta_curr)
+
+    def zero_step(_jacobian, _residual):
+        return np.zeros(2, dtype=np.float64)
+
+    model._least_squares_step_2xN = zero_step
+    model.residualTolerance = -1.0
+
+    with pytest.raises(RuntimeError, match="failed to converge"):
+        model._solve_interface_planar(p, q, s, model._s_old, eta, 1.0e-4)
+
+    assert model._lastImplicitConverged is False
+    assert model._lastImplicitFailureReason == "line search failed"
+    assert model._lastImplicitIterations == 1
+    assert model._lastImplicitCandidateEvaluations == 3
+    assert model._lastImplicitJacobianEvaluations == 1
+    assert model._lastImplicitMotionBranch == "positive"
+    assert np.isfinite(model._lastImplicitResidual)
+    assert np.isfinite(model._lastImplicitPhysicalResidual)
+
+
+def test_ternary_interface_failure_diagnostics_record_maximum_iterations():
+    model = _make_length_scaled_illingworth_model(1.0)
+    model.setup()
+    p = model._p_curr.copy()
+    q = model._q_curr.copy()
+    s = float(model._s_curr)
+    eta = float(model._eta_curr)
+    model.maxIterations = 1
+    model.residualTolerance = -1.0
+
+    with pytest.raises(RuntimeError, match="failed to converge"):
+        model._solve_interface_planar(p, q, s, model._s_old, eta, 1.0e-4)
+
+    assert model._lastImplicitConverged is False
+    assert model._lastImplicitFailureReason == "maximum iterations reached"
+    assert model._lastImplicitIterations == 1
+    assert model._lastImplicitCandidateEvaluations == 4
+    assert model._lastImplicitJacobianEvaluations == 1
+    assert model._lastImplicitMotionBranch == "positive"
+
+
+def test_ternary_interface_diagnostics_reset_before_candidate_evaluation_failure():
+    model = _make_length_scaled_illingworth_model(1.0)
+    model.setup()
+    x = model.getCurrentX()
+    model.getdXdt(model.currentTime, x)
+    previous_residual = float(model._lastImplicitResidual)
+
+    def failing_interface_compositions(_eta):
+        raise ValueError("forced interface failure")
+
+    model._interface_compositions = failing_interface_compositions
+    p = model._p_curr.copy()
+    q = model._q_curr.copy()
+
+    with pytest.raises(ValueError, match="forced interface failure"):
+        model._solve_interface_planar(p, q, float(model._s_curr), float(model._s_old), float(model._eta_curr), 1.0e-4)
+
+    assert np.isfinite(previous_residual)
+    assert model._lastImplicitConverged is False
+    assert model._lastImplicitFailureReason == "candidate evaluation failed"
+    assert model._lastImplicitIterations == 1
+    assert model._lastImplicitCandidateEvaluations == 1
+    assert model._lastImplicitJacobianEvaluations == 0
+    assert model._lastImplicitMotionBranch == "positive"
+    assert np.isinf(model._lastImplicitResidual)
+    assert np.isinf(model._lastImplicitPhysicalResidual)
+
+
+def test_ternary_getdxdt_reduces_timestep_after_failed_interface_solve():
+    model = _make_length_scaled_illingworth_model(1.0)
+    model.setup()
+    original_step = model._take_implicit_step_planar
+    calls = []
+
+    def fail_once_then_solve(p, q, s, old_s, eta, dt):
+        calls.append(float(dt))
+        if len(calls) == 1:
+            raise RuntimeError("forced first-step failure")
+        return original_step(p, q, s, old_s, eta, dt)
+
+    model._take_implicit_step_planar = fail_once_then_solve
+    x = model.getCurrentX()
+    model.getdXdt(model.currentTime, x)
+
+    assert calls == [1.0e-4, 5.0e-5]
+    assert model._lastStepRetries == 1
+    assert model._currdt == 5.0e-5
+    assert model._lastImplicitConverged is True
 
 
 @pytest.mark.parametrize(
