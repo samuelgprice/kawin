@@ -801,9 +801,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._semiLogTimes = None
         self._semiLogNextIndex = 0
         self._nearFinalNoop = False
-        self._lastImplicitIterations = 0
-        self._lastImplicitResidual = np.nan
-        self._lastImplicitPhysicalResidual = np.nan
+        self._reset_implicit_diagnostics()
         self._lastStepRetries = 0
         self._lastInterfaceCompositions = None
         self.initialEtaEstimate = None
@@ -981,6 +979,36 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             self.mesh.boundaryConditions = bc
         return bc
 
+    def _reset_implicit_diagnostics(self):
+        """Resets diagnostics for the most recent nonlinear interface solve."""
+        self._lastImplicitIterations = 0
+        self._lastImplicitResidual = np.nan
+        self._lastImplicitPhysicalResidual = np.nan
+        self._lastImplicitFunctionEvaluations = 0
+        self._lastImplicitJacobianEvaluations = 0
+        self._lastImplicitMotionBranch = None
+        self._lastImplicitFailureReason = None
+
+    def _record_implicit_success(self, iterations, candidate, function_evaluations, jacobian_evaluations):
+        """Records diagnostics for a converged nonlinear interface solve."""
+        self._lastImplicitIterations = int(iterations)
+        self._lastImplicitResidual = candidate.scaled_norm
+        self._lastImplicitPhysicalResidual = candidate.physical_norm
+        self._lastImplicitFunctionEvaluations = int(function_evaluations)
+        self._lastImplicitJacobianEvaluations = int(jacobian_evaluations)
+        self._lastImplicitMotionBranch = candidate.motion_branch
+        self._lastImplicitFailureReason = None
+
+    def _record_implicit_failure(self, iterations, best, function_evaluations, jacobian_evaluations, reason):
+        """Records diagnostics for a failed nonlinear interface solve."""
+        self._lastImplicitIterations = int(iterations)
+        self._lastImplicitFunctionEvaluations = int(function_evaluations)
+        self._lastImplicitJacobianEvaluations = int(jacobian_evaluations)
+        self._lastImplicitFailureReason = reason
+        if best is not None:
+            self._lastImplicitResidual = best[0]
+            self._lastImplicitPhysicalResidual = best[1]
+
     def reset(self):
         super().reset()
         self.interfaceData.reset()
@@ -994,9 +1022,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._semiLogTimes = None
         self._semiLogNextIndex = 0
         self._nearFinalNoop = False
-        self._lastImplicitIterations = 0
-        self._lastImplicitResidual = np.nan
-        self._lastImplicitPhysicalResidual = np.nan
+        self._reset_implicit_diagnostics()
         self._lastStepRetries = 0
         self._lastInterfaceCompositions = None
         self.initialEtaEstimate = None
@@ -1598,8 +1624,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         c_left_old = np.asarray(p[-1], dtype=np.float64).copy()
         c_right_old = np.asarray(q[0], dtype=np.float64).copy()
         best = None
+        residual_evaluations = 0
+        jacobian_evaluations = 0
+        iterations_attempted = 0
 
         for count in range(self.maxIterations):
+            iterations_attempted = count + 1
             future_s, future_eta = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
             motion_branch = _select_interface_motion_branch(s, old_s, future_s)
             candidate = self._evaluate_interface_candidate(
@@ -1616,6 +1646,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 x_hat,
                 motion_branch,
             )
+            residual_evaluations += 1
             scaled_residual = candidate.scaled_residual
             norm = candidate.scaled_norm
             physical_norm = candidate.physical_norm
@@ -1632,9 +1663,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     candidate.D_right.copy(),
                 )
             if self._interface_candidate_has_converged(candidate, lower, upper):
-                self._lastImplicitIterations = count + 1
-                self._lastImplicitResidual = norm
-                self._lastImplicitPhysicalResidual = physical_norm
+                self._record_implicit_success(iterations_attempted, candidate, residual_evaluations, jacobian_evaluations)
                 return (
                     candidate.p_future,
                     candidate.q_future,
@@ -1667,6 +1696,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                         x_perturbed,
                         motion_branch,
                     ).scaled_residual
+                    residual_evaluations += 1
                     jacobian[:, variable] = (residual_perturbed - scaled_residual) / step
                 else:
                     x_perturbed[variable] -= step
@@ -1684,7 +1714,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                         x_perturbed,
                         motion_branch,
                     ).scaled_residual
+                    residual_evaluations += 1
                     jacobian[:, variable] = (scaled_residual - residual_perturbed) / step
+            jacobian_evaluations += 1
 
             step = self._least_squares_step_2xN(jacobian, scaled_residual)
             step, alpha_start = self._bounded_scaled_newton_step(x_hat, step, lower, upper)
@@ -1709,6 +1741,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     trial,
                     motion_branch,
                 )
+                residual_evaluations += 1
                 trial_norm = trial_candidate.scaled_norm
                 if self._interface_candidate_improves(trial_candidate, norm):
                     x_hat = trial
@@ -1717,10 +1750,13 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             if not accepted:
                 break
 
-        if best is not None:
-            self._lastImplicitIterations = self.maxIterations
-            self._lastImplicitResidual = best[0]
-            self._lastImplicitPhysicalResidual = best[1]
+        self._record_implicit_failure(
+            iterations_attempted,
+            best,
+            residual_evaluations,
+            jacobian_evaluations,
+            "line search failed" if iterations_attempted < self.maxIterations else "maximum iterations reached",
+        )
         raise RuntimeError(
             "Ternary Illingworth interface solve failed to converge; "
             f"best residual was {np.inf if best is None else best[0]:.3e}."
