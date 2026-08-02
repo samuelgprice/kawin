@@ -102,6 +102,32 @@ class InitialEtaEstimate:
     branch: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _InterfaceCandidate:
+    """
+    Mutually consistent state from one fixed-branch interface trial.
+
+    The concentration profiles, interface compositions, diffusivity matrices,
+    branch, and residuals all come from the same trial ``x_hat``. Keeping them
+    grouped avoids mixing values from different nonlinear iterations.
+    """
+
+    x_hat: np.ndarray
+    future_s: float
+    future_eta: float
+    motion_branch: str
+    c_left: np.ndarray
+    c_right: np.ndarray
+    D_left: np.ndarray
+    D_right: np.ndarray
+    p_future: np.ndarray
+    q_future: np.ndarray
+    residual: np.ndarray
+    scaled_residual: np.ndarray
+    scaled_norm: float
+    physical_norm: float
+
+
 def _validate_ternary_diffusivity_matrix(D, phase, context="ternary Illingworth diffusivity"):
     """
     Validates a ternary 2x2 diffusion matrix with scale-invariant eigen tests.
@@ -1488,6 +1514,67 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             alpha_max *= 1.0 - 1e-12
         return step, alpha_max
 
+    def _evaluate_interface_candidate(
+        self,
+        p,
+        q,
+        s,
+        old_s,
+        dt,
+        eta_lower,
+        eta_span,
+        residual_scale,
+        c_left_old,
+        c_right_old,
+        x_hat,
+        motion_branch,
+    ):
+        """
+        Evaluates one fixed-branch nonlinear interface trial.
+
+        The caller owns branch selection, Newton convergence, and line search.
+        This helper only builds the mutually consistent physical candidate and
+        its scaled residual for the supplied trial variables.
+        """
+        future_s, future_eta = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
+        c_left, c_right = self._interface_compositions(future_eta)
+        D_left = self._phase_diffusivity_matrix(c_left, self.phases[0], self.currentTime, future_s)
+        D_right = self._phase_diffusivity_matrix(c_right, self.phases[1], self.currentTime, future_s)
+        p_future = self._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
+        q_future = self._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
+        residual = self._interface_residual(
+            p_future,
+            q_future,
+            s,
+            old_s,
+            future_s,
+            dt,
+            c_left,
+            c_right,
+            c_left_old,
+            c_right_old,
+            D_left,
+            D_right,
+            motion_branch,
+        )
+        scaled_residual = residual / residual_scale
+        return _InterfaceCandidate(
+            x_hat=np.asarray(x_hat, dtype=np.float64).copy(),
+            future_s=future_s,
+            future_eta=future_eta,
+            motion_branch=motion_branch,
+            c_left=c_left,
+            c_right=c_right,
+            D_left=D_left,
+            D_right=D_right,
+            p_future=p_future,
+            q_future=q_future,
+            residual=residual,
+            scaled_residual=scaled_residual,
+            scaled_norm=float(np.max(np.abs(scaled_residual))),
+            physical_norm=float(np.max(np.abs(residual))),
+        )
+
     def _solve_interface_planar(self, p, q, s, old_s, eta, dt):
         eta_lower, _, eta_span = self._eta_scaling_bounds()
         lower, upper = self._interface_scaled_bounds()
@@ -1499,46 +1586,52 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         c_right_old = np.asarray(q[0], dtype=np.float64).copy()
         best = None
 
-        def evaluate(params, motion_branch=None):
-            future_s, future_eta = self._interface_scaled_to_physical(params, eta_lower, eta_span)
-            if motion_branch is None:
-                motion_branch = _select_interface_motion_branch(s, old_s, future_s)
-            c_left, c_right = self._interface_compositions(future_eta)
-            D_left = self._phase_diffusivity_matrix(c_left, self.phases[0], self.currentTime, future_s)
-            D_right = self._phase_diffusivity_matrix(c_right, self.phases[1], self.currentTime, future_s)
-            p_future = self._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
-            q_future = self._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
-            residual = self._interface_residual(
-                p_future,
-                q_future,
-                s,
-                old_s,
-                future_s,
-                dt,
-                c_left,
-                c_right,
-                c_left_old,
-                c_right_old,
-                D_left,
-                D_right,
-                motion_branch,
-            )
-            return residual, p_future, q_future, c_left, c_right, D_left, D_right
-
         for count in range(self.maxIterations):
             future_s, future_eta = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
             motion_branch = _select_interface_motion_branch(s, old_s, future_s)
-            residual, p_future, q_future, c_left, c_right, D_left, D_right = evaluate(x_hat, motion_branch)
-            scaled_residual = residual / residual_scale
-            norm = float(np.max(np.abs(scaled_residual)))
-            physical_norm = float(np.max(np.abs(residual)))
+            candidate = self._evaluate_interface_candidate(
+                p,
+                q,
+                s,
+                old_s,
+                dt,
+                eta_lower,
+                eta_span,
+                residual_scale,
+                c_left_old,
+                c_right_old,
+                x_hat,
+                motion_branch,
+            )
+            scaled_residual = candidate.scaled_residual
+            norm = candidate.scaled_norm
+            physical_norm = candidate.physical_norm
             if best is None or norm < best[0]:
-                best = (norm, physical_norm, x_hat.copy(), p_future.copy(), q_future.copy(), c_left.copy(), c_right.copy(), D_left.copy(), D_right.copy())
+                best = (
+                    norm,
+                    physical_norm,
+                    x_hat.copy(),
+                    candidate.p_future.copy(),
+                    candidate.q_future.copy(),
+                    candidate.c_left.copy(),
+                    candidate.c_right.copy(),
+                    candidate.D_left.copy(),
+                    candidate.D_right.copy(),
+                )
             if norm <= self.residualTolerance:
                 self._lastImplicitIterations = count + 1
                 self._lastImplicitResidual = norm
                 self._lastImplicitPhysicalResidual = physical_norm
-                return p_future, q_future, future_s, future_eta, c_left, c_right, D_left, D_right
+                return (
+                    candidate.p_future,
+                    candidate.q_future,
+                    candidate.future_s,
+                    candidate.future_eta,
+                    candidate.c_left,
+                    candidate.c_right,
+                    candidate.D_left,
+                    candidate.D_right,
+                )
 
             jacobian = np.zeros((2, len(x_hat)), dtype=np.float64)
             for variable in range(len(x_hat)):
@@ -1547,11 +1640,37 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 x_perturbed = x_hat.copy()
                 if x_hat[variable] + step <= upper[variable]:
                     x_perturbed[variable] += step
-                    residual_perturbed = evaluate(x_perturbed, motion_branch)[0] / residual_scale
+                    residual_perturbed = self._evaluate_interface_candidate(
+                        p,
+                        q,
+                        s,
+                        old_s,
+                        dt,
+                        eta_lower,
+                        eta_span,
+                        residual_scale,
+                        c_left_old,
+                        c_right_old,
+                        x_perturbed,
+                        motion_branch,
+                    ).scaled_residual
                     jacobian[:, variable] = (residual_perturbed - scaled_residual) / step
                 else:
                     x_perturbed[variable] -= step
-                    residual_perturbed = evaluate(x_perturbed, motion_branch)[0] / residual_scale
+                    residual_perturbed = self._evaluate_interface_candidate(
+                        p,
+                        q,
+                        s,
+                        old_s,
+                        dt,
+                        eta_lower,
+                        eta_span,
+                        residual_scale,
+                        c_left_old,
+                        c_right_old,
+                        x_perturbed,
+                        motion_branch,
+                    ).scaled_residual
                     jacobian[:, variable] = (scaled_residual - residual_perturbed) / step
 
             step = self._least_squares_step_2xN(jacobian, scaled_residual)
@@ -1563,8 +1682,21 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 trial = x_hat + scale * step
                 if np.any(trial < lower) or np.any(trial > upper):
                     continue
-                trial_residual = evaluate(trial, motion_branch)[0] / residual_scale
-                trial_norm = float(np.max(np.abs(trial_residual)))
+                trial_candidate = self._evaluate_interface_candidate(
+                    p,
+                    q,
+                    s,
+                    old_s,
+                    dt,
+                    eta_lower,
+                    eta_span,
+                    residual_scale,
+                    c_left_old,
+                    c_right_old,
+                    trial,
+                    motion_branch,
+                )
+                trial_norm = trial_candidate.scaled_norm
                 if np.isfinite(trial_norm) and trial_norm < norm:
                     x_hat = trial
                     accepted = True
