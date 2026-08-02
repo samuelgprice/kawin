@@ -89,6 +89,21 @@ def _newton_step_2x2(jacobian, residual):
     return np.asarray([(d * r0 - b * r1) / determinant, (-c * r0 + a * r1) / determinant], dtype=np.float64)
 
 
+def _validate_motion_branch(motion_branch):
+    """Validates the two fixed upwind branch labels used by the interface solve."""
+    if motion_branch not in {"positive", "negative"}:
+        raise ValueError("motion_branch must be 'positive' or 'negative'.")
+
+
+def _allocate_ternary_block_system(n):
+    """Allocates zeroed 2x2 block-tridiagonal arrays for one ternary phase solve."""
+    lower = np.zeros((n, 2, 2), dtype=np.float64)
+    diagonal = np.zeros((n, 2, 2), dtype=np.float64)
+    upper = np.zeros((n, 2, 2), dtype=np.float64)
+    rhs = np.zeros((n, 2), dtype=np.float64)
+    return lower, diagonal, upper, rhs
+
+
 def _select_interface_motion_branch(s, old_s, future_s, atol=1e-15):
     """
     Selects the conservative interface upwind branch for one residual evaluation.
@@ -1295,13 +1310,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         left-phase transformed-grid rows; local composition-dependent bulk
         matrices are intentionally outside this solver's current scope.
         """
-        if motion_branch not in {"positive", "negative"}:
-            raise ValueError("motion_branch must be 'positive' or 'negative'.")
+        _validate_motion_branch(motion_branch)
         n = len(p)
-        lower = np.zeros((n, 2, 2), dtype=np.float64)
-        diagonal = np.zeros((n, 2, 2), dtype=np.float64)
-        upper = np.zeros((n, 2, 2), dtype=np.float64)
-        rhs = np.zeros((n, 2), dtype=np.float64)
+        lower, diagonal, upper, rhs = _allocate_ternary_block_system(n)
         I = self._identity()
         tmpA = D_left * (float(dt) / float(future_s))
         tmpB = float(future_s) - float(s)
@@ -1351,13 +1362,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         for all right-phase transformed-grid rows; local composition-dependent
         bulk matrices are intentionally outside this solver's current scope.
         """
-        if motion_branch not in {"positive", "negative"}:
-            raise ValueError("motion_branch must be 'positive' or 'negative'.")
+        _validate_motion_branch(motion_branch)
         n = len(q)
-        lower = np.zeros((n, 2, 2), dtype=np.float64)
-        diagonal = np.zeros((n, 2, 2), dtype=np.float64)
-        upper = np.zeros((n, 2, 2), dtype=np.float64)
-        rhs = np.zeros((n, 2), dtype=np.float64)
+        lower, diagonal, upper, rhs = _allocate_ternary_block_system(n)
         I = self._identity()
         tmpA = D_right * (float(dt) / (self._R - float(future_s)))
         tmpB = float(future_s) - float(s)
@@ -1432,8 +1439,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         endpoint values from ``p[-1]`` and ``q[0]``. ``motion_branch`` must be
         the same branch used by both phase bulk solves for this residual.
         """
-        if motion_branch not in {"positive", "negative"}:
-            raise ValueError("motion_branch must be 'positive' or 'negative'.")
+        _validate_motion_branch(motion_branch)
         diff_l = _matvec_2x2(D_left, (c_left - p_future[-2]) / (1.0 - self._u_grid[-2]))
         diff_l = diff_l / future_s
         diff_r = _matvec_2x2(D_right, (q_future[1] - c_right) / self._v_grid[1])
