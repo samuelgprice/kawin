@@ -2751,6 +2751,59 @@ def _build_surrogate(**kwargs):
     return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(**params)
 
 
+def _continuous_bulk_grids():
+    return (
+        np.asarray([0.18, 0.24, 0.30, 0.36, 0.42], dtype=np.float64),
+        np.asarray([0.06, 0.10, 0.14, 0.18, 0.22], dtype=np.float64),
+    )
+
+
+def _test_continuous_matrix(composition, phase, scale=1.0):
+    x, y = np.asarray(composition, dtype=np.float64)
+    if phase == "ALPHA":
+        return scale * np.asarray([[1.0 + x + 0.2 * y, 0.05 * y], [0.02 * y, 1.4 + x + 0.1 * y]], dtype=np.float64)
+    return scale * np.asarray([[1.5 + x + 0.1 * y, -0.03 * y], [0.01 * y, 1.8 + x + 0.2 * y]], dtype=np.float64)
+
+
+def _direct_continuous_surrogate(*, bulk_scale=10.0, invalid_bulk=False):
+    eta = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+    tielines = {
+        "ALPHA": np.asarray([[0.20, 0.10], [0.25, 0.10], [0.30, 0.10]], dtype=np.float64),
+        "BETA": np.asarray([[0.30, 0.15], [0.35, 0.15], [0.40, 0.15]], dtype=np.float64),
+    }
+    grids = _continuous_bulk_grids()
+    grid_points = np.asarray(np.meshgrid(*grids, indexing="ij"), dtype=np.float64).reshape(2, -1).T
+    interface_diffusivities = {
+        phase: np.asarray([_test_continuous_matrix(point, phase) for point in tielines[phase]], dtype=np.float64)
+        for phase in ("ALPHA", "BETA")
+    }
+    if invalid_bulk:
+        bulk_diffusivities = {
+            phase: np.tile(np.asarray([[-1.0, 0.0], [0.0, -1.0]], dtype=np.float64), (grid_points.shape[0], 1, 1))
+            for phase in ("ALPHA", "BETA")
+        }
+    else:
+        bulk_diffusivities = {
+            phase: np.asarray([_test_continuous_matrix(point, phase, scale=bulk_scale) for point in grid_points], dtype=np.float64)
+            for phase in ("ALPHA", "BETA")
+        }
+    return TernaryMovingBoundaryThermodynamicsSurrogate(
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        tieline_phases=("ALPHA", "BETA"),
+        temperature=1000.0,
+        eta_samples=eta,
+        tieline_compositions=tielines,
+        diffusivity_compositions={
+            "interface": {phase: tielines[phase] for phase in ("ALPHA", "BETA")},
+            "general": {phase: grid_points for phase in ("ALPHA", "BETA")},
+        },
+        diffusivities={"interface": interface_diffusivities, "general": bulk_diffusivities},
+        diffusivity_interpolation="continuous_grid",
+        diffusivity_bulk_grids=grids,
+    )
+
+
 class _RecordingSurrogateDiffusivity:
     def __init__(self, surrogate):
         self.surrogate = surrogate
@@ -2854,6 +2907,67 @@ def test_ternary_surrogate_returns_nearest_interface_and_general_diffusivities()
     assert np.allclose(general_matrix, expected_general)
 
 
+def test_ternary_continuous_surrogate_requires_regular_bulk_grid():
+    with pytest.raises(ValueError, match="diffusivity_bulk_grids"):
+        _build_surrogate(diffusivity_interpolation="continuous_grid")
+
+
+def test_ternary_continuous_surrogate_rejects_grid_outside_simplex():
+    with pytest.raises(ValueError, match="ternary composition bounds"):
+        _build_surrogate(
+            diffusivity_interpolation="continuous_grid",
+            diffusivity_bulk_grids=(
+                np.asarray([0.70, 0.80], dtype=np.float64),
+                np.asarray([0.25, 0.30], dtype=np.float64),
+            ),
+        )
+
+
+def test_ternary_continuous_surrogate_interface_uses_tieline_only():
+    first = _direct_continuous_surrogate(bulk_scale=10.0)
+    second = _direct_continuous_surrogate(bulk_scale=100.0)
+    left = first.interface_compositions(0.5)[0]
+
+    first_interface = first.getInterdiffusivity(left, 1000.0, phase="ALPHA", query_context="interface")
+    second_interface = second.getInterdiffusivity(left, 1000.0, phase="ALPHA", query_context="interface")
+    first_general = first.getInterdiffusivity(left, 1000.0, phase="ALPHA", query_context="general")
+    expected_interface = _test_continuous_matrix(left, "ALPHA")
+
+    assert np.allclose(first_interface, expected_interface)
+    assert np.allclose(second_interface, expected_interface)
+    assert not np.allclose(first_interface, first_general)
+
+
+def test_ternary_continuous_surrogate_interface_varies_continuously_with_endpoint_composition():
+    surrogate = _direct_continuous_surrogate()
+
+    matrix = surrogate.getInterdiffusivity([0.2500, 0.10], 1000.0, phase="ALPHA", query_context="interface")
+    nearby = surrogate.getInterdiffusivity([0.2505, 0.10], 1000.0, phase="ALPHA", query_context="interface")
+
+    assert not np.array_equal(matrix, nearby)
+    assert np.linalg.norm(matrix - nearby, ord=np.inf) < 2.0e-3
+
+
+def test_ternary_continuous_surrogate_bulk_vectorized_matches_scalar_and_is_continuous():
+    surrogate = _build_surrogate(
+        diffusivity_interpolation="continuous_grid",
+        diffusivity_bulk_grids=_continuous_bulk_grids(),
+    )
+    points = np.asarray([[0.255, 0.105], [0.256, 0.106]], dtype=np.float64)
+
+    vectorized = surrogate.getInterdiffusivity(points, 1000.0, phase="ALPHA", query_context="general")
+    scalar = surrogate.getInterdiffusivity(points[0], 1000.0, phase="ALPHA", query_context="general")
+
+    assert np.allclose(vectorized[0], scalar)
+    assert not np.array_equal(vectorized[0], vectorized[1])
+    assert np.linalg.norm(vectorized[1] - vectorized[0], ord=np.inf) < 1.0e-2
+
+
+def test_ternary_continuous_surrogate_rejects_invalid_dense_interpolation():
+    with pytest.raises(ValueError, match="positive real eigenvalues"):
+        _direct_continuous_surrogate(invalid_bulk=True)
+
+
 def test_ternary_surrogate_rejects_nonmatching_temperature():
     surrogate = _build_surrogate()
 
@@ -2875,6 +2989,32 @@ def test_ternary_surrogate_save_load_preserves_phase_order_and_predictions():
     assert np.allclose(
         loaded.getInterdiffusivity([0.451, 0.05], 1000.0, phase="ALPHA"),
         surrogate.getInterdiffusivity([0.451, 0.05], 1000.0, phase="ALPHA"),
+    )
+
+
+def test_ternary_continuous_surrogate_save_load_preserves_predictions():
+    surrogate = _build_surrogate(
+        diffusivity_interpolation="continuous_grid",
+        diffusivity_bulk_grids=_continuous_bulk_grids(),
+    )
+    path = Path.cwd() / "continuous_ternary_surrogate_test_roundtrip.npz"
+
+    try:
+        surrogate.save(path)
+        loaded = TernaryMovingBoundaryThermodynamicsSurrogate.load(path)
+    finally:
+        path.unlink(missing_ok=True)
+
+    assert loaded.diffusivityInterpolation == "continuous_grid"
+    assert np.allclose(loaded.diffusivityBulkGridAxes[0], surrogate.diffusivityBulkGridAxes[0])
+    assert np.allclose(loaded.diffusivityBulkGridAxes[1], surrogate.diffusivityBulkGridAxes[1])
+    assert np.allclose(
+        loaded.getInterdiffusivity([0.25, 0.10], 1000.0, phase="ALPHA", query_context="interface"),
+        surrogate.getInterdiffusivity([0.25, 0.10], 1000.0, phase="ALPHA", query_context="interface"),
+    )
+    assert np.allclose(
+        loaded.getInterdiffusivity([0.255, 0.105], 1000.0, phase="ALPHA", query_context="general"),
+        surrogate.getInterdiffusivity([0.255, 0.105], 1000.0, phase="ALPHA", query_context="general"),
     )
 
 
@@ -2922,6 +3062,40 @@ def test_ternary_illingworth_variable_modes_query_surrogate_general_bulk_context
     assert ("BETA", "general") in solve_contexts
     assert any(call["composition_shape"] == (len(model._u_grid) - 1, 2) for call in thermodynamics.calls)
     assert any(call["composition_shape"] == (len(model._v_grid) - 1, 2) for call in thermodynamics.calls)
+
+
+def test_ternary_illingworth_composition_dependent_implicit_converges_with_continuous_surrogate():
+    surrogate = _build_surrogate(
+        diffusivity_interpolation="continuous_grid",
+        diffusivity_bulk_grids=_continuous_bulk_grids(),
+    )
+    thermodynamics = _RecordingSurrogateDiffusivity(surrogate)
+    left, right = surrogate.interface_compositions(0.0)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.5, left, right), ["X", "Y"])]))
+    model = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=thermodynamics,
+        temperature=1000.0,
+        interfacePosition=0.5,
+        interface_equilibrium=surrogate,
+        initial_eta_bracket=(0.0, 1.0),
+        bulk_diffusivity_mode="composition_dependent_implicit",
+        bulk_picard_max_iterations=20,
+        time_step=1.0,
+        record=True,
+    )
+
+    model.solve(1.0)
+
+    assert model._lastBulkConverged is True
+    assert model._lastBulkDiffusivityProviderCalls > 0
+    assert model._lastBulkFaceMatricesEvaluated > 0
+    assert ("ALPHA", "general") in [(call["phase"], call["query_context"]) for call in thermodynamics.calls]
+    assert ("BETA", "general") in [(call["phase"], call["query_context"]) for call in thermodynamics.calls]
+    assert np.allclose(model.checkConservation(1.0e-12), np.zeros(2))
 
 
 def test_ternary_illingworth_phase_uniform_surrogate_uses_interface_diffusivity_context():
