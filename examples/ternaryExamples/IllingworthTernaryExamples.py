@@ -74,10 +74,16 @@ RIGHT_BULK = np.array([0.13, 0.15], dtype=np.float64) # np.array([0.22596712, 0.
 
 idealized_comp = LEFT_BULK * (INTERFACE_POSITION/LENGTH) + RIGHT_BULK * (1 - INTERFACE_POSITION/LENGTH)
 
-# Two diffusivity modes are supported:
+# Top-level solver diffusivity source:
+#   "fixed"    -> preserve the original example behavior: build the interface
+#                 surrogate, then solve with one frozen 2x2 matrix per phase.
+#   "variable" -> use the surrogate itself as the bulk diffusivity provider.
+DIFFUSIVITY_SOURCE = "fixed"
+
+# Fixed-source matrix selection:
 #   "explicit"       -> set FIXED_DIFFUSIVITY_MATRICES below.
 #   "sample_tieline" -> sample one tie-line from the real thermodynamics object
-#                       and freeze one matrix per phase for the solver.
+#                       at DIFFUSIVITY_SAMPLE_ETA and freeze one matrix per phase.
 DIFFUSIVITY_MODE = "sample_tieline"
 DIFFUSIVITY_SAMPLE_ETA = 0.5
 FIXED_DIFFUSIVITY_MATRICES = None
@@ -86,6 +92,26 @@ FIXED_DIFFUSIVITY_MATRICES = None
 #     "BCC_A2": np.array([[1.0e-15, 0.0], [0.0, 1.0e-15]], dtype=np.float64),
 #     "FCC_A1": np.array([[1.0e-16, 0.0], [0.0, 1.0e-16]], dtype=np.float64),
 # }
+
+# Variable-source surrogate options:
+#   VARIABLE_DIFFUSIVITY_INTERPOLATION = "continuous_grid" -> smooth interface
+#       and regular-grid bulk interpolation. This is the recommended variable
+#       path for composition-dependent lagged/Picard solves.
+#   VARIABLE_DIFFUSIVITY_INTERPOLATION = "nearest" -> legacy nearest-neighbor
+#       surrogate diffusivity using the same grid samples as extra bulk points.
+VARIABLE_DIFFUSIVITY_INTERPOLATION = "continuous_grid"
+VARIABLE_DIFFUSIVITY_BULK_MODE = "picard"
+# Alternative:
+# VARIABLE_DIFFUSIVITY_BULK_MODE = "lagged"
+VARIABLE_DIFFUSIVITY_BULK_CR_AXIS = np.linspace(0.10, 0.55, 19)
+VARIABLE_DIFFUSIVITY_BULK_NI_AXIS = np.linspace(0.0001, 0.25, 19)
+# Set this to an explicit ``(cr_axis, ni_axis)`` tuple to override the two axes
+# above without editing both variables.
+VARIABLE_DIFFUSIVITY_BULK_GRIDS = None
+VARIABLE_DIFFUSIVITY_BULK_PICARD_RTOL = None
+VARIABLE_DIFFUSIVITY_BULK_PICARD_ATOL = 1.0e-12
+VARIABLE_DIFFUSIVITY_BULK_PICARD_MAX_ITERATIONS = 25
+VARIABLE_DIFFUSIVITY_BULK_PICARD_RELAXATION = 1.0
 
 # Time stepping:
 #   DT_MODE = "fixed"    -> advance by FIXED_TIME_STEP.
@@ -117,8 +143,12 @@ RUN_SOLVE = True
 
 
 _OVERRIDE_KEY_ALIASES = {
+    "diffusivity_mode": "DIFFUSIVITY_MODE",
+    "diffusivity_sample_eta": "DIFFUSIVITY_SAMPLE_ETA",
+    "diffusivity_source": "DIFFUSIVITY_SOURCE",
     "dt_mode": "DT_MODE",
     "fixed_time_step": "FIXED_TIME_STEP",
+    "fixed_diffusivity_matrices": "FIXED_DIFFUSIVITY_MATRICES",
     "left_bulk": "LEFT_BULK",
     "length": "LENGTH",
     "max_iterations": "MAX_ITERATIONS",
@@ -136,6 +166,15 @@ _OVERRIDE_KEY_ALIASES = {
     "tolerance": "TOLERANCE",
     "verbose": "VERBOSE",
     "verbose_interval": "VERBOSE_INTERVAL",
+    "variable_diffusivity_bulk_cr_axis": "VARIABLE_DIFFUSIVITY_BULK_CR_AXIS",
+    "variable_diffusivity_bulk_grids": "VARIABLE_DIFFUSIVITY_BULK_GRIDS",
+    "variable_diffusivity_bulk_mode": "VARIABLE_DIFFUSIVITY_BULK_MODE",
+    "variable_diffusivity_bulk_ni_axis": "VARIABLE_DIFFUSIVITY_BULK_NI_AXIS",
+    "variable_diffusivity_bulk_picard_atol": "VARIABLE_DIFFUSIVITY_BULK_PICARD_ATOL",
+    "variable_diffusivity_bulk_picard_max_iterations": "VARIABLE_DIFFUSIVITY_BULK_PICARD_MAX_ITERATIONS",
+    "variable_diffusivity_bulk_picard_relaxation": "VARIABLE_DIFFUSIVITY_BULK_PICARD_RELAXATION",
+    "variable_diffusivity_bulk_picard_rtol": "VARIABLE_DIFFUSIVITY_BULK_PICARD_RTOL",
+    "variable_diffusivity_interpolation": "VARIABLE_DIFFUSIVITY_INTERPOLATION",
 }
 
 
@@ -224,8 +263,84 @@ def build_source_thermodynamics():
     return MulticomponentThermodynamics(str(TDB_PATH), ELEMENTS, PHASES)
 
 
+def _coerce_diffusivity_source():
+    source = str(DIFFUSIVITY_SOURCE)
+    if source not in {"fixed", "variable"}:
+        raise ValueError("DIFFUSIVITY_SOURCE must be either 'fixed' or 'variable'.")
+    return source
+
+
+def _coerce_variable_diffusivity_bulk_mode():
+    mode = str(VARIABLE_DIFFUSIVITY_BULK_MODE)
+    mode_aliases = {
+        "lagged": "composition_dependent_lagged",
+        "picard": "composition_dependent_implicit",
+        "implicit": "composition_dependent_implicit",
+    }
+    mode = mode_aliases.get(mode, mode)
+    if mode not in {"composition_dependent_lagged", "composition_dependent_implicit"}:
+        raise ValueError(
+            "VARIABLE_DIFFUSIVITY_BULK_MODE must be either "
+            "'lagged'/'composition_dependent_lagged' or 'picard'/'composition_dependent_implicit'."
+        )
+    return mode
+
+
+def get_variable_diffusivity_solver_options():
+    """Returns Illingworth bulk-diffusivity kwargs for variable diffusivity solves."""
+    if _coerce_diffusivity_source() == "fixed":
+        return {"bulk_diffusivity_mode": "phase_uniform"}
+    return {
+        "bulk_diffusivity_mode": _coerce_variable_diffusivity_bulk_mode(),
+        "bulk_picard_rtol": VARIABLE_DIFFUSIVITY_BULK_PICARD_RTOL,
+        "bulk_picard_atol": float(VARIABLE_DIFFUSIVITY_BULK_PICARD_ATOL),
+        "bulk_picard_max_iterations": int(VARIABLE_DIFFUSIVITY_BULK_PICARD_MAX_ITERATIONS),
+        "bulk_picard_relaxation": float(VARIABLE_DIFFUSIVITY_BULK_PICARD_RELAXATION),
+    }
+
+
+def get_variable_diffusivity_bulk_grids():
+    """Returns the regular [CR, NI] grid axes used to train variable bulk diffusivity."""
+    grids = VARIABLE_DIFFUSIVITY_BULK_GRIDS
+    if grids is None:
+        grids = (VARIABLE_DIFFUSIVITY_BULK_CR_AXIS, VARIABLE_DIFFUSIVITY_BULK_NI_AXIS)
+    axes = tuple(np.asarray(axis, dtype=np.float64).reshape(-1) for axis in grids)
+    if len(axes) != 2:
+        raise ValueError("VARIABLE_DIFFUSIVITY_BULK_GRIDS must contain exactly two axes.")
+    for label, axis in zip(INDEPENDENT_ELEMENTS, axes):
+        if axis.size < 2:
+            raise ValueError(f"Variable diffusivity {label} grid axis must contain at least two values.")
+        if not np.all(np.isfinite(axis)) or not np.all(np.diff(axis) > 0.0):
+            raise ValueError(f"Variable diffusivity {label} grid axis must be finite and strictly increasing.")
+    if axes[0][-1] + axes[1][-1] >= 1.0:
+        raise ValueError("Variable diffusivity grid rectangle must lie inside the ternary composition simplex.")
+    return tuple(axis.copy() for axis in axes)
+
+
+def get_surrogate_diffusivity_sampling_options():
+    """
+    Returns diffusivity sampling kwargs for ``TernaryMovingBoundaryThermodynamicsSurrogate``.
+
+    Fixed-source solves keep the light tie-line-only surrogate used by the
+    original example. Variable-source solves additionally sample a regular bulk
+    diffusivity grid so the surrogate can supply composition-dependent bulk
+    matrices to the Illingworth solver.
+    """
+    if _coerce_diffusivity_source() == "fixed":
+        return {}
+
+    interpolation = str(VARIABLE_DIFFUSIVITY_INTERPOLATION)
+    if interpolation not in {"nearest", "continuous_grid"}:
+        raise ValueError("VARIABLE_DIFFUSIVITY_INTERPOLATION must be either 'nearest' or 'continuous_grid'.")
+    grids = get_variable_diffusivity_bulk_grids()
+    return {
+        "diffusivity_interpolation": interpolation,
+        "diffusivity_bulk_grids": grids,
+    }
+
+
 def build_tieline_surrogate(source_thermodynamics):
-    """Samples the Fe-Cr-Ni tie-line family used by the interface solver."""
+    """Samples the Fe-Cr-Ni tie-line family and optional variable diffusivity grid."""
     return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
         thermodynamics=source_thermodynamics,
         elements=ELEMENTS,
@@ -236,6 +351,7 @@ def build_tieline_surrogate(source_thermodynamics):
         probe_end=PROBE_END,
         eta_samples=ETA_SAMPLES,
         precipitate_phase=TIELINE_PHASES[1],
+        **get_surrogate_diffusivity_sampling_options(),
     )
 
 
@@ -282,30 +398,46 @@ def select_fixed_diffusivity_matrices(source_thermodynamics, tieline_surrogate, 
 
 def build_case_context(overrides=None, *, print_matrices=True):
     """
-    Builds reusable thermodynamics and fixed-diffusivity objects for this case.
+    Builds reusable thermodynamics and diffusivity objects for this case.
 
-    The expensive Fe-Cr-Ni database and tie-line surrogate setup is independent
-    of mesh density and timestep controls, so convergence sweeps can build this
-    context once and pass it to ``run_case`` for each numerical variant.
+    The expensive Fe-Cr-Ni database and surrogate setup is independent of mesh
+    density and timestep controls, so convergence sweeps can build this context
+    once and pass it to ``run_case`` for each numerical variant.
     """
     with _temporary_config(overrides):
+        diffusivity_source = _coerce_diffusivity_source()
         source_thermodynamics = build_source_thermodynamics()
         tieline_surrogate = build_tieline_surrogate(source_thermodynamics)
-        fixed_diffusivity_matrices = select_fixed_diffusivity_matrices(
-            source_thermodynamics,
-            tieline_surrogate,
-            print_matrices=print_matrices,
-        )
-        fixed_diffusivity = FixedMatrixTernaryDiffusivity(
-            fixed_diffusivity_matrices,
-            phases=TIELINE_PHASES,
-            temperature=TEMPERATURE,
-        )
+        fixed_diffusivity_matrices = None
+        fixed_diffusivity = None
+        solver_options = get_variable_diffusivity_solver_options()
+        if diffusivity_source == "fixed":
+            fixed_diffusivity_matrices = select_fixed_diffusivity_matrices(
+                source_thermodynamics,
+                tieline_surrogate,
+                print_matrices=print_matrices,
+            )
+            fixed_diffusivity = FixedMatrixTernaryDiffusivity(
+                fixed_diffusivity_matrices,
+                phases=TIELINE_PHASES,
+                temperature=TEMPERATURE,
+            )
+            solver_thermodynamics = fixed_diffusivity
+        else:
+            solver_thermodynamics = tieline_surrogate
+            if print_matrices:
+                print("Using variable surrogate diffusivity for the Illingworth solve.")
+                print(f"Surrogate diffusivity interpolation = {VARIABLE_DIFFUSIVITY_INTERPOLATION}")
+                print(f"Solver bulk diffusivity mode = {solver_options['bulk_diffusivity_mode']}")
         return {
+            "bulk_diffusivity_mode": solver_options["bulk_diffusivity_mode"],
+            "diffusivity_source": diffusivity_source,
             "source_thermodynamics": source_thermodynamics,
             "tieline_surrogate": tieline_surrogate,
             "fixed_diffusivity_matrices": fixed_diffusivity_matrices,
             "fixed_diffusivity": fixed_diffusivity,
+            "solver_thermodynamics": solver_thermodynamics,
+            "solver_options": solver_options,
         }
 
 
@@ -351,14 +483,18 @@ def get_time_step_options():
     raise ValueError("DT_MODE must be either 'fixed' or 'semi_log'.")
 
 
-def build_model(tieline_surrogate, fixed_diffusivity):
+def build_model(tieline_surrogate, solver_thermodynamics, *, solver_options=None, bulk_diffusivity_mode=None):
     """Constructs the ternary Illingworth model without starting the solve."""
     time_step_options = get_time_step_options()
+    solver_options = {} if solver_options is None else dict(solver_options)
+    if bulk_diffusivity_mode is not None:
+        solver_options["bulk_diffusivity_mode"] = bulk_diffusivity_mode
+    solver_options.setdefault("bulk_diffusivity_mode", "phase_uniform")
     return MovingBoundaryIllingworthTernaryFD1DModel(
         mesh=make_mesh(),
         elements=ELEMENTS,
         phases=list(TIELINE_PHASES),
-        thermodynamics=fixed_diffusivity,
+        thermodynamics=solver_thermodynamics,
         temperature=TEMPERATURE,
         interfacePosition=INTERFACE_POSITION,
         interface_equilibrium=tieline_surrogate,
@@ -374,6 +510,7 @@ def build_model(tieline_surrogate, fixed_diffusivity):
         phase_b_nodes=PHASE_B_NODES,
         tolerance=TOLERANCE,
         max_iterations=MAX_ITERATIONS,
+        **solver_options,
         record=True,
     )
 
@@ -385,13 +522,17 @@ def run_case(overrides=None, context=None, make_plots=False):
     Parameters in ``overrides`` temporarily replace module-level configuration
     values such as ``NODES``, ``DT_MODE``, ``SEMI_LOG_DT``, ``FIXED_TIME_STEP``,
     and ``SOLVE_TIME``. Passing a context from ``build_case_context`` reuses the
-    database-derived tie-line surrogate and fixed diffusivity object.
+    database-derived surrogate and diffusivity object.
     """
     figures = {}
     with _temporary_config(overrides):
         if context is None:
             context = build_case_context(print_matrices=VERBOSE)
-        model = build_model(context["tieline_surrogate"], context["fixed_diffusivity"])
+        model = build_model(
+            context["tieline_surrogate"],
+            context["solver_thermodynamics"],
+            solver_options=context["solver_options"],
+        )
 
         if DT_MODE == "fixed":
             n_steps = int(np.ceil(SOLVE_TIME / FIXED_TIME_STEP))
