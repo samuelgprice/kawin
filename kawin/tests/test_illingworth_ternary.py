@@ -173,6 +173,46 @@ class _NoContextScalarBulkThermodynamics:
         )
 
 
+class _PhaseSelectiveDifficultBulkThermodynamics:
+    def __init__(self, difficult_phases):
+        self.difficult_phases = {str(phase) for phase in difficult_phases}
+        self.calls = []
+
+    def clearCache(self):
+        pass
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        values = np.asarray(composition, dtype=np.float64)
+        single = values.ndim == 1
+        values = np.atleast_2d(values)
+        self.calls.append(
+            {
+                "phase": phase,
+                "composition": values.copy(),
+                "query_context": kwargs.get("query_context"),
+            }
+        )
+        matrices = []
+        for x, y in values:
+            if phase in self.difficult_phases and kwargs.get("query_context") == "general":
+                scale = 1.0 + 4.0 * x + 3.0 * y
+                matrices.append(
+                    np.asarray(
+                        [
+                            [1.0e-3 * scale, 1.0e-4 * (1.0 + y)],
+                            [5.0e-5 * (1.0 + x), 8.0e-4 * (1.0 + 2.0 * x + 2.0 * y)],
+                        ],
+                        dtype=np.float64,
+                    )
+                )
+            elif phase == "ALPHA":
+                matrices.append(np.asarray([[1.0e-3, 2.0e-4], [1.0e-4, 8.0e-4]], dtype=np.float64))
+            else:
+                matrices.append(np.asarray([[7.0e-4, -1.0e-4], [2.0e-4, 1.1e-3]], dtype=np.float64))
+        matrices = np.asarray(matrices, dtype=np.float64)
+        return matrices[0] if single else matrices
+
+
 class _LinearInterfaceEquilibrium:
     eta_bounds = (0.0, 1.0)
 
@@ -447,13 +487,13 @@ def _record_solve_interface_branches(previous_delta_s, max_iterations=1):
     right_original = model._solve_concentration_right_planar
     residual_original = model._interface_residual
 
-    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
+    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch, validate_diffusivity=True):
         records.append(("left", float(future_s_arg), motion_branch))
-        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch)
+        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch, validate_diffusivity=validate_diffusivity)
 
-    def right_spy(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch):
+    def right_spy(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch, validate_diffusivity=True):
         records.append(("right", float(future_s_arg), motion_branch))
-        return right_original(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch)
+        return right_original(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch, validate_diffusivity=validate_diffusivity)
 
     def residual_spy(*args):
         records.append(("residual", float(args[4]), args[-1]))
@@ -581,9 +621,9 @@ def _record_scaled_jacobian_perturbations(domain_length=1.0e-6):
     left_original = model._solve_concentration_left_planar
     interface_original = model._interface_compositions
 
-    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
+    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch, validate_diffusivity=True):
         future_s_calls.append(float(future_s_arg))
-        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch)
+        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch, validate_diffusivity=validate_diffusivity)
 
     def interface_spy(eta_arg):
         eta_calls.append(float(eta_arg))
@@ -881,6 +921,27 @@ def test_ternary_diffusivity_validation_rejects_complex_valued_matrix():
         _validate_ternary_diffusivity_matrix(matrix, "ALPHA", context="complex test diffusivity")
 
 
+def test_ternary_phase_uniform_solve_rejects_complex_diffusivity_before_real_conversion():
+    model, p, _ = _make_residual_identity_state()
+    s = float(model._s_curr)
+    c_left = np.asarray([0.25, 0.10], dtype=np.float64)
+    D_left = np.asarray([[1.0e-3 + 1.0e-8j, 0.0], [0.0, 8.0e-4]], dtype=np.complex128)
+
+    with pytest.raises(ValueError, match="real-valued"):
+        model._solve_concentration_left_planar(p, s, s + 1.0e-4, 1.0e-4, c_left, D_left, "positive")
+
+
+def test_ternary_face_array_solve_rejects_single_complex_face_before_real_conversion():
+    model, p, _ = _make_residual_identity_state()
+    s = float(model._s_curr)
+    c_left = np.asarray([0.25, 0.10], dtype=np.float64)
+    D_faces = np.broadcast_to(np.asarray([[1.0e-3, 1.0e-4], [5.0e-5, 8.0e-4]], dtype=np.float64), (len(p) - 1, 2, 2)).astype(np.complex128)
+    D_faces[1, 0, 1] += 1.0e-8j
+
+    with pytest.raises(ValueError, match="real-valued"):
+        model._solve_concentration_left_planar(p, s, s + 1.0e-4, 1.0e-4, c_left, D_faces, "positive")
+
+
 def test_ternary_diffusivity_validation_call_sites_share_helper(monkeypatch):
     model = _make_scope_validation_model()
     model.setup()
@@ -959,13 +1020,13 @@ def test_ternary_bulk_diffusivity_is_phase_uniform_and_evaluated_at_interface_co
     left_original = model._solve_concentration_left_planar
     right_original = model._solve_concentration_right_planar
 
-    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
+    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch, validate_diffusivity=True):
         bulk_calls.append(("ALPHA", np.asarray(D_left_arg, dtype=np.float64).copy()))
-        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch)
+        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch, validate_diffusivity=validate_diffusivity)
 
-    def right_spy(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch):
+    def right_spy(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch, validate_diffusivity=True):
         bulk_calls.append(("BETA", np.asarray(D_right_arg, dtype=np.float64).copy()))
-        return right_original(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch)
+        return right_original(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch, validate_diffusivity=validate_diffusivity)
 
     model._solve_concentration_left_planar = left_spy
     model._solve_concentration_right_planar = right_spy
@@ -1283,6 +1344,58 @@ def test_ternary_implicit_candidate_evaluation_is_deterministic_after_other_tria
     assert repeated.right_inner_iterations == first.right_inner_iterations
 
 
+def test_ternary_invalid_bulk_diffusivity_mode_after_setup_fails_explicitly():
+    model = _make_scope_validation_model()
+    model.setup()
+    p, q, s, eta = model.getCurrentX()
+    dt = model._compute_dt(model.currentTime)
+    eta_lower, _, eta_span = model._eta_scaling_bounds()
+    residual_scale = model._interface_residual_scale(p, q, s)
+    x_hat = model._interface_physical_to_scaled(s, eta, eta_lower, eta_span)
+    model.bulkDiffusivityMode = "definitely_not_a_mode"
+
+    with pytest.raises(ValueError, match="bulkDiffusivityMode"):
+        model._evaluate_interface_candidate(
+            p,
+            q,
+            s,
+            s,
+            dt,
+            eta_lower,
+            eta_span,
+            residual_scale,
+            p[-1].copy(),
+            q[0].copy(),
+            x_hat,
+            ternary_fdm._select_interface_motion_branch(s, s, s),
+        )
+
+
+def test_ternary_implicit_picard_reuses_next_coefficient_query():
+    model = _make_scope_validation_model()
+    model.therm = _SmoothBulkTernaryThermodynamics()
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.bulkPicardRtol = 1.0e-13
+    model.bulkPicardAtol = 1.0e-15
+    model.bulkPicardMaxIterations = 20
+    model.setup()
+    p, _, s, eta = model.getCurrentX()
+    c_left, _ = model._interface_compositions(eta + 1.0e-3)
+    calls = {"count": 0}
+    original = model._left_lagged_face_diffusivity_matrices
+
+    def count_left_face_query(*args, **kwargs):
+        calls["count"] += 1
+        return original(*args, **kwargs)
+
+    model._left_lagged_face_diffusivity_matrices = count_left_face_query
+
+    result = model._solve_concentration_left_picard(p, s, s + 1.0e-4, 1.0e-4, c_left, "positive")
+
+    assert result.inner_iterations > 1
+    assert calls["count"] == result.inner_iterations
+
+
 def test_ternary_implicit_under_relaxation_converges_to_same_step():
     direct = _make_scope_validation_model()
     direct.therm = _SmoothBulkTernaryThermodynamics()
@@ -1333,6 +1446,126 @@ def test_ternary_implicit_inner_failure_propagates_to_timestep_retry(monkeypatch
     assert all(np.all(np.isfinite(np.asarray(part, dtype=np.float64))) for part in dXdt)
 
 
+def test_ternary_outer_line_search_failure_does_not_mark_bulk_failed(monkeypatch):
+    model = _make_scope_validation_model()
+    model.therm = _SmoothBulkTernaryThermodynamics(constant=True)
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.setup()
+    monkeypatch.setattr(model, "_interface_candidate_has_converged", lambda candidate, lower, upper: False)
+    monkeypatch.setattr(model, "_interface_candidate_improves", lambda candidate, previous_norm: False)
+    p, q, s, eta = model.getCurrentX()
+
+    with pytest.raises(RuntimeError, match="failed to converge"):
+        model._solve_interface_planar(p, q, s, s, eta, model.timeStep)
+
+    assert model._lastImplicitConverged is False
+    assert model._lastImplicitFailureReason == "line search failed"
+    assert model._lastBulkConverged is True
+    assert model._lastBulkFailureReason is None
+    assert model._lastBulkLeftPicardIterations == 1
+    assert model._lastBulkRightPicardIterations == 1
+
+
+def test_ternary_outer_max_iteration_failure_does_not_mark_bulk_failed(monkeypatch):
+    model = _make_scope_validation_model()
+    model.therm = _SmoothBulkTernaryThermodynamics(constant=True)
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.maxIterations = 2
+    model.setup()
+    monkeypatch.setattr(model, "_interface_candidate_has_converged", lambda candidate, lower, upper: False)
+    monkeypatch.setattr(model, "_interface_candidate_improves", lambda candidate, previous_norm: True)
+    p, q, s, eta = model.getCurrentX()
+
+    with pytest.raises(RuntimeError, match="failed to converge"):
+        model._solve_interface_planar(p, q, s, s, eta, model.timeStep)
+
+    assert model._lastImplicitConverged is False
+    assert model._lastImplicitFailureReason == "maximum iterations reached"
+    assert model._lastBulkConverged is True
+    assert model._lastBulkFailureReason is None
+    assert model._lastBulkLeftPicardIterations == 1
+    assert model._lastBulkRightPicardIterations == 1
+
+
+@pytest.mark.parametrize(
+    "difficult_phase, expected_reason",
+    [
+        ("ALPHA", "left bulk Picard solve failed"),
+        ("BETA", "right bulk Picard solve failed"),
+    ],
+)
+def test_ternary_genuine_phase_picard_failure_identifies_phase(difficult_phase, expected_reason):
+    model = _make_scope_validation_model()
+    model.therm = _PhaseSelectiveDifficultBulkThermodynamics({difficult_phase})
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.bulkPicardRtol = 1.0e-14
+    model.bulkPicardAtol = 1.0e-16
+    model.bulkPicardMaxIterations = 1
+    model.setup()
+    p, q, s, eta = model.getCurrentX()
+    c_left, c_right = model._interface_compositions(eta + 0.05)
+
+    with pytest.raises(RuntimeError, match=expected_reason):
+        if difficult_phase == "ALPHA":
+            model._solve_concentration_left_picard(p, s, s + 1.0e-4, model.timeStep, c_left, "positive")
+        else:
+            model._solve_concentration_right_picard(q, s, s + 1.0e-4, model.timeStep, c_right, "positive")
+
+    assert model._lastBulkConverged is False
+    assert expected_reason in model._lastBulkFailureReason
+    if difficult_phase == "ALPHA":
+        assert model._lastBulkLeftPicardIterations == 1
+        assert model._lastBulkRightPicardIterations == 0
+    else:
+        assert model._lastBulkLeftPicardIterations == 0
+        assert model._lastBulkRightPicardIterations == 1
+
+
+def test_ternary_real_picard_nonconvergence_reaches_retry_limit():
+    model = _make_scope_validation_model()
+    model.therm = _PhaseSelectiveDifficultBulkThermodynamics({"ALPHA"})
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.bulkPicardRtol = 1.0e-14
+    model.bulkPicardAtol = 1.0e-16
+    model.bulkPicardMaxIterations = 1
+    model.maxStepRetries = 2
+    model.setup()
+    x = model.getCurrentX()
+    x[3] = float(x[3] + 0.05)
+
+    with pytest.raises(RuntimeError, match="failed after timestep retries"):
+        model.getdXdt(model.currentTime, x)
+
+    assert model._lastImplicitConverged is False
+    assert model._lastImplicitFailureReason == "candidate evaluation failed"
+    assert model._lastBulkConverged is False
+    assert "left bulk Picard solve failed" in model._lastBulkFailureReason
+
+
+def test_ternary_implicit_tolerance_refinement_has_stable_limit():
+    loose = _make_scope_validation_model()
+    loose.therm = _SmoothBulkTernaryThermodynamics()
+    loose.bulkDiffusivityMode = "composition_dependent_implicit"
+    loose.bulkPicardRtol = 1.0e-8
+    loose.bulkPicardAtol = 1.0e-12
+    loose.setup()
+    tight = _make_scope_validation_model()
+    tight.therm = _SmoothBulkTernaryThermodynamics()
+    tight.bulkDiffusivityMode = "composition_dependent_implicit"
+    tight.bulkPicardRtol = 1.0e-12
+    tight.bulkPicardAtol = 1.0e-15
+    tight.bulkPicardMaxIterations = 40
+    tight.setup()
+
+    d_loose = loose.getdXdt(loose.currentTime, loose.getCurrentX())
+    d_tight = tight.getdXdt(tight.currentTime, tight.getCurrentX())
+
+    for actual, expected in zip(d_loose, d_tight):
+        assert np.allclose(actual, expected, rtol=1.0e-5, atol=1.0e-10)
+    assert tight._lastBulkLeftUpdateNorm <= loose._lastBulkLeftUpdateNorm
+    assert tight._lastBulkRightUpdateNorm <= loose._lastBulkRightUpdateNorm
+
+
 @pytest.mark.parametrize("direction", [-1.0, 1.0])
 def test_ternary_lagged_mode_conserves_inventory_for_opposite_motion(direction):
     left_bulk = np.asarray([0.16, 0.06], dtype=np.float64)
@@ -1362,6 +1595,47 @@ def test_ternary_lagged_mode_conserves_inventory_for_opposite_motion(direction):
     inventories = np.asarray(model.inventoryData._y[: model.inventoryData.N + 1], dtype=np.float64)
     assert model._lastImplicitConverged is True
     assert model._lastStepRetries == 0
+    assert np.allclose(inventories, inventories[0], rtol=0.0, atol=5.0e-11)
+    assert np.all((model.interfaceData._y[: model.interfaceData.N + 1] > 0.0) & (model.interfaceData._y[: model.interfaceData.N + 1] < model._R))
+    assert np.all((model.etaData._y[: model.etaData.N + 1] >= 0.0) & (model.etaData._y[: model.etaData.N + 1] <= 1.0))
+
+
+@pytest.mark.parametrize("direction", [-1.0, 1.0])
+def test_ternary_implicit_mode_conserves_inventory_for_opposite_motion(direction):
+    left_bulk = np.asarray([0.16, 0.06], dtype=np.float64)
+    right_bulk = np.asarray([0.3261538461538461, 0.193], dtype=np.float64)
+    if direction < 0.0:
+        left_bulk, right_bulk = np.asarray([0.16, 0.12], dtype=np.float64), np.asarray([0.56, 0.25], dtype=np.float64)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 31)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.45, left_bulk, right_bulk), ["X", "Y"])]), boundaryConditions=MixedBoundary1D(2))
+    model = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_SmoothBulkTernaryThermodynamics(),
+        temperature=1000.0,
+        interfacePosition=0.45,
+        interface_equilibrium=_EtaVaryingInterfaceEquilibrium(),
+        initial_eta_method="instantaneous_balance",
+        initial_eta_bracket=(0.0, 1.0),
+        bulk_diffusivity_mode="composition_dependent_implicit",
+        bulk_picard_rtol=1.0e-10,
+        bulk_picard_atol=1.0e-13,
+        bulk_picard_max_iterations=40,
+        time_step=5.0e-5,
+        tolerance=1.0e-10,
+        max_iterations=50,
+        record=True,
+    )
+    model.solve(2.0e-4, minDtFrac=1.0e-12)
+
+    inventories = np.asarray(model.inventoryData._y[: model.inventoryData.N + 1], dtype=np.float64)
+    assert model._lastImplicitConverged is True
+    assert model._lastBulkConverged is True
+    assert model._lastBulkLeftPicardIterations > 0
+    assert model._lastBulkRightPicardIterations > 0
+    assert model._lastBulkDiffusivityProviderCalls > 0
+    assert model._lastBulkFaceMatricesEvaluated > 0
     assert np.allclose(inventories, inventories[0], rtol=0.0, atol=5.0e-11)
     assert np.all((model.interfaceData._y[: model.interfaceData.N + 1] > 0.0) & (model.interfaceData._y[: model.interfaceData.N + 1] < model._R))
     assert np.all((model.etaData._y[: model.etaData.N + 1] >= 0.0) & (model.etaData._y[: model.etaData.N + 1] <= 1.0))
@@ -1566,9 +1840,9 @@ def test_ternary_scaled_line_search_keeps_forced_outward_eta_trials_feasible():
     left_original = model._solve_concentration_left_planar
     interface_original = model._interface_compositions
 
-    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
+    def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch, validate_diffusivity=True):
         evaluated.append(("s", float(future_s_arg) / model._R))
-        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch)
+        return left_original(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch, validate_diffusivity=validate_diffusivity)
 
     def interface_spy(eta_arg):
         evaluated.append(("eta", (float(eta_arg) - eta_lower) / eta_span))

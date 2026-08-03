@@ -38,6 +38,31 @@ class _CoupledTernaryThermodynamics:
         return np.asarray([[7.0e-4, -1.0e-4], [2.0e-4, 1.1e-3]], dtype=np.float64)
 
 
+class _SmoothBulkTernaryThermodynamics:
+    def __init__(self, vectorized=True):
+        self.vectorized = bool(vectorized)
+        self.provider_calls = 0
+
+    def clearCache(self):
+        pass
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        values = np.asarray(composition, dtype=np.float64)
+        single = values.ndim == 1
+        if not single and not self.vectorized:
+            raise ValueError("scalar-only thermodynamics")
+        values = np.atleast_2d(values)
+        self.provider_calls += 1
+        matrices = []
+        for x, y in values:
+            if phase == "ALPHA":
+                matrices.append(np.asarray([[1.0e-3 + 1.0e-4 * x, 2.0e-4 + 2.0e-5 * y], [1.0e-4 + 1.0e-5 * x, 8.0e-4 + 8.0e-5 * y]], dtype=np.float64))
+            else:
+                matrices.append(np.asarray([[7.0e-4 + 8.0e-5 * x, -1.0e-4 + 1.0e-5 * y], [2.0e-4 + 1.0e-5 * x, 1.1e-3 + 7.0e-5 * y]], dtype=np.float64))
+        matrices = np.asarray(matrices, dtype=np.float64)
+        return matrices[0] if single else matrices
+
+
 class _EtaVaryingInterfaceEquilibrium:
     eta_bounds = (0.0, 1.0)
 
@@ -67,28 +92,43 @@ def _load_model_from_ref(ref):
     return module.MovingBoundaryIllingworthTernaryFD1DModel
 
 
-def _make_model(model_cls, n_nodes):
+def _make_model(model_cls, n_nodes, bulk_diffusivity_mode="phase_uniform", query_mode="vectorized"):
     equilibrium = _EtaVaryingInterfaceEquilibrium()
     mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], int(n_nodes))
     mesh.setResponseProfile(
         ProfileBuilder([(StepProfile1D(0.45, np.asarray([0.16, 0.06]), np.asarray([0.3261538461538461, 0.193])), ["X", "Y"])]),
         boundaryConditions=MixedBoundary1D(2),
     )
-    return model_cls(
-        mesh=mesh,
-        elements=["Z", "X", "Y"],
-        phases=["ALPHA", "BETA"],
-        thermodynamics=_CoupledTernaryThermodynamics(),
-        temperature=1000.0,
-        interfacePosition=0.45,
-        interface_equilibrium=equilibrium,
-        initial_eta_method="instantaneous_balance",
-        initial_eta_bracket=equilibrium.eta_bounds,
-        time_step=1.0e-4,
-        tolerance=1.0e-11,
-        max_iterations=50,
-        record=True,
+    thermodynamics = (
+        _CoupledTernaryThermodynamics()
+        if bulk_diffusivity_mode == "phase_uniform"
+        else _SmoothBulkTernaryThermodynamics(vectorized=(query_mode == "vectorized"))
     )
+    kwargs = {
+        "mesh": mesh,
+        "elements": ["Z", "X", "Y"],
+        "phases": ["ALPHA", "BETA"],
+        "thermodynamics": thermodynamics,
+        "temperature": 1000.0,
+        "interfacePosition": 0.45,
+        "interface_equilibrium": equilibrium,
+        "initial_eta_method": "instantaneous_balance",
+        "initial_eta_bracket": equilibrium.eta_bounds,
+        "time_step": 1.0e-4,
+        "tolerance": 1.0e-11,
+        "max_iterations": 50,
+        "record": True,
+    }
+    if bulk_diffusivity_mode != "phase_uniform":
+        kwargs.update(
+            {
+                "bulk_diffusivity_mode": bulk_diffusivity_mode,
+                "bulk_picard_rtol": 1.0e-11,
+                "bulk_picard_atol": 1.0e-14,
+                "bulk_picard_max_iterations": 40,
+            }
+        )
+    return model_cls(**kwargs)
 
 
 def _wrap_candidate_counter(model):
@@ -103,8 +143,8 @@ def _wrap_candidate_counter(model):
     return counters
 
 
-def _run_once(model_cls, n_nodes):
-    model = _make_model(model_cls, n_nodes)
+def _run_once(model_cls, n_nodes, bulk_diffusivity_mode="phase_uniform", query_mode="vectorized"):
+    model = _make_model(model_cls, n_nodes, bulk_diffusivity_mode, query_mode)
     with contextlib.redirect_stdout(io.StringIO()):
         model.setup()
     counters = _wrap_candidate_counter(model)
@@ -135,12 +175,16 @@ def _run_once(model_cls, n_nodes):
         "candidate_evaluations": int(counters["candidate_evaluations"]),
         "diagnostic_candidate_evaluations": int(getattr(model, "_lastImplicitCandidateEvaluations", counters["candidate_evaluations"])),
         "jacobian_evaluations": int(getattr(model, "_lastImplicitJacobianEvaluations", max(0, int(model._lastImplicitIterations) - 1))),
+        "left_picard_iterations": int(getattr(model, "_lastBulkLeftPicardIterations", 0)),
+        "right_picard_iterations": int(getattr(model, "_lastBulkRightPicardIterations", 0)),
+        "diffusivity_provider_calls": int(getattr(model, "_lastBulkDiffusivityProviderCalls", 0)),
+        "face_matrices_evaluated": int(getattr(model, "_lastBulkFaceMatricesEvaluated", 0)),
         "retries": int(model._lastStepRetries),
     }
 
 
-def _summarize(model_cls, n_nodes, repetitions):
-    runs = [_run_once(model_cls, n_nodes) for _ in range(repetitions)]
+def _summarize(model_cls, n_nodes, repetitions, bulk_diffusivity_mode="phase_uniform", query_mode="vectorized"):
+    runs = [_run_once(model_cls, n_nodes, bulk_diffusivity_mode, query_mode) for _ in range(repetitions)]
     times = np.asarray([run["time"] for run in runs], dtype=np.float64)
     median_run = runs[int(np.argsort(times)[len(times) // 2])]
     return {**median_run, "time": float(np.median(times)), "time_samples": times.tolist()}
@@ -182,14 +226,27 @@ def main():
 
     baseline_cls = _load_model_from_ref(args.baseline_ref) if args.baseline_ref else None
     report = {"repetitions": args.repetitions, "cases": []}
+    mode_cases = [
+        ("phase_uniform", "interface"),
+        ("composition_dependent_lagged", "vectorized"),
+        ("composition_dependent_lagged", "scalar"),
+        ("composition_dependent_implicit", "vectorized"),
+        ("composition_dependent_implicit", "scalar"),
+    ]
     for n_nodes in args.nodes:
-        current = _summarize(MovingBoundaryIllingworthTernaryFD1DModel, n_nodes, args.repetitions)
-        case = {"nodes": n_nodes, "current": _public_summary(current)}
-        if baseline_cls is not None:
-            baseline = _summarize(baseline_cls, n_nodes, args.repetitions)
-            case["baseline"] = _public_summary(baseline)
-            case["comparison"] = _compare(current, baseline)
-        report["cases"].append(case)
+        for mode, query_mode in mode_cases:
+            current = _summarize(MovingBoundaryIllingworthTernaryFD1DModel, n_nodes, args.repetitions, mode, query_mode)
+            case = {
+                "nodes": n_nodes,
+                "bulk_diffusivity_mode": mode,
+                "query_mode": query_mode,
+                "current": _public_summary(current),
+            }
+            if baseline_cls is not None and mode == "phase_uniform":
+                baseline = _summarize(baseline_cls, n_nodes, args.repetitions)
+                case["baseline"] = _public_summary(baseline)
+                case["comparison"] = _compare(current, baseline)
+            report["cases"].append(case)
     print(json.dumps(report, indent=2))
 
 
