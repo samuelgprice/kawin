@@ -23,9 +23,11 @@ from kawin.thermo.Mobility import interstitials
 
 _BULK_DIFFUSIVITY_PHASE_UNIFORM = "phase_uniform"
 _BULK_DIFFUSIVITY_LAGGED = "composition_dependent_lagged"
+_BULK_DIFFUSIVITY_IMPLICIT = "composition_dependent_implicit"
 _SUPPORTED_BULK_DIFFUSIVITY_MODES = {
     _BULK_DIFFUSIVITY_PHASE_UNIFORM,
     _BULK_DIFFUSIVITY_LAGGED,
+    _BULK_DIFFUSIVITY_IMPLICIT,
 }
 
 def debugInPlace():
@@ -187,6 +189,11 @@ class _InterfaceCandidate:
     scaled_residual: np.ndarray
     scaled_norm: float
     physical_norm: float
+    left_inner_iterations: int = 0
+    right_inner_iterations: int = 0
+    left_inner_update_norm: float = 0.0
+    right_inner_update_norm: float = 0.0
+    bulk_diffusivity_evaluations: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,7 +310,10 @@ def _coerce_bulk_diffusivity_mode(mode):
     """Normalizes and validates the ternary Illingworth bulk diffusivity mode."""
     value = str(mode)
     if value not in _SUPPORTED_BULK_DIFFUSIVITY_MODES:
-        raise ValueError("bulk_diffusivity_mode must be 'phase_uniform' or 'composition_dependent_lagged'.")
+        raise ValueError(
+            "bulk_diffusivity_mode must be 'phase_uniform', "
+            "'composition_dependent_lagged', or 'composition_dependent_implicit'."
+        )
     return value
 
 
@@ -836,8 +846,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     bulk solve. ``bulk_diffusivity_mode='composition_dependent_lagged'`` instead
     evaluates one matrix per finite-volume face from the accepted old-time
     profile and freezes those matrices during each candidate linear solve. The
-    interface residual consumes the exact interface-adjacent diffusive flux
-    returned by each bulk solve.
+    ``'composition_dependent_implicit'`` mode evaluates those face matrices from
+    a Picard iterate inside each candidate phase solve. The Picard iterate is
+    initialized deterministically from the accepted old-time profile with the
+    trial interface boundary imposed. The interface residual consumes the exact
+    interface-adjacent diffusive flux returned by each bulk solve.
     """
 
     def __init__(
@@ -860,6 +873,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         initial_eta_root_rtol: float = 1e-12,
         initial_eta_root_maxiter: int = 100,
         bulk_diffusivity_mode: str = _BULK_DIFFUSIVITY_PHASE_UNIFORM,
+        bulk_picard_rtol: float | None = None,
+        bulk_picard_atol: float = 1e-12,
+        bulk_picard_max_iterations: int = 25,
+        bulk_picard_relaxation: float = 1.0,
         dt_mode: str = "fixed",
         semiLog_dt: float | None = None,
         semiLogT0: float | None = None,
@@ -888,6 +905,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self.initialEtaRootRtol = float(initial_eta_root_rtol)
         self.initialEtaRootMaxiter = int(initial_eta_root_maxiter)
         self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
+        self.bulkPicardRtol = None if bulk_picard_rtol is None else float(bulk_picard_rtol)
+        self.bulkPicardAtol = float(bulk_picard_atol)
+        self.bulkPicardMaxIterations = int(bulk_picard_max_iterations)
+        self.bulkPicardRelaxation = float(bulk_picard_relaxation)
         self.dtMode = str(dt_mode)
         self.semiLog_dt = None if semiLog_dt is None else float(semiLog_dt)
         self.semiLogT0 = None if semiLogT0 is None else float(semiLogT0)
@@ -1007,6 +1028,14 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if self.dtMode not in {"fixed", "semi_log"}:
             raise ValueError("dt_mode must be 'fixed' or 'semi_log'.")
         self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(self.bulkDiffusivityMode)
+        if self.bulkPicardRtol is not None and (not np.isfinite(self.bulkPicardRtol) or self.bulkPicardRtol <= 0.0):
+            raise ValueError("bulk_picard_rtol must be positive when specified.")
+        if not np.isfinite(self.bulkPicardAtol) or self.bulkPicardAtol <= 0.0:
+            raise ValueError("bulk_picard_atol must be a positive finite value.")
+        if self.bulkPicardMaxIterations < 1:
+            raise ValueError("bulk_picard_max_iterations must be at least 1.")
+        if not np.isfinite(self.bulkPicardRelaxation) or not (0.0 < self.bulkPicardRelaxation <= 1.0):
+            raise ValueError("bulk_picard_relaxation must be in the interval (0, 1].")
         if self.dtMode == "semi_log" and ((self.semiLog_dt is None) or (self.semiLogT0 is None)):
             raise ValueError("semiLog_dt and semiLogT0 must be specified when dt_mode is 'semi_log'.")
         _validate_eta_bounds(self.interfaceEquilibrium)
@@ -1122,6 +1151,13 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._lastImplicitMotionBranch = None
         self._lastImplicitConverged = False
         self._lastImplicitFailureReason = None
+        self._lastBulkLeftPicardIterations = 0
+        self._lastBulkRightPicardIterations = 0
+        self._lastBulkLeftUpdateNorm = np.nan
+        self._lastBulkRightUpdateNorm = np.nan
+        self._lastBulkDiffusivityEvaluations = 0
+        self._lastBulkConverged = True
+        self._lastBulkFailureReason = None
 
     def _record_implicit_success(self, iterations, candidate, candidate_evaluations, jacobian_evaluations):
         """
@@ -1140,6 +1176,13 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._lastImplicitMotionBranch = candidate.motion_branch
         self._lastImplicitConverged = True
         self._lastImplicitFailureReason = None
+        self._lastBulkLeftPicardIterations = int(candidate.left_inner_iterations)
+        self._lastBulkRightPicardIterations = int(candidate.right_inner_iterations)
+        self._lastBulkLeftUpdateNorm = float(candidate.left_inner_update_norm)
+        self._lastBulkRightUpdateNorm = float(candidate.right_inner_update_norm)
+        self._lastBulkDiffusivityEvaluations = int(candidate.bulk_diffusivity_evaluations)
+        self._lastBulkConverged = True
+        self._lastBulkFailureReason = None
 
     def _record_implicit_failure(self, iterations, best_scaled_norm, best_physical_norm, best_motion_branch, candidate_evaluations, jacobian_evaluations, reason):
         """Records diagnostics for a failed nonlinear interface solve."""
@@ -1152,6 +1195,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._lastImplicitMotionBranch = best_motion_branch
         self._lastImplicitConverged = False
         self._lastImplicitFailureReason = reason
+        self._lastBulkConverged = False
+        if self._lastBulkFailureReason is None and reason == "candidate evaluation failed":
+            self._lastBulkFailureReason = reason
 
     def reset(self):
         super().reset()
@@ -1730,6 +1776,128 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         """
         return self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch).profile
 
+    def _bulk_picard_relative_tolerance(self):
+        """Returns the effective relative tolerance for implicit bulk Picard solves."""
+        return float(self.tolerance if self.bulkPicardRtol is None else self.bulkPicardRtol)
+
+    def _bulk_picard_update_has_converged(self, update_norm, profile):
+        """
+        Tests Picard convergence against an absolute-plus-relative profile norm.
+
+        The update norm is the maximum absolute component change from the
+        current coefficient iterate to the unrelaxed linear solve. Relaxation is
+        used only to form the next coefficient iterate when the update is still
+        too large.
+        """
+        profile_scale = max(1.0, float(np.max(np.abs(np.asarray(profile, dtype=np.float64)))))
+        threshold = self.bulkPicardAtol + self._bulk_picard_relative_tolerance() * profile_scale
+        return float(update_norm) <= threshold
+
+    def _left_candidate_initial_profile(self, p, c_left):
+        """Builds the deterministic left Picard seed for one interface trial."""
+        profile = np.asarray(p, dtype=np.float64).copy()
+        profile[-1] = np.asarray(c_left, dtype=np.float64)
+        return profile
+
+    def _right_candidate_initial_profile(self, q, c_right):
+        """Builds the deterministic right Picard seed for one interface trial."""
+        profile = np.asarray(q, dtype=np.float64).copy()
+        profile[0] = np.asarray(c_right, dtype=np.float64)
+        return profile
+
+    def _solve_concentration_left_picard(self, p, s, future_s, dt, c_left, motion_branch):
+        """
+        Solves the left bulk recurrence with composition-dependent Picard matrices.
+
+        Face matrices are evaluated from the current Picard profile at face
+        averages, the existing linear finite-volume block solve is applied, and
+        an optional relaxation forms the next coefficient iterate. Nonconvergence
+        raises ``RuntimeError`` so the surrounding timestep retry logic can
+        reduce ``dt`` without changing the outer interface Newton algorithm.
+        """
+        iterate = self._left_candidate_initial_profile(p, c_left)
+        diffusivity_evaluations = 0
+        update_norm = np.inf
+        for iteration in range(1, self.bulkPicardMaxIterations + 1):
+            D_faces = self._left_lagged_face_diffusivity_matrices(iterate, future_s, self.currentTime)
+            diffusivity_evaluations += len(D_faces)
+            linear = self._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_faces, motion_branch)
+            D_linear = self._left_lagged_face_diffusivity_matrices(linear.profile, future_s, self.currentTime)
+            diffusivity_evaluations += len(D_linear)
+            if np.array_equal(D_linear, D_faces):
+                return _BulkPhaseSolveResult(
+                    profile=linear.profile,
+                    interface_flux=linear.interface_flux,
+                    interface_face_matrix=linear.interface_face_matrix,
+                    inner_iterations=iteration,
+                    inner_update_norm=0.0,
+                    diffusivity_evaluations=diffusivity_evaluations,
+                )
+            update_norm = float(np.max(np.abs(linear.profile - iterate)))
+            if self._bulk_picard_update_has_converged(update_norm, linear.profile):
+                return _BulkPhaseSolveResult(
+                    profile=linear.profile,
+                    interface_flux=linear.interface_flux,
+                    interface_face_matrix=linear.interface_face_matrix,
+                    inner_iterations=iteration,
+                    inner_update_norm=update_norm,
+                    diffusivity_evaluations=diffusivity_evaluations,
+                )
+            iterate = iterate + self.bulkPicardRelaxation * (linear.profile - iterate)
+            iterate[-1] = np.asarray(c_left, dtype=np.float64)
+
+        reason = f"left bulk Picard solve failed to converge after {self.bulkPicardMaxIterations} iterations"
+        self._lastBulkFailureReason = reason
+        self._lastBulkLeftPicardIterations = self.bulkPicardMaxIterations
+        self._lastBulkLeftUpdateNorm = float(update_norm)
+        self._lastBulkDiffusivityEvaluations = int(diffusivity_evaluations)
+        raise RuntimeError(reason)
+
+    def _solve_concentration_right_picard(self, q, s, future_s, dt, c_right, motion_branch):
+        """
+        Solves the right bulk recurrence with composition-dependent Picard matrices.
+
+        The iteration convention mirrors the left phase, but the interface face
+        is face zero and the trial Dirichlet composition is imposed at node zero.
+        """
+        iterate = self._right_candidate_initial_profile(q, c_right)
+        diffusivity_evaluations = 0
+        update_norm = np.inf
+        for iteration in range(1, self.bulkPicardMaxIterations + 1):
+            D_faces = self._right_lagged_face_diffusivity_matrices(iterate, future_s, self.currentTime)
+            diffusivity_evaluations += len(D_faces)
+            linear = self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_faces, motion_branch)
+            D_linear = self._right_lagged_face_diffusivity_matrices(linear.profile, future_s, self.currentTime)
+            diffusivity_evaluations += len(D_linear)
+            if np.array_equal(D_linear, D_faces):
+                return _BulkPhaseSolveResult(
+                    profile=linear.profile,
+                    interface_flux=linear.interface_flux,
+                    interface_face_matrix=linear.interface_face_matrix,
+                    inner_iterations=iteration,
+                    inner_update_norm=0.0,
+                    diffusivity_evaluations=diffusivity_evaluations,
+                )
+            update_norm = float(np.max(np.abs(linear.profile - iterate)))
+            if self._bulk_picard_update_has_converged(update_norm, linear.profile):
+                return _BulkPhaseSolveResult(
+                    profile=linear.profile,
+                    interface_flux=linear.interface_flux,
+                    interface_face_matrix=linear.interface_face_matrix,
+                    inner_iterations=iteration,
+                    inner_update_norm=update_norm,
+                    diffusivity_evaluations=diffusivity_evaluations,
+                )
+            iterate = iterate + self.bulkPicardRelaxation * (linear.profile - iterate)
+            iterate[0] = np.asarray(c_right, dtype=np.float64)
+
+        reason = f"right bulk Picard solve failed to converge after {self.bulkPicardMaxIterations} iterations"
+        self._lastBulkFailureReason = reason
+        self._lastBulkRightPicardIterations = self.bulkPicardMaxIterations
+        self._lastBulkRightUpdateNorm = float(update_norm)
+        self._lastBulkDiffusivityEvaluations = int(diffusivity_evaluations)
+        raise RuntimeError(reason)
+
     def _interface_residual(
         self,
         p_future,
@@ -1929,11 +2097,16 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
             D_left = self._phase_diffusivity_matrix(c_left, self.phases[0], self.currentTime, future_s)
             D_right = self._phase_diffusivity_matrix(c_right, self.phases[1], self.currentTime, future_s)
-        else:
+            left_result = self._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
+            right_result = self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
+        elif self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_LAGGED:
             D_left = self._left_lagged_face_diffusivity_matrices(p, future_s, self.currentTime)
             D_right = self._right_lagged_face_diffusivity_matrices(q, future_s, self.currentTime)
-        left_result = self._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
-        right_result = self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
+            left_result = self._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
+            right_result = self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
+        else:
+            left_result = self._solve_concentration_left_picard(p, s, future_s, dt, c_left, motion_branch)
+            right_result = self._solve_concentration_right_picard(q, s, future_s, dt, c_right, motion_branch)
         residual = self._interface_residual(
             left_result.profile,
             right_result.profile,
@@ -1965,6 +2138,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             scaled_residual=scaled_residual,
             scaled_norm=float(np.max(np.abs(scaled_residual))),
             physical_norm=float(np.max(np.abs(residual))),
+            left_inner_iterations=left_result.inner_iterations,
+            right_inner_iterations=right_result.inner_iterations,
+            left_inner_update_norm=left_result.inner_update_norm,
+            right_inner_update_norm=right_result.inner_update_norm,
+            bulk_diffusivity_evaluations=left_result.diffusivity_evaluations + right_result.diffusivity_evaluations,
         )
 
     def _solve_interface_planar(self, p, q, s, old_s, eta, dt):

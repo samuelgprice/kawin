@@ -1158,6 +1158,143 @@ def test_ternary_lagged_constant_diffusivity_reproduces_phase_uniform_step():
     assert lagged._lastStepRetries == uniform._lastStepRetries
 
 
+def test_ternary_implicit_constant_diffusivity_reproduces_phase_uniform_step_in_one_picard_cycle():
+    uniform = _make_scope_validation_model()
+    uniform.therm = _SmoothBulkTernaryThermodynamics(constant=True)
+    uniform.setup()
+    implicit = _make_scope_validation_model()
+    implicit.therm = _SmoothBulkTernaryThermodynamics(constant=True)
+    implicit.bulkDiffusivityMode = "composition_dependent_implicit"
+    implicit.setup()
+
+    d_uniform = uniform.getdXdt(uniform.currentTime, uniform.getCurrentX())
+    d_implicit = implicit.getdXdt(implicit.currentTime, implicit.getCurrentX())
+
+    for actual, expected in zip(d_implicit, d_uniform):
+        assert np.allclose(actual, expected, rtol=1.0e-12, atol=1.0e-14)
+    assert implicit._lastImplicitConverged is True
+    assert implicit._lastBulkConverged is True
+    assert implicit._lastBulkLeftPicardIterations == 1
+    assert implicit._lastBulkRightPicardIterations == 1
+    assert implicit._lastBulkDiffusivityEvaluations > 0
+    assert implicit._lastStepRetries == uniform._lastStepRetries
+
+
+def test_ternary_implicit_candidate_evaluation_is_deterministic_after_other_trials():
+    model = _make_scope_validation_model()
+    model.therm = _SmoothBulkTernaryThermodynamics()
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.setup()
+    p, q, s, eta = model.getCurrentX()
+    dt = model._compute_dt(model.currentTime)
+    eta_lower, _, eta_span = model._eta_scaling_bounds()
+    residual_scale = model._interface_residual_scale(p, q, s)
+    c_left_old = p[-1].copy()
+    c_right_old = q[0].copy()
+    x_hat = model._interface_physical_to_scaled(s, eta, eta_lower, eta_span)
+    x_other = x_hat + np.asarray([0.01, -0.01], dtype=np.float64)
+    motion_branch = ternary_fdm._select_interface_motion_branch(s, s, s)
+
+    first = model._evaluate_interface_candidate(
+        p,
+        q,
+        s,
+        s,
+        dt,
+        eta_lower,
+        eta_span,
+        residual_scale,
+        c_left_old,
+        c_right_old,
+        x_hat,
+        motion_branch,
+    )
+    model._evaluate_interface_candidate(
+        p,
+        q,
+        s,
+        s,
+        dt,
+        eta_lower,
+        eta_span,
+        residual_scale,
+        c_left_old,
+        c_right_old,
+        x_other,
+        motion_branch,
+    )
+    repeated = model._evaluate_interface_candidate(
+        p,
+        q,
+        s,
+        s,
+        dt,
+        eta_lower,
+        eta_span,
+        residual_scale,
+        c_left_old,
+        c_right_old,
+        x_hat,
+        motion_branch,
+    )
+
+    assert np.array_equal(repeated.p_future, first.p_future)
+    assert np.array_equal(repeated.q_future, first.q_future)
+    assert np.array_equal(repeated.residual, first.residual)
+    assert repeated.left_inner_iterations == first.left_inner_iterations
+    assert repeated.right_inner_iterations == first.right_inner_iterations
+
+
+def test_ternary_implicit_under_relaxation_converges_to_same_step():
+    direct = _make_scope_validation_model()
+    direct.therm = _SmoothBulkTernaryThermodynamics()
+    direct.bulkDiffusivityMode = "composition_dependent_implicit"
+    direct.bulkPicardRtol = 1.0e-11
+    direct.setup()
+    relaxed = _make_scope_validation_model()
+    relaxed.therm = _SmoothBulkTernaryThermodynamics()
+    relaxed.bulkDiffusivityMode = "composition_dependent_implicit"
+    relaxed.bulkPicardRtol = 1.0e-11
+    relaxed.bulkPicardRelaxation = 0.5
+    relaxed.bulkPicardMaxIterations = 60
+    relaxed.setup()
+
+    d_direct = direct.getdXdt(direct.currentTime, direct.getCurrentX())
+    d_relaxed = relaxed.getdXdt(relaxed.currentTime, relaxed.getCurrentX())
+
+    for actual, expected in zip(d_relaxed, d_direct):
+        assert np.allclose(actual, expected, rtol=1.0e-8, atol=1.0e-12)
+    assert relaxed._lastBulkLeftPicardIterations >= direct._lastBulkLeftPicardIterations
+    assert relaxed._lastBulkRightPicardIterations >= direct._lastBulkRightPicardIterations
+    assert relaxed._lastBulkConverged is True
+
+
+def test_ternary_implicit_inner_failure_propagates_to_timestep_retry(monkeypatch):
+    model = _make_scope_validation_model()
+    model.therm = _SmoothBulkTernaryThermodynamics()
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.setup()
+    original = model._solve_concentration_left_picard
+    calls = {"count": 0}
+
+    def fail_once(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            model._lastBulkFailureReason = "forced inner failure"
+            raise RuntimeError("forced inner failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(model, "_solve_concentration_left_picard", fail_once)
+
+    dXdt = model.getdXdt(model.currentTime, model.getCurrentX())
+
+    assert calls["count"] > 1
+    assert model._lastStepRetries == 1
+    assert model._lastImplicitConverged is True
+    assert model._lastBulkConverged is True
+    assert all(np.all(np.isfinite(np.asarray(part, dtype=np.float64))) for part in dXdt)
+
+
 @pytest.mark.parametrize("direction", [-1.0, 1.0])
 def test_ternary_lagged_mode_conserves_inventory_for_opposite_motion(direction):
     left_bulk = np.asarray([0.16, 0.06], dtype=np.float64)
