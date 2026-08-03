@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -78,7 +79,7 @@ idealized_comp = LEFT_BULK * (INTERFACE_POSITION/LENGTH) + RIGHT_BULK * (1 - INT
 #   "fixed"    -> preserve the original example behavior: build the interface
 #                 surrogate, then solve with one frozen 2x2 matrix per phase.
 #   "variable" -> use the surrogate itself as the bulk diffusivity provider.
-DIFFUSIVITY_SOURCE = "fixed"
+DIFFUSIVITY_SOURCE = ["fixed", "variable"][1]
 
 # Fixed-source matrix selection:
 #   "explicit"       -> set FIXED_DIFFUSIVITY_MATRICES below.
@@ -100,7 +101,7 @@ FIXED_DIFFUSIVITY_MATRICES = None
 #   VARIABLE_DIFFUSIVITY_INTERPOLATION = "nearest" -> legacy nearest-neighbor
 #       surrogate diffusivity using the same grid samples as extra bulk points.
 VARIABLE_DIFFUSIVITY_INTERPOLATION = "continuous_grid"
-VARIABLE_DIFFUSIVITY_BULK_MODE = "picard"
+VARIABLE_DIFFUSIVITY_BULK_MODE = ["lagged", "picard"][1]
 # Alternative:
 # VARIABLE_DIFFUSIVITY_BULK_MODE = "lagged"
 VARIABLE_DIFFUSIVITY_BULK_CR_AXIS = np.linspace(0.10, 0.55, 19)
@@ -122,7 +123,7 @@ VARIABLE_DIFFUSIVITY_BULK_PICARD_RELAXATION = 1.0
 DT_MODE = "semi_log"
 FIXED_TIME_STEP = 1.0
 SEMI_LOG_BASE_TIME_STEP = 1.0
-SEMI_LOG_DT = 0.25 / 100
+SEMI_LOG_DT = 0.25 / 10
 SEMI_LOG_T0 = 1.0e-6
 SOLVE_TIME = [3600*1e0, 3600*1e2, 3600*1e3][2]
 PHASE_A_NODES = None
@@ -270,8 +271,9 @@ def _coerce_diffusivity_source():
     return source
 
 
-def _coerce_variable_diffusivity_bulk_mode():
-    mode = str(VARIABLE_DIFFUSIVITY_BULK_MODE)
+def _normalize_variable_diffusivity_bulk_mode(mode):
+    """Normalizes user-facing variable diffusivity solve mode aliases."""
+    mode = str(mode)
     mode_aliases = {
         "lagged": "composition_dependent_lagged",
         "picard": "composition_dependent_implicit",
@@ -284,6 +286,10 @@ def _coerce_variable_diffusivity_bulk_mode():
             "'lagged'/'composition_dependent_lagged' or 'picard'/'composition_dependent_implicit'."
         )
     return mode
+
+
+def _coerce_variable_diffusivity_bulk_mode():
+    return _normalize_variable_diffusivity_bulk_mode(VARIABLE_DIFFUSIVITY_BULK_MODE)
 
 
 def get_variable_diffusivity_solver_options():
@@ -745,6 +751,365 @@ def print_final_equilibrium_estimates(model, tieline_surrogate):
     }
 
 
+def default_diffusivity_comparison_config():
+    """
+    Returns a mutable default config for fixed/variable diffusivity comparisons.
+
+    The default sweep runs one fixed-diffusivity baseline and variable
+    diffusivity cases for both lagged and Picard bulk solves. Three surrogate
+    parameter sets vary the regular bulk grid density and tie-line eta sampling.
+    """
+    return {
+        "base_overrides": {
+            "VERBOSE": False,
+            "PLOT_LEE_OH_FIG9_DATA": False,
+        },
+        "fixed_overrides": {
+            "DIFFUSIVITY_SOURCE": "fixed",
+            "DIFFUSIVITY_MODE": DIFFUSIVITY_MODE,
+            "DIFFUSIVITY_SAMPLE_ETA": DIFFUSIVITY_SAMPLE_ETA,
+        },
+        "variable_modes": ["lagged", "picard"],
+        "surrogate_parameter_sets": [
+            {
+                "label": "grid11_eta21",
+                "VARIABLE_DIFFUSIVITY_INTERPOLATION": "continuous_grid",
+                "VARIABLE_DIFFUSIVITY_BULK_CR_AXIS": np.linspace(0.10, 0.55, 11),
+                "VARIABLE_DIFFUSIVITY_BULK_NI_AXIS": np.linspace(0.0001, 0.25, 11),
+                "ETA_SAMPLES": np.linspace(0.0, 1.0, 21),
+            },
+            {
+                "label": "grid19_eta21",
+                "VARIABLE_DIFFUSIVITY_INTERPOLATION": "continuous_grid",
+                "VARIABLE_DIFFUSIVITY_BULK_CR_AXIS": np.linspace(0.10, 0.55, 19),
+                "VARIABLE_DIFFUSIVITY_BULK_NI_AXIS": np.linspace(0.0001, 0.25, 19),
+                "ETA_SAMPLES": np.linspace(0.0, 1.0, 21),
+            },
+            {
+                "label": "grid19_eta31",
+                "VARIABLE_DIFFUSIVITY_INTERPOLATION": "continuous_grid",
+                "VARIABLE_DIFFUSIVITY_BULK_CR_AXIS": np.linspace(0.10, 0.55, 19),
+                "VARIABLE_DIFFUSIVITY_BULK_NI_AXIS": np.linspace(0.0001, 0.25, 19),
+                "ETA_SAMPLES": np.linspace(0.0, 1.0, 31),
+            },
+        ],
+        "analysis_time_count": 64,
+        "keep_models": True,
+        "print_matrices": False,
+        "progress": True,
+    }
+
+
+def run_diffusivity_comparison(config=None):
+    """
+    Compares fixed diffusivity against variable lagged/Picard surrogate solves.
+
+    The returned dictionary contains the normalized config, the fixed baseline
+    record, all run records, common analysis times, and a quantitative summary.
+    Variable surrogates are built once per surrogate parameter set and reused
+    for each requested lagged/Picard solve mode.
+    """
+    config = _normalize_diffusivity_comparison_config(config)
+    progress = bool(config["progress"])
+    runs = []
+
+    fixed_overrides = _comparison_overrides(config["base_overrides"], config["fixed_overrides"])
+    if progress:
+        print("[fixed] building context and running baseline")
+    fixed_context = build_case_context(
+        overrides=fixed_overrides,
+        print_matrices=bool(config["print_matrices"]),
+    )
+    baseline = _run_diffusivity_comparison_case(
+        label="fixed",
+        overrides=fixed_overrides,
+        context=fixed_context,
+        keep_model=bool(config["keep_models"]),
+    )
+    runs.append(baseline)
+
+    for parameter_set in config["surrogate_parameter_sets"]:
+        parameter_label = str(parameter_set["label"])
+        build_overrides = _comparison_overrides(
+            config["base_overrides"],
+            {key: value for key, value in parameter_set.items() if key != "label"},
+            {"DIFFUSIVITY_SOURCE": "variable", "VARIABLE_DIFFUSIVITY_BULK_MODE": config["variable_modes"][0]},
+        )
+        if progress:
+            print(f"[variable:{parameter_label}] building surrogate context")
+        variable_context = build_case_context(
+            overrides=build_overrides,
+            print_matrices=bool(config["print_matrices"]),
+        )
+
+        for mode in config["variable_modes"]:
+            normalized_mode = _normalize_variable_diffusivity_bulk_mode(mode)
+            run_context = _context_with_bulk_mode(variable_context, normalized_mode)
+            run_overrides = _comparison_overrides(
+                build_overrides,
+                {"VARIABLE_DIFFUSIVITY_BULK_MODE": mode},
+            )
+            label = f"{parameter_label}_{_short_bulk_mode_label(normalized_mode)}"
+            if progress:
+                print(f"[variable:{parameter_label}] running {mode}")
+            runs.append(
+                _run_diffusivity_comparison_case(
+                    label=label,
+                    overrides=run_overrides,
+                    context=run_context,
+                    keep_model=bool(config["keep_models"]),
+                    surrogate_label=parameter_label,
+                )
+            )
+
+    analysis_times = _common_comparison_times(runs, count=config["analysis_time_count"], include_zero=True)
+    summary = summarize_diffusivity_comparison(runs, baseline, analysis_times)
+    return {
+        "config": config,
+        "baseline": baseline,
+        "runs": runs,
+        "analysis_times": analysis_times,
+        "summary": summary,
+    }
+
+
+def summarize_diffusivity_comparison(runs, baseline=None, analysis_times=None):
+    """
+    Returns a quantitative table comparing runs to the fixed baseline.
+
+    A ``pandas.DataFrame`` is returned when pandas is available; otherwise the
+    fallback is a list of dictionaries with the same columns.
+    """
+    runs = list(runs)
+    if not runs:
+        raise ValueError("At least one comparison run is required.")
+    baseline = runs[0] if baseline is None else baseline
+    if analysis_times is None:
+        analysis_times = _common_comparison_times(runs, count=64, include_zero=True)
+    rows = [_diffusivity_comparison_summary_row(run, baseline, analysis_times) for run in runs]
+    try:
+        import pandas as pd
+
+        return pd.DataFrame(rows)
+    except ImportError:
+        return rows
+
+
+def _normalize_diffusivity_comparison_config(config):
+    defaults = default_diffusivity_comparison_config()
+    if config is not None:
+        merged = dict(defaults)
+        for key, value in dict(config).items():
+            if key in {"base_overrides", "fixed_overrides"}:
+                merged[key] = {**dict(defaults.get(key, {})), **dict(value)}
+            elif key == "surrogate_parameter_sets":
+                merged[key] = [dict(item) for item in value]
+            else:
+                merged[key] = value
+        defaults = merged
+    defaults["base_overrides"] = dict(defaults.get("base_overrides", {}))
+    defaults["fixed_overrides"] = dict(defaults.get("fixed_overrides", {}))
+    defaults["variable_modes"] = list(defaults.get("variable_modes", ["lagged", "picard"]))
+    defaults["surrogate_parameter_sets"] = [dict(item) for item in defaults.get("surrogate_parameter_sets", [])]
+    defaults["analysis_time_count"] = int(defaults.get("analysis_time_count", 64))
+    defaults["keep_models"] = bool(defaults.get("keep_models", True))
+    defaults["print_matrices"] = bool(defaults.get("print_matrices", False))
+    defaults["progress"] = bool(defaults.get("progress", True))
+    if not defaults["variable_modes"]:
+        raise ValueError("At least one variable diffusivity mode is required.")
+    if not defaults["surrogate_parameter_sets"]:
+        raise ValueError("At least one surrogate parameter set is required.")
+    for i, parameter_set in enumerate(defaults["surrogate_parameter_sets"]):
+        parameter_set.setdefault("label", f"surrogate_{i}")
+    return defaults
+
+
+def _comparison_overrides(*overrides):
+    merged = {}
+    for override in overrides:
+        if override:
+            merged.update(dict(override))
+    return merged
+
+
+def _context_with_bulk_mode(context, bulk_mode):
+    run_context = dict(context)
+    solver_options = dict(run_context["solver_options"])
+    solver_options["bulk_diffusivity_mode"] = bulk_mode
+    run_context["bulk_diffusivity_mode"] = bulk_mode
+    run_context["solver_options"] = solver_options
+    return run_context
+
+
+def _run_diffusivity_comparison_case(label, overrides, context, *, keep_model=True, surrogate_label=None):
+    start = time.perf_counter()
+    run = run_case(overrides=overrides, context=context, make_plots=False)
+    runtime_s = time.perf_counter() - start
+    record = _extract_diffusivity_comparison_record(
+        label,
+        run["model"],
+        run["context"],
+        overrides,
+        runtime_s=runtime_s,
+        surrogate_label=surrogate_label,
+    )
+    if keep_model:
+        record["model"] = run["model"]
+    return record
+
+
+def _extract_diffusivity_comparison_record(label, model, context, overrides, *, runtime_s=0.0, surrogate_label=None):
+    n_interface = model.interfaceData.N + 1
+    n_eta = model.etaData.N + 1
+    n_inventory = model.inventoryData.N + 1
+    p_final = np.asarray(model.pData._y[model.pData.N], dtype=np.float64).copy() if model.pData is not None else None
+    q_final = np.asarray(model.qData._y[model.qData.N], dtype=np.float64).copy() if model.qData is not None else None
+    grids = context["tieline_surrogate"].diffusivityBulkGridAxes
+    grid_counts = None if grids is None else tuple(int(axis.size) for axis in grids)
+    return {
+        "label": str(label),
+        "surrogate_label": surrogate_label,
+        "diffusivity_source": context["diffusivity_source"],
+        "bulk_diffusivity_mode": context["bulk_diffusivity_mode"],
+        "surrogate_interpolation": getattr(context["tieline_surrogate"], "diffusivityInterpolation", None),
+        "surrogate_grid_counts": grid_counts,
+        "overrides": dict(overrides),
+        "runtime_s": float(runtime_s),
+        "step_count": int(max(n_interface, 1) - 1),
+        "final_time": float(model.currentTime),
+        "times": np.asarray(model.interfaceData._time[:n_interface], dtype=np.float64),
+        "interface_position": np.asarray(model.interfaceData._y[:n_interface], dtype=np.float64),
+        "eta_times": np.asarray(model.etaData._time[:n_eta], dtype=np.float64),
+        "eta": np.asarray(model.etaData._y[:n_eta], dtype=np.float64),
+        "inventory_times": np.asarray(model.inventoryData._time[:n_inventory], dtype=np.float64),
+        "inventory": np.asarray(model.inventoryData._y[:n_inventory], dtype=np.float64),
+        "u_grid": np.asarray(model._u_grid, dtype=np.float64).copy(),
+        "v_grid": np.asarray(model._v_grid, dtype=np.float64).copy(),
+        "p_final": p_final,
+        "q_final": q_final,
+        "bulk_provider_calls": int(getattr(model, "_lastBulkDiffusivityProviderCalls", 0)),
+        "bulk_face_matrices_evaluated": int(getattr(model, "_lastBulkFaceMatricesEvaluated", 0)),
+        "bulk_left_picard_iterations": int(getattr(model, "_lastBulkLeftPicardIterations", 0)),
+        "bulk_right_picard_iterations": int(getattr(model, "_lastBulkRightPicardIterations", 0)),
+        "bulk_converged": getattr(model, "_lastBulkConverged", None),
+        "bulk_failure_reason": getattr(model, "_lastBulkFailureReason", None),
+    }
+
+
+def _diffusivity_comparison_summary_row(run, baseline, analysis_times):
+    run_s = _interp_comparison_scalar(run["times"], run["interface_position"], analysis_times)
+    base_s = _interp_comparison_scalar(baseline["times"], baseline["interface_position"], analysis_times)
+    run_eta = _interp_comparison_scalar(run["eta_times"], run["eta"], analysis_times)
+    base_eta = _interp_comparison_scalar(baseline["eta_times"], baseline["eta"], analysis_times)
+    initial_s = float(baseline["interface_position"][0])
+    profile_errors = _comparison_profile_errors(run, baseline)
+    final_inventory = np.asarray(run["inventory"][-1], dtype=np.float64)
+    baseline_inventory = np.asarray(baseline["inventory"][-1], dtype=np.float64)
+    grid_counts = run["surrogate_grid_counts"]
+    return {
+        "label": run["label"],
+        "surrogate_label": run["surrogate_label"],
+        "diffusivity_source": run["diffusivity_source"],
+        "bulk_diffusivity_mode": run["bulk_diffusivity_mode"],
+        "surrogate_interpolation": run["surrogate_interpolation"],
+        "bulk_grid_cr_count": np.nan if grid_counts is None else grid_counts[0],
+        "bulk_grid_ni_count": np.nan if grid_counts is None else grid_counts[1],
+        "runtime_s": run["runtime_s"],
+        "step_count": run["step_count"],
+        "final_time": run["final_time"],
+        "final_interface_position": float(run["interface_position"][-1]),
+        "final_normalized_interface_position": float(run["interface_position"][-1] / run["interface_position"][0]),
+        "final_eta": float(run["eta"][-1]),
+        "final_inventory_cr": float(final_inventory[0]),
+        "final_inventory_ni": float(final_inventory[1]),
+        "delta_final_interface_position": float(run["interface_position"][-1] - baseline["interface_position"][-1]),
+        "delta_final_normalized_interface_position": float(
+            run["interface_position"][-1] / run["interface_position"][0]
+            - baseline["interface_position"][-1] / baseline["interface_position"][0]
+        ),
+        "delta_final_eta": float(run["eta"][-1] - baseline["eta"][-1]),
+        "delta_final_inventory_cr": float(final_inventory[0] - baseline_inventory[0]),
+        "delta_final_inventory_ni": float(final_inventory[1] - baseline_inventory[1]),
+        "max_normalized_interface_delta": float(np.max(np.abs((run_s - base_s) / initial_s))),
+        "max_eta_delta": float(np.max(np.abs(run_eta - base_eta))),
+        "final_profile_linf_delta": profile_errors["final_profile_linf_delta"],
+        "final_profile_rms_delta": profile_errors["final_profile_rms_delta"],
+        "bulk_provider_calls": run["bulk_provider_calls"],
+        "bulk_face_matrices_evaluated": run["bulk_face_matrices_evaluated"],
+        "bulk_left_picard_iterations": run["bulk_left_picard_iterations"],
+        "bulk_right_picard_iterations": run["bulk_right_picard_iterations"],
+        "bulk_converged": run["bulk_converged"],
+        "bulk_failure_reason": run["bulk_failure_reason"],
+    }
+
+
+def _common_comparison_times(runs, count=64, include_zero=True):
+    if not runs:
+        return np.asarray([], dtype=np.float64)
+    count = max(2, int(count))
+    final_time = min(float(np.max(run["times"])) for run in runs)
+    positive_starts = []
+    for run in runs:
+        times = np.asarray(run["times"], dtype=np.float64)
+        positives = times[times > 0.0]
+        if positives.size:
+            positive_starts.append(float(positives[0]))
+    if not positive_starts or final_time <= 0.0:
+        return np.asarray([0.0], dtype=np.float64) if include_zero else np.asarray([], dtype=np.float64)
+    start = max(positive_starts)
+    if start >= final_time:
+        values = np.asarray([final_time], dtype=np.float64)
+    else:
+        values = np.geomspace(start, final_time, count)
+    if include_zero:
+        values = np.concatenate(([0.0], values))
+    return np.unique(values)
+
+
+def _interp_comparison_scalar(times, values, query_times):
+    times = np.asarray(times, dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64)
+    query_times = np.asarray(query_times, dtype=np.float64)
+    if times.size == 0:
+        return np.full_like(query_times, np.nan, dtype=np.float64)
+    return np.interp(query_times, times, values)
+
+
+def _comparison_profile_errors(run, baseline):
+    if run.get("p_final") is None or baseline.get("p_final") is None:
+        return {
+            "final_profile_linf_delta": np.nan,
+            "final_profile_rms_delta": np.nan,
+        }
+    p_interp = _interp_comparison_profile(run["u_grid"], run["p_final"], baseline["u_grid"])
+    q_interp = _interp_comparison_profile(run["v_grid"], run["q_final"], baseline["v_grid"])
+    p_delta = p_interp - np.asarray(baseline["p_final"], dtype=np.float64)
+    q_delta = q_interp - np.asarray(baseline["q_final"], dtype=np.float64)
+    combined = np.concatenate((p_delta, q_delta), axis=0)
+    return {
+        "final_profile_linf_delta": float(np.max(np.abs(combined))),
+        "final_profile_rms_delta": float(np.sqrt(np.mean(combined * combined))),
+    }
+
+
+def _interp_comparison_profile(source_grid, source_profile, target_grid):
+    source_grid = np.asarray(source_grid, dtype=np.float64)
+    source_profile = np.asarray(source_profile, dtype=np.float64)
+    target_grid = np.asarray(target_grid, dtype=np.float64)
+    values = np.empty((target_grid.size, source_profile.shape[1]), dtype=np.float64)
+    for component in range(source_profile.shape[1]):
+        values[:, component] = np.interp(target_grid, source_grid, source_profile[:, component])
+    return values
+
+
+def _short_bulk_mode_label(mode):
+    if mode == "composition_dependent_lagged":
+        return "lagged"
+    if mode == "composition_dependent_implicit":
+        return "picard"
+    return str(mode)
+
+
 def run_interactive_example(overrides=None, timeProfiling=False):
     """
     Runs the original notebook-style Fe-Cr-Ni example flow.
@@ -800,10 +1165,20 @@ def run_convergence_demo():
     return results, summary
 
 
-if __name__ == "__main__":
-    run_results = run_interactive_example(timeProfiling=True)
+def run_diffusivity_comparison_demo():
+    """Runs the default fixed-vs-variable diffusivity comparison sweep."""
+    cfg = default_diffusivity_comparison_config()
+    results = run_diffusivity_comparison(cfg)
+    return results, results["summary"]
+
+
+# if __name__ == "__main__":
+#     run_results = run_interactive_example(timeProfiling=True)
 
 # %%
 # if __name__ == "__main__":
 #     results, summary = run_convergence_demo()
+# %%
+if __name__ == "__main__":
+    results, summary = run_diffusivity_comparison_demo()
 # %%
