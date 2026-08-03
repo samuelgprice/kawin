@@ -123,7 +123,7 @@ VARIABLE_DIFFUSIVITY_BULK_PICARD_RELAXATION = 1.0
 DT_MODE = "semi_log"
 FIXED_TIME_STEP = 1.0
 SEMI_LOG_BASE_TIME_STEP = 1.0
-SEMI_LOG_DT = 0.25 / 10
+SEMI_LOG_DT = 0.25 / 5
 SEMI_LOG_T0 = 1.0e-6
 SOLVE_TIME = [3600*1e0, 3600*1e2, 3600*1e3][2]
 PHASE_A_NODES = None
@@ -654,6 +654,50 @@ def plot_interface_position(model, *, scale_time=1.0, normalize_to=None, plot_le
     return fig, ax
 
 
+def plot_diffusivity_comparison_interface_positions(
+    results,
+    *,
+    scale_time=1.0,
+    normalize_to=None,
+    plot_lee_oh_fig9_data=False,
+    xlims=None,
+):
+    """Plots normalized interface position histories for diffusivity comparison runs."""
+    runs = list(results["runs"] if isinstance(results, dict) else results)
+    if not runs:
+        raise ValueError("At least one diffusivity comparison run is required.")
+
+    fig, ax = plt.subplots(figsize=(14, 8))
+    for run in runs:
+        times = np.asarray(run["times"], dtype=np.float64) / scale_time
+        positions = np.asarray(run["interface_position"], dtype=np.float64)
+        reference_position = float(positions[0] if normalize_to is None else normalize_to)
+        if not np.isfinite(reference_position) or abs(reference_position) <= 1.0e-300:
+            raise ValueError("Cannot normalize interface position by a zero or non-finite reference position.")
+        positive_time = times > 0.0
+        ax.plot(
+            times[positive_time],
+            (positions / reference_position)[positive_time],
+            linestyle="-",
+            linewidth=1.0,
+            label=run["label"],
+        )
+
+    if plot_lee_oh_fig9_data:
+        _plot_lee_oh_fig9_interface_data(ax, scale_time=scale_time)
+    ax.axhline(1.0, color="0.5", linestyle="--", linewidth=1)
+    ax.set_xscale("log")
+    ax.set_xlabel(f"time / {scale_time:g}")
+    ax.set_ylabel("normalized interface position")
+    ax.set_title("Ternary Illingworth diffusivity comparison")
+    if xlims is not None:
+        ax.set_xlim(*xlims)
+    ax.legend()
+    fig.tight_layout()
+    _show_if_interactive()
+    return fig, ax
+
+
 def plot_integrated_inventory(model, *, scale_time=1.0):
     """Plots domain-average CR and NI composition from inventory divided by R."""
     times = np.asarray(model.inventoryData._time[: model.inventoryData.N + 1], dtype=np.float64) / scale_time
@@ -756,9 +800,12 @@ def default_diffusivity_comparison_config():
     """
     Returns a mutable default config for fixed/variable diffusivity comparisons.
 
-    The default sweep runs one fixed-diffusivity baseline and variable
-    diffusivity cases for both lagged and Picard bulk solves. Three surrogate
-    parameter sets vary the regular bulk grid density and tie-line eta sampling.
+    The default sweep first runs a fine variable-diffusivity Picard reference,
+    then runs the same fine surrogate with lagged bulk diffusivity, fixed
+    diffusivity cases sampled at several tie-line eta values, and coarser
+    variable diffusivity cases for both lagged and Picard bulk solves. Three
+    surrogate parameter sets vary the regular bulk grid density and tie-line
+    eta sampling.
     """
     return {
         "base_overrides": {
@@ -768,8 +815,17 @@ def default_diffusivity_comparison_config():
         "fixed_overrides": {
             "DIFFUSIVITY_SOURCE": "fixed",
             "DIFFUSIVITY_MODE": DIFFUSIVITY_MODE,
-            "DIFFUSIVITY_SAMPLE_ETA": DIFFUSIVITY_SAMPLE_ETA,
         },
+        "fixed_sample_etas": [0.4, 0.5, 0.6],
+        "reference_parameter_set": {
+            "label": "reference_grid51_eta101",
+            "VARIABLE_DIFFUSIVITY_INTERPOLATION": "continuous_grid",
+            "VARIABLE_DIFFUSIVITY_BULK_CR_AXIS": np.linspace(0.10, 0.55, 51),
+            "VARIABLE_DIFFUSIVITY_BULK_NI_AXIS": np.linspace(0.0001, 0.25, 51),
+            "ETA_SAMPLES": np.linspace(0.0, 1.0, 101),
+            "VARIABLE_DIFFUSIVITY_BULK_MODE": "picard",
+        },
+        "reference_comparison_modes": ["lagged"],
         "variable_modes": ["lagged", "picard"],
         "surrogate_parameter_sets": [
             {
@@ -803,31 +859,87 @@ def default_diffusivity_comparison_config():
 
 def run_diffusivity_comparison(config=None):
     """
-    Compares fixed diffusivity against variable lagged/Picard surrogate solves.
+    Compares fixed and coarser variable diffusivity solves to a fine reference.
 
-    The returned dictionary contains the normalized config, the fixed baseline
-    record, all run records, common analysis times, and a quantitative summary.
-    Variable surrogates are built once per surrogate parameter set and reused
-    for each requested lagged/Picard solve mode.
+    The returned dictionary contains the normalized config, the fine Picard
+    reference run as the baseline, all fine-reference run records, all fixed
+    run records, all run records, common analysis times, and a quantitative
+    summary. Variable surrogates are built once per surrogate parameter set and
+    reused for each requested lagged/Picard solve mode.
     """
     config = _normalize_diffusivity_comparison_config(config)
     progress = bool(config["progress"])
     runs = []
+    reference_runs = []
+    fixed_runs = []
 
-    fixed_overrides = _comparison_overrides(config["base_overrides"], config["fixed_overrides"])
+    reference_set = config["reference_parameter_set"]
+    reference_label = str(reference_set["label"])
+    reference_mode = _normalize_variable_diffusivity_bulk_mode(reference_set["VARIABLE_DIFFUSIVITY_BULK_MODE"])
+    reference_overrides = _comparison_overrides(
+        config["base_overrides"],
+        {key: value for key, value in reference_set.items() if key != "label"},
+        {"DIFFUSIVITY_SOURCE": "variable", "VARIABLE_DIFFUSIVITY_BULK_MODE": reference_mode},
+    )
     if progress:
-        print("[fixed] building context and running baseline")
-    fixed_context = build_case_context(
-        overrides=fixed_overrides,
+        print(f"[reference:{reference_label}] building fine surrogate context and running {_short_bulk_mode_label(reference_mode)}")
+    reference_context = build_case_context(
+        overrides=reference_overrides,
         print_matrices=bool(config["print_matrices"]),
     )
-    baseline = _run_diffusivity_comparison_case(
-        label="fixed",
-        overrides=fixed_overrides,
-        context=fixed_context,
+    reference_run = _run_diffusivity_comparison_case(
+        label=_label_with_bulk_mode(reference_label, reference_mode),
+        overrides=reference_overrides,
+        context=reference_context,
         keep_model=bool(config["keep_models"]),
+        surrogate_label=reference_label,
     )
-    runs.append(baseline)
+    reference_runs.append(reference_run)
+    runs.append(reference_run)
+
+    for mode in config["reference_comparison_modes"]:
+        normalized_mode = _normalize_variable_diffusivity_bulk_mode(mode)
+        if normalized_mode == reference_mode:
+            continue
+        run_context = _context_with_bulk_mode(reference_context, normalized_mode)
+        run_overrides = _comparison_overrides(
+            reference_overrides,
+            {"VARIABLE_DIFFUSIVITY_BULK_MODE": mode},
+        )
+        if progress:
+            print(f"[reference:{reference_label}] running {_short_bulk_mode_label(normalized_mode)}")
+        comparison_run = _run_diffusivity_comparison_case(
+            label=_label_with_bulk_mode(reference_label, normalized_mode),
+            overrides=run_overrides,
+            context=run_context,
+            keep_model=bool(config["keep_models"]),
+            surrogate_label=reference_label,
+        )
+        reference_runs.append(comparison_run)
+        runs.append(comparison_run)
+
+    for fixed_eta in config["fixed_sample_etas"]:
+        fixed_overrides = _comparison_overrides(
+            config["base_overrides"],
+            config["fixed_overrides"],
+            {"DIFFUSIVITY_SAMPLE_ETA": fixed_eta},
+        )
+        label = f"fixed_eta{float(fixed_eta):g}"
+        if progress:
+            print(f"[fixed:{float(fixed_eta):g}] building context and running")
+        fixed_context = build_case_context(
+            overrides=fixed_overrides,
+            print_matrices=bool(config["print_matrices"]),
+        )
+        fixed_run = _run_diffusivity_comparison_case(
+            label=label,
+            overrides=fixed_overrides,
+            context=fixed_context,
+            keep_model=bool(config["keep_models"]),
+        )
+        fixed_runs.append(fixed_run)
+        runs.append(fixed_run)
+    baseline = reference_run
 
     for parameter_set in config["surrogate_parameter_sets"]:
         parameter_label = str(parameter_set["label"])
@@ -868,6 +980,9 @@ def run_diffusivity_comparison(config=None):
     return {
         "config": config,
         "baseline": baseline,
+        "reference_run": reference_run,
+        "reference_runs": reference_runs,
+        "fixed_runs": fixed_runs,
         "runs": runs,
         "analysis_times": analysis_times,
         "summary": summary,
@@ -876,7 +991,7 @@ def run_diffusivity_comparison(config=None):
 
 def summarize_diffusivity_comparison(runs, baseline=None, analysis_times=None):
     """
-    Returns a quantitative table comparing runs to the fixed baseline.
+    Returns a quantitative table comparing runs to the selected baseline.
 
     A ``pandas.DataFrame`` is returned when pandas is available; otherwise the
     fallback is a list of dictionaries with the same columns.
@@ -903,6 +1018,8 @@ def _normalize_diffusivity_comparison_config(config):
         for key, value in dict(config).items():
             if key in {"base_overrides", "fixed_overrides"}:
                 merged[key] = {**dict(defaults.get(key, {})), **dict(value)}
+            elif key == "reference_parameter_set":
+                merged[key] = {**dict(defaults.get(key, {})), **dict(value)}
             elif key == "surrogate_parameter_sets":
                 merged[key] = [dict(item) for item in value]
             else:
@@ -910,12 +1027,19 @@ def _normalize_diffusivity_comparison_config(config):
         defaults = merged
     defaults["base_overrides"] = dict(defaults.get("base_overrides", {}))
     defaults["fixed_overrides"] = dict(defaults.get("fixed_overrides", {}))
+    defaults["fixed_sample_etas"] = [float(eta) for eta in defaults.get("fixed_sample_etas", [])]
+    defaults["reference_parameter_set"] = dict(defaults.get("reference_parameter_set", {}))
+    defaults["reference_comparison_modes"] = list(defaults.get("reference_comparison_modes", []))
     defaults["variable_modes"] = list(defaults.get("variable_modes", ["lagged", "picard"]))
     defaults["surrogate_parameter_sets"] = [dict(item) for item in defaults.get("surrogate_parameter_sets", [])]
     defaults["analysis_time_count"] = int(defaults.get("analysis_time_count", 64))
     defaults["keep_models"] = bool(defaults.get("keep_models", True))
     defaults["print_matrices"] = bool(defaults.get("print_matrices", False))
     defaults["progress"] = bool(defaults.get("progress", True))
+    defaults["reference_parameter_set"].setdefault("label", "reference")
+    defaults["reference_parameter_set"].setdefault("VARIABLE_DIFFUSIVITY_BULK_MODE", "picard")
+    if not defaults["fixed_sample_etas"]:
+        raise ValueError("At least one fixed diffusivity sample eta is required.")
     if not defaults["variable_modes"]:
         raise ValueError("At least one variable diffusivity mode is required.")
     if not defaults["surrogate_parameter_sets"]:
@@ -1013,6 +1137,7 @@ def _diffusivity_comparison_summary_row(run, baseline, analysis_times):
         "diffusivity_source": run["diffusivity_source"],
         "bulk_diffusivity_mode": run["bulk_diffusivity_mode"],
         "surrogate_interpolation": run["surrogate_interpolation"],
+        "diffusivity_sample_eta": run["overrides"].get("DIFFUSIVITY_SAMPLE_ETA", np.nan),
         "bulk_grid_cr_count": np.nan if grid_counts is None else grid_counts[0],
         "bulk_grid_ni_count": np.nan if grid_counts is None else grid_counts[1],
         "runtime_s": run["runtime_s"],
@@ -1111,6 +1236,14 @@ def _short_bulk_mode_label(mode):
     return str(mode)
 
 
+def _label_with_bulk_mode(label, mode):
+    short_mode = _short_bulk_mode_label(mode)
+    label = str(label)
+    if label.endswith(f"_{short_mode}"):
+        return label
+    return f"{label}_{short_mode}"
+
+
 def run_interactive_example(overrides=None, timeProfiling=False):
     """
     Runs the original notebook-style Fe-Cr-Ni example flow.
@@ -1166,10 +1299,46 @@ def run_convergence_demo():
     return results, summary
 
 
-def run_diffusivity_comparison_demo():
-    """Runs the default fixed-vs-variable diffusivity comparison sweep."""
+def run_diffusivity_comparison_demo(
+    *,
+    fixed_sample_etas=None,
+    reference_parameter_set=None,
+    reference_comparison_modes=None,
+    plot_normalized_interface_positions=False,
+    interface_plot_scale_time=1.0,
+    interface_plot_normalize_to=None,
+    interface_plot_lee_oh_fig9_data=False,
+    interface_plot_xlims=None,
+):
+    """
+    Runs the default fixed-vs-variable diffusivity comparison sweep.
+
+    ``fixed_sample_etas`` overrides the default fixed-diffusivity tie-line eta
+    sweep, which is ``[0.4, 0.5, 0.6]``.
+    ``reference_parameter_set`` can override the fine Picard reference settings
+    used as the quantitative baseline.
+    ``reference_comparison_modes`` controls which additional fine-reference
+    solve modes are included alongside the baseline; the default is ``["lagged"]``.
+    When ``plot_normalized_interface_positions`` is true, a shared line plot of
+    normalized interface position histories is stored in
+    ``results["figures"]["normalized_interface_positions"]``.
+    """
     cfg = default_diffusivity_comparison_config()
+    if fixed_sample_etas is not None:
+        cfg["fixed_sample_etas"] = list(fixed_sample_etas)
+    if reference_parameter_set is not None:
+        cfg["reference_parameter_set"] = {**cfg["reference_parameter_set"], **dict(reference_parameter_set)}
+    if reference_comparison_modes is not None:
+        cfg["reference_comparison_modes"] = list(reference_comparison_modes)
     results = run_diffusivity_comparison(cfg)
+    if plot_normalized_interface_positions:
+        results.setdefault("figures", {})["normalized_interface_positions"] = plot_diffusivity_comparison_interface_positions(
+            results,
+            scale_time=interface_plot_scale_time,
+            normalize_to=interface_plot_normalize_to,
+            plot_lee_oh_fig9_data=interface_plot_lee_oh_fig9_data,
+            xlims=interface_plot_xlims,
+        )
     return results, results["summary"]
 
 
@@ -1181,7 +1350,10 @@ def run_diffusivity_comparison_demo():
 #     results, summary = run_convergence_demo()
 # %%
 if __name__ == "__main__":
-    results, summary = run_diffusivity_comparison_demo()
+    results, summary = run_diffusivity_comparison_demo(
+        plot_normalized_interface_positions=True,
+        interface_plot_xlims=(1e-1, 1e7),
+    )
 # %%
 
 # %%
