@@ -21,6 +21,13 @@ from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
 
+_BULK_DIFFUSIVITY_PHASE_UNIFORM = "phase_uniform"
+_BULK_DIFFUSIVITY_LAGGED = "composition_dependent_lagged"
+_SUPPORTED_BULK_DIFFUSIVITY_MODES = {
+    _BULK_DIFFUSIVITY_PHASE_UNIFORM,
+    _BULK_DIFFUSIVITY_LAGGED,
+}
+
 def debugInPlace():
     try:
         import debugpy
@@ -182,6 +189,26 @@ class _InterfaceCandidate:
     physical_norm: float
 
 
+@dataclass(frozen=True, slots=True)
+class _BulkPhaseSolveResult:
+    """
+    Result from one transformed ternary bulk phase solve.
+
+    ``interface_flux`` is the physical diffusive flux at the face adjacent to
+    the moving interface, computed from the same face matrix used in the linear
+    finite-volume assembly.
+    """
+
+    profile: np.ndarray
+    interface_flux: np.ndarray
+    interface_face_matrix: np.ndarray
+    inner_iterations: int = 0
+    inner_update_norm: float = 0.0
+    converged: bool = True
+    failure_reason: str | None = None
+    diffusivity_evaluations: int = 0
+
+
 def _validate_ternary_diffusivity_matrix(D, phase, context="ternary Illingworth diffusivity"):
     """
     Validates a ternary 2x2 diffusion matrix with scale-invariant eigen tests.
@@ -263,6 +290,23 @@ def _get_stefan_interdiffusivity(thermodynamics, composition, temperature, phase
     return _validate_ternary_diffusivity_matrix(D, phase, context="initial-eta diffusivity")
 
 
+def _get_bulk_interdiffusivity(thermodynamics, composition, temperature, phase, context="bulk diffusivity"):
+    """Returns a validated general/bulk ternary interdiffusivity matrix."""
+    try:
+        D = thermodynamics.getInterdiffusivity(composition, temperature, phase=phase, query_context="general")
+    except TypeError:
+        D = thermodynamics.getInterdiffusivity(composition, temperature, phase=phase)
+    return _validate_ternary_diffusivity_matrix(D, phase, context=context)
+
+
+def _coerce_bulk_diffusivity_mode(mode):
+    """Normalizes and validates the ternary Illingworth bulk diffusivity mode."""
+    value = str(mode)
+    if value not in _SUPPORTED_BULK_DIFFUSIVITY_MODES:
+        raise ValueError("bulk_diffusivity_mode must be 'phase_uniform' or 'composition_dependent_lagged'.")
+    return value
+
+
 def estimate_initial_eta_from_stefan_residual(
     composition,
     z,
@@ -277,6 +321,7 @@ def estimate_initial_eta_from_stefan_residual(
     root_xtol=1e-12,
     root_rtol=1e-12,
     root_maxiter=100,
+    bulk_diffusivity_mode=_BULK_DIFFUSIVITY_PHASE_UNIFORM,
 ):
     """
     Estimates the initial ternary tie-line coordinate from a Stefan residual.
@@ -310,6 +355,7 @@ def estimate_initial_eta_from_stefan_residual(
         raise ValueError("phases must contain exactly the left and right phases.")
     if thermodynamics is None or not hasattr(thermodynamics, "getInterdiffusivity"):
         raise TypeError("thermodynamics must provide getInterdiffusivity for initial eta estimation.")
+    bulk_diffusivity_mode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
 
     s = float(interface_position)
     domain_length = float(z[-1] - z[0])
@@ -344,8 +390,24 @@ def estimate_initial_eta_from_stefan_residual(
         jump_norm_sq = float(np.dot(jump, jump))
         if jump_norm_sq <= 1e-300:
             raise ValueError("tie-line has a degenerate interface composition jump at the queried eta.")
-        D_left = _get_stefan_interdiffusivity(thermodynamics, c_left, temperature_value, phases[0])
-        D_right = _get_stefan_interdiffusivity(thermodynamics, c_right, temperature_value, phases[1])
+        if bulk_diffusivity_mode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
+            D_left = _get_stefan_interdiffusivity(thermodynamics, c_left, temperature_value, phases[0])
+            D_right = _get_stefan_interdiffusivity(thermodynamics, c_right, temperature_value, phases[1])
+        else:
+            D_left = _get_bulk_interdiffusivity(
+                thermodynamics,
+                0.5 * (p_adjacent + c_left),
+                temperature_value,
+                phases[0],
+                context="initial-eta left interface-face diffusivity",
+            )
+            D_right = _get_bulk_interdiffusivity(
+                thermodynamics,
+                0.5 * (c_right + q_adjacent),
+                temperature_value,
+                phases[1],
+                context="initial-eta right interface-face diffusivity",
+            )
         left_gradient = (c_left - p_adjacent) / (s * (1.0 - float(u_grid[-2])))
         right_gradient = (q_adjacent - c_right) / ((domain_length - s) * float(v_grid[1]))
         flux_delta = _matvec_2x2(D_right, right_gradient) - _matvec_2x2(D_left, left_gradient)
@@ -420,6 +482,7 @@ def estimate_initial_eta_from_instantaneous_balance(
     velocity_guess=None,
     root_xtol=1e-12,
     root_maxiter=100,
+    bulk_diffusivity_mode=_BULK_DIFFUSIVITY_PHASE_UNIFORM,
 ):
     """
     Estimates initial eta by solving the instantaneous discrete balance.
@@ -450,6 +513,7 @@ def estimate_initial_eta_from_instantaneous_balance(
         raise ValueError("phases must contain exactly the left and right phases.")
     if thermodynamics is None or not hasattr(thermodynamics, "getInterdiffusivity"):
         raise TypeError("thermodynamics must provide getInterdiffusivity for initial eta estimation.")
+    bulk_diffusivity_mode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
 
     s = float(interface_position)
     domain_length = float(z[-1] - z[0])
@@ -487,8 +551,24 @@ def estimate_initial_eta_from_instantaneous_balance(
         c_right = np.asarray(c_right, dtype=np.float64).reshape(2)
         if not np.all(np.isfinite(c_left)) or not np.all(np.isfinite(c_right)):
             raise ValueError("interface compositions are non-finite at the queried eta.")
-        D_left = _get_stefan_interdiffusivity(thermodynamics, c_left, temperature_value, phases[0])
-        D_right = _get_stefan_interdiffusivity(thermodynamics, c_right, temperature_value, phases[1])
+        if bulk_diffusivity_mode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
+            D_left = _get_stefan_interdiffusivity(thermodynamics, c_left, temperature_value, phases[0])
+            D_right = _get_stefan_interdiffusivity(thermodynamics, c_right, temperature_value, phases[1])
+        else:
+            D_left = _get_bulk_interdiffusivity(
+                thermodynamics,
+                0.5 * (p_adjacent + c_left),
+                temperature_value,
+                phases[0],
+                context="initial-eta left interface-face diffusivity",
+            )
+            D_right = _get_bulk_interdiffusivity(
+                thermodynamics,
+                0.5 * (c_right + q_adjacent),
+                temperature_value,
+                phases[1],
+                context="initial-eta right interface-face diffusivity",
+            )
         G_left = _matvec_2x2(D_left, (c_left - p_adjacent) / (s * (1.0 - u_adjacent)))
         G_right = _matvec_2x2(D_right, (q_adjacent - c_right) / ((domain_length - s) * v_adjacent))
         flux_delta = G_right - G_left
@@ -750,14 +830,14 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     residual, so callers must provide an eta-capable interface equilibrium.
     Only planar Cartesian finite-difference meshes are supported.
 
-    Diffusivity scope is intentionally limited: during each nonlinear residual
-    evaluation the solver evaluates one 2-by-2 interdiffusivity matrix for each
-    phase at that phase's interface composition, current time, and interface
-    temperature. That matrix is then treated as spatially uniform throughout
-    the corresponding transformed phase bulk solve. Local bulk transport with
-    nodewise or facewise matrices of the form ``D = D(c(x), T)`` and fluxes
-    discretized as ``div(D(c) grad(c))`` is not implemented by this Illingworth
-    solver.
+    By default, ``bulk_diffusivity_mode='phase_uniform'`` preserves the legacy
+    behavior: one 2-by-2 interdiffusivity matrix is evaluated for each phase at
+    that phase's interface composition and reused throughout the transformed
+    bulk solve. ``bulk_diffusivity_mode='composition_dependent_lagged'`` instead
+    evaluates one matrix per finite-volume face from the accepted old-time
+    profile and freezes those matrices during each candidate linear solve. The
+    interface residual consumes the exact interface-adjacent diffusive flux
+    returned by each bulk solve.
     """
 
     def __init__(
@@ -779,6 +859,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         initial_eta_root_xtol: float = 1e-12,
         initial_eta_root_rtol: float = 1e-12,
         initial_eta_root_maxiter: int = 100,
+        bulk_diffusivity_mode: str = _BULK_DIFFUSIVITY_PHASE_UNIFORM,
         dt_mode: str = "fixed",
         semiLog_dt: float | None = None,
         semiLogT0: float | None = None,
@@ -806,6 +887,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self.initialEtaRootXtol = float(initial_eta_root_xtol)
         self.initialEtaRootRtol = float(initial_eta_root_rtol)
         self.initialEtaRootMaxiter = int(initial_eta_root_maxiter)
+        self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
         self.dtMode = str(dt_mode)
         self.semiLog_dt = None if semiLog_dt is None else float(semiLog_dt)
         self.semiLogT0 = None if semiLogT0 is None else float(semiLogT0)
@@ -924,6 +1006,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             raise ValueError("time_step must be a positive finite value.")
         if self.dtMode not in {"fixed", "semi_log"}:
             raise ValueError("dt_mode must be 'fixed' or 'semi_log'.")
+        self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(self.bulkDiffusivityMode)
         if self.dtMode == "semi_log" and ((self.semiLog_dt is None) or (self.semiLogT0 is None)):
             raise ValueError("semiLog_dt and semiLogT0 must be specified when dt_mode is 'semi_log'.")
         _validate_eta_bounds(self.interfaceEquilibrium)
@@ -1137,6 +1220,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             "eta_bracket": self.initialEtaBracket,
             "root_xtol": self.initialEtaRootXtol,
             "root_maxiter": self.initialEtaRootMaxiter,
+            "bulk_diffusivity_mode": self.bulkDiffusivityMode,
         }
         if self.initialEtaMethod == "stefan_cross_brentq":
             self.initialEtaEstimate = estimate_initial_eta_from_stefan_residual(
@@ -1160,8 +1244,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._eta_curr = eta0
         c_left, c_right = self._interface_compositions(eta0)
         self._lastInterfaceCompositions = (c_left.copy(), c_right.copy())
-        self._D_left = self._phase_diffusivity_matrix(c_left, self.phases[0], 0.0, s0)
-        self._D_right = self._phase_diffusivity_matrix(c_right, self.phases[1], 0.0, s0)
+        if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
+            self._D_left = self._phase_diffusivity_matrix(c_left, self.phases[0], 0.0, s0)
+            self._D_right = self._phase_diffusivity_matrix(c_right, self.phases[1], 0.0, s0)
+        else:
+            self._D_left = self._left_lagged_face_diffusivity_matrices(self._p_curr, s0, 0.0)[-1]
+            self._D_right = self._right_lagged_face_diffusivity_matrices(self._q_curr, s0, 0.0)[0]
 
         if self.recordPqData:
             self.pData.record(0, self._p_curr)
@@ -1230,6 +1318,109 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         except TypeError:
             D = self.therm.getInterdiffusivity(composition, temperature, phase=phase)
         return _validate_ternary_diffusivity_matrix(D, phase, context="transient diffusivity")
+
+    def _temperatures_at_positions(self, positions, time):
+        """Returns finite temperatures at physical face positions."""
+        positions = np.asarray(positions, dtype=np.float64).reshape(-1)
+        T = np.asarray(
+            self.temperatureParameters(positions.reshape(-1, 1), float(time)),
+            dtype=np.float64,
+        ).reshape(-1)
+        if T.size == 1 and positions.size != 1:
+            T = np.full(positions.shape, float(T[0]), dtype=np.float64)
+        if T.size != positions.size or not np.all(np.isfinite(T)):
+            raise ValueError("Bulk face temperatures must be finite and match the face count.")
+        return T
+
+    def _bulk_face_diffusivity_matrices(self, face_compositions, phase, time, physical_face_positions):
+        """
+        Returns validated general/bulk diffusivity matrices at face compositions.
+
+        Vectorized thermodynamic queries are used when supported. Providers that
+        only accept one composition at a time fall back to a deterministic loop.
+        """
+        face_compositions = np.asarray(face_compositions, dtype=np.float64)
+        if face_compositions.ndim != 2 or face_compositions.shape[1] != 2:
+            raise ValueError("face_compositions must have shape (n_faces, 2).")
+        temperatures = self._temperatures_at_positions(physical_face_positions, time)
+        if temperatures.size != face_compositions.shape[0]:
+            raise ValueError("physical_face_positions must match the face composition count.")
+
+        def validate_stack(values):
+            matrices = np.asarray(values, dtype=np.float64)
+            if matrices.shape == (2, 2) and face_compositions.shape[0] == 1:
+                matrices = matrices.reshape(1, 2, 2)
+            if matrices.shape != (face_compositions.shape[0], 2, 2):
+                raise ValueError("bulk diffusivity query returned an unexpected matrix shape.")
+            out = np.empty_like(matrices)
+            for i, matrix in enumerate(matrices):
+                out[i] = _validate_ternary_diffusivity_matrix(matrix, phase, context=f"bulk face diffusivity face {i}")
+            return out
+
+        try:
+            values = self.therm.getInterdiffusivity(face_compositions, temperatures, phase=phase, query_context="general")
+            return validate_stack(values)
+        except TypeError:
+            pass
+        except ValueError:
+            pass
+
+        out = np.empty((face_compositions.shape[0], 2, 2), dtype=np.float64)
+        for i, (composition, temperature) in enumerate(zip(face_compositions, temperatures)):
+            try:
+                D = self.therm.getInterdiffusivity(composition, float(temperature), phase=phase, query_context="general")
+            except TypeError:
+                D = self.therm.getInterdiffusivity(composition, float(temperature), phase=phase)
+            out[i] = _validate_ternary_diffusivity_matrix(D, phase, context=f"bulk face diffusivity face {i}")
+        return out
+
+    def _left_lagged_face_compositions(self, p):
+        """
+        Builds fully lagged left-phase face compositions.
+
+        Face ``j`` is between old accepted nodes ``p[j]`` and ``p[j + 1]``; the
+        interface-adjacent face therefore uses ``0.5 * (p[-2] + p[-1])`` where
+        ``p[-1]`` is the old accepted left interface composition.
+        """
+        p = np.asarray(p, dtype=np.float64)
+        return 0.5 * (p[:-1] + p[1:])
+
+    def _right_lagged_face_compositions(self, q):
+        """
+        Builds fully lagged right-phase face compositions.
+
+        Face ``j`` is between old accepted nodes ``q[j]`` and ``q[j + 1]``; the
+        interface-adjacent face therefore uses ``0.5 * (q[0] + q[1])`` where
+        ``q[0]`` is the old accepted right interface composition.
+        """
+        q = np.asarray(q, dtype=np.float64)
+        return 0.5 * (q[:-1] + q[1:])
+
+    def _left_face_positions(self, future_s):
+        u_faces = 0.5 * (self._u_grid[:-1] + self._u_grid[1:])
+        return float(future_s) * u_faces
+
+    def _right_face_positions(self, future_s):
+        v_faces = 0.5 * (self._v_grid[:-1] + self._v_grid[1:])
+        return float(future_s) + (self._R - float(future_s)) * v_faces
+
+    def _left_lagged_face_diffusivity_matrices(self, p, future_s, time):
+        """Returns left-phase lagged bulk face diffusivity matrices."""
+        return self._bulk_face_diffusivity_matrices(
+            self._left_lagged_face_compositions(p),
+            self.phases[0],
+            time,
+            self._left_face_positions(future_s),
+        )
+
+    def _right_lagged_face_diffusivity_matrices(self, q, future_s, time):
+        """Returns right-phase lagged bulk face diffusivity matrices."""
+        return self._bulk_face_diffusivity_matrices(
+            self._right_lagged_face_compositions(q),
+            self.phases[1],
+            time,
+            self._right_face_positions(future_s),
+        )
 
     def setTimeInfo(self, currTime, simTime):
         """Stores solve-time bounds and prepares optional semi-log target times."""
@@ -1321,26 +1512,74 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     def _identity(self):
         return np.eye(2, dtype=np.float64)
 
-    def _new_concentration_left_planar(self, p, s, future_s, dt, c_left, D_left, motion_branch):
+    def _phase_face_diffusivity_matrices(self, D, n_faces, phase, context="transient face diffusivity"):
         """
-        Solves the left transformed bulk system using a phase-uniform matrix.
+        Returns validated face diffusivity matrices for one phase.
 
-        ``D_left`` is a single 2x2 interdiffusivity matrix evaluated before this
-        assembly, normally at the left interface composition. It is used for all
-        left-phase transformed-grid rows; local composition-dependent bulk
-        matrices are intentionally outside this solver's current scope.
+        A single already-validated 2-by-2 phase-uniform matrix is exposed as a
+        broadcast view over all finite-volume faces. A face-specific input must
+        already have shape ``(n_faces, 2, 2)`` and is validated face by face.
+        """
+        n_faces = int(n_faces)
+        if n_faces < 1:
+            raise ValueError("A transformed phase solve requires at least one face.")
+        values = np.asarray(D, dtype=np.float64)
+        if values.shape == (2, 2):
+            return np.broadcast_to(values, (n_faces, 2, 2))
+        if values.shape != (n_faces, 2, 2):
+            raise ValueError(f"{context} for phase {phase} must have shape (2, 2) or ({n_faces}, 2, 2); received {values.shape}.")
+        for i, matrix in enumerate(values):
+            _validate_ternary_diffusivity_matrix(matrix, phase, context=f"{context} face {i}")
+        return values
+
+    def _left_interface_diffusive_flux(self, p_future, future_s, c_left, interface_face_matrix):
+        """
+        Returns the physical left-phase diffusive flux at the interface face.
+
+        The interface-adjacent face is between ``p_future[-2]`` and the
+        Dirichlet endpoint ``c_left == p_future[-1]``.
+        """
+        diff_l = _matvec_2x2(interface_face_matrix, (np.asarray(c_left, dtype=np.float64) - p_future[-2]) / (1.0 - self._u_grid[-2]))
+        return diff_l / float(future_s)
+
+    def _right_interface_diffusive_flux(self, q_future, future_s, c_right, interface_face_matrix):
+        """
+        Returns the physical right-phase diffusive flux at the interface face.
+
+        The interface-adjacent face is between the Dirichlet endpoint
+        ``c_right == q_future[0]`` and ``q_future[1]``.
+        """
+        diff_r = _matvec_2x2(interface_face_matrix, (q_future[1] - np.asarray(c_right, dtype=np.float64)) / self._v_grid[1])
+        return diff_r / (self._R - float(future_s))
+
+    def _solve_concentration_left_planar(self, p, s, future_s, dt, c_left, D_left_faces, motion_branch):
+        """
+        Solves the left transformed bulk system using face diffusivity matrices.
+
+        ``D_left_faces[j]`` is the 2-by-2 matrix on the face between
+        transformed nodes ``j`` and ``j + 1``. The interface-adjacent face is
+        ``D_left_faces[-1]``.
         """
         _validate_motion_branch(motion_branch)
         n = len(p)
+        D_left_values = np.asarray(D_left_faces, dtype=np.float64)
+        phase_uniform = D_left_values.shape == (2, 2)
+        if phase_uniform:
+            D_left_uniform = D_left_values
+        else:
+            D_left_faces = self._phase_face_diffusivity_matrices(D_left_values, n - 1, self.phases[0])
         lower, diagonal, upper, rhs = _allocate_ternary_block_system(n)
         I = self._identity()
-        tmpA = D_left * (float(dt) / float(future_s))
+        tmpA_scale = float(dt) / float(future_s)
+        tmpA_uniform = D_left_uniform * tmpA_scale if phase_uniform else None
+        tmpA_faces = None if phase_uniform else D_left_faces * tmpA_scale
         tmpB = float(future_s) - float(s)
         u = self._u_grid
 
         if motion_branch == "positive":
-            diagonal[0] = -tmpA / u[1] - I * (future_s * u[1] / 2.0)
-            upper[0] = tmpA / u[1] + I * (tmpB * u[1] / 2.0)
+            A_right = tmpA_uniform if phase_uniform else tmpA_faces[0]
+            diagonal[0] = -A_right / u[1] - I * (future_s * u[1] / 2.0)
+            upper[0] = A_right / u[1] + I * (tmpB * u[1] / 2.0)
             rhs[0] = -p[0] * s * u[1] / 2.0
             for i in range(1, n - 1):
                 left_diff = u[i] - u[i - 1]
@@ -1348,14 +1587,20 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 left_sum = u[i] + u[i - 1]
                 right_sum = u[i + 1] + u[i]
                 cell_width = right_sum - left_sum
-                lower[i] = tmpA / left_diff
-                diagonal[i] = -tmpA * (1.0 / left_diff + 1.0 / right_diff)
+                A_left = tmpA_uniform if phase_uniform else tmpA_faces[i - 1]
+                A_right = tmpA_uniform if phase_uniform else tmpA_faces[i]
+                lower[i] = A_left / left_diff
+                if phase_uniform:
+                    diagonal[i] = -tmpA_uniform * (1.0 / left_diff + 1.0 / right_diff)
+                else:
+                    diagonal[i] = -A_left / left_diff - A_right / right_diff
                 diagonal[i] += -I * (tmpB * left_sum / 2.0 + future_s * cell_width / 2.0)
-                upper[i] = tmpA / right_diff + I * (tmpB * right_sum / 2.0)
+                upper[i] = A_right / right_diff + I * (tmpB * right_sum / 2.0)
                 rhs[i] = -s * p[i] * cell_width / 2.0
         else:
-            diagonal[0] = -tmpA / u[1] + I * (tmpB * u[1] / 2.0 - future_s * u[1] / 2.0)
-            upper[0] = tmpA / u[1]
+            A_right = tmpA_uniform if phase_uniform else tmpA_faces[0]
+            diagonal[0] = -A_right / u[1] + I * (tmpB * u[1] / 2.0 - future_s * u[1] / 2.0)
+            upper[0] = A_right / u[1]
             rhs[0] = -p[0] * s * u[1] / 2.0
             for i in range(1, n - 1):
                 left_diff = u[i] - u[i - 1]
@@ -1363,30 +1608,57 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 left_sum = u[i] + u[i - 1]
                 right_sum = u[i + 1] + u[i]
                 cell_width = right_sum - left_sum
-                lower[i] = tmpA / left_diff - I * (tmpB * left_sum / 2.0)
-                diagonal[i] = -tmpA * (1.0 / left_diff + 1.0 / right_diff)
+                A_left = tmpA_uniform if phase_uniform else tmpA_faces[i - 1]
+                A_right = tmpA_uniform if phase_uniform else tmpA_faces[i]
+                lower[i] = A_left / left_diff - I * (tmpB * left_sum / 2.0)
+                if phase_uniform:
+                    diagonal[i] = -tmpA_uniform * (1.0 / left_diff + 1.0 / right_diff)
+                else:
+                    diagonal[i] = -A_left / left_diff - A_right / right_diff
                 diagonal[i] += I * (tmpB * right_sum / 2.0 - future_s * cell_width / 2.0)
-                upper[i] = tmpA / right_diff
+                upper[i] = A_right / right_diff
                 rhs[i] = -s * p[i] * cell_width / 2.0
 
         diagonal[-1] = -I
         rhs[-1] = -np.asarray(c_left, dtype=np.float64)
-        return solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+        profile = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+        interface_face_matrix = D_left_uniform if phase_uniform else np.asarray(D_left_faces[-1], dtype=np.float64)
+        return _BulkPhaseSolveResult(
+            profile=profile,
+            interface_flux=self._left_interface_diffusive_flux(profile, future_s, c_left, interface_face_matrix),
+            interface_face_matrix=interface_face_matrix,
+        )
 
-    def _new_concentration_right_planar(self, q, s, future_s, dt, c_right, D_right, motion_branch):
+    def _new_concentration_left_planar(self, p, s, future_s, dt, c_left, D_left, motion_branch):
         """
-        Solves the right transformed bulk system using a phase-uniform matrix.
+        Compatibility wrapper returning only the solved left concentration.
 
-        ``D_right`` is a single 2x2 interdiffusivity matrix evaluated before
-        this assembly, normally at the right interface composition. It is used
-        for all right-phase transformed-grid rows; local composition-dependent
-        bulk matrices are intentionally outside this solver's current scope.
+        ``D_left`` may be either a single phase-uniform matrix or a face array
+        with shape ``(len(p) - 1, 2, 2)``.
+        """
+        return self._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch).profile
+
+    def _solve_concentration_right_planar(self, q, s, future_s, dt, c_right, D_right_faces, motion_branch):
+        """
+        Solves the right transformed bulk system using face diffusivity matrices.
+
+        ``D_right_faces[j]`` is the 2-by-2 matrix on the face between
+        transformed nodes ``j`` and ``j + 1``. The interface-adjacent face is
+        ``D_right_faces[0]``.
         """
         _validate_motion_branch(motion_branch)
         n = len(q)
+        D_right_values = np.asarray(D_right_faces, dtype=np.float64)
+        phase_uniform = D_right_values.shape == (2, 2)
+        if phase_uniform:
+            D_right_uniform = D_right_values
+        else:
+            D_right_faces = self._phase_face_diffusivity_matrices(D_right_values, n - 1, self.phases[1])
         lower, diagonal, upper, rhs = _allocate_ternary_block_system(n)
         I = self._identity()
-        tmpA = D_right * (float(dt) / (self._R - float(future_s)))
+        tmpA_scale = float(dt) / (self._R - float(future_s))
+        tmpA_uniform = D_right_uniform * tmpA_scale if phase_uniform else None
+        tmpA_faces = None if phase_uniform else D_right_faces * tmpA_scale
         tmpB = float(future_s) - float(s)
         span = self._R - float(future_s)
         v = self._v_grid
@@ -1400,15 +1672,21 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 left_sum = v[i] + v[i - 1]
                 right_sum = v[i + 1] + v[i]
                 cell_width = right_sum - left_sum
-                lower[i] = tmpA / left_diff
-                diagonal[i] = -tmpA * (1.0 / right_diff + 1.0 / left_diff)
+                A_left = tmpA_uniform if phase_uniform else tmpA_faces[i - 1]
+                A_right = tmpA_uniform if phase_uniform else tmpA_faces[i]
+                lower[i] = A_left / left_diff
+                if phase_uniform:
+                    diagonal[i] = -tmpA_uniform * (1.0 / right_diff + 1.0 / left_diff)
+                else:
+                    diagonal[i] = -A_right / right_diff - A_left / left_diff
                 diagonal[i] += -I * (tmpB * (1.0 - left_sum / 2.0) + span * cell_width / 2.0)
-                upper[i] = tmpA / right_diff + I * (tmpB * (1.0 - right_sum / 2.0))
+                upper[i] = A_right / right_diff + I * (tmpB * (1.0 - right_sum / 2.0))
                 rhs[i] = -(self._R - s) * q[i] * cell_width / 2.0
 
             tmp = v[-2]
-            lower[-1] = tmpA / (1.0 - tmp)
-            diagonal[-1] = -tmpA / (1.0 - tmp)
+            A_left = tmpA_uniform if phase_uniform else tmpA_faces[-1]
+            lower[-1] = A_left / (1.0 - tmp)
+            diagonal[-1] = -A_left / (1.0 - tmp)
             diagonal[-1] += -I * (tmpB * (1.0 - (1.0 + tmp) / 2.0) + span * (1.0 - tmp) / 2.0)
             rhs[-1] = -q[-1] * (self._R - s) * (1.0 - tmp) / 2.0
         else:
@@ -1418,18 +1696,39 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 left_sum = v[i] + v[i - 1]
                 right_sum = v[i + 1] + v[i]
                 cell_width = right_sum - left_sum
-                lower[i] = tmpA / left_diff - I * (tmpB * (1.0 - left_sum / 2.0))
-                diagonal[i] = -tmpA * (1.0 / right_diff + 1.0 / left_diff)
+                A_left = tmpA_uniform if phase_uniform else tmpA_faces[i - 1]
+                A_right = tmpA_uniform if phase_uniform else tmpA_faces[i]
+                lower[i] = A_left / left_diff - I * (tmpB * (1.0 - left_sum / 2.0))
+                if phase_uniform:
+                    diagonal[i] = -tmpA_uniform * (1.0 / right_diff + 1.0 / left_diff)
+                else:
+                    diagonal[i] = -A_right / right_diff - A_left / left_diff
                 diagonal[i] += I * (tmpB * (1.0 - right_sum / 2.0) - span * cell_width / 2.0)
-                upper[i] = tmpA / right_diff
+                upper[i] = A_right / right_diff
                 rhs[i] = -(self._R - s) * q[i] * cell_width / 2.0
 
             tmp = v[-2]
-            lower[-1] = tmpA / (1.0 - tmp) - I * (tmpB * (1.0 - (1.0 + tmp) / 2.0))
-            diagonal[-1] = -tmpA / (1.0 - tmp) - I * (span * (1.0 - tmp) / 2.0)
+            A_left = tmpA_uniform if phase_uniform else tmpA_faces[-1]
+            lower[-1] = A_left / (1.0 - tmp) - I * (tmpB * (1.0 - (1.0 + tmp) / 2.0))
+            diagonal[-1] = -A_left / (1.0 - tmp) - I * (span * (1.0 - tmp) / 2.0)
             rhs[-1] = -q[-1] * (self._R - s) * (1.0 - tmp) / 2.0
 
-        return solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+        profile = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+        interface_face_matrix = D_right_uniform if phase_uniform else np.asarray(D_right_faces[0], dtype=np.float64)
+        return _BulkPhaseSolveResult(
+            profile=profile,
+            interface_flux=self._right_interface_diffusive_flux(profile, future_s, c_right, interface_face_matrix),
+            interface_face_matrix=interface_face_matrix,
+        )
+
+    def _new_concentration_right_planar(self, q, s, future_s, dt, c_right, D_right, motion_branch):
+        """
+        Compatibility wrapper returning only the solved right concentration.
+
+        ``D_right`` may be either a single phase-uniform matrix or a face array
+        with shape ``(len(q) - 1, 2, 2)``.
+        """
+        return self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch).profile
 
     def _interface_residual(
         self,
@@ -1443,8 +1742,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         c_right,
         c_left_old,
         c_right_old,
-        D_left,
-        D_right,
+        left_interface_flux,
+        right_interface_flux,
         motion_branch,
     ):
         """
@@ -1460,10 +1759,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         the same branch used by both phase bulk solves for this residual.
         """
         _validate_motion_branch(motion_branch)
-        diff_l = _matvec_2x2(D_left, (c_left - p_future[-2]) / (1.0 - self._u_grid[-2]))
-        diff_l = diff_l / future_s
-        diff_r = _matvec_2x2(D_right, (q_future[1] - c_right) / self._v_grid[1])
-        diff_r = diff_r / (self._R - future_s)
+        diff_l = np.asarray(left_interface_flux, dtype=np.float64).reshape(2)
+        diff_r = np.asarray(right_interface_flux, dtype=np.float64).reshape(2)
         rhs = (diff_r - diff_l) * dt
 
         if motion_branch == "positive":
@@ -1629,13 +1926,17 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         """
         future_s, future_eta = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
         c_left, c_right = self._interface_compositions(future_eta)
-        D_left = self._phase_diffusivity_matrix(c_left, self.phases[0], self.currentTime, future_s)
-        D_right = self._phase_diffusivity_matrix(c_right, self.phases[1], self.currentTime, future_s)
-        p_future = self._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
-        q_future = self._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
+        if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
+            D_left = self._phase_diffusivity_matrix(c_left, self.phases[0], self.currentTime, future_s)
+            D_right = self._phase_diffusivity_matrix(c_right, self.phases[1], self.currentTime, future_s)
+        else:
+            D_left = self._left_lagged_face_diffusivity_matrices(p, future_s, self.currentTime)
+            D_right = self._right_lagged_face_diffusivity_matrices(q, future_s, self.currentTime)
+        left_result = self._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
+        right_result = self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
         residual = self._interface_residual(
-            p_future,
-            q_future,
+            left_result.profile,
+            right_result.profile,
             s,
             old_s,
             future_s,
@@ -1644,8 +1945,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             c_right,
             c_left_old,
             c_right_old,
-            D_left,
-            D_right,
+            left_result.interface_flux,
+            right_result.interface_flux,
             motion_branch,
         )
         scaled_residual = residual / residual_scale
@@ -1656,10 +1957,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             motion_branch=motion_branch,
             c_left=c_left,
             c_right=c_right,
-            D_left=D_left,
-            D_right=D_right,
-            p_future=p_future,
-            q_future=q_future,
+            D_left=left_result.interface_face_matrix,
+            D_right=right_result.interface_face_matrix,
+            p_future=left_result.profile,
+            q_future=right_result.profile,
             residual=residual,
             scaled_residual=scaled_residual,
             scaled_norm=float(np.max(np.abs(scaled_residual))),

@@ -111,6 +111,46 @@ class _RecordingCompositionDependentThermodynamics:
         )
 
 
+class _SmoothBulkTernaryThermodynamics:
+    def __init__(self, vectorized=True, constant=False):
+        self.vectorized = bool(vectorized)
+        self.constant = bool(constant)
+        self.calls = []
+
+    def clearCache(self):
+        pass
+
+    def reset(self):
+        self.calls.clear()
+
+    def _matrix_for(self, composition, phase):
+        x, y = np.asarray(composition, dtype=np.float64)
+        if self.constant:
+            if phase == "ALPHA":
+                return np.asarray([[1.0e-3, 2.0e-4], [1.0e-4, 8.0e-4]], dtype=np.float64)
+            return np.asarray([[7.0e-4, -1.0e-4], [2.0e-4, 1.1e-3]], dtype=np.float64)
+        if phase == "ALPHA":
+            return np.asarray([[1.0e-3 + 1.0e-4 * x, 2.0e-4 + 2.0e-5 * y], [1.0e-4 + 1.0e-5 * x, 8.0e-4 + 8.0e-5 * y]], dtype=np.float64)
+        return np.asarray([[7.0e-4 + 8.0e-5 * x, -1.0e-4 + 1.0e-5 * y], [2.0e-4 + 1.0e-5 * x, 1.1e-3 + 7.0e-5 * y]], dtype=np.float64)
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        values = np.asarray(composition, dtype=np.float64)
+        single = values.ndim == 1
+        if not single and not self.vectorized:
+            raise ValueError("scalar-only thermodynamics")
+        values = np.atleast_2d(values)
+        self.calls.append(
+            {
+                "phase": phase,
+                "composition": values.copy(),
+                "temperature": np.asarray(temperature, dtype=np.float64).copy(),
+                "query_context": kwargs.get("query_context"),
+            }
+        )
+        matrices = np.asarray([self._matrix_for(row, phase) for row in values], dtype=np.float64)
+        return matrices[0] if single else matrices
+
+
 class _LinearInterfaceEquilibrium:
     eta_bounds = (0.0, 1.0)
 
@@ -381,8 +421,8 @@ def _record_solve_interface_branches(previous_delta_s, max_iterations=1):
     s = float(model._s_curr)
     old_s = s - float(previous_delta_s)
     records = []
-    left_original = model._new_concentration_left_planar
-    right_original = model._new_concentration_right_planar
+    left_original = model._solve_concentration_left_planar
+    right_original = model._solve_concentration_right_planar
     residual_original = model._interface_residual
 
     def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
@@ -397,8 +437,8 @@ def _record_solve_interface_branches(previous_delta_s, max_iterations=1):
         records.append(("residual", float(args[4]), args[-1]))
         return residual_original(*args)
 
-    model._new_concentration_left_planar = left_spy
-    model._new_concentration_right_planar = right_spy
+    model._solve_concentration_left_planar = left_spy
+    model._solve_concentration_right_planar = right_spy
     model._interface_residual = residual_spy
     model.maxIterations = int(max_iterations)
     model.residualTolerance = -1.0
@@ -516,7 +556,7 @@ def _record_scaled_jacobian_perturbations(domain_length=1.0e-6):
     eta = float(model._eta_curr)
     future_s_calls = []
     eta_calls = []
-    left_original = model._new_concentration_left_planar
+    left_original = model._solve_concentration_left_planar
     interface_original = model._interface_compositions
 
     def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
@@ -530,7 +570,7 @@ def _record_scaled_jacobian_perturbations(domain_length=1.0e-6):
     def stop_after_jacobian(jacobian, residual):
         raise RuntimeError("stop after scaled Jacobian probes")
 
-    model._new_concentration_left_planar = left_spy
+    model._solve_concentration_left_planar = left_spy
     model._interface_compositions = interface_spy
     model._least_squares_step_2xN = stop_after_jacobian
     model.residualTolerance = -1.0
@@ -894,8 +934,8 @@ def test_ternary_bulk_diffusivity_is_phase_uniform_and_evaluated_at_interface_co
     expected_right = thermodynamics.getInterdiffusivity(c_right, 1000.0, phase="BETA", query_context="interface")
     thermodynamics.reset()
     bulk_calls = []
-    left_original = model._new_concentration_left_planar
-    right_original = model._new_concentration_right_planar
+    left_original = model._solve_concentration_left_planar
+    right_original = model._solve_concentration_right_planar
 
     def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
         bulk_calls.append(("ALPHA", np.asarray(D_left_arg, dtype=np.float64).copy()))
@@ -905,8 +945,8 @@ def test_ternary_bulk_diffusivity_is_phase_uniform_and_evaluated_at_interface_co
         bulk_calls.append(("BETA", np.asarray(D_right_arg, dtype=np.float64).copy()))
         return right_original(q_arg, s_arg, future_s_arg, dt_arg, c_right_arg, D_right_arg, motion_branch)
 
-    model._new_concentration_left_planar = left_spy
-    model._new_concentration_right_planar = right_spy
+    model._solve_concentration_left_planar = left_spy
+    model._solve_concentration_right_planar = right_spy
     model.residualTolerance = np.inf
 
     model._solve_interface_planar(p, q, model._s_curr, model._s_old, eta, 1.0e-4)
@@ -926,6 +966,230 @@ def test_ternary_bulk_diffusivity_is_phase_uniform_and_evaluated_at_interface_co
     assert bulk_calls[1][0] == "BETA"
     assert bulk_calls[1][1].shape == (2, 2)
     assert np.allclose(bulk_calls[1][1], expected_right)
+
+
+def test_ternary_left_face_diffusivity_indexing_and_cross_terms(monkeypatch):
+    model, p, _ = _make_residual_identity_state()
+    s = float(model._s_curr)
+    future_s = s + 2.0e-3
+    dt = 1.0e-4
+    c_left = p[-1].copy()
+    D_faces = np.asarray(
+        [
+            [[1.0e-3 + i * 1.0e-5, 2.0e-4 + i * 1.0e-5], [1.0e-4 + i * 5.0e-6, 8.0e-4 + i * 1.0e-5]]
+            for i in range(len(p) - 1)
+        ],
+        dtype=np.float64,
+    )
+    captured = {}
+
+    def capture_solver(lower, diagonal, upper, rhs):
+        captured["lower"] = lower.copy()
+        captured["diagonal"] = diagonal.copy()
+        captured["upper"] = upper.copy()
+        out = p.copy()
+        out[-1] = c_left
+        return out
+
+    monkeypatch.setattr(ternary_fdm, "solve_illingworth_block_tridiagonal", capture_solver)
+    result = model._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_faces, "positive")
+
+    i = 2
+    u = model._u_grid
+    A_left = D_faces[i - 1] * (dt / future_s)
+    A_right = D_faces[i] * (dt / future_s)
+    left_diff = u[i] - u[i - 1]
+    right_diff = u[i + 1] - u[i]
+    expected_diagonal = -A_left / left_diff - A_right / right_diff
+    expected_diagonal += -np.eye(2) * ((future_s - s) * (u[i] + u[i - 1]) / 2.0 + future_s * (u[i + 1] - u[i - 1]) / 2.0)
+
+    assert np.allclose(captured["lower"][i], A_left / left_diff)
+    assert np.allclose(captured["diagonal"][i], expected_diagonal)
+    assert np.allclose(captured["upper"][i][0, 1], (A_right / right_diff)[0, 1])
+    assert np.allclose(captured["upper"][i][1, 0], (A_right / right_diff)[1, 0])
+    assert np.allclose(captured["upper"][i][0, 1], captured["lower"][i + 1][0, 1])
+    assert np.allclose(captured["upper"][i][1, 0], captured["lower"][i + 1][1, 0])
+    assert np.allclose(result.interface_face_matrix, D_faces[-1])
+    expected_flux = _block_times_vector(D_faces[-1], (c_left - p[-2]) / (1.0 - model._u_grid[-2])) / future_s
+    assert np.allclose(result.interface_flux, expected_flux)
+
+
+def test_ternary_right_face_diffusivity_indexing_and_interface_flux(monkeypatch):
+    model, _, q = _make_residual_identity_state()
+    s = float(model._s_curr)
+    future_s = s - 2.0e-3
+    dt = 1.0e-4
+    c_right = q[0].copy()
+    D_faces = np.asarray(
+        [
+            [[7.0e-4 + i * 1.0e-5, -1.0e-4 + i * 2.0e-6], [2.0e-4 + i * 4.0e-6, 1.1e-3 + i * 1.0e-5]]
+            for i in range(len(q) - 1)
+        ],
+        dtype=np.float64,
+    )
+    captured = {}
+
+    def capture_solver(lower, diagonal, upper, rhs):
+        captured["lower"] = lower.copy()
+        captured["diagonal"] = diagonal.copy()
+        captured["upper"] = upper.copy()
+        out = q.copy()
+        out[0] = c_right
+        return out
+
+    monkeypatch.setattr(ternary_fdm, "solve_illingworth_block_tridiagonal", capture_solver)
+    result = model._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_faces, "negative")
+
+    i = 2
+    v = model._v_grid
+    A_left = D_faces[i - 1] * (dt / (model._R - future_s))
+    A_right = D_faces[i] * (dt / (model._R - future_s))
+    left_diff = v[i] - v[i - 1]
+    right_diff = v[i + 1] - v[i]
+    expected_diagonal = -A_right / right_diff - A_left / left_diff
+    expected_diagonal += np.eye(2) * ((future_s - s) * (1.0 - (v[i + 1] + v[i]) / 2.0) - (model._R - future_s) * (v[i + 1] - v[i - 1]) / 2.0)
+
+    assert np.allclose(captured["lower"][i][0, 1], (A_left / left_diff)[0, 1])
+    assert np.allclose(captured["lower"][i][1, 0], (A_left / left_diff)[1, 0])
+    assert np.allclose(captured["diagonal"][i], expected_diagonal)
+    assert np.allclose(captured["upper"][i], A_right / right_diff)
+    assert np.allclose(captured["upper"][i][0, 1], captured["lower"][i + 1][0, 1])
+    assert np.allclose(captured["upper"][i][1, 0], captured["lower"][i + 1][1, 0])
+    assert np.allclose(result.interface_face_matrix, D_faces[0])
+    expected_flux = _block_times_vector(D_faces[0], (q[1] - c_right) / model._v_grid[1]) / (model._R - future_s)
+    assert np.allclose(result.interface_flux, expected_flux)
+
+
+def test_ternary_uniform_face_array_matches_phase_uniform_solve():
+    model, p, q = _make_residual_identity_state()
+    s = float(model._s_curr)
+    future_s = s + 1.0e-3
+    dt = 1.0e-4
+    c_left, c_right = model._interface_compositions(0.4)
+    D_left = _CoupledTernaryThermodynamics().getInterdiffusivity(c_left, 1000.0, phase="ALPHA")
+    D_right = _CoupledTernaryThermodynamics().getInterdiffusivity(c_right, 1000.0, phase="BETA")
+    motion_branch = _select_interface_motion_branch(s, s, future_s)
+
+    left_uniform = model._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
+    left_faces = np.broadcast_to(D_left, (len(p) - 1, 2, 2))
+    left_face_array = model._solve_concentration_left_planar(p, s, future_s, dt, c_left, left_faces, motion_branch)
+    right_uniform = model._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
+    right_faces = np.broadcast_to(D_right, (len(q) - 1, 2, 2))
+    right_face_array = model._solve_concentration_right_planar(q, s, future_s, dt, c_right, right_faces, motion_branch)
+
+    assert np.allclose(left_face_array.profile, left_uniform.profile, rtol=1.0e-14, atol=1.0e-15)
+    assert np.allclose(left_face_array.interface_flux, left_uniform.interface_flux, rtol=1.0e-14, atol=1.0e-15)
+    assert np.allclose(right_face_array.profile, right_uniform.profile, rtol=1.0e-14, atol=1.0e-15)
+    assert np.allclose(right_face_array.interface_flux, right_uniform.interface_flux, rtol=1.0e-14, atol=1.0e-15)
+
+
+def test_ternary_bulk_diffusivity_mode_defaults_to_phase_uniform():
+    model = _make_scope_validation_model()
+
+    assert model.bulkDiffusivityMode == "phase_uniform"
+
+
+def test_ternary_lagged_mode_queries_spatially_varying_bulk_face_matrices():
+    thermodynamics = _SmoothBulkTernaryThermodynamics()
+    model = _make_scope_validation_model()
+    model.therm = thermodynamics
+    model.bulkDiffusivityMode = "composition_dependent_lagged"
+    model.setup()
+    thermodynamics.reset()
+    p = model._p_curr.copy()
+    p[:-1] = np.linspace([0.08, 0.04], [0.28, 0.16], len(p) - 1)
+
+    matrices = model._left_lagged_face_diffusivity_matrices(p, model._s_curr, model.currentTime)
+    expected_faces = 0.5 * (p[:-1] + p[1:])
+
+    assert matrices.shape == (len(p) - 1, 2, 2)
+    assert not np.allclose(matrices[0], matrices[-1])
+    assert len(thermodynamics.calls) == 1
+    assert thermodynamics.calls[0]["phase"] == "ALPHA"
+    assert thermodynamics.calls[0]["query_context"] == "general"
+    assert thermodynamics.calls[0]["composition"].shape == expected_faces.shape
+    assert np.allclose(thermodynamics.calls[0]["composition"], expected_faces)
+
+
+def test_ternary_lagged_mode_uses_scalar_fallback_and_initial_eta_face_convention():
+    thermodynamics = _SmoothBulkTernaryThermodynamics(vectorized=False)
+    model = _make_scope_validation_model()
+    model.therm = thermodynamics
+    model.bulkDiffusivityMode = "composition_dependent_lagged"
+
+    model.setup()
+
+    first_left_call = next(call for call in thermodynamics.calls if call["phase"] == "ALPHA" and call["query_context"] == "general")
+    first_right_call = next(call for call in thermodynamics.calls if call["phase"] == "BETA" and call["query_context"] == "general")
+    c_left, c_right = model.interfaceEquilibrium.interface_compositions(model.initialEta)
+    z_left_adjacent = model.initialInterfacePosition * model._u_grid[-2]
+    z_right_adjacent = model.initialInterfacePosition + (model._R - model.initialInterfacePosition) * model._v_grid[1]
+    c0 = np.asarray(model.data._y[0], dtype=np.float64)
+    left_mask = model._z <= model.initialInterfacePosition
+    right_mask = model._z >= model.initialInterfacePosition
+    p_adjacent = np.asarray([np.interp(z_left_adjacent, model._z[left_mask], c0[left_mask, component]) for component in range(2)])
+    q_adjacent = np.asarray([np.interp(z_right_adjacent, model._z[right_mask], c0[right_mask, component]) for component in range(2)])
+
+    assert first_left_call["composition"].shape == (1, 2)
+    assert first_right_call["composition"].shape == (1, 2)
+    assert np.allclose(first_left_call["composition"][0], 0.5 * (p_adjacent + c_left))
+    assert np.allclose(first_right_call["composition"][0], 0.5 * (c_right + q_adjacent))
+
+
+def test_ternary_lagged_constant_diffusivity_reproduces_phase_uniform_step():
+    thermodynamics = _SmoothBulkTernaryThermodynamics(constant=True)
+    uniform = _make_scope_validation_model()
+    uniform.therm = thermodynamics
+    uniform.setup()
+    lagged = _make_scope_validation_model()
+    lagged.therm = _SmoothBulkTernaryThermodynamics(constant=True)
+    lagged.bulkDiffusivityMode = "composition_dependent_lagged"
+    lagged.setup()
+
+    x_uniform = uniform.getCurrentX()
+    x_lagged = lagged.getCurrentX()
+    d_uniform = uniform.getdXdt(uniform.currentTime, x_uniform)
+    d_lagged = lagged.getdXdt(lagged.currentTime, x_lagged)
+
+    for actual, expected in zip(d_lagged, d_uniform):
+        assert np.allclose(actual, expected, rtol=1.0e-12, atol=1.0e-14)
+    assert lagged._lastImplicitIterations == uniform._lastImplicitIterations
+    assert lagged._lastImplicitCandidateEvaluations == uniform._lastImplicitCandidateEvaluations
+    assert lagged._lastStepRetries == uniform._lastStepRetries
+
+
+@pytest.mark.parametrize("direction", [-1.0, 1.0])
+def test_ternary_lagged_mode_conserves_inventory_for_opposite_motion(direction):
+    left_bulk = np.asarray([0.16, 0.06], dtype=np.float64)
+    right_bulk = np.asarray([0.3261538461538461, 0.193], dtype=np.float64)
+    if direction < 0.0:
+        left_bulk, right_bulk = np.asarray([0.16, 0.12], dtype=np.float64), np.asarray([0.56, 0.25], dtype=np.float64)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 31)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.45, left_bulk, right_bulk), ["X", "Y"])]), boundaryConditions=MixedBoundary1D(2))
+    model = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=_SmoothBulkTernaryThermodynamics(),
+        temperature=1000.0,
+        interfacePosition=0.45,
+        interface_equilibrium=_EtaVaryingInterfaceEquilibrium(),
+        initial_eta_method="instantaneous_balance",
+        initial_eta_bracket=(0.0, 1.0),
+        bulk_diffusivity_mode="composition_dependent_lagged",
+        time_step=5.0e-5,
+        tolerance=1.0e-10,
+        max_iterations=50,
+        record=True,
+    )
+    model.solve(5.0e-4, minDtFrac=1.0e-12)
+
+    inventories = np.asarray(model.inventoryData._y[: model.inventoryData.N + 1], dtype=np.float64)
+    assert model._lastImplicitConverged is True
+    assert model._lastStepRetries == 0
+    assert np.allclose(inventories, inventories[0], rtol=0.0, atol=5.0e-11)
+    assert np.all((model.interfaceData._y[: model.interfaceData.N + 1] > 0.0) & (model.interfaceData._y[: model.interfaceData.N + 1] < model._R))
+    assert np.all((model.etaData._y[: model.etaData.N + 1] >= 0.0) & (model.etaData._y[: model.etaData.N + 1] <= 1.0))
 
 
 def test_ternary_scope_validation_accepts_default_zero_flux_boundaries():
@@ -1124,7 +1388,7 @@ def test_ternary_scaled_line_search_keeps_forced_outward_eta_trials_feasible():
     eta = eta_lower
     p[-1], q[0] = model.interfaceEquilibrium.interface_compositions(eta)
     evaluated = []
-    left_original = model._new_concentration_left_planar
+    left_original = model._solve_concentration_left_planar
     interface_original = model._interface_compositions
 
     def left_spy(p_arg, s_arg, future_s_arg, dt_arg, c_left_arg, D_left_arg, motion_branch):
@@ -1138,7 +1402,7 @@ def test_ternary_scaled_line_search_keeps_forced_outward_eta_trials_feasible():
     def forced_step(jacobian, residual):
         return np.asarray([1.0e-4, -1.0], dtype=np.float64)
 
-    model._new_concentration_left_planar = left_spy
+    model._solve_concentration_left_planar = left_spy
     model._interface_compositions = interface_spy
     model._least_squares_step_2xN = forced_step
     model.residualTolerance = -1.0
@@ -1309,8 +1573,10 @@ def test_ternary_interface_residual_matches_inventory_change_when_interface_comp
     D_left = _CoupledTernaryThermodynamics().getInterdiffusivity(c_left, 1000.0, phase="ALPHA")
     D_right = _CoupledTernaryThermodynamics().getInterdiffusivity(c_right, 1000.0, phase="BETA")
     motion_branch = _select_interface_motion_branch(s, s, future_s)
-    p_future = model._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
-    q_future = model._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
+    left_result = model._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
+    right_result = model._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
+    p_future = left_result.profile
+    q_future = right_result.profile
 
     residual = model._interface_residual(
         p_future,
@@ -1323,8 +1589,8 @@ def test_ternary_interface_residual_matches_inventory_change_when_interface_comp
         c_right,
         c_left_old,
         c_right_old,
-        D_left,
-        D_right,
+        left_result.interface_flux,
+        right_result.interface_flux,
         motion_branch,
     )
     old_inventory = integrate_planar_transformed_profile_components(p, q, s, model._R, model._u_grid, model._v_grid)
@@ -1352,8 +1618,10 @@ def test_ternary_interface_residual_reduces_to_legacy_formula_when_interface_com
     D_left = _CoupledTernaryThermodynamics().getInterdiffusivity(c_left, 1000.0, phase="ALPHA")
     D_right = _CoupledTernaryThermodynamics().getInterdiffusivity(c_right, 1000.0, phase="BETA")
     motion_branch = _select_interface_motion_branch(s, s, future_s)
-    p_future = model._new_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
-    q_future = model._new_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
+    left_result = model._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch)
+    right_result = model._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch)
+    p_future = left_result.profile
+    q_future = right_result.profile
 
     residual = model._interface_residual(
         p_future,
@@ -1366,8 +1634,8 @@ def test_ternary_interface_residual_reduces_to_legacy_formula_when_interface_com
         c_right,
         p[-1],
         q[0],
-        D_left,
-        D_right,
+        left_result.interface_flux,
+        right_result.interface_flux,
         motion_branch,
     )
     legacy = _legacy_interface_residual(model, p_future, q_future, s, future_s, dt, c_left, c_right, D_left, D_right, motion_branch)
