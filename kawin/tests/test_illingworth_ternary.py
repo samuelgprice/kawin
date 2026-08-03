@@ -151,6 +151,28 @@ class _SmoothBulkTernaryThermodynamics:
         return matrices[0] if single else matrices
 
 
+class _NoContextScalarBulkThermodynamics:
+    def __init__(self):
+        self.calls = []
+
+    def clearCache(self):
+        pass
+
+    def getInterdiffusivity(self, composition, temperature, phase=None):
+        values = np.asarray(composition, dtype=np.float64)
+        if values.ndim != 1:
+            raise TypeError("scalar-only thermodynamics")
+        self.calls.append({"phase": phase, "composition": values.copy(), "temperature": float(temperature)})
+        x, y = values
+        return np.asarray(
+            [
+                [1.0e-3 + 1.0e-4 * x, 2.0e-4 + 1.0e-5 * y],
+                [1.0e-4 + 1.0e-5 * x, 9.0e-4 + 1.0e-4 * y],
+            ],
+            dtype=np.float64,
+        )
+
+
 class _LinearInterfaceEquilibrium:
     eta_bounds = (0.0, 1.0)
 
@@ -1134,6 +1156,22 @@ def test_ternary_lagged_mode_uses_scalar_fallback_and_initial_eta_face_conventio
     assert first_right_call["composition"].shape == (1, 2)
     assert np.allclose(first_left_call["composition"][0], 0.5 * (p_adjacent + c_left))
     assert np.allclose(first_right_call["composition"][0], 0.5 * (c_right + q_adjacent))
+
+
+def test_ternary_bulk_face_diffusivity_falls_back_to_no_context_scalar_api():
+    model = _make_scope_validation_model()
+    model.setup()
+    thermodynamics = _NoContextScalarBulkThermodynamics()
+    model.therm = thermodynamics
+    face_compositions = np.asarray([[0.18, 0.08], [0.24, 0.12], [0.30, 0.16]], dtype=np.float64)
+    face_positions = np.asarray([0.2, 0.4, 0.6], dtype=np.float64)
+
+    matrices = model._bulk_face_diffusivity_matrices(face_compositions, "ALPHA", model.currentTime, face_positions)
+
+    assert matrices.shape == (3, 2, 2)
+    assert len(thermodynamics.calls) == 3
+    assert [call["phase"] for call in thermodynamics.calls] == ["ALPHA", "ALPHA", "ALPHA"]
+    assert np.allclose([call["composition"] for call in thermodynamics.calls], face_compositions)
 
 
 def test_ternary_lagged_constant_diffusivity_reproduces_phase_uniform_step():
@@ -2253,6 +2291,32 @@ def _build_surrogate(**kwargs):
     return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(**params)
 
 
+class _RecordingSurrogateDiffusivity:
+    def __init__(self, surrogate):
+        self.surrogate = surrogate
+        self.calls = []
+
+    def clearCache(self):
+        self.surrogate.clearCache()
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, query_context=None, **kwargs):
+        values = np.asarray(composition, dtype=np.float64)
+        self.calls.append(
+            {
+                "phase": phase,
+                "query_context": query_context,
+                "composition_shape": values.shape,
+            }
+        )
+        return self.surrogate.getInterdiffusivity(
+            composition,
+            temperature,
+            phase=phase,
+            query_context=query_context,
+            **kwargs,
+        )
+
+
 def test_ternary_surrogate_requires_explicit_tieline_phases():
     with pytest.raises(ValueError, match="tieline_phases"):
         _build_surrogate(tieline_phases=None)
@@ -2352,6 +2416,80 @@ def test_ternary_surrogate_save_load_preserves_phase_order_and_predictions():
         loaded.getInterdiffusivity([0.451, 0.05], 1000.0, phase="ALPHA"),
         surrogate.getInterdiffusivity([0.451, 0.05], 1000.0, phase="ALPHA"),
     )
+
+
+@pytest.mark.parametrize("bulk_diffusivity_mode", ["composition_dependent_lagged", "composition_dependent_implicit"])
+def test_ternary_illingworth_variable_modes_query_surrogate_general_bulk_context(bulk_diffusivity_mode):
+    surrogate = _build_surrogate(
+        diffusivity_bulk_points=np.asarray(
+            [
+                [0.20, 0.10],
+                [0.25, 0.10],
+                [0.30, 0.15],
+                [0.35, 0.15],
+            ],
+            dtype=np.float64,
+        )
+    )
+    thermodynamics = _RecordingSurrogateDiffusivity(surrogate)
+    left, right = surrogate.interface_compositions(0.0)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.5, left, right), ["X", "Y"])]))
+    model = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=thermodynamics,
+        temperature=1000.0,
+        interfacePosition=0.5,
+        interface_equilibrium=surrogate,
+        initial_eta_bracket=(0.0, 1.0),
+        bulk_diffusivity_mode=bulk_diffusivity_mode,
+        bulk_picard_max_iterations=10,
+        time_step=1.0,
+        record=True,
+    )
+    model.setup()
+    setup_contexts = [(call["phase"], call["query_context"]) for call in thermodynamics.calls]
+    thermodynamics.calls.clear()
+
+    model.getdXdt(model.currentTime, model.getCurrentX())
+
+    solve_contexts = [(call["phase"], call["query_context"]) for call in thermodynamics.calls]
+    assert ("ALPHA", "general") in setup_contexts
+    assert ("BETA", "general") in setup_contexts
+    assert ("ALPHA", "general") in solve_contexts
+    assert ("BETA", "general") in solve_contexts
+    assert any(call["composition_shape"] == (len(model._u_grid) - 1, 2) for call in thermodynamics.calls)
+    assert any(call["composition_shape"] == (len(model._v_grid) - 1, 2) for call in thermodynamics.calls)
+
+
+def test_ternary_illingworth_phase_uniform_surrogate_uses_interface_diffusivity_context():
+    surrogate = _build_surrogate()
+    thermodynamics = _RecordingSurrogateDiffusivity(surrogate)
+    left, right = surrogate.interface_compositions(0.0)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.5, left, right), ["X", "Y"])]))
+    model = MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        thermodynamics=thermodynamics,
+        temperature=1000.0,
+        interfacePosition=0.5,
+        interface_equilibrium=surrogate,
+        initial_eta_bracket=(0.0, 1.0),
+        time_step=1.0,
+        record=True,
+    )
+    model.setup()
+    thermodynamics.calls.clear()
+
+    model.getdXdt(model.currentTime, model.getCurrentX())
+
+    assert ("ALPHA", "interface") in [(call["phase"], call["query_context"]) for call in thermodynamics.calls]
+    assert ("BETA", "interface") in [(call["phase"], call["query_context"]) for call in thermodynamics.calls]
+    assert not any(call["query_context"] == "general" for call in thermodynamics.calls)
 
 
 def test_ternary_illingworth_accepts_surrogate_for_thermo_and_equilibrium():

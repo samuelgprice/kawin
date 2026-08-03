@@ -168,7 +168,12 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
     The surrogate stores a phase-ordered family of interface tie-lines indexed
     by scalar ``eta`` and phase-labeled interdiffusivity matrices indexed by
     independent composition. Tie-lines are linearly interpolated in ``eta``;
-    diffusivities are selected by nearest sampled composition.
+    diffusivities are selected by nearest sampled composition. Because that
+    nearest-neighbor diffusivity field is discontinuous, it is best suited to
+    phase-uniform or lagged coefficient use. Implicit composition-dependent
+    moving-boundary solves require a sufficiently smooth direct thermodynamic
+    or surrogate diffusivity source for reliable Picard and finite-difference
+    Jacobian convergence.
     """
 
     def __init__(
@@ -585,7 +590,10 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
 
         ``query_context='interface'`` uses interface endpoint samples. All other
         contexts use the general sample pool, which includes interface samples
-        plus any requested bulk samples.
+        plus any requested bulk samples. The returned nearest-neighbor mapping
+        is discontinuous in composition, so continuous surrogate interpolation is
+        deferred to a future implementation before relying on this source for
+        implicit composition-dependent bulk diffusivity.
         """
         self._validate_temperature(T)
         phase = self._phase_index(phase)
