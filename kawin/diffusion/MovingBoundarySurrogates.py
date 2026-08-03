@@ -96,6 +96,22 @@ def _signed_cuberoot(values):
     return np.sign(values) * np.cbrt(np.abs(values))
 
 
+def _coerce_positive_int(value, name):
+    value = int(value)
+    if value < 1:
+        raise ValueError(f"{name} must be at least 1.")
+    return value
+
+
+def _coerce_grid_counts(value, name):
+    values = np.asarray(value, dtype=np.int64).reshape(-1)
+    if values.size == 1:
+        values = np.repeat(values, 2)
+    if values.size != 2 or np.any(values < 1):
+        raise ValueError(f"{name} must be a positive integer or two positive integers.")
+    return int(values[0]), int(values[1])
+
+
 def _bulk_grid_axes(diffusivity_bulk_grids, min_composition):
     if diffusivity_bulk_grids is None:
         return None
@@ -116,6 +132,49 @@ def _bulk_grid_axes(diffusivity_bulk_grids, min_composition):
 
 def _bulk_points_from_axes(axes):
     return np.asarray(np.meshgrid(*axes, indexing="ij"), dtype=np.float64).reshape(2, -1).T
+
+
+def _densified_axes_from_bounds(bounds, counts):
+    return tuple(
+        np.linspace(float(bounds[i, 0]), float(bounds[i, 1]), int(counts[i]), dtype=np.float64)
+        for i in range(2)
+    )
+
+
+def _valid_simplex_mask(points, min_composition):
+    points = np.asarray(points, dtype=np.float64)
+    return (
+        np.all(np.isfinite(points), axis=1)
+        & np.all(points >= min_composition, axis=1)
+        & (np.sum(points, axis=1) <= 1.0 - min_composition)
+    )
+
+
+def _matrix_validity_diagnostics(matrices, *, eigen_imag_tol=1e-12, eigen_real_min=1e-14):
+    matrices = np.asarray(matrices, dtype=np.float64)
+    if matrices.ndim != 3 or matrices.shape[1:] != (2, 2):
+        raise ValueError("matrix validity diagnostics require shape (n_samples, 2, 2).")
+    finite = np.all(np.isfinite(matrices), axis=(1, 2))
+    scales = np.linalg.norm(np.where(np.isfinite(matrices), matrices, 0.0), ord=np.inf, axis=(1, 2))
+    nonzero = np.isfinite(scales) & (scales > 0.0)
+    normalized = np.zeros_like(matrices, dtype=np.float64)
+    valid_scale = finite & nonzero
+    normalized[valid_scale] = matrices[valid_scale] / scales[valid_scale, np.newaxis, np.newaxis]
+    eigenvalues = np.full((matrices.shape[0], 2), np.nan + 0j, dtype=np.complex128)
+    if np.any(valid_scale):
+        eigenvalues[valid_scale] = np.linalg.eigvals(normalized[valid_scale])
+    real_positive = np.all(np.real(eigenvalues) > float(eigen_real_min), axis=1)
+    imaginary_small = np.all(np.abs(np.imag(eigenvalues)) <= float(eigen_imag_tol), axis=1)
+    valid = finite & nonzero & real_positive & imaginary_small
+    return {
+        "valid": valid,
+        "finite": finite,
+        "nonzero": nonzero,
+        "eigenvalues": eigenvalues,
+        "scales": scales,
+        "eigen_real_min": float(eigen_real_min),
+        "eigen_imag_tol": float(eigen_imag_tol),
+    }
 
 
 class _InterfaceDiffusivitySpline1D:
@@ -458,6 +517,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         diffusivity_interpolation=_DIFFUSIVITY_INTERPOLATION_NEAREST,
         min_composition=1e-10,
         thermodynamics_kwargs=None,
+        validation_database=None,
+        validation_thermodynamics_kwargs=None,
     ):
         """
         Samples tie-lines and diffusivities from a thermodynamics source.
@@ -478,6 +539,16 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             if diffusivity_bulk_points is not None or diffusivity_bulk_bbox is not None or diffusivity_bulk_spacing is not None:
                 raise ValueError("continuous_grid diffusivity interpolation uses diffusivity_bulk_grids only.")
             bulk_grid_axes = _bulk_grid_axes(diffusivity_bulk_grids, float(min_composition))
+        validation_database_source = validation_database
+        if validation_database_source is None and thermodynamics is None and isinstance(database, (str, Path)):
+            validation_database_source = database
+        validation_metadata = {}
+        if validation_database_source is not None:
+            validation_metadata["validation_database"] = str(validation_database_source)
+            validation_metadata["validation_thermodynamics_kwargs"] = (
+                dict(thermodynamics_kwargs or {}) if validation_thermodynamics_kwargs is None else dict(validation_thermodynamics_kwargs)
+            )
+
         if temperature is None:
             raise ValueError("temperature must be provided.")
         temperature = float(temperature)
@@ -591,6 +662,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 "probe_start": probe_start.tolist(),
                 "probe_end": probe_end.tolist(),
                 "precipitate_phase": precipitate_phase,
+                **validation_metadata,
             },
         )
 
@@ -897,6 +969,417 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         indices = np.argmin(np.sum(deltas * deltas, axis=2), axis=1)
         out = samples_d[indices]
         return out[0].copy() if single else out.copy()
+
+    def validate_diffusivity_matrices(
+        self,
+        *,
+        phases=None,
+        matrix_interface_eta_count=201,
+        matrix_bulk_grid_counts=(101, 101),
+        matrix_bulk_axes=None,
+        eigen_imag_tol=1e-12,
+        eigen_real_min=1e-14,
+        raise_on_invalid=False,
+    ):
+        """
+        Densely validates surrogate-generated interdiffusivity matrices.
+
+        Interface samples are evaluated at phase endpoint compositions with
+        ``query_context='interface'``. Bulk samples are evaluated over a dense
+        independent-composition grid with ``query_context='general'``. This
+        method is intentionally opt-in because dense validation can be expensive.
+        """
+        phases = self._validation_phases(phases)
+        interface_samples = self._interface_validation_samples(matrix_interface_eta_count)
+        bulk_samples = self._bulk_validation_samples(matrix_bulk_grid_counts, matrix_bulk_axes)
+        report = {
+            "interface": self._validate_diffusivity_regime(
+                "interface",
+                phases,
+                interface_samples,
+                eigen_imag_tol=eigen_imag_tol,
+                eigen_real_min=eigen_real_min,
+            ),
+            "bulk": self._validate_diffusivity_regime(
+                "general",
+                phases,
+                bulk_samples,
+                eigen_imag_tol=eigen_imag_tol,
+                eigen_real_min=eigen_real_min,
+            ),
+        }
+        report["summary"] = self._combine_validation_summaries(report)
+        if raise_on_invalid and not report["summary"]["ok"]:
+            raise ValueError(
+                "Surrogate diffusivity validation failed: "
+                f"{report['summary']['invalid_count']} invalid matrices across {report['summary']['sample_count']} samples."
+            )
+        return report
+
+    def compare_diffusivity_to_ground_truth(
+        self,
+        *,
+        thermodynamics=None,
+        database=None,
+        thermodynamics_kwargs=None,
+        phases=None,
+        error_interface_eta_count=201,
+        error_bulk_grid_counts=(101, 101),
+        error_bulk_axes=None,
+        relative_error_floor=1e-300,
+        eigen_imag_tol=1e-12,
+        eigen_real_min=1e-14,
+        raise_on_error=False,
+    ):
+        """
+        Compares surrogate diffusivity matrices to ground-truth thermodynamics.
+
+        Ground truth is sampled at the same interface endpoint and bulk
+        composition points used for surrogate queries. If ``thermodynamics`` is
+        omitted, the method rebuilds a ``MulticomponentThermodynamics`` object
+        from stored validation metadata or an explicit ``database`` argument.
+        """
+        phases = self._validation_phases(phases)
+        floor = float(relative_error_floor)
+        if not np.isfinite(floor) or floor <= 0.0:
+            raise ValueError("relative_error_floor must be positive and finite.")
+        truth = self._validation_thermodynamics(
+            thermodynamics=thermodynamics,
+            database=database,
+            thermodynamics_kwargs=thermodynamics_kwargs,
+        )
+        interface_samples = self._interface_validation_samples(error_interface_eta_count)
+        bulk_samples = self._bulk_validation_samples(error_bulk_grid_counts, error_bulk_axes)
+        report = {
+            "interface": self._compare_diffusivity_regime(
+                "interface",
+                phases,
+                interface_samples,
+                truth,
+                relative_error_floor=floor,
+                eigen_imag_tol=eigen_imag_tol,
+                eigen_real_min=eigen_real_min,
+            ),
+            "bulk": self._compare_diffusivity_regime(
+                "general",
+                phases,
+                bulk_samples,
+                truth,
+                relative_error_floor=floor,
+                eigen_imag_tol=eigen_imag_tol,
+                eigen_real_min=eigen_real_min,
+            ),
+        }
+        report["summary"] = self._combine_comparison_summaries(report)
+        if raise_on_error and not report["summary"]["ok"]:
+            raise ValueError("Surrogate diffusivity ground-truth comparison produced non-finite values.")
+        return report
+
+    def _validation_phases(self, phases):
+        if phases is None:
+            return self.tieline_phases
+        out = tuple(str(phase) for phase in phases)
+        for phase in out:
+            self._phase_index(phase)
+        return out
+
+    def _interface_validation_samples(self, eta_count):
+        eta_count = _coerce_positive_int(eta_count, "interface eta count")
+        eta = np.linspace(self.eta_bounds[0], self.eta_bounds[1], eta_count, dtype=np.float64)
+        compositions = {}
+        for phase in self.tieline_phases:
+            compositions[phase] = np.asarray(
+                [
+                    np.interp(eta, self.eta_samples, self.tieline_compositions[phase][:, component])
+                    for component in range(2)
+                ],
+                dtype=np.float64,
+            ).T
+        return {
+            "eta": eta,
+            "compositions": compositions,
+            "axes": None,
+        }
+
+    def _bulk_validation_samples(self, grid_counts, axes):
+        counts = _coerce_grid_counts(grid_counts, "bulk grid counts")
+        if axes is None:
+            axes = self._default_bulk_validation_axes(counts)
+        else:
+            axes = self._coerce_validation_axes(axes)
+        points = _bulk_points_from_axes(axes)
+        points = points[_valid_simplex_mask(points, self.min_composition)]
+        if points.shape[0] == 0:
+            raise ValueError("bulk validation sampling produced no valid ternary composition points.")
+        return {
+            "points": points,
+            "axes": axes,
+            "grid_counts": counts,
+        }
+
+    def _default_bulk_validation_axes(self, counts):
+        if self.diffusivityBulkGridAxes is not None:
+            bounds = np.asarray(
+                [
+                    [self.diffusivityBulkGridAxes[0][0], self.diffusivityBulkGridAxes[0][-1]],
+                    [self.diffusivityBulkGridAxes[1][0], self.diffusivityBulkGridAxes[1][-1]],
+                ],
+                dtype=np.float64,
+            )
+        else:
+            samples = np.concatenate(
+                [self.diffusivity_compositions["general"][phase] for phase in self.tieline_phases],
+                axis=0,
+            )
+            bounds = np.asarray([np.min(samples, axis=0), np.max(samples, axis=0)], dtype=np.float64).T
+        return _densified_axes_from_bounds(bounds, counts)
+
+    def _coerce_validation_axes(self, axes):
+        axes = tuple(np.asarray(axis, dtype=np.float64).reshape(-1) for axis in axes)
+        if len(axes) != 2:
+            raise ValueError("bulk validation axes must contain exactly two component axes.")
+        for i, axis in enumerate(axes):
+            if axis.size < 1:
+                raise ValueError(f"bulk validation axis {i} must contain at least one value.")
+            if not np.all(np.isfinite(axis)) or np.any(np.diff(axis) <= 0.0):
+                raise ValueError(f"bulk validation axis {i} must be finite and strictly increasing.")
+        return tuple(axis.copy() for axis in axes)
+
+    def _validate_diffusivity_regime(self, context, phases, samples, *, eigen_imag_tol, eigen_real_min):
+        regime = "interface" if context == "interface" else "bulk"
+        phase_reports = {}
+        for phase in phases:
+            compositions = samples["compositions"][phase] if context == "interface" else samples["points"]
+            matrices = self.getInterdiffusivity(
+                compositions,
+                self.temperature,
+                phase=phase,
+                query_context="interface" if context == "interface" else "general",
+            )
+            diagnostics = _matrix_validity_diagnostics(
+                matrices,
+                eigen_imag_tol=eigen_imag_tol,
+                eigen_real_min=eigen_real_min,
+            )
+            phase_reports[phase] = {
+                "phase": phase,
+                "regime": regime,
+                "eta": samples.get("eta"),
+                "compositions": compositions,
+                "matrices": matrices,
+                "valid": diagnostics["valid"],
+                "finite": diagnostics["finite"],
+                "nonzero": diagnostics["nonzero"],
+                "eigenvalues": diagnostics["eigenvalues"],
+                "scales": diagnostics["scales"],
+                "nearest_training_distance": self._nearest_training_distances(compositions, context, phase),
+                "summary": self._validity_summary(diagnostics["valid"]),
+            }
+        return {
+            "regime": regime,
+            "samples": {key: value for key, value in samples.items() if key != "compositions"},
+            "phases": phase_reports,
+            "summary": self._combine_phase_summaries(phase_reports),
+        }
+
+    def _compare_diffusivity_regime(
+        self,
+        context,
+        phases,
+        samples,
+        thermodynamics,
+        *,
+        relative_error_floor,
+        eigen_imag_tol,
+        eigen_real_min,
+    ):
+        regime = "interface" if context == "interface" else "bulk"
+        phase_reports = {}
+        for phase in phases:
+            compositions = samples["compositions"][phase] if context == "interface" else samples["points"]
+            surrogate_matrices = self.getInterdiffusivity(
+                compositions,
+                self.temperature,
+                phase=phase,
+                query_context="interface" if context == "interface" else "general",
+            )
+            truth_matrices = self._ground_truth_diffusivity_matrices(thermodynamics, compositions, phase)
+            absolute_error = np.abs(surrogate_matrices - truth_matrices)
+            relative_error = absolute_error / np.maximum(np.abs(truth_matrices), float(relative_error_floor))
+            surrogate_diagnostics = _matrix_validity_diagnostics(
+                surrogate_matrices,
+                eigen_imag_tol=eigen_imag_tol,
+                eigen_real_min=eigen_real_min,
+            )
+            truth_diagnostics = _matrix_validity_diagnostics(
+                truth_matrices,
+                eigen_imag_tol=eigen_imag_tol,
+                eigen_real_min=eigen_real_min,
+            )
+            finite = (
+                np.all(np.isfinite(surrogate_matrices), axis=(1, 2))
+                & np.all(np.isfinite(truth_matrices), axis=(1, 2))
+                & np.all(np.isfinite(relative_error), axis=(1, 2))
+            )
+            phase_reports[phase] = {
+                "phase": phase,
+                "regime": regime,
+                "eta": samples.get("eta"),
+                "compositions": compositions,
+                "surrogate_matrices": surrogate_matrices,
+                "truth_matrices": truth_matrices,
+                "absolute_error": absolute_error,
+                "relative_error": relative_error,
+                "surrogate_valid": surrogate_diagnostics["valid"],
+                "truth_valid": truth_diagnostics["valid"],
+                "surrogate_eigenvalues": surrogate_diagnostics["eigenvalues"],
+                "truth_eigenvalues": truth_diagnostics["eigenvalues"],
+                "nearest_training_distance": self._nearest_training_distances(compositions, context, phase),
+                "finite": finite,
+                "summary": self._comparison_summary(finite, absolute_error, relative_error),
+            }
+        return {
+            "regime": regime,
+            "samples": {key: value for key, value in samples.items() if key != "compositions"},
+            "phases": phase_reports,
+            "summary": self._combine_phase_comparison_summaries(phase_reports),
+        }
+
+    def _ground_truth_diffusivity_matrices(self, thermodynamics, compositions, phase):
+        matrices = []
+        for i, composition in enumerate(np.asarray(compositions, dtype=np.float64)):
+            matrices.append(
+                _validate_2x2_matrix(
+                    thermodynamics.getInterdiffusivity(composition, self.temperature, phase=phase),
+                    f"ground-truth diffusivity for phase {phase} at validation sample {i}",
+                )
+            )
+        return np.asarray(matrices, dtype=np.float64)
+
+    def _validation_thermodynamics(self, *, thermodynamics=None, database=None, thermodynamics_kwargs=None):
+        if thermodynamics is not None:
+            return thermodynamics
+        database = self.metadata.get("validation_database") if database is None else database
+        if database is None:
+            raise ValueError(
+                "Ground-truth diffusivity validation requires a thermodynamics object, a database path, "
+                "or stored validation_database metadata."
+            )
+        if thermodynamics_kwargs is None:
+            thermodynamics_kwargs = self.metadata.get("validation_thermodynamics_kwargs", {})
+        return MulticomponentThermodynamics(
+            str(database),
+            list(self.elements),
+            list(self.phases),
+            **dict(thermodynamics_kwargs or {}),
+        )
+
+    def _nearest_training_distances(self, compositions, context, phase, chunk_size=10000):
+        compositions = np.asarray(compositions, dtype=np.float64)
+        training = self.diffusivity_compositions[context][phase]
+        distances = np.empty(compositions.shape[0], dtype=np.float64)
+        for start in range(0, compositions.shape[0], int(chunk_size)):
+            stop = min(start + int(chunk_size), compositions.shape[0])
+            deltas = compositions[start:stop, np.newaxis, :] - training[np.newaxis, :, :]
+            distances[start:stop] = np.sqrt(np.min(np.sum(deltas * deltas, axis=2), axis=1))
+        return distances
+
+    def _validity_summary(self, valid):
+        valid = np.asarray(valid, dtype=bool)
+        invalid_count = int(np.count_nonzero(~valid))
+        sample_count = int(valid.size)
+        return {
+            "ok": invalid_count == 0,
+            "sample_count": sample_count,
+            "valid_count": int(np.count_nonzero(valid)),
+            "invalid_count": invalid_count,
+            "invalid_fraction": 0.0 if sample_count == 0 else float(invalid_count / sample_count),
+        }
+
+    def _comparison_summary(self, finite, absolute_error, relative_error):
+        finite = np.asarray(finite, dtype=bool)
+        sample_count = int(finite.size)
+        nonfinite_count = int(np.count_nonzero(~finite))
+        return {
+            "ok": nonfinite_count == 0,
+            "sample_count": sample_count,
+            "finite_count": int(np.count_nonzero(finite)),
+            "nonfinite_count": nonfinite_count,
+            "max_absolute_error": float(np.nanmax(absolute_error)) if absolute_error.size else np.nan,
+            "mean_absolute_error": float(np.nanmean(absolute_error)) if absolute_error.size else np.nan,
+            "max_absolute_error_by_component": np.nanmax(absolute_error, axis=0) if absolute_error.size else np.full((2, 2), np.nan),
+            "mean_absolute_error_by_component": np.nanmean(absolute_error, axis=0) if absolute_error.size else np.full((2, 2), np.nan),
+            "max_relative_error": float(np.nanmax(relative_error)) if relative_error.size else np.nan,
+            "mean_relative_error": float(np.nanmean(relative_error)) if relative_error.size else np.nan,
+            "max_relative_error_by_component": np.nanmax(relative_error, axis=0) if relative_error.size else np.full((2, 2), np.nan),
+            "mean_relative_error_by_component": np.nanmean(relative_error, axis=0) if relative_error.size else np.full((2, 2), np.nan),
+        }
+
+    def _combine_phase_summaries(self, phase_reports):
+        sample_count = sum(report["summary"]["sample_count"] for report in phase_reports.values())
+        invalid_count = sum(report["summary"]["invalid_count"] for report in phase_reports.values())
+        return {
+            "ok": invalid_count == 0,
+            "sample_count": int(sample_count),
+            "valid_count": int(sample_count - invalid_count),
+            "invalid_count": int(invalid_count),
+            "invalid_fraction": 0.0 if sample_count == 0 else float(invalid_count / sample_count),
+        }
+
+    def _combine_phase_comparison_summaries(self, phase_reports):
+        sample_count = sum(report["summary"]["sample_count"] for report in phase_reports.values())
+        nonfinite_count = sum(report["summary"]["nonfinite_count"] for report in phase_reports.values())
+        max_relative = [
+            report["summary"]["max_relative_error"]
+            for report in phase_reports.values()
+            if np.isfinite(report["summary"]["max_relative_error"])
+        ]
+        max_absolute = [
+            report["summary"]["max_absolute_error"]
+            for report in phase_reports.values()
+            if np.isfinite(report["summary"]["max_absolute_error"])
+        ]
+        return {
+            "ok": nonfinite_count == 0,
+            "sample_count": int(sample_count),
+            "finite_count": int(sample_count - nonfinite_count),
+            "nonfinite_count": int(nonfinite_count),
+            "max_absolute_error": float(np.max(max_absolute)) if max_absolute else np.nan,
+            "max_relative_error": float(np.max(max_relative)) if max_relative else np.nan,
+        }
+
+    def _combine_validation_summaries(self, report):
+        sample_count = report["interface"]["summary"]["sample_count"] + report["bulk"]["summary"]["sample_count"]
+        invalid_count = report["interface"]["summary"]["invalid_count"] + report["bulk"]["summary"]["invalid_count"]
+        return {
+            "ok": invalid_count == 0,
+            "sample_count": int(sample_count),
+            "valid_count": int(sample_count - invalid_count),
+            "invalid_count": int(invalid_count),
+            "invalid_fraction": 0.0 if sample_count == 0 else float(invalid_count / sample_count),
+        }
+
+    def _combine_comparison_summaries(self, report):
+        sample_count = report["interface"]["summary"]["sample_count"] + report["bulk"]["summary"]["sample_count"]
+        nonfinite_count = report["interface"]["summary"]["nonfinite_count"] + report["bulk"]["summary"]["nonfinite_count"]
+        max_absolute = [
+            report[regime]["summary"]["max_absolute_error"]
+            for regime in ("interface", "bulk")
+            if np.isfinite(report[regime]["summary"]["max_absolute_error"])
+        ]
+        max_relative = [
+            report[regime]["summary"]["max_relative_error"]
+            for regime in ("interface", "bulk")
+            if np.isfinite(report[regime]["summary"]["max_relative_error"])
+        ]
+        return {
+            "ok": nonfinite_count == 0,
+            "sample_count": int(sample_count),
+            "finite_count": int(sample_count - nonfinite_count),
+            "nonfinite_count": int(nonfinite_count),
+            "max_absolute_error": float(np.max(max_absolute)) if max_absolute else np.nan,
+            "max_relative_error": float(np.max(max_relative)) if max_relative else np.nan,
+        }
 
     def clearCache(self):
         """No-op compatibility method for thermodynamics-like objects."""

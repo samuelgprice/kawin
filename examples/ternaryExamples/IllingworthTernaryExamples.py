@@ -357,6 +357,7 @@ def build_tieline_surrogate(source_thermodynamics):
         probe_end=PROBE_END,
         eta_samples=ETA_SAMPLES,
         precipitate_phase=TIELINE_PHASES[1],
+        validation_database=TDB_PATH,
         **get_surrogate_diffusivity_sampling_options(),
     )
 
@@ -1181,4 +1182,234 @@ def run_diffusivity_comparison_demo():
 # %%
 if __name__ == "__main__":
     results, summary = run_diffusivity_comparison_demo()
+# %%
+
+# %%
+def run_surrogate_validation_demo(make_plot=True):
+    """
+    Builds a variable-diffusivity surrogate and runs dense validation reports.
+
+    The surrogate stores ``TDB_PATH`` as validation metadata during construction,
+    so ``compare_diffusivity_to_ground_truth`` can rebuild the thermodynamics
+    source without passing a database or thermodynamics object here.
+    """
+    validation_context = build_case_context(
+        overrides={
+            "DIFFUSIVITY_SOURCE": "variable",
+            "VARIABLE_DIFFUSIVITY_INTERPOLATION": "continuous_grid",
+            "VARIABLE_DIFFUSIVITY_BULK_CR_AXIS": np.linspace(0.10, 0.55, 19),
+            "VARIABLE_DIFFUSIVITY_BULK_NI_AXIS": np.linspace(0.0001, 0.25, 19),
+            "ETA_SAMPLES": np.linspace(0.0, 1.0, 21),
+            "RUN_SOLVE": False,
+            "VERBOSE": False,
+        },
+        print_matrices=False,
+    )
+    validation_surrogate = validation_context["tieline_surrogate"]
+    print(f"Stored validation database: {validation_surrogate.metadata.get('validation_database')}")
+
+    matrix_report = validation_surrogate.validate_diffusivity_matrices(
+        matrix_interface_eta_count=401,
+        matrix_bulk_grid_counts=(151, 151),
+    )
+    print(matrix_report["summary"])
+    print(matrix_report["interface"]["summary"])
+    print(matrix_report["bulk"]["summary"])
+
+    truth_report = validation_surrogate.compare_diffusivity_to_ground_truth(
+        error_interface_eta_count=201,
+        error_bulk_grid_counts=(61, 61),
+    )
+    print(truth_report["summary"])
+    print(truth_report["interface"]["summary"])
+    print(truth_report["bulk"]["summary"])
+
+    figures = {}
+    if make_plot:
+        bulkOrInterface = ["bulk", "interface"][1]
+        alpha_BOI = truth_report[bulkOrInterface]["phases"][TIELINE_PHASES[0]]
+        alpha_BOI_distance = alpha_BOI["nearest_training_distance"]
+        alpha_BOI_max_rel_error = np.max(alpha_BOI["relative_error"], axis=(1, 2))
+        alpha_BOI_max_abs_error = np.max(alpha_BOI["absolute_error"], axis=(1, 2))
+
+        fig, ax = plt.subplots(figsize=(5, 4))
+        ax.scatter(alpha_BOI_distance, alpha_BOI_max_rel_error, s=12)
+        ax.set_xlabel(f"distance to nearest {bulkOrInterface} training point")
+        ax.set_ylabel("max elementwise relative diffusivity error")
+        ax.set_yscale("log")
+        fig.tight_layout()
+        _show_if_interactive()
+        figures[f"alpha_{bulkOrInterface}_relError_distance"] = (fig, ax)
+
+        fig2, ax2 = plt.subplots(figsize=(5, 4))
+        ax2.scatter(alpha_BOI_distance, alpha_BOI_max_abs_error, s=12)
+        ax2.set_xlabel(f"distance to nearest {bulkOrInterface} training point")
+        ax2.set_ylabel("max elementwise absolute diffusivity error")
+        ax2.set_yscale("log")
+        fig2.tight_layout()
+        _show_if_interactive()
+        figures[f"alpha_{bulkOrInterface}_absError_distance"] = (fig2, ax2)
+
+        from typing import Any
+
+
+        from numpy.typing import ArrayLike, NDArray
+
+
+        def normalized_matrix_errors(
+            true_matrices: ArrayLike,
+            predicted_matrices: ArrayLike,
+            *,
+            denominator_floor: float = 0.0,
+        ) -> dict[str, NDArray[np.float64]]:
+            """
+            Calculate absolute and normalized Frobenius and spectral matrix errors.
+
+            Parameters
+            ----------
+            true_matrices
+                Ground-truth matrices with shape (..., m, n).
+            predicted_matrices
+                Surrogate matrices with the same shape.
+            denominator_floor
+                Minimum denominator used for normalized errors. This has the same
+                units as the matrix entries.
+
+            Returns
+            -------
+            dict
+                Arrays with shape true_matrices.shape[:-2].
+            """
+            true = np.asarray(true_matrices)
+            predicted = np.asarray(predicted_matrices)
+
+            if true.shape != predicted.shape:
+                raise ValueError(
+                    "True and predicted matrices must have the same shape; "
+                    f"received {true.shape} and {predicted.shape}."
+                )
+
+            if true.ndim < 2:
+                raise ValueError("Inputs must contain at least one matrix.")
+
+            if denominator_floor < 0:
+                raise ValueError("denominator_floor must be nonnegative.")
+
+            if not np.all(np.isfinite(true)):
+                raise ValueError("Ground-truth matrices contain nonfinite values.")
+
+            if not np.all(np.isfinite(predicted)):
+                raise ValueError("Predicted matrices contain nonfinite values.")
+
+            difference = predicted - true
+            matrix_axes = (-2, -1)
+
+            frobenius_absolute = np.linalg.norm(
+                difference,
+                ord="fro",
+                axis=matrix_axes,
+            )
+            spectral_absolute = np.linalg.norm(
+                difference,
+                ord=2,
+                axis=matrix_axes,
+            )
+
+            frobenius_reference = np.linalg.norm(
+                true,
+                ord="fro",
+                axis=matrix_axes,
+            )
+            spectral_reference = np.linalg.norm(
+                true,
+                ord=2,
+                axis=matrix_axes,
+            )
+
+            # np.finfo(...).tiny prevents division by zero even when the requested
+            # physical floor is zero.
+            numerical_floor = np.finfo(np.result_type(true, predicted, float)).tiny
+            floor = max(float(denominator_floor), numerical_floor)
+            
+            return {
+                "frobenius_absolute": frobenius_absolute,
+                "frobenius_normalized": (
+                    frobenius_absolute
+                    / np.maximum(frobenius_reference, floor)
+                ),
+                "spectral_absolute": spectral_absolute,
+                "spectral_normalized": (
+                    spectral_absolute
+                    / np.maximum(spectral_reference, floor)
+                ),
+                "frobenius_reference": frobenius_reference,
+                "spectral_reference": spectral_reference,
+            }
+
+        errors_alpha_BOI = normalized_matrix_errors(
+            true_matrices=truth_report[bulkOrInterface]['phases'][TIELINE_PHASES[0]]['truth_matrices'].copy(),
+            predicted_matrices=truth_report[bulkOrInterface]['phases'][TIELINE_PHASES[0]]['surrogate_matrices'].copy(),
+            denominator_floor=1e-30,
+        )
+
+        fig3, ax3 = plt.subplots(figsize=(5, 4))
+        ax3.scatter(alpha_BOI_distance, errors_alpha_BOI["spectral_normalized"], s=12, alpha=0.5)
+        ax3.set_xlabel(f"distance to nearest {bulkOrInterface} training point")
+        ax3.set_ylabel("spectral_normalized error")
+        ax3.set_yscale("log")
+        fig3.tight_layout()
+        _show_if_interactive()
+        figures[f"alpha_{bulkOrInterface}_spectralNorm_distance"] = (fig3, ax3)
+
+        fig4, ax4 = plt.subplots(figsize=(5, 4))
+        ax4.scatter(alpha_BOI_distance, errors_alpha_BOI["frobenius_normalized"], s=12, alpha=0.5)
+        ax4.set_xlabel(f"distance to nearest {bulkOrInterface} training point")
+        ax4.set_ylabel("frobenius_normalized error")
+        ax4.set_yscale("log")
+        fig4.tight_layout()
+        _show_if_interactive()
+        figures[f"alpha_{bulkOrInterface}_frobeniusNorm_distance"] = (fig4, ax4)
+
+        fig5, ax5 = plt.subplots(figsize=(5, 4))
+        ax5.scatter(alpha_BOI_max_abs_error, errors_alpha_BOI["frobenius_normalized"], s=12, alpha=0.5)
+        ax5.set_xlabel(f"alpha_{bulkOrInterface}_max_abs_error")
+        ax5.set_ylabel("frobenius_normalized error")
+        ax5.set_xscale("log")
+        ax5.set_yscale("log")
+        fig5.tight_layout()
+        _show_if_interactive()
+        figures[f"alpha_{bulkOrInterface}_max_abs_error vs frobeniusNorm"] = (fig5, ax5)
+
+        fig5, ax5 = plt.subplots(figsize=(5, 4))
+        ax5.scatter(alpha_BOI_max_rel_error, errors_alpha_BOI["frobenius_normalized"], s=12, alpha=0.5)
+        ax5.set_xlabel(f"alpha_{bulkOrInterface}_max_rel_error")
+        ax5.set_ylabel("frobenius_normalized error")
+        ax5.set_xscale("log")
+        ax5.set_yscale("log")
+        fig5.tight_layout()
+        _show_if_interactive()
+        figures[f"alpha_{bulkOrInterface}_max_rel_error vs frobeniusNorm"] = (fig5, ax5)
+
+        fig5, ax5 = plt.subplots(figsize=(5, 4))
+        ax5.scatter(errors_alpha_BOI["spectral_normalized"], errors_alpha_BOI["frobenius_normalized"], s=12, alpha=0.5)
+        ax5.set_xlabel("spectral_normalized error")
+        ax5.set_ylabel("frobenius_normalized error")
+        ax5.set_xscale("log")
+        ax5.set_yscale("log")
+        fig5.tight_layout()
+        _show_if_interactive()
+        figures["spectral_Norm vs frobeniusNorm"] = (fig5, ax5)
+
+
+    return {
+        "context": validation_context,
+        "surrogate": validation_surrogate,
+        "matrix_report": matrix_report,
+        "truth_report": truth_report,
+        "figures": figures,
+    }
+
+
+if __name__ == "__main__":
+    validation_results = run_surrogate_validation_demo()
 # %%

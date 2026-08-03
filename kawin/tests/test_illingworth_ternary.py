@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import kawin.diffusion.MovingBoundarySurrogates as surrogate_module
 import kawin.diffusion.MovingBoundaryIllingworthTernaryFDM as ternary_fdm
 from kawin.diffusion import (
     MovingBoundaryIllingworthTernaryFD1DModel,
@@ -2804,6 +2805,64 @@ def _direct_continuous_surrogate(*, bulk_scale=10.0, invalid_bulk=False):
     )
 
 
+def _direct_nearest_surrogate(*, scale=1.0, invalid=False):
+    eta = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+    tielines = {
+        "ALPHA": np.asarray([[0.20, 0.10], [0.25, 0.10], [0.30, 0.10]], dtype=np.float64),
+        "BETA": np.asarray([[0.30, 0.15], [0.35, 0.15], [0.40, 0.15]], dtype=np.float64),
+    }
+    general_points = np.asarray([[0.20, 0.10], [0.30, 0.10], [0.30, 0.15], [0.40, 0.15]], dtype=np.float64)
+    if invalid:
+        interface_diffusivities = {
+            phase: np.tile(np.asarray([[-1.0, 0.0], [0.0, -1.0]], dtype=np.float64), (eta.size, 1, 1))
+            for phase in ("ALPHA", "BETA")
+        }
+        general_diffusivities = {
+            phase: np.tile(np.asarray([[-1.0, 0.0], [0.0, -1.0]], dtype=np.float64), (general_points.shape[0], 1, 1))
+            for phase in ("ALPHA", "BETA")
+        }
+    else:
+        interface_diffusivities = {
+            phase: np.asarray([_test_continuous_matrix(point, phase, scale=scale) for point in tielines[phase]], dtype=np.float64)
+            for phase in ("ALPHA", "BETA")
+        }
+        general_diffusivities = {
+            phase: np.asarray([_test_continuous_matrix(point, phase, scale=scale) for point in general_points], dtype=np.float64)
+            for phase in ("ALPHA", "BETA")
+        }
+    return TernaryMovingBoundaryThermodynamicsSurrogate(
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        tieline_phases=("ALPHA", "BETA"),
+        temperature=1000.0,
+        eta_samples=eta,
+        tieline_compositions=tielines,
+        diffusivity_compositions={
+            "interface": {phase: tielines[phase] for phase in ("ALPHA", "BETA")},
+            "general": {phase: general_points for phase in ("ALPHA", "BETA")},
+        },
+        diffusivities={"interface": interface_diffusivities, "general": general_diffusivities},
+    )
+
+
+class _ContinuousMatrixTruth:
+    def __init__(self, scale=1.0):
+        self.scale = float(scale)
+        self.elements = ["Z", "X", "Y"]
+        self.phases = ["ALPHA", "BETA"]
+
+    def clearCache(self):
+        return
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        return _test_continuous_matrix(composition, phase, scale=self.scale)
+
+
+class _ZeroMatrixTruth(_ContinuousMatrixTruth):
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        return np.zeros((2, 2), dtype=np.float64)
+
+
 class _RecordingSurrogateDiffusivity:
     def __init__(self, surrogate):
         self.surrogate = surrogate
@@ -2966,6 +3025,174 @@ def test_ternary_continuous_surrogate_bulk_vectorized_matches_scalar_and_is_cont
 def test_ternary_continuous_surrogate_rejects_invalid_dense_interpolation():
     with pytest.raises(ValueError, match="positive real eigenvalues"):
         _direct_continuous_surrogate(invalid_bulk=True)
+
+
+def test_ternary_surrogate_dense_matrix_validation_reports_interface_and_bulk_counts():
+    surrogate = _direct_continuous_surrogate()
+
+    report = surrogate.validate_diffusivity_matrices(
+        matrix_interface_eta_count=5,
+        matrix_bulk_grid_counts=(3, 4),
+        matrix_bulk_axes=(np.asarray([0.18, 0.30, 0.42]), np.asarray([0.06, 0.12, 0.18, 0.22])),
+    )
+
+    assert report["summary"]["ok"] is True
+    assert report["interface"]["phases"]["ALPHA"]["matrices"].shape == (5, 2, 2)
+    assert report["bulk"]["phases"]["ALPHA"]["matrices"].shape == (12, 2, 2)
+    assert report["interface"]["phases"]["ALPHA"]["nearest_training_distance"].shape == (5,)
+    assert report["bulk"]["phases"]["ALPHA"]["nearest_training_distance"].shape == (12,)
+
+
+def test_ternary_surrogate_dense_matrix_validation_reports_invalid_without_first_failure():
+    surrogate = _direct_nearest_surrogate(invalid=True)
+
+    report = surrogate.validate_diffusivity_matrices(
+        matrix_interface_eta_count=3,
+        matrix_bulk_grid_counts=(2, 2),
+        matrix_bulk_axes=(np.asarray([0.20, 0.30]), np.asarray([0.10, 0.15])),
+    )
+
+    assert report["summary"]["ok"] is False
+    assert report["summary"]["invalid_count"] > 1
+    assert np.any(~report["interface"]["phases"]["ALPHA"]["valid"])
+    assert np.any(~report["bulk"]["phases"]["BETA"]["valid"])
+    with pytest.raises(ValueError, match="validation failed"):
+        surrogate.validate_diffusivity_matrices(
+            matrix_interface_eta_count=3,
+            matrix_bulk_grid_counts=(2, 2),
+            matrix_bulk_axes=(np.asarray([0.20, 0.30]), np.asarray([0.10, 0.15])),
+            raise_on_invalid=True,
+        )
+
+
+def test_ternary_surrogate_dense_validation_uses_interface_and_general_contexts(monkeypatch):
+    surrogate = _direct_continuous_surrogate()
+    calls = []
+    original = surrogate.getInterdiffusivity
+
+    def spy(composition, temperature=None, phase=None, query_context=None, **kwargs):
+        calls.append((phase, query_context, np.asarray(composition, dtype=np.float64).shape))
+        return original(composition, temperature, phase=phase, query_context=query_context, **kwargs)
+
+    monkeypatch.setattr(surrogate, "getInterdiffusivity", spy)
+
+    surrogate.validate_diffusivity_matrices(
+        phases=("ALPHA",),
+        matrix_interface_eta_count=4,
+        matrix_bulk_grid_counts=(2, 2),
+        matrix_bulk_axes=(np.asarray([0.18, 0.24]), np.asarray([0.06, 0.10])),
+    )
+
+    assert ("ALPHA", "interface", (4, 2)) in calls
+    assert ("ALPHA", "general", (4, 2)) in calls
+
+
+def test_ternary_surrogate_ground_truth_comparison_reports_zero_error_and_distances():
+    surrogate = _direct_nearest_surrogate()
+
+    report = surrogate.compare_diffusivity_to_ground_truth(
+        thermodynamics=_ContinuousMatrixTruth(),
+        error_interface_eta_count=3,
+        error_bulk_grid_counts=(2, 1),
+        error_bulk_axes=(np.asarray([0.20, 0.30]), np.asarray([0.10])),
+    )
+
+    assert report["summary"]["ok"] is True
+    assert np.isclose(report["summary"]["max_relative_error"], 0.0)
+    assert np.isclose(report["interface"]["phases"]["ALPHA"]["summary"]["max_relative_error"], 0.0)
+    assert np.any(np.isclose(report["interface"]["phases"]["ALPHA"]["nearest_training_distance"], 0.0))
+    assert np.any(np.isclose(report["bulk"]["phases"]["ALPHA"]["nearest_training_distance"], 0.0))
+
+
+def test_ternary_surrogate_ground_truth_comparison_reports_nonzero_relative_error():
+    surrogate = _direct_continuous_surrogate(bulk_scale=10.0)
+
+    report = surrogate.compare_diffusivity_to_ground_truth(
+        thermodynamics=_ContinuousMatrixTruth(scale=1.0),
+        error_interface_eta_count=3,
+        error_bulk_grid_counts=(2, 2),
+        error_bulk_axes=(np.asarray([0.18, 0.42]), np.asarray([0.06, 0.22])),
+    )
+
+    assert report["summary"]["ok"] is True
+    assert report["bulk"]["phases"]["ALPHA"]["summary"]["max_relative_error"] > 1.0
+    assert report["bulk"]["phases"]["ALPHA"]["relative_error"].shape[-2:] == (2, 2)
+
+
+def test_ternary_surrogate_ground_truth_comparison_uses_safe_relative_error_floor():
+    surrogate = _direct_nearest_surrogate()
+
+    report = surrogate.compare_diffusivity_to_ground_truth(
+        thermodynamics=_ZeroMatrixTruth(),
+        error_interface_eta_count=3,
+        error_bulk_grid_counts=(1, 1),
+        error_bulk_axes=(np.asarray([0.20]), np.asarray([0.10])),
+        relative_error_floor=1.0e-6,
+    )
+
+    assert report["summary"]["ok"] is True
+    assert np.all(np.isfinite(report["interface"]["phases"]["ALPHA"]["relative_error"]))
+    assert report["interface"]["phases"]["ALPHA"]["summary"]["max_relative_error"] > 1.0e5
+
+
+def test_ternary_surrogate_ground_truth_validation_requires_source():
+    surrogate = _direct_nearest_surrogate()
+
+    with pytest.raises(ValueError, match="Ground-truth diffusivity validation requires"):
+        surrogate.compare_diffusivity_to_ground_truth(
+            error_interface_eta_count=2,
+            error_bulk_grid_counts=(1, 1),
+            error_bulk_axes=(np.asarray([0.20]), np.asarray([0.10])),
+        )
+
+
+def test_ternary_surrogate_from_database_stores_explicit_validation_database_and_roundtrips():
+    surrogate = _build_surrogate(
+        validation_database="fake_validation_source.tdb",
+        validation_thermodynamics_kwargs={"parameters": {"A": 1.0}},
+    )
+    path = Path.cwd() / "ternary_surrogate_validation_metadata_roundtrip.npz"
+
+    try:
+        surrogate.save(path)
+        loaded = TernaryMovingBoundaryThermodynamicsSurrogate.load(path)
+    finally:
+        path.unlink(missing_ok=True)
+
+    assert loaded.metadata["validation_database"] == "fake_validation_source.tdb"
+    assert loaded.metadata["validation_thermodynamics_kwargs"] == {"parameters": {"A": 1.0}}
+
+
+def test_ternary_surrogate_from_database_path_stores_validation_database(monkeypatch):
+    class FakeMulticomponentThermodynamics(_TieLineSamplingThermodynamics):
+        def __init__(self, database, elements, phases, **kwargs):
+            super().__init__()
+            self.database = database
+            self.elements = elements
+            self.phases = phases
+
+    monkeypatch.setattr(surrogate_module, "MulticomponentThermodynamics", FakeMulticomponentThermodynamics)
+
+    surrogate = TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
+        database="stored_validation_source.tdb",
+        elements=["Z", "X", "Y"],
+        phases=["ALPHA", "BETA"],
+        tieline_phases=("ALPHA", "BETA"),
+        temperature=1000.0,
+        probe_start=np.asarray([0.20, 0.10], dtype=np.float64),
+        probe_end=np.asarray([0.40, 0.20], dtype=np.float64),
+        eta_samples=np.asarray([0.0, 0.5, 1.0], dtype=np.float64),
+    )
+
+    assert surrogate.metadata["validation_database"] == "stored_validation_source.tdb"
+    report = surrogate.compare_diffusivity_to_ground_truth(
+        phases=("ALPHA",),
+        error_interface_eta_count=3,
+        error_bulk_grid_counts=(2, 1),
+        error_bulk_axes=(np.asarray([0.20, 0.25]), np.asarray([0.10])),
+    )
+    assert report["summary"]["ok"] is True
+    assert np.isclose(report["summary"]["max_relative_error"], 0.0)
 
 
 def test_ternary_surrogate_rejects_nonmatching_temperature():
