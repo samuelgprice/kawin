@@ -213,6 +213,43 @@ class _PhaseSelectiveDifficultBulkThermodynamics:
         return matrices[0] if single else matrices
 
 
+class _PiecewiseBulkTernaryThermodynamics:
+    def __init__(self, threshold, direction, component=0, low=None, high=None):
+        self.threshold = float(threshold)
+        self.direction = float(direction)
+        self.component = int(component)
+        self.low = np.asarray(
+            [[1.0e-3, 2.0e-4], [1.0e-4, 8.0e-4]] if low is None else low,
+            dtype=np.float64,
+        )
+        self.high = np.asarray(
+            [[1.9e-3, 2.5e-4], [1.2e-4, 1.4e-3]] if high is None else high,
+            dtype=np.float64,
+        )
+        self.calls = []
+
+    def clearCache(self):
+        pass
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        values = np.asarray(composition, dtype=np.float64)
+        single = values.ndim == 1
+        values = np.atleast_2d(values)
+        self.calls.append(
+            {
+                "phase": phase,
+                "composition": values.copy(),
+                "query_context": kwargs.get("query_context"),
+            }
+        )
+        if phase != "ALPHA" or kwargs.get("query_context") != "general":
+            matrices = np.broadcast_to(self.low, (values.shape[0], 2, 2)).copy()
+        else:
+            projected = self.direction * values[:, self.component]
+            matrices = np.asarray([self.high if value > self.threshold else self.low for value in projected], dtype=np.float64)
+        return matrices[0] if single else matrices
+
+
 class _LinearInterfaceEquilibrium:
     eta_bounds = (0.0, 1.0)
 
@@ -1396,6 +1433,61 @@ def test_ternary_implicit_picard_reuses_next_coefficient_query():
     assert calls["count"] == result.inner_iterations
 
 
+def test_ternary_under_relaxed_piecewise_coefficients_do_not_accept_unrelaxed_shortcut():
+    model = _make_scope_validation_model()
+    model.therm = _SmoothBulkTernaryThermodynamics(constant=True)
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.bulkPicardRelaxation = 0.25
+    model.bulkPicardRtol = 1.0e-12
+    model.bulkPicardAtol = 1.0e-15
+    model.bulkPicardMaxIterations = 80
+    model.setup()
+    p, _, s, eta = model.getCurrentX()
+    c_left, _ = model._interface_compositions(eta + 0.05)
+    future_s = s + 1.0e-4
+    D_low = np.asarray([[1.0e-3, 2.0e-4], [1.0e-4, 8.0e-4]], dtype=np.float64)
+    D_high = np.asarray([[1.9e-3, 2.5e-4], [1.2e-4, 1.4e-3]], dtype=np.float64)
+    initial = model._left_candidate_initial_profile(p, c_left)
+    first_linear = model._solve_concentration_left_planar(
+        p,
+        s,
+        future_s,
+        model.timeStep,
+        c_left,
+        np.broadcast_to(D_low, (len(p) - 1, 2, 2)),
+        "positive",
+    )
+    initial_faces = model._left_lagged_face_compositions(initial)
+    linear_faces = model._left_lagged_face_compositions(first_linear.profile)
+    deltas = linear_faces - initial_faces
+    flat_index = int(np.argmax(np.abs(deltas)))
+    face_index, component = np.unravel_index(flat_index, deltas.shape)
+    direction = 1.0 if deltas[face_index, component] > 0.0 else -1.0
+    threshold = direction * (initial_faces[face_index, component] + 0.5 * deltas[face_index, component])
+    relaxed_first = initial + model.bulkPicardRelaxation * (first_linear.profile - initial)
+    relaxed_faces = model._left_lagged_face_compositions(relaxed_first)
+    assert direction * relaxed_faces[face_index, component] < threshold
+    assert direction * linear_faces[face_index, component] > threshold
+    model.therm = _PiecewiseBulkTernaryThermodynamics(
+        threshold=threshold,
+        direction=direction,
+        component=component,
+        low=D_low,
+        high=D_high,
+    )
+
+    first = model._solve_concentration_left_picard(p, s, future_s, model.timeStep, c_left, "positive")
+    second = model._solve_concentration_left_picard(p, s, future_s, model.timeStep, c_left, "positive")
+    final_faces = model._left_lagged_face_diffusivity_matrices(first.profile, future_s, model.currentTime)
+
+    assert first.inner_iterations > 1
+    assert first.inner_update_norm <= model.bulkPicardAtol + model.bulkPicardRtol * np.max(np.abs(first.profile))
+    assert np.array_equal(first.profile, second.profile)
+    assert np.array_equal(first.interface_face_matrix, final_faces[-1])
+    assert np.allclose(first.interface_flux, model._left_interface_diffusive_flux(first.profile, future_s, c_left, final_faces[-1]))
+    assert not np.array_equal(first.profile, first_linear.profile)
+
+
 def test_ternary_implicit_under_relaxation_converges_to_same_step():
     direct = _make_scope_validation_model()
     direct.therm = _SmoothBulkTernaryThermodynamics()
@@ -1444,6 +1536,100 @@ def test_ternary_implicit_inner_failure_propagates_to_timestep_retry(monkeypatch
     assert model._lastImplicitConverged is True
     assert model._lastBulkConverged is True
     assert all(np.all(np.isfinite(np.asarray(part, dtype=np.float64))) for part in dXdt)
+
+
+def _interface_candidate_test_inputs(model, x_hat=None):
+    p, q, s, eta = model.getCurrentX()
+    dt = model._compute_dt(model.currentTime)
+    eta_lower, _, eta_span = model._eta_scaling_bounds()
+    residual_scale = model._interface_residual_scale(p, q, s)
+    if x_hat is None:
+        x_hat = model._interface_physical_to_scaled(s, eta, eta_lower, eta_span)
+    return {
+        "p": p,
+        "q": q,
+        "s": s,
+        "old_s": s,
+        "dt": dt,
+        "eta_lower": eta_lower,
+        "eta_span": eta_span,
+        "residual_scale": residual_scale,
+        "c_left_old": p[-1].copy(),
+        "c_right_old": q[0].copy(),
+        "x_hat": np.asarray(x_hat, dtype=np.float64),
+        "motion_branch": ternary_fdm._select_interface_motion_branch(s, s, s),
+    }
+
+
+def test_ternary_candidate_left_failure_resets_previous_right_diagnostics(monkeypatch):
+    model = _make_scope_validation_model()
+    model.therm = _SmoothBulkTernaryThermodynamics(constant=True)
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.setup()
+    model._bulkDiffusivityCountingActive = True
+    first_args = _interface_candidate_test_inputs(model)
+    model._evaluate_interface_candidate(**first_args)
+    previous_provider_calls = model._currentBulkDiffusivityProviderCalls
+    assert model._lastBulkLeftPicardIterations == 1
+    assert model._lastBulkRightPicardIterations == 1
+
+    def fail_left(*args, **kwargs):
+        raise RuntimeError("forced left candidate failure")
+
+    monkeypatch.setattr(model, "_solve_concentration_left_picard", fail_left)
+    second_args = _interface_candidate_test_inputs(model, first_args["x_hat"] + np.asarray([0.0, 1.0e-3]))
+
+    with pytest.raises(RuntimeError, match="forced left candidate failure"):
+        model._evaluate_interface_candidate(**second_args)
+
+    assert model._lastBulkConverged is False
+    assert "left bulk solve failed: forced left candidate failure" == model._lastBulkFailureReason
+    assert model._lastBulkLeftPicardIterations == 0
+    assert model._lastBulkRightPicardIterations == 0
+    assert np.isinf(model._lastBulkRightUpdateNorm)
+    assert model._currentBulkDiffusivityProviderCalls >= previous_provider_calls
+
+
+def test_ternary_candidate_right_failure_keeps_same_candidate_left_diagnostics(monkeypatch):
+    model = _make_scope_validation_model()
+    model.therm = _SmoothBulkTernaryThermodynamics(constant=True)
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.setup()
+
+    def fail_right(*args, **kwargs):
+        raise ValueError("forced right candidate failure")
+
+    monkeypatch.setattr(model, "_solve_concentration_right_picard", fail_right)
+
+    with pytest.raises(ValueError, match="forced right candidate failure"):
+        model._evaluate_interface_candidate(**_interface_candidate_test_inputs(model))
+
+    assert model._lastBulkConverged is False
+    assert model._lastBulkLeftPicardIterations == 1
+    assert model._lastBulkRightPicardIterations == 0
+    assert model._lastBulkLeftUpdateNorm <= 1.0e-15
+    assert np.isinf(model._lastBulkRightUpdateNorm)
+    assert model._lastBulkFailureReason == "right bulk solve failed: forced right candidate failure"
+
+
+def test_ternary_non_picard_phase_exception_is_classified_without_replacement(monkeypatch):
+    model = _make_scope_validation_model()
+    model.therm = _SmoothBulkTernaryThermodynamics(constant=True)
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.setup()
+
+    def fail_block_solve(*args, **kwargs):
+        raise ArithmeticError("block solve blew up")
+
+    monkeypatch.setattr(model, "_solve_concentration_left_planar", fail_block_solve)
+
+    with pytest.raises(ArithmeticError, match="block solve blew up"):
+        model._evaluate_interface_candidate(**_interface_candidate_test_inputs(model))
+
+    assert model._lastBulkConverged is False
+    assert model._lastBulkLeftPicardIterations == 0
+    assert "Picard solve failed to converge" not in model._lastBulkFailureReason
+    assert model._lastBulkFailureReason == "left bulk solve failed: block solve blew up"
 
 
 def test_ternary_outer_line_search_failure_does_not_mark_bulk_failed(monkeypatch):

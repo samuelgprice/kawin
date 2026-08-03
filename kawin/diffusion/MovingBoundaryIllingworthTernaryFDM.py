@@ -1219,8 +1219,29 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._lastBulkConverged = True
         self._lastBulkFailureReason = None
 
+    def _reset_candidate_bulk_diagnostics(self):
+        """Initializes phase-bulk diagnostics for one interface-candidate attempt."""
+        self._lastBulkLeftPicardIterations = 0
+        self._lastBulkRightPicardIterations = 0
+        self._lastBulkLeftUpdateNorm = np.inf
+        self._lastBulkRightUpdateNorm = np.inf
+        self._lastBulkConverged = None
+        self._lastBulkFailureReason = "not evaluated"
+
+    def _record_bulk_phase_success(self, phase_label, result):
+        """Records one successfully completed phase solve for the current candidate."""
+        if phase_label == "left":
+            self._lastBulkLeftPicardIterations = int(result.inner_iterations)
+            self._lastBulkLeftUpdateNorm = float(result.inner_update_norm)
+        elif phase_label == "right":
+            self._lastBulkRightPicardIterations = int(result.inner_iterations)
+            self._lastBulkRightUpdateNorm = float(result.inner_update_norm)
+        if self._lastBulkConverged is not False:
+            self._lastBulkConverged = True
+            self._lastBulkFailureReason = None
+
     def _record_bulk_phase_failure(self, phase_label, iterations, update_norm, reason):
-        """Records diagnostics for a genuine phase-bulk Picard failure."""
+        """Records diagnostics for a genuine phase-bulk failure."""
         if phase_label == "left":
             self._lastBulkLeftPicardIterations = int(iterations)
             self._lastBulkLeftUpdateNorm = float(update_norm)
@@ -1908,7 +1929,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             next_iterate = iterate + self.bulkPicardRelaxation * (linear.profile - iterate)
             next_iterate[-1] = np.asarray(c_left, dtype=np.float64)
             D_next = self._left_lagged_face_diffusivity_matrices(next_iterate, future_s, self.currentTime)
-            if np.array_equal(D_next, D_faces):
+            if self.bulkPicardRelaxation == 1.0 and np.array_equal(D_next, D_faces):
                 return _BulkPhaseSolveResult(
                     profile=linear.profile,
                     interface_flux=linear.interface_flux,
@@ -1947,7 +1968,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             next_iterate = iterate + self.bulkPicardRelaxation * (linear.profile - iterate)
             next_iterate[0] = np.asarray(c_right, dtype=np.float64)
             D_next = self._right_lagged_face_diffusivity_matrices(next_iterate, future_s, self.currentTime)
-            if np.array_equal(D_next, D_faces):
+            if self.bulkPicardRelaxation == 1.0 and np.array_equal(D_next, D_faces):
                 return _BulkPhaseSolveResult(
                     profile=linear.profile,
                     interface_flux=linear.interface_flux,
@@ -2158,27 +2179,52 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         """
         future_s, future_eta = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
         c_left, c_right = self._interface_compositions(future_eta)
+        self._reset_candidate_bulk_diagnostics()
         if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
-            D_left = self._phase_diffusivity_matrix(c_left, self.phases[0], self.currentTime, future_s)
-            D_right = self._phase_diffusivity_matrix(c_right, self.phases[1], self.currentTime, future_s)
-            left_result = self._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch, validate_diffusivity=False)
-            right_result = self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch, validate_diffusivity=False)
+            try:
+                D_left = self._phase_diffusivity_matrix(c_left, self.phases[0], self.currentTime, future_s)
+                left_result = self._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch, validate_diffusivity=False)
+            except Exception as exc:
+                self._record_bulk_phase_failure("left", 0, np.inf, f"left bulk solve failed: {exc}")
+                raise
+            self._record_bulk_phase_success("left", left_result)
+            try:
+                D_right = self._phase_diffusivity_matrix(c_right, self.phases[1], self.currentTime, future_s)
+                right_result = self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch, validate_diffusivity=False)
+            except Exception as exc:
+                self._record_bulk_phase_failure("right", 0, np.inf, f"right bulk solve failed: {exc}")
+                raise
+            self._record_bulk_phase_success("right", right_result)
         elif self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_LAGGED:
-            D_left = self._left_lagged_face_diffusivity_matrices(p, future_s, self.currentTime)
-            D_right = self._right_lagged_face_diffusivity_matrices(q, future_s, self.currentTime)
-            left_result = self._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch, validate_diffusivity=False)
-            right_result = self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch, validate_diffusivity=False)
+            try:
+                D_left = self._left_lagged_face_diffusivity_matrices(p, future_s, self.currentTime)
+                left_result = self._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch, validate_diffusivity=False)
+            except Exception as exc:
+                self._record_bulk_phase_failure("left", 0, np.inf, f"left bulk solve failed: {exc}")
+                raise
+            self._record_bulk_phase_success("left", left_result)
+            try:
+                D_right = self._right_lagged_face_diffusivity_matrices(q, future_s, self.currentTime)
+                right_result = self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch, validate_diffusivity=False)
+            except Exception as exc:
+                self._record_bulk_phase_failure("right", 0, np.inf, f"right bulk solve failed: {exc}")
+                raise
+            self._record_bulk_phase_success("right", right_result)
         elif self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_IMPLICIT:
             try:
                 left_result = self._solve_concentration_left_picard(p, s, future_s, dt, c_left, motion_branch)
-            except RuntimeError:
+            except Exception as exc:
+                if self._lastBulkFailureReason is None or self._lastBulkFailureReason == "not evaluated":
+                    self._record_bulk_phase_failure("left", 0, np.inf, f"left bulk solve failed: {exc}")
                 raise
+            self._record_bulk_phase_success("left", left_result)
             try:
                 right_result = self._solve_concentration_right_picard(q, s, future_s, dt, c_right, motion_branch)
-            except RuntimeError:
-                self._lastBulkLeftPicardIterations = int(left_result.inner_iterations)
-                self._lastBulkLeftUpdateNorm = float(left_result.inner_update_norm)
+            except Exception as exc:
+                if self._lastBulkFailureReason is None or self._lastBulkFailureReason == "not evaluated":
+                    self._record_bulk_phase_failure("right", 0, np.inf, f"right bulk solve failed: {exc}")
                 raise
+            self._record_bulk_phase_success("right", right_result)
         else:
             raise ValueError(
                 "bulkDiffusivityMode must be 'phase_uniform', "
