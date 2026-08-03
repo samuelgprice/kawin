@@ -2177,9 +2177,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         This helper only builds the mutually consistent physical candidate and
         its scaled residual for the supplied trial variables.
         """
+        self._reset_candidate_bulk_diagnostics()
         future_s, future_eta = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
         c_left, c_right = self._interface_compositions(future_eta)
-        self._reset_candidate_bulk_diagnostics()
         if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
             try:
                 D_left = self._phase_diffusivity_matrix(c_left, self.phases[0], self.currentTime, future_s)

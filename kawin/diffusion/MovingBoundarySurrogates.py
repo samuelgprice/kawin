@@ -571,7 +571,9 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             if phase not in phases:
                 raise ValueError(f"tieline phase '{phase}' must be included in phases.")
 
-        eta_samples = np.linspace(0.0, 1.0, 11) if eta_samples is None else np.asarray(eta_samples, dtype=np.float64).reshape(-1)
+        if eta_samples is None: 
+            raise ValueError("eta_samples must be provided.")
+        eta_samples = np.asarray(eta_samples, dtype=np.float64).reshape(-1)
         if eta_samples.size < 2:
             raise ValueError("At least two eta_samples are required.")
         if not np.all(np.isfinite(eta_samples)) or not np.all(np.diff(eta_samples) > 0.0):
