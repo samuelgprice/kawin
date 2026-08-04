@@ -836,19 +836,26 @@ def default_diffusivity_comparison_config():
                 "ETA_SAMPLES": np.linspace(0.0, 1.0, 21),
             },
             {
-                "label": "grid19_eta21",
+                "label": "grid101_eta201",
                 "VARIABLE_DIFFUSIVITY_INTERPOLATION": "continuous_grid",
-                "VARIABLE_DIFFUSIVITY_BULK_CR_AXIS": np.linspace(0.10, 0.55, 19),
-                "VARIABLE_DIFFUSIVITY_BULK_NI_AXIS": np.linspace(0.0001, 0.25, 19),
-                "ETA_SAMPLES": np.linspace(0.0, 1.0, 21),
+                "VARIABLE_DIFFUSIVITY_BULK_CR_AXIS": np.linspace(0.10, 0.55, 101),
+                "VARIABLE_DIFFUSIVITY_BULK_NI_AXIS": np.linspace(0.0001, 0.25, 101),
+                "ETA_SAMPLES": np.linspace(0.0, 1.0, 201),
             },
-            {
-                "label": "grid19_eta31",
-                "VARIABLE_DIFFUSIVITY_INTERPOLATION": "continuous_grid",
-                "VARIABLE_DIFFUSIVITY_BULK_CR_AXIS": np.linspace(0.10, 0.55, 19),
-                "VARIABLE_DIFFUSIVITY_BULK_NI_AXIS": np.linspace(0.0001, 0.25, 19),
-                "ETA_SAMPLES": np.linspace(0.0, 1.0, 31),
-            },
+            # {
+            #     "label": "grid19_eta21",
+            #     "VARIABLE_DIFFUSIVITY_INTERPOLATION": "continuous_grid",
+            #     "VARIABLE_DIFFUSIVITY_BULK_CR_AXIS": np.linspace(0.10, 0.55, 19),
+            #     "VARIABLE_DIFFUSIVITY_BULK_NI_AXIS": np.linspace(0.0001, 0.25, 19),
+            #     "ETA_SAMPLES": np.linspace(0.0, 1.0, 21),
+            # },
+            # {
+            #     "label": "grid19_eta31",
+            #     "VARIABLE_DIFFUSIVITY_INTERPOLATION": "continuous_grid",
+            #     "VARIABLE_DIFFUSIVITY_BULK_CR_AXIS": np.linspace(0.10, 0.55, 19),
+            #     "VARIABLE_DIFFUSIVITY_BULK_NI_AXIS": np.linspace(0.0001, 0.25, 19),
+            #     "ETA_SAMPLES": np.linspace(0.0, 1.0, 31),
+            # },
         ],
         "analysis_time_count": 64,
         "keep_models": True,
@@ -1343,6 +1350,18 @@ def run_diffusivity_comparison_demo(
 
 
 # if __name__ == "__main__":
+#     def debugInPlace():
+#         try:
+#             import debugpy
+#             # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+#             debugpy.listen(5678)
+#             print("Waiting for debugger attach")
+#             debugpy.wait_for_client()
+#             debugpy.breakpoint()
+#             print('break on this line')
+#         except:
+#             pass
+#     debugInPlace()
 #     run_results = run_interactive_example(timeProfiling=True)
 
 # %%
