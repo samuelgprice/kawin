@@ -2,7 +2,6 @@ import warnings
 from dataclasses import dataclass
 
 import numpy as np
-from scipy import optimize
 
 from kawin.GenericModel import GenericModel
 from kawin.diffusion.Diffusion import DiffusionModel
@@ -137,14 +136,12 @@ def _select_interface_motion_branch(s, old_s, future_s, atol=1e-15):
 @dataclass(frozen=True)
 class InitialEtaEstimate:
     """
-    Diagnostics from held-profile Stefan residual initial tie-line selection.
+    Diagnostics from initial tie-line selection.
 
     ``eta`` is the selected tie-line coordinate. ``velocity`` is the scalar
-    least-squares interface velocity that best aligns the two-component flux
-    imbalance with the interface composition jump for the selected eta.
-    ``method`` identifies the initialization strategy that produced the
-    estimate. ``branch`` is ``"positive"``, ``"negative"``, or ``None`` for
-    methods without a swept-inventory branch choice.
+    interface velocity returned by the initialization strategy. ``method``
+    identifies the strategy that produced the estimate. ``branch`` is the
+    swept-inventory branch used by branch-aware estimators.
     """
 
     eta: float
@@ -317,166 +314,6 @@ def _coerce_bulk_diffusivity_mode(mode):
             "'composition_dependent_lagged', or 'composition_dependent_implicit'."
         )
     return value
-
-
-def estimate_initial_eta_from_stefan_residual(
-    composition,
-    z,
-    interface_position,
-    phases,
-    thermodynamics,
-    temperature,
-    interface_equilibrium,
-    transformed_u_grid,
-    transformed_v_grid,
-    eta_bracket=None,
-    root_xtol=1e-12,
-    root_rtol=1e-12,
-    root_maxiter=100,
-    bulk_diffusivity_mode=_BULK_DIFFUSIVITY_PHASE_UNIFORM,
-):
-    """
-    Estimates the initial ternary tie-line coordinate from a Stefan residual.
-
-    The estimator keeps the initial transformed profile fixed and solves a
-    scalar equal-velocity condition with ``scipy.optimize.root_scalar`` using
-    ``method='brentq'``. The root condition is the 2D cross product between the
-    interface composition jump and the two-component flux imbalance. At zero,
-    the flux imbalance is parallel to the composition jump, so both independent
-    components imply the same scalar interface velocity. This local diagnostic
-    is used only to choose the initial tie-line; it does not run the implicit
-    Illingworth update and intentionally does not call ``_interface_residual``.
-    """
-    composition = np.asarray(composition, dtype=np.float64)
-    z = np.asarray(z, dtype=np.float64).reshape(-1)
-    u_grid = np.asarray(transformed_u_grid, dtype=np.float64).reshape(-1)
-    v_grid = np.asarray(transformed_v_grid, dtype=np.float64).reshape(-1)
-    if composition.ndim != 2 or composition.shape[1] != 2 or composition.shape[0] != z.size:
-        raise ValueError("composition must have shape (n_nodes, 2) matching z.")
-    if z.size < 3 or not np.all(np.diff(z) > 0.0):
-        raise ValueError("z must be a strictly increasing 1D grid with at least three nodes.")
-    if not np.isclose(z[0], 0.0):
-        raise ValueError("estimate_initial_eta_from_stefan_residual expects a 1D domain starting at 0.")
-    if u_grid.size < 3 or v_grid.size < 3:
-        raise ValueError("transformed grids must each contain at least three nodes.")
-    if not np.isclose(u_grid[0], 0.0) or not np.isclose(u_grid[-1], 1.0) or not np.all(np.diff(u_grid) > 0.0):
-        raise ValueError("transformed_u_grid must be strictly increasing from 0 to 1.")
-    if not np.isclose(v_grid[0], 0.0) or not np.isclose(v_grid[-1], 1.0) or not np.all(np.diff(v_grid) > 0.0):
-        raise ValueError("transformed_v_grid must be strictly increasing from 0 to 1.")
-    if len(phases) != 2:
-        raise ValueError("phases must contain exactly the left and right phases.")
-    if thermodynamics is None or not hasattr(thermodynamics, "getInterdiffusivity"):
-        raise TypeError("thermodynamics must provide getInterdiffusivity for initial eta estimation.")
-    bulk_diffusivity_mode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
-
-    s = float(interface_position)
-    domain_length = float(z[-1] - z[0])
-    if not (0.0 < s < domain_length):
-        raise ValueError("interface_position must lie strictly inside the domain.")
-    eta_bounds = _validate_eta_bounds(interface_equilibrium)
-    bracket = _coerce_initial_eta_bracket(eta_bracket, eta_bounds)
-    temperature_value = _temperature_at_interface(temperature, s)
-
-    left_mask = z <= s
-    right_mask = z >= s
-    if not np.any(left_mask) or not np.any(right_mask):
-        raise ValueError("Initial interface leaves an empty phase.")
-    z_left_adjacent = s * float(u_grid[-2])
-    z_right_adjacent = s + (domain_length - s) * float(v_grid[1])
-    p_adjacent = np.asarray(
-        [np.interp(z_left_adjacent, z[left_mask], composition[left_mask, component]) for component in range(2)],
-        dtype=np.float64,
-    )
-    q_adjacent = np.asarray(
-        [np.interp(z_right_adjacent, z[right_mask], composition[right_mask, component]) for component in range(2)],
-        dtype=np.float64,
-    )
-
-    def evaluate_eta(eta):
-        c_left, c_right = interface_equilibrium.interface_compositions(float(eta))
-        c_left = np.asarray(c_left, dtype=np.float64).reshape(2)
-        c_right = np.asarray(c_right, dtype=np.float64).reshape(2)
-        if not np.all(np.isfinite(c_left)) or not np.all(np.isfinite(c_right)):
-            raise ValueError("interface compositions are non-finite at the queried eta.")
-        jump = c_left - c_right
-        jump_norm_sq = float(np.dot(jump, jump))
-        if jump_norm_sq <= 1e-300:
-            raise ValueError("tie-line has a degenerate interface composition jump at the queried eta.")
-        if bulk_diffusivity_mode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
-            D_left = _get_stefan_interdiffusivity(thermodynamics, c_left, temperature_value, phases[0])
-            D_right = _get_stefan_interdiffusivity(thermodynamics, c_right, temperature_value, phases[1])
-        else:
-            D_left = _get_bulk_interdiffusivity(
-                thermodynamics,
-                0.5 * (p_adjacent + c_left),
-                temperature_value,
-                phases[0],
-                context="initial-eta left interface-face diffusivity",
-            )
-            D_right = _get_bulk_interdiffusivity(
-                thermodynamics,
-                0.5 * (c_right + q_adjacent),
-                temperature_value,
-                phases[1],
-                context="initial-eta right interface-face diffusivity",
-            )
-        left_gradient = (c_left - p_adjacent) / (s * (1.0 - float(u_grid[-2])))
-        right_gradient = (q_adjacent - c_right) / ((domain_length - s) * float(v_grid[1]))
-        flux_delta = _matvec_2x2(D_right, right_gradient) - _matvec_2x2(D_left, left_gradient)
-        velocity = float(np.dot(jump, flux_delta) / jump_norm_sq)
-        residual = velocity * jump - flux_delta
-        root_value = float(jump[0] * flux_delta[1] - jump[1] * flux_delta[0])
-        if not np.isfinite(root_value) or not np.all(np.isfinite(residual)):
-            raise ValueError("Stefan residual is non-finite at the queried eta.")
-        return root_value, velocity, residual.copy(), flux_delta.copy(), c_left.copy(), c_right.copy()
-
-    f_lower = evaluate_eta(bracket[0])[0]
-    f_upper = evaluate_eta(bracket[1])[0]
-    endpoint_atol = max(1e-14 * max(abs(f_lower), abs(f_upper), 1.0), 1e-300)
-    lower_is_root = abs(f_lower) <= endpoint_atol
-    upper_is_root = abs(f_upper) <= endpoint_atol
-    if not (lower_is_root or upper_is_root) and f_lower * f_upper > 0.0:
-        raise ValueError(
-            "Initial eta bracket does not contain a sign change for the held-profile Stefan root; "
-            f"f({bracket[0]:.6g})={f_lower:.6g}, f({bracket[1]:.6g})={f_upper:.6g}."
-        )
-
-    def root_function(eta):
-        eta = float(eta)
-        if lower_is_root and np.isclose(eta, bracket[0], rtol=0.0, atol=0.0):
-            return 0.0
-        if upper_is_root and np.isclose(eta, bracket[1], rtol=0.0, atol=0.0):
-            return 0.0
-        return evaluate_eta(eta)[0]
-
-    solution = optimize.root_scalar(
-        root_function,
-        bracket=bracket,
-        method="brentq",
-        xtol=float(root_xtol),
-        rtol=float(root_rtol),
-        maxiter=int(root_maxiter),
-    )
-    if not solution.converged:
-        raise ValueError("Initial eta Brent root solve failed to converge.")
-
-    eta = float(solution.root)
-    _, velocity, residual, flux_delta, c_left, c_right = evaluate_eta(eta)
-    return InitialEtaEstimate(
-        eta=eta,
-        residual_norm=float(np.max(np.abs(residual))),
-        velocity=velocity,
-        residual=residual,
-        flux_delta=flux_delta,
-        left_interface_composition=c_left,
-        right_interface_composition=c_right,
-        method="stefan_cross_brentq",
-        solver="root_scalar(brentq)",
-        bracket=bracket,
-        converged=bool(solution.converged),
-        iterations=int(solution.iterations),
-        function_calls=int(solution.function_calls),
-    )
 
 
 def estimate_initial_eta_from_instantaneous_balance(
@@ -838,9 +675,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     stores two independent substitutional components per transformed grid node,
     solves full 2-by-2 block-tridiagonal phase systems, and advances the
     interface through a conservative two-component residual. The initial
-    tie-line coordinate is estimated from the initial held-profile Stefan
-    residual, so callers must provide an eta-capable interface equilibrium.
-    Only planar Cartesian finite-difference meshes are supported.
+    tie-line coordinate is estimated from the instantaneous discrete balance
+    that matches the finite-step interface residual, so callers must provide an
+    eta-capable interface equilibrium. Only planar Cartesian finite-difference
+    meshes are supported.
 
     By default, ``bulk_diffusivity_mode='phase_uniform'`` preserves the legacy
     behavior: one 2-by-2 interdiffusivity matrix is evaluated for each phase at
@@ -867,12 +705,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         interface_equilibrium=None,
         interface_compositions=None,
         eta_bounds: tuple[float, float] = (0.0, 1.0),
-        initial_eta_method: str = "stefan_cross_brentq",
+        initial_eta_method: str = "instantaneous_balance",
         initial_eta_bracket=None,
         initial_eta_guess: float | None = None,
         initial_velocity_guess: float | None = None,
         initial_eta_root_xtol: float = 1e-12,
-        initial_eta_root_rtol: float = 1e-12,
         initial_eta_root_maxiter: int = 100,
         bulk_diffusivity_mode: str = _BULK_DIFFUSIVITY_PHASE_UNIFORM,
         bulk_picard_rtol: float | None = None,
@@ -904,7 +741,6 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self.initialEtaGuess = None if initial_eta_guess is None else float(initial_eta_guess)
         self.initialVelocityGuess = None if initial_velocity_guess is None else float(initial_velocity_guess)
         self.initialEtaRootXtol = float(initial_eta_root_xtol)
-        self.initialEtaRootRtol = float(initial_eta_root_rtol)
         self.initialEtaRootMaxiter = int(initial_eta_root_maxiter)
         self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
         self.bulkPicardRtol = None if bulk_picard_rtol is None else float(bulk_picard_rtol)
@@ -1041,10 +877,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if self.dtMode == "semi_log" and ((self.semiLog_dt is None) or (self.semiLogT0 is None)):
             raise ValueError("semiLog_dt and semiLogT0 must be specified when dt_mode is 'semi_log'.")
         _validate_eta_bounds(self.interfaceEquilibrium)
-        if self.initialEtaMethod not in {"stefan_cross_brentq", "instantaneous_balance"}:
-            raise ValueError("initial_eta_method must be 'stefan_cross_brentq' or 'instantaneous_balance'.")
-        if self.initialEtaRootXtol <= 0.0 or self.initialEtaRootRtol <= 0.0:
-            raise ValueError("initial eta root tolerances must be positive.")
+        if self.initialEtaMethod != "instantaneous_balance":
+            raise ValueError("initial_eta_method must be 'instantaneous_balance'.")
+        if self.initialEtaRootXtol <= 0.0:
+            raise ValueError("initial eta root tolerance must be positive.")
         if self.initialEtaRootMaxiter < 1:
             raise ValueError("initial_eta_root_maxiter must be at least 1.")
         if self.maxIterations < 2:
@@ -1330,17 +1166,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             "root_maxiter": self.initialEtaRootMaxiter,
             "bulk_diffusivity_mode": self.bulkDiffusivityMode,
         }
-        if self.initialEtaMethod == "stefan_cross_brentq":
-            self.initialEtaEstimate = estimate_initial_eta_from_stefan_residual(
-                **estimate_kwargs,
-                root_rtol=self.initialEtaRootRtol,
-            )
-        else:
-            self.initialEtaEstimate = estimate_initial_eta_from_instantaneous_balance(
-                **estimate_kwargs,
-                eta_guess=self.initialEtaGuess,
-                velocity_guess=self.initialVelocityGuess,
-            )
+        self.initialEtaEstimate = estimate_initial_eta_from_instantaneous_balance(
+            **estimate_kwargs,
+            eta_guess=self.initialEtaGuess,
+            velocity_guess=self.initialVelocityGuess,
+        )
         print(f"initialEtaEstimate: {self.initialEtaEstimate.eta}")
         eta0 = float(self.initialEtaEstimate.eta)
         self.initialEta = eta0

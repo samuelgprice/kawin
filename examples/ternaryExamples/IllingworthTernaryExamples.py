@@ -58,7 +58,7 @@ TDB_PATH = EXAMPLES_DIR / "FeCrNi_Lee1993_L_style_ternary_checked_withMobility.t
 PROBE_START = np.array([0.1233, 0.0001], dtype=np.float64)
 PROBE_END = np.array([0.4993, 0.2257], dtype=np.float64)
 ETA_SAMPLES = np.linspace(0.0, 1.0, 21)
-INITIAL_ETA_METHOD = ["stefan_cross_brentq", "instantaneous_balance"][1]
+INITIAL_ETA_METHOD = "instantaneous_balance"
 INITIAL_ETA_BRACKET = (1e-3, 1-1e-3)
 INITIAL_ETA_GUESS = None
 INITIAL_VELOCITY_GUESS = None
