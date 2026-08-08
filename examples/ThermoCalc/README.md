@@ -16,13 +16,13 @@ The default configuration targets:
 
 Generated datasets, plots, surrogates, and Thermo-Calc cache files should be written under `examples/ThermoCalc/outputs/`, which is ignored by git.
 
-The notebook startup cell adds the repository root to `sys.path`, so it can be launched either from the repo root or directly from `examples/ThermoCalc`.
+The cell-script startup cell adds the repository root to `sys.path`, so it can be launched either from the repo root or directly from `examples/ThermoCalc`.
 
 ## Files
 
 - `tc_python_adapter.py`: kawin-style facade backed by TC-Python.
 - `training_data.py`: grid creation, sampling, checkpoint/resume, and NPZ/JSON export.
-- `FeCrNi_TC_Python.ipynb`: notebook workflow for smoke checking, sampling, plotting, building, checking, and saving a moving-boundary surrogate.
+- `FeCrNi_TC_Python.py`: percent-cell workflow for smoke checking, sampling, plotting, building, checking, and saving a moving-boundary surrogate in a Jupyter Interactive window.
 
 ## Data conventions
 
