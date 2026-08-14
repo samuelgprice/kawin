@@ -1,0 +1,1068 @@
+import warnings
+from dataclasses import dataclass
+
+import numpy as np
+
+from kawin.GenericModel import GenericModel
+from kawin.diffusion.Diffusion import DiffusionModel
+from kawin.diffusion.MovingBoundaryEquilibrium import CallableTernaryInterfaceEquilibrium
+from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import (
+    _ArrayHistory,
+    _BULK_DIFFUSIVITY_IMPLICIT,
+    _BULK_DIFFUSIVITY_LAGGED,
+    _BULK_DIFFUSIVITY_PHASE_UNIFORM,
+    _SUPPORTED_BULK_DIFFUSIVITY_MODES,
+    _bounded_finite_difference_perturbation,
+    _coerce_bulk_diffusivity_mode,
+    _loge_arange,
+    _validate_eta_bounds,
+    _validate_ternary_diffusivity_matrix,
+)
+from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D
+from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
+    flatten_1d_coordinates,
+    integrate_planar_transformed_profile_sequence,
+    reconstruct_planar_transformed_profile_sequence,
+    solve_illingworth_block_tridiagonal,
+    validate_ternary_profile,
+)
+from kawin.solver import explicitEulerIterator
+from kawin.thermo.Mobility import interstitials
+
+
+@dataclass(frozen=True, slots=True)
+class _ThreePhaseBulkResult:
+    """Result from one transformed interval solve in the three-phase model."""
+
+    profile: np.ndarray
+    left_flux: np.ndarray
+    right_flux: np.ndarray
+    left_face_matrix: np.ndarray | None
+    right_face_matrix: np.ndarray | None
+    inner_iterations: int = 0
+    inner_update_norm: float = 0.0
+    diffusivity_evaluations: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _ThreePhaseCandidate:
+    """Mutually consistent profiles, interfaces, etas, and residuals for one trial."""
+
+    x_hat: np.ndarray
+    profiles: tuple[np.ndarray, np.ndarray, np.ndarray]
+    interfaces: np.ndarray
+    etas: np.ndarray
+    interface_compositions: tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]
+    residual: np.ndarray
+    scaled_residual: np.ndarray
+    scaled_norm: float
+    physical_norm: float
+    bulk_results: tuple[_ThreePhaseBulkResult, _ThreePhaseBulkResult, _ThreePhaseBulkResult]
+
+
+class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
+    """
+    Three-phase sequential ternary Illingworth moving-boundary model.
+
+    The model tracks a fixed planar phase order ``A | B | C`` with two moving
+    sharp interfaces. Each phase is solved on its own Landau grid with two
+    independent substitutional ternary components. The two interfaces are
+    advanced simultaneously from four nonlinear residual equations: two
+    component balances at ``A|B`` and two at ``B|C``. Phase disappearance is
+    not handled; when the middle phase becomes too thin the step is rejected.
+    """
+
+    def __init__(
+        self,
+        mesh,
+        elements,
+        phases,
+        thermodynamics,
+        temperature,
+        interfacePositions,
+        time_step: float,
+        interface_equilibria,
+        initial_eta_guess=None,
+        bulk_diffusivity_mode: str = _BULK_DIFFUSIVITY_PHASE_UNIFORM,
+        bulk_picard_rtol: float | None = None,
+        bulk_picard_atol: float = 1e-12,
+        bulk_picard_max_iterations: int = 25,
+        bulk_picard_relaxation: float = 1.0,
+        dt_mode: str = "fixed",
+        semiLog_dt: float | None = None,
+        semiLogT0: float | None = None,
+        geometry: str = "planar",
+        phase_nodes=None,
+        tolerance: float = 1e-8,
+        residual_tolerance: float | None = None,
+        max_iterations: int = 25,
+        max_step_retries: int = 8,
+        retry_factor: float = 0.5,
+        min_middle_width_fraction: float = 1e-10,
+        constraints=None,
+        record=False,
+        record_pq_data: bool = True,
+        transformed_grids=None,
+    ):
+        self.initialInterfacePositions = np.asarray(interfacePositions, dtype=np.float64).reshape(-1)
+        self.timeStep = float(time_step)
+        self.interfaceEquilibria = self._coerce_interface_equilibria(interface_equilibria)
+        self.initialEtaGuess = None if initial_eta_guess is None else np.asarray(initial_eta_guess, dtype=np.float64).reshape(-1)
+        self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
+        self.bulkPicardRtol = None if bulk_picard_rtol is None else float(bulk_picard_rtol)
+        self.bulkPicardAtol = float(bulk_picard_atol)
+        self.bulkPicardMaxIterations = int(bulk_picard_max_iterations)
+        self.bulkPicardRelaxation = float(bulk_picard_relaxation)
+        self.dtMode = str(dt_mode)
+        self.semiLog_dt = None if semiLog_dt is None else float(semiLog_dt)
+        self.semiLogT0 = None if semiLogT0 is None else float(semiLogT0)
+        self.geometry = str(geometry)
+        self.phaseNodes = None if phase_nodes is None else tuple(int(v) for v in np.asarray(phase_nodes, dtype=np.int64).reshape(-1))
+        self.tolerance = float(tolerance)
+        self.residualTolerance = float(tolerance if residual_tolerance is None else residual_tolerance)
+        self.maxIterations = int(max_iterations)
+        self.maxStepRetries = int(max_step_retries)
+        self.retryFactor = float(retry_factor)
+        self.minMiddleWidthFraction = float(min_middle_width_fraction)
+        self.recordPqData = bool(record_pq_data)
+        self._inputGrids = None if transformed_grids is None else tuple(self._validate_transformed_grid(g, f"transformed_grids[{i}]") for i, g in enumerate(transformed_grids))
+        if self._inputGrids is not None:
+            if len(self._inputGrids) != 3:
+                raise ValueError("transformed_grids must contain exactly three grids.")
+            if self.phaseNodes is not None and tuple(len(g) for g in self._inputGrids) != self.phaseNodes:
+                raise ValueError("phase_nodes must match transformed_grids lengths when both are specified.")
+            self.phaseNodes = tuple(len(g) for g in self._inputGrids)
+
+        self.interfaceData = _ArrayHistory((2,), record)
+        self.etaData = _ArrayHistory((2,), record)
+        self.inventoryData = _ArrayHistory((2,), record)
+        self.profileData = None
+
+        self._currdt = np.inf
+        self._semiLogTimes = None
+        self._semiLogNextIndex = 0
+        self._nearFinalNoop = False
+        self._lastStepRetries = 0
+        self._lastImplicitIterations = 0
+        self._lastImplicitResidual = np.nan
+        self._lastImplicitPhysicalResidual = np.nan
+        self._lastImplicitConverged = False
+        self._lastImplicitFailureReason = None
+        self._lastInterfaceCompositions = None
+        self._initialInventory = None
+
+        self._z = None
+        self._R = None
+        self._grids = None
+        self._profiles_curr = None
+        self._interfaces_curr = None
+        self._interfaces_old = None
+        self._etas_curr = None
+
+        super().__init__(
+            mesh=mesh,
+            elements=elements,
+            phases=phases,
+            thermodynamics=thermodynamics,
+            temperature=temperature,
+            constraints=constraints,
+            record=record,
+        )
+        self._validateModelConfiguration()
+        self.interfaceData.currentY = self.initialInterfacePositions.copy()
+        self.interfaceData._y[0] = self.initialInterfacePositions.copy()
+
+    def _coerce_interface_equilibria(self, interface_equilibria):
+        if interface_equilibria is None:
+            raise ValueError("interface_equilibria must provide closures for A|B and B|C.")
+        if len(interface_equilibria) != 2:
+            raise ValueError("interface_equilibria must contain exactly two closures.")
+        closures = []
+        for i, closure in enumerate(interface_equilibria):
+            if hasattr(closure, "interface_compositions"):
+                closures.append(closure)
+            elif callable(closure):
+                closures.append(CallableTernaryInterfaceEquilibrium(closure))
+            else:
+                raise TypeError(f"interface_equilibria[{i}] must be an eta-capable closure or callable.")
+        return tuple(closures)
+
+    def _validate_transformed_grid(self, grid, name):
+        """Validates a supplied phase Landau-coordinate grid."""
+        values = np.asarray(grid, dtype=np.float64).reshape(-1)
+        if len(values) < 3:
+            raise ValueError(f"{name} must contain at least three nodes.")
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"{name} must contain only finite values.")
+        if not np.isclose(values[0], 0.0, rtol=0.0, atol=1e-14) or not np.isclose(values[-1], 1.0, rtol=0.0, atol=1e-14):
+            raise ValueError(f"{name} must start at 0 and end at 1.")
+        if not np.all(np.diff(values) > 0.0):
+            raise ValueError(f"{name} must be strictly increasing.")
+        values[0] = 0.0
+        values[-1] = 1.0
+        return values
+
+    def _validateModelConfiguration(self):
+        if not isinstance(self.mesh, CartesianFD1D):
+            raise TypeError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel requires a CartesianFD1D mesh.")
+        if len(self.allElements) != 3 or self.mesh.numResponses != 2:
+            raise ValueError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel requires ternary systems with two independent responses.")
+        if len(self.phases) != 3:
+            raise ValueError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel requires exactly three explicit phases.")
+        if any(e in interstitials for e in self.allElements):
+            raise ValueError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel supports only substitutional systems.")
+        if self.geometry != "planar":
+            raise NotImplementedError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel currently implements only planar geometry.")
+        if not np.isfinite(self.timeStep) or self.timeStep <= 0.0:
+            raise ValueError("time_step must be a positive finite value.")
+        if self.dtMode not in {"fixed", "semi_log"}:
+            raise ValueError("dt_mode must be 'fixed' or 'semi_log'.")
+        if self.dtMode == "semi_log" and ((self.semiLog_dt is None) or (self.semiLogT0 is None)):
+            raise ValueError("semiLog_dt and semiLogT0 must be specified when dt_mode is 'semi_log'.")
+        if self.initialInterfacePositions.shape != (2,) or not np.all(np.isfinite(self.initialInterfacePositions)):
+            raise ValueError("interfacePositions must contain two finite values.")
+        if self.maxIterations < 2:
+            raise ValueError("max_iterations must be at least 2.")
+        if self.maxStepRetries < 1:
+            raise ValueError("max_step_retries must be at least 1.")
+        if not (0.0 < self.retryFactor < 1.0):
+            raise ValueError("retry_factor must be between 0 and 1.")
+        if not np.isfinite(self.minMiddleWidthFraction) or self.minMiddleWidthFraction <= 0.0:
+            raise ValueError("min_middle_width_fraction must be positive and finite.")
+        if self.bulkPicardRtol is not None and (not np.isfinite(self.bulkPicardRtol) or self.bulkPicardRtol <= 0.0):
+            raise ValueError("bulk_picard_rtol must be positive when specified.")
+        if not np.isfinite(self.bulkPicardAtol) or self.bulkPicardAtol <= 0.0:
+            raise ValueError("bulk_picard_atol must be positive and finite.")
+        if self.bulkPicardMaxIterations < 1:
+            raise ValueError("bulk_picard_max_iterations must be at least 1.")
+        if not np.isfinite(self.bulkPicardRelaxation) or not (0.0 < self.bulkPicardRelaxation <= 1.0):
+            raise ValueError("bulk_picard_relaxation must be in the interval (0, 1].")
+        if self.phaseNodes is not None and (len(self.phaseNodes) != 3 or any(n < 3 for n in self.phaseNodes)):
+            raise ValueError("phase_nodes must contain three integers of at least 3.")
+        for closure in self.interfaceEquilibria:
+            _validate_eta_bounds(closure)
+        self._validate_external_boundary_conditions()
+        self._validate_isothermal_temperature()
+
+    def _validate_external_boundary_conditions(self):
+        """Rejects unsupported external boundary conditions for the closed planar solver."""
+        bc = getattr(self.mesh, "boundaryConditions", None)
+        if bc is None:
+            return
+        if isinstance(bc, PeriodicBoundary1D):
+            raise NotImplementedError("Three-phase Illingworth supports only homogeneous zero-flux external boundaries.")
+        if not isinstance(bc, MixedBoundary1D):
+            raise NotImplementedError("Three-phase Illingworth supports only MixedBoundary1D zero-flux external boundaries.")
+        expected_shape = (self.mesh.numResponses,)
+        for attr in ("LBCtype", "RBCtype", "LBCvalue", "RBCvalue"):
+            values = np.asarray(getattr(bc, attr, None))
+            if values.shape != expected_shape:
+                raise NotImplementedError("Boundary-condition arrays must match the independent-component count.")
+        if not np.all(np.asarray(bc.LBCtype) == MixedBoundary1D.NEUMANN) or not np.all(np.asarray(bc.RBCtype) == MixedBoundary1D.NEUMANN):
+            raise NotImplementedError("Three-phase Illingworth supports only Neumann zero-flux external boundaries.")
+        if not np.all(np.asarray(bc.LBCvalue, dtype=np.float64) == 0.0) or not np.all(np.asarray(bc.RBCvalue, dtype=np.float64) == 0.0):
+            raise NotImplementedError("Three-phase Illingworth supports only homogeneous zero-flux external boundaries.")
+
+    def _validate_isothermal_temperature(self):
+        """Validates the scalar isothermal temperature assumption used by v1."""
+        params = getattr(self.temperatureParameters, "Tparameters", None)
+        if isinstance(params, tuple) and len(params) == 2:
+            values = np.asarray(params[1], dtype=np.float64).reshape(-1)
+            if values.size == 0 or not np.all(np.isfinite(values)):
+                raise ValueError("Temperature values must be finite.")
+            if not np.all(values == values[0]):
+                raise NotImplementedError("Three-phase Illingworth currently supports only isothermal temperature.")
+            return
+        if callable(params):
+            raise NotImplementedError("Three-phase Illingworth currently supports only isothermal temperature.")
+        values = np.asarray(params, dtype=np.float64).reshape(-1)
+        if values.size != 1 or not np.isfinite(values[0]):
+            raise ValueError("Three-phase Illingworth requires a finite scalar isothermal temperature.")
+
+    def _getBoundaryConditions(self):
+        bc = getattr(self.mesh, "boundaryConditions", None)
+        if bc is None:
+            bc = MixedBoundary1D(self.mesh.responses)
+            self.mesh.boundaryConditions = bc
+        return bc
+
+    def _minimum_middle_width(self):
+        return max(float(self._R) * self.minMiddleWidthFraction, 1e-14)
+
+    def _validate_interfaces(self, interfaces, strict=True):
+        values = np.asarray(interfaces, dtype=np.float64).reshape(2)
+        if self._R is None:
+            z = flatten_1d_coordinates(self.mesh.z)
+            domain_length = float(z[-1] - z[0])
+        else:
+            domain_length = float(self._R)
+        eps = max(domain_length * 1e-14, 1e-14)
+        min_width = max(domain_length * self.minMiddleWidthFraction, eps)
+        valid = eps < values[0] and values[0] + min_width < values[1] and values[1] < domain_length - eps
+        if strict and not valid:
+            raise ValueError("Three-phase interface positions must satisfy 0 < s_AB < s_BC < R with a nonzero middle phase.")
+        values[0] = np.clip(values[0], eps, domain_length - eps)
+        values[1] = np.clip(values[1], eps, domain_length - eps)
+        if values[1] - values[0] < min_width:
+            center = 0.5 * (values[0] + values[1])
+            values[0] = center - 0.5 * min_width
+            values[1] = center + 0.5 * min_width
+        return values
+
+    def _eta_bounds(self):
+        return tuple(_validate_eta_bounds(closure) for closure in self.interfaceEquilibria)
+
+    def _initial_etas(self):
+        bounds = self._eta_bounds()
+        if self.initialEtaGuess is None:
+            return np.asarray([0.5 * (lower + upper) for lower, upper in bounds], dtype=np.float64)
+        if self.initialEtaGuess.shape != (2,):
+            raise ValueError("initial_eta_guess must contain two eta values.")
+        etas = self.initialEtaGuess.astype(np.float64).copy()
+        for i, (lower, upper) in enumerate(bounds):
+            if etas[i] < lower or etas[i] > upper:
+                raise ValueError("initial_eta_guess must lie within each interface eta bound.")
+        return etas
+
+    def _interface_compositions(self, etas):
+        etas = np.asarray(etas, dtype=np.float64).reshape(2)
+        out = []
+        for i, (closure, eta) in enumerate(zip(self.interfaceEquilibria, etas)):
+            left, right = closure.interface_compositions(float(eta))
+            left = self._validate_composition_vector(left, f"interface {i} left composition")
+            right = self._validate_composition_vector(right, f"interface {i} right composition")
+            out.append((left, right))
+        return tuple(out)
+
+    def _validate_composition_vector(self, values, name):
+        values = np.asarray(values, dtype=np.float64).reshape(-1)
+        min_comp = float(self.constraints.minComposition)
+        if values.shape != (2,) or not np.all(np.isfinite(values)):
+            raise ValueError(f"{name} must be a finite two-component vector.")
+        dependent = 1.0 - float(np.sum(values))
+        if np.any(values < min_comp) or dependent < min_comp:
+            raise ValueError(f"{name} violates ternary composition bounds.")
+        return values.copy()
+
+    def _validate_profile_compositions(self, profile, name):
+        profile = validate_ternary_profile(profile, name)
+        min_comp = float(self.constraints.minComposition)
+        dependent = 1.0 - np.sum(profile, axis=1)
+        if np.any(profile < min_comp) or np.any(dependent < min_comp):
+            raise ValueError(f"{name} violates ternary composition bounds.")
+
+    def setup(self):
+        super().setup()
+        self._validateModelConfiguration()
+        self._getBoundaryConditions()
+        self._z = flatten_1d_coordinates(self.mesh.z).astype(np.float64)
+        if not np.isclose(self._z[0], 0.0):
+            raise ValueError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel expects a 1D domain starting at 0.")
+        self._R = float(self._z[-1] - self._z[0])
+        interfaces0 = self._validate_interfaces(self.initialInterfacePositions, strict=True)
+        self.initialInterfacePositions = interfaces0.copy()
+        etas0 = self._initial_etas()
+        self._grids = self._build_transformed_grids(interfaces0)
+        self.profileData = [_ArrayHistory((len(grid), 2), self.interfaceData.recordInterval) for grid in self._grids] if self.recordPqData else None
+
+        c0 = np.asarray(self.data.currentY, dtype=np.float64)
+        profiles = self._initialize_transformed_state(c0, interfaces0, etas0)
+        self._profiles_curr = tuple(profile.copy() for profile in profiles)
+        self._interfaces_curr = interfaces0.copy()
+        self._interfaces_old = interfaces0.copy()
+        self._etas_curr = etas0.copy()
+        self._lastInterfaceCompositions = self._interface_compositions(etas0)
+
+        self.interfaceData.reset()
+        self.interfaceData.record(0, interfaces0)
+        self.etaData.reset()
+        self.etaData.record(0, etas0)
+        if self.recordPqData:
+            for history, profile in zip(self.profileData, self._profiles_curr):
+                history.record(0, profile)
+
+        physical = self._reconstruct_physical_profile(self._profiles_curr, interfaces0)
+        self.data.currentY = physical
+        self.data._y[0] = physical
+        self._initialInventory = self.getTotalInventoryFromState(self._profiles_curr, interfaces0)
+        self.inventoryData.reset()
+        self.inventoryData.record(0, self._initialInventory)
+
+    def _build_transformed_grids(self, interfaces):
+        if self._inputGrids is not None:
+            return tuple(grid.copy() for grid in self._inputGrids)
+        if self.phaseNodes is not None:
+            counts = self.phaseNodes
+        else:
+            s_ab, s_bc = interfaces
+            counts = (
+                max(3, int(np.searchsorted(self._z, s_ab, side="right"))),
+                max(3, int(np.searchsorted(self._z, s_bc, side="right") - np.searchsorted(self._z, s_ab, side="left") + 1)),
+                max(3, len(self._z) - int(np.searchsorted(self._z, s_bc, side="left"))),
+            )
+        return tuple(np.linspace(0.0, 1.0, int(count), dtype=np.float64) for count in counts)
+
+    def _initialize_transformed_state(self, composition, interfaces, etas):
+        c = np.asarray(composition, dtype=np.float64)
+        if c.ndim != 2 or c.shape[1] != 2:
+            raise ValueError("Initial ternary composition must have shape (n_nodes, 2).")
+        comps = self._interface_compositions(etas)
+        boundaries = np.concatenate(([0.0], interfaces, [self._R]))
+        profiles = []
+        for i, grid in enumerate(self._grids):
+            left, right = boundaries[i], boundaries[i + 1]
+            z_phase = left + (right - left) * grid
+            mask = (self._z >= left) & (self._z <= right)
+            if not np.any(mask):
+                raise ValueError("Initial interfaces leave an empty phase.")
+            profile = np.empty((len(grid), 2), dtype=np.float64)
+            for component in range(2):
+                profile[:, component] = np.interp(z_phase, self._z[mask], c[mask, component])
+            profiles.append(profile)
+        profiles[0][-1] = comps[0][0]
+        profiles[1][0] = comps[0][1]
+        profiles[1][-1] = comps[1][0]
+        profiles[2][0] = comps[1][1]
+        return tuple(profiles)
+
+    def _reconstruct_physical_profile(self, profiles, interfaces):
+        return reconstruct_planar_transformed_profile_sequence(
+            z=self._z,
+            profiles=profiles,
+            interfaces=interfaces,
+            domain_length=self._R,
+            grids=self._grids,
+        )
+
+    def setTimeInfo(self, currTime, simTime):
+        """Stores solve-time bounds and prepares optional semi-log target times."""
+        super().setTimeInfo(currTime, simTime)
+        self._currdt = np.inf
+        self._nearFinalNoop = False
+        if self.dtMode != "semi_log" or simTime <= 0:
+            self._semiLogTimes = None
+            self._semiLogNextIndex = 0
+            return
+        t0_rel = max(float(self.semiLogT0), 1e-15)
+        sim_time = float(simTime)
+        if sim_time <= t0_rel:
+            rel_times = np.asarray([sim_time], dtype=np.float64)
+        else:
+            rel_times = _loge_arange(t0_rel, sim_time, float(self.semiLog_dt))
+            rel_times = rel_times[(rel_times > 0.0) & (rel_times < sim_time)]
+            rel_times = np.append(rel_times, sim_time)
+        self._semiLogTimes = float(currTime) + np.asarray(rel_times, dtype=np.float64)
+        self._semiLogNextIndex = 0
+
+    def _updateSemiLogIndex(self, t):
+        if self._semiLogTimes is None:
+            return
+        while self._semiLogNextIndex < len(self._semiLogTimes):
+            if self._semiLogTimes[self._semiLogNextIndex] > float(t) + 1e-15:
+                break
+            self._semiLogNextIndex += 1
+
+    def _computeSemiLogDt(self, t):
+        if self.dtMode != "semi_log" or self._semiLogTimes is None:
+            return np.inf
+        self._updateSemiLogIndex(t)
+        if self._semiLogNextIndex >= len(self._semiLogTimes):
+            return np.inf
+        return max(1e-15, float(self._semiLogTimes[self._semiLogNextIndex] - float(t)))
+
+    def _compute_dt(self, t):
+        remaining = getattr(self, "finalTime", np.inf) - float(t)
+        step_scale = self.timeStep
+        if self.dtMode == "semi_log":
+            scheduled_dt = self._computeSemiLogDt(t)
+            if np.isfinite(scheduled_dt) and scheduled_dt > 0:
+                step_scale = scheduled_dt
+            dt = min(scheduled_dt, remaining)
+        else:
+            dt = min(self.timeStep, remaining)
+        self._nearFinalNoop = bool(np.isfinite(remaining) and 0 < remaining <= max(step_scale, 1e-15) * 1e-10)
+        if self._nearFinalNoop:
+            self._currdt = max(step_scale, 1e-15)
+            return self._currdt
+        if not np.isfinite(dt) or dt <= 0:
+            dt = self.timeStep
+        self._currdt = float(dt)
+        return float(dt)
+
+    def solve(self, simTime, iterator=explicitEulerIterator, verbose=False, vIt=10, minDtFrac=1e-8, maxDtFrac=1):
+        """Solves the implicit three-phase recurrence through an Euler wrapper."""
+        if iterator is not explicitEulerIterator:
+            raise ValueError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel supports only explicitEulerIterator.")
+        return super().solve(simTime, iterator=iterator, verbose=verbose, vIt=vIt, minDtFrac=minDtFrac, maxDtFrac=maxDtFrac)
+
+    def getCurrentX(self):
+        return [*(profile.copy() for profile in self._profiles_curr), self._interfaces_curr.copy(), self._etas_curr.copy()]
+
+    def flattenX(self, X):
+        return np.concatenate((
+            np.asarray(X[0], dtype=np.float64).reshape(-1),
+            np.asarray(X[1], dtype=np.float64).reshape(-1),
+            np.asarray(X[2], dtype=np.float64).reshape(-1),
+            np.asarray(X[3], dtype=np.float64).reshape(2),
+            np.asarray(X[4], dtype=np.float64).reshape(2),
+        ))
+
+    def unflattenX(self, X_flat, X_ref):
+        sizes = [np.asarray(X_ref[i], dtype=np.float64).size for i in range(3)]
+        cursor = 0
+        profiles = []
+        for i, size in enumerate(sizes):
+            profiles.append(np.asarray(X_flat[cursor : cursor + size], dtype=np.float64).reshape(np.asarray(X_ref[i]).shape))
+            cursor += size
+        interfaces = np.asarray(X_flat[cursor : cursor + 2], dtype=np.float64)
+        cursor += 2
+        etas = np.asarray(X_flat[cursor : cursor + 2], dtype=np.float64)
+        return [profiles[0], profiles[1], profiles[2], interfaces, etas]
+
+    def _identity(self):
+        return np.eye(2, dtype=np.float64)
+
+    def _phase_face_diffusivity_matrices(self, values, n_faces, phase, context="transient face diffusivity"):
+        values = np.asarray(values)
+        if values.shape == (2, 2):
+            matrix = _validate_ternary_diffusivity_matrix(values, phase, context=context)
+            return np.broadcast_to(matrix, (n_faces, 2, 2)).copy()
+        if values.shape != (n_faces, 2, 2):
+            raise ValueError(f"{context} for phase {phase} must have shape (2, 2) or ({n_faces}, 2, 2); received {values.shape}.")
+        out = np.empty(values.shape, dtype=np.float64)
+        for i, matrix in enumerate(values):
+            out[i] = _validate_ternary_diffusivity_matrix(matrix, phase, context=f"{context} face {i}")
+        return out
+
+    def _temperatures_at_positions(self, positions, time):
+        positions = np.asarray(positions, dtype=np.float64).reshape(-1)
+        T = np.asarray(self.temperatureParameters(positions.reshape(-1, 1), float(time)), dtype=np.float64).reshape(-1)
+        if T.size == 1 and positions.size != 1:
+            T = np.full(positions.shape, float(T[0]), dtype=np.float64)
+        if T.size != positions.size or not np.all(np.isfinite(T)):
+            raise ValueError("Bulk face temperatures must be finite and match the face count.")
+        return T
+
+    def _bulk_face_diffusivity_matrices(self, face_compositions, phase, time, physical_face_positions):
+        """Returns validated bulk diffusivity matrices for interval faces."""
+        face_compositions = np.asarray(face_compositions, dtype=np.float64)
+        if face_compositions.ndim != 2 or face_compositions.shape[1] != 2:
+            raise ValueError("face_compositions must have shape (n_faces, 2).")
+        temperatures = self._temperatures_at_positions(physical_face_positions, time)
+
+        def validate_stack(values):
+            matrices = np.asarray(values)
+            if matrices.shape == (2, 2) and face_compositions.shape[0] == 1:
+                matrices = matrices.reshape(1, 2, 2)
+            if matrices.shape != (face_compositions.shape[0], 2, 2):
+                raise ValueError("bulk diffusivity query returned an unexpected matrix shape.")
+            out = np.empty(matrices.shape, dtype=np.float64)
+            for i, matrix in enumerate(matrices):
+                out[i] = _validate_ternary_diffusivity_matrix(matrix, phase, context=f"bulk face diffusivity face {i}")
+            return out
+
+        try:
+            values = self.therm.getInterdiffusivity(face_compositions, temperatures, phase=phase, query_context="general")
+        except (TypeError, ValueError):
+            pass
+        else:
+            return validate_stack(values)
+
+        out = np.empty((face_compositions.shape[0], 2, 2), dtype=np.float64)
+        for i, (composition, temperature) in enumerate(zip(face_compositions, temperatures)):
+            try:
+                D = self.therm.getInterdiffusivity(composition, float(temperature), phase=phase, query_context="general")
+            except TypeError:
+                D = self.therm.getInterdiffusivity(composition, float(temperature), phase=phase)
+            out[i] = _validate_ternary_diffusivity_matrix(D, phase, context=f"bulk face diffusivity face {i}")
+        return out
+
+    def _phase_uniform_diffusivity(self, phase_index, interface_compositions, interfaces):
+        if phase_index == 0:
+            composition = interface_compositions[0][0]
+            position = interfaces[0]
+        elif phase_index == 1:
+            composition = 0.5 * (interface_compositions[0][1] + interface_compositions[1][0])
+            position = 0.5 * (interfaces[0] + interfaces[1])
+        else:
+            composition = interface_compositions[1][1]
+            position = interfaces[1]
+        T = np.asarray(self.temperatureParameters(np.asarray([[float(position)]], dtype=np.float64), self.currentTime), dtype=np.float64).reshape(-1)
+        try:
+            D = self.therm.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index], query_context="interface")
+        except TypeError:
+            D = self.therm.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index])
+        return _validate_ternary_diffusivity_matrix(D, self.phases[phase_index], context="three-phase phase-uniform diffusivity")
+
+    def _face_positions(self, grid, bounds):
+        face_xi = 0.5 * (grid[:-1] + grid[1:])
+        return float(bounds[0]) + (float(bounds[1]) - float(bounds[0])) * face_xi
+
+    def _lagged_face_compositions(self, profile):
+        return 0.5 * (np.asarray(profile, dtype=np.float64)[:-1] + np.asarray(profile, dtype=np.float64)[1:])
+
+    def _interval_face_diffusivity(self, profile, grid, phase_index, new_bounds):
+        return self._bulk_face_diffusivity_matrices(
+            self._lagged_face_compositions(profile),
+            self.phases[phase_index],
+            self.currentTime,
+            self._face_positions(grid, new_bounds),
+        )
+
+    def _solve_interval_planar(self, profile, grid, old_bounds, new_bounds, phase_index, left_value, right_value, D_faces, validate_diffusivity=True):
+        """
+        Solves one transformed planar interval on a moving Landau grid.
+
+        The finite-volume equation uses old and new physical control-volume
+        widths so phase-length changes are included in the discrete inventory.
+        Endpoint values are Dirichlet when supplied; ``None`` means homogeneous
+        zero flux at a fixed external boundary.
+        """
+        profile = validate_ternary_profile(profile, "interval profile")
+        grid = np.asarray(grid, dtype=np.float64).reshape(-1)
+        n = len(profile)
+        D_values = np.asarray(D_faces)
+        D_faces = self._phase_face_diffusivity_matrices(D_values, n - 1, self.phases[phase_index]) if validate_diffusivity else np.asarray(D_values, dtype=np.float64)
+        if D_faces.shape == (2, 2):
+            D_faces = np.broadcast_to(D_faces, (n - 1, 2, 2)).copy()
+
+        old_left, old_right = float(old_bounds[0]), float(old_bounds[1])
+        new_left, new_right = float(new_bounds[0]), float(new_bounds[1])
+        old_length = old_right - old_left
+        new_length = new_right - new_left
+        if old_length <= 0.0 or new_length <= 0.0:
+            raise ValueError("Transformed interval length must remain positive.")
+        face_xi = np.empty(n + 1, dtype=np.float64)
+        face_xi[0] = 0.0
+        face_xi[-1] = 1.0
+        face_xi[1:-1] = 0.5 * (grid[:-1] + grid[1:])
+        old_widths = old_length * (face_xi[1:] - face_xi[:-1])
+        new_widths = new_length * (face_xi[1:] - face_xi[:-1])
+
+        lower = np.zeros((n, 2, 2), dtype=np.float64)
+        diagonal = np.zeros((n, 2, 2), dtype=np.float64)
+        upper = np.zeros((n, 2, 2), dtype=np.float64)
+        rhs = np.zeros((n, 2), dtype=np.float64)
+        I = self._identity()
+
+        for i in range(n):
+            if i == 0 and left_value is not None:
+                diagonal[i] = I
+                rhs[i] = np.asarray(left_value, dtype=np.float64)
+                continue
+            if i == n - 1 and right_value is not None:
+                diagonal[i] = I
+                rhs[i] = np.asarray(right_value, dtype=np.float64)
+                continue
+            diagonal[i] = new_widths[i] * I
+            rhs[i] = old_widths[i] * profile[i]
+            if i > 0:
+                dx_left = new_length * (grid[i] - grid[i - 1])
+                A_left = float(self._currdt) * D_faces[i - 1] / dx_left
+                diagonal[i] += A_left
+                lower[i] -= A_left
+            if i < n - 1:
+                dx_right = new_length * (grid[i + 1] - grid[i])
+                A_right = float(self._currdt) * D_faces[i] / dx_right
+                diagonal[i] += A_right
+                upper[i] -= A_right
+
+        solved = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+        left_matrix = None if left_value is None else D_faces[0]
+        right_matrix = None if right_value is None else D_faces[-1]
+        zero = np.zeros(2, dtype=np.float64)
+        if left_value is None:
+            left_flux = zero.copy()
+        else:
+            left_flux = np.matmul(left_matrix, (solved[1] - np.asarray(left_value, dtype=np.float64)) / (new_length * grid[1]))
+        if right_value is None:
+            right_flux = zero.copy()
+        else:
+            right_flux = np.matmul(right_matrix, (np.asarray(right_value, dtype=np.float64) - solved[-2]) / (new_length * (1.0 - grid[-2])))
+        return _ThreePhaseBulkResult(solved, left_flux, right_flux, left_matrix, right_matrix)
+
+    def _solve_interval_picard(self, profile, grid, old_bounds, new_bounds, phase_index, left_value, right_value):
+        """Solves one interval with composition-dependent Picard face matrices."""
+        iterate = np.asarray(profile, dtype=np.float64).copy()
+        if left_value is not None:
+            iterate[0] = left_value
+        if right_value is not None:
+            iterate[-1] = right_value
+        update_norm = np.inf
+        for iteration in range(1, self.bulkPicardMaxIterations + 1):
+            D_faces = self._interval_face_diffusivity(iterate, grid, phase_index, new_bounds)
+            linear = self._solve_interval_planar(profile, grid, old_bounds, new_bounds, phase_index, left_value, right_value, D_faces, validate_diffusivity=False)
+            update = linear.profile - iterate
+            update_norm = float(np.max(np.abs(update)))
+            scale = max(1e-12, float(np.max(np.abs(linear.profile))))
+            threshold = self.bulkPicardAtol + float(self.tolerance if self.bulkPicardRtol is None else self.bulkPicardRtol) * scale
+            if update_norm <= threshold:
+                return _ThreePhaseBulkResult(
+                    linear.profile,
+                    linear.left_flux,
+                    linear.right_flux,
+                    linear.left_face_matrix,
+                    linear.right_face_matrix,
+                    inner_iterations=iteration,
+                    inner_update_norm=update_norm,
+                    diffusivity_evaluations=len(profile) - 1,
+                )
+            iterate = iterate + self.bulkPicardRelaxation * update
+        raise RuntimeError(f"bulk Picard solve failed to converge for phase {self.phases[phase_index]} after {self.bulkPicardMaxIterations} iterations")
+
+    def _solve_bulk_profiles(self, profiles, old_interfaces, new_interfaces, interface_compositions):
+        old_bounds = np.asarray([[0.0, old_interfaces[0]], [old_interfaces[0], old_interfaces[1]], [old_interfaces[1], self._R]], dtype=np.float64)
+        new_bounds = np.asarray([[0.0, new_interfaces[0]], [new_interfaces[0], new_interfaces[1]], [new_interfaces[1], self._R]], dtype=np.float64)
+        boundary_values = (
+            (None, interface_compositions[0][0]),
+            (interface_compositions[0][1], interface_compositions[1][0]),
+            (interface_compositions[1][1], None),
+        )
+        results = []
+        for phase_index in range(3):
+            left_value, right_value = boundary_values[phase_index]
+            if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
+                D = self._phase_uniform_diffusivity(phase_index, interface_compositions, new_interfaces)
+                result = self._solve_interval_planar(profiles[phase_index], self._grids[phase_index], old_bounds[phase_index], new_bounds[phase_index], phase_index, left_value, right_value, D)
+            elif self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_LAGGED:
+                D = self._interval_face_diffusivity(profiles[phase_index], self._grids[phase_index], phase_index, new_bounds[phase_index])
+                result = self._solve_interval_planar(profiles[phase_index], self._grids[phase_index], old_bounds[phase_index], new_bounds[phase_index], phase_index, left_value, right_value, D, validate_diffusivity=False)
+            elif self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_IMPLICIT:
+                result = self._solve_interval_picard(profiles[phase_index], self._grids[phase_index], old_bounds[phase_index], new_bounds[phase_index], phase_index, left_value, right_value)
+            else:
+                raise ValueError(f"Unsupported bulk diffusivity mode {self.bulkDiffusivityMode}.")
+            results.append(result)
+        return tuple(results)
+
+    def _interface_residuals(self, old_interfaces, new_interfaces, interface_compositions, bulk_results, dt):
+        ds_ab = float(new_interfaces[0] - old_interfaces[0])
+        ds_bc = float(new_interfaces[1] - old_interfaces[1])
+        c_a_ab, c_b_ab = interface_compositions[0]
+        c_b_bc, c_c_bc = interface_compositions[1]
+        residual_ab = ds_ab * (c_a_ab - c_b_ab) - float(dt) * (bulk_results[1].left_flux - bulk_results[0].right_flux)
+        residual_bc = ds_bc * (c_b_bc - c_c_bc) - float(dt) * (bulk_results[2].left_flux - bulk_results[1].right_flux)
+        return np.concatenate((residual_ab, residual_bc))
+
+    def _residual_scale(self, profiles, interfaces):
+        inventory = self.getTotalInventoryFromState(profiles, interfaces)
+        return np.maximum(np.maximum(np.repeat(np.maximum(np.abs(inventory), self._R), 2), 1e-300), 1e-300)
+
+    def _scaled_bounds(self):
+        eps = 1e-14
+        return np.asarray([eps, eps, 0.0, 0.0], dtype=np.float64), np.asarray([1.0 - eps, 1.0 - eps, 1.0, 1.0], dtype=np.float64)
+
+    def _physical_to_scaled(self, interfaces, etas):
+        bounds = self._eta_bounds()
+        return np.asarray(
+            [
+                interfaces[0] / self._R,
+                interfaces[1] / self._R,
+                (etas[0] - bounds[0][0]) / (bounds[0][1] - bounds[0][0]),
+                (etas[1] - bounds[1][0]) / (bounds[1][1] - bounds[1][0]),
+            ],
+            dtype=np.float64,
+        )
+
+    def _scaled_to_physical(self, x_hat):
+        x_hat = np.asarray(x_hat, dtype=np.float64).reshape(4)
+        bounds = self._eta_bounds()
+        interfaces = np.asarray([x_hat[0] * self._R, x_hat[1] * self._R], dtype=np.float64)
+        etas = np.asarray(
+            [
+                bounds[0][0] + x_hat[2] * (bounds[0][1] - bounds[0][0]),
+                bounds[1][0] + x_hat[3] * (bounds[1][1] - bounds[1][0]),
+            ],
+            dtype=np.float64,
+        )
+        return interfaces, etas
+
+    def _scaled_variables_in_bounds(self, x_hat, lower, upper):
+        if np.any(np.asarray(x_hat) < lower) or np.any(np.asarray(x_hat) > upper):
+            return False
+        interfaces, _ = self._scaled_to_physical(x_hat)
+        return interfaces[1] - interfaces[0] >= self._minimum_middle_width()
+
+    def _bounded_newton_step(self, x_hat, step, lower, upper):
+        step = np.asarray(step, dtype=np.float64).copy()
+        if not np.all(np.isfinite(step)):
+            raise RuntimeError("Three-phase interface Newton step is non-finite.")
+        active_tol = 10.0 * np.finfo(float).eps
+        for i in range(step.size):
+            if x_hat[i] <= lower[i] + active_tol and step[i] < 0.0:
+                step[i] = 0.0
+            elif x_hat[i] >= upper[i] - active_tol and step[i] > 0.0:
+                step[i] = 0.0
+        alpha_max = 1.0
+        for i in range(step.size):
+            if step[i] > 0.0:
+                alpha_max = min(alpha_max, float((upper[i] - x_hat[i]) / step[i]))
+            elif step[i] < 0.0:
+                alpha_max = min(alpha_max, float((lower[i] - x_hat[i]) / step[i]))
+        if step[0] - step[1] > 0.0:
+            gap_hat = (x_hat[1] - x_hat[0]) - self._minimum_middle_width() / self._R
+            alpha_max = min(alpha_max, max(0.0, float(gap_hat / (step[0] - step[1]))))
+        return step, max(0.0, alpha_max * (1.0 - 1e-12))
+
+    def _evaluate_interface_candidate(self, profiles, old_interfaces, x_hat, residual_scale, dt):
+        interfaces, etas = self._scaled_to_physical(x_hat)
+        interfaces = self._validate_interfaces(interfaces, strict=True)
+        interface_compositions = self._interface_compositions(etas)
+        bulk_results = self._solve_bulk_profiles(profiles, old_interfaces, interfaces, interface_compositions)
+        residual = self._interface_residuals(old_interfaces, interfaces, interface_compositions, bulk_results, dt)
+        scaled = residual / residual_scale
+        return _ThreePhaseCandidate(
+            x_hat=np.asarray(x_hat, dtype=np.float64).copy(),
+            profiles=tuple(result.profile for result in bulk_results),
+            interfaces=interfaces.copy(),
+            etas=etas.copy(),
+            interface_compositions=interface_compositions,
+            residual=residual,
+            scaled_residual=scaled,
+            scaled_norm=float(np.max(np.abs(scaled))),
+            physical_norm=float(np.max(np.abs(residual))),
+            bulk_results=bulk_results,
+        )
+
+    def _solve_interface_planar(self, profiles, interfaces, etas, dt):
+        lower, upper = self._scaled_bounds()
+        x_hat = self._physical_to_scaled(interfaces, etas)
+        if not self._scaled_variables_in_bounds(x_hat, lower, upper):
+            raise ValueError("Initial three-phase nonlinear iterate lies outside scaled solve bounds.")
+        residual_scale = self._residual_scale(profiles, interfaces)
+        best = None
+        failure_reason = "maximum iterations reached"
+        for iteration in range(1, self.maxIterations + 1):
+            candidate = self._evaluate_interface_candidate(profiles, interfaces, x_hat, residual_scale, dt)
+            if best is None or candidate.scaled_norm < best.scaled_norm:
+                best = candidate
+            if candidate.scaled_norm <= self.residualTolerance:
+                self._lastImplicitIterations = iteration
+                self._lastImplicitResidual = candidate.scaled_norm
+                self._lastImplicitPhysicalResidual = candidate.physical_norm
+                self._lastImplicitConverged = True
+                self._lastImplicitFailureReason = None
+                return candidate
+
+            jacobian = np.zeros((4, 4), dtype=np.float64)
+            for variable in range(4):
+                step_size, x_perturbed, direction = _bounded_finite_difference_perturbation(x_hat, lower, upper, variable)
+                if not self._scaled_variables_in_bounds(x_perturbed, lower, upper):
+                    x_perturbed = x_hat.copy()
+                    x_perturbed[variable] -= step_size
+                    direction = "backward"
+                perturbed = self._evaluate_interface_candidate(profiles, interfaces, x_perturbed, residual_scale, dt)
+                if direction == "forward":
+                    jacobian[:, variable] = (perturbed.scaled_residual - candidate.scaled_residual) / step_size
+                else:
+                    jacobian[:, variable] = (candidate.scaled_residual - perturbed.scaled_residual) / step_size
+
+            try:
+                step = np.linalg.solve(jacobian, -candidate.scaled_residual)
+            except np.linalg.LinAlgError:
+                step = np.linalg.lstsq(jacobian, -candidate.scaled_residual, rcond=None)[0]
+            step, alpha_start = self._bounded_newton_step(x_hat, step, lower, upper)
+            accepted = False
+            for scale in (alpha_start, 0.5 * alpha_start, 0.25 * alpha_start, 0.125 * alpha_start, 0.0625 * alpha_start):
+                if scale <= 0.0:
+                    continue
+                trial = x_hat + scale * step
+                if not self._scaled_variables_in_bounds(trial, lower, upper):
+                    continue
+                trial_candidate = self._evaluate_interface_candidate(profiles, interfaces, trial, residual_scale, dt)
+                if np.isfinite(trial_candidate.scaled_norm) and trial_candidate.scaled_norm < candidate.scaled_norm:
+                    x_hat = trial
+                    accepted = True
+                    break
+            if not accepted:
+                failure_reason = "line search failed"
+                break
+        self._lastImplicitIterations = self.maxIterations
+        self._lastImplicitResidual = np.inf if best is None else best.scaled_norm
+        self._lastImplicitPhysicalResidual = np.inf if best is None else best.physical_norm
+        self._lastImplicitConverged = False
+        self._lastImplicitFailureReason = failure_reason
+        raise RuntimeError(f"Three-phase Illingworth interface solve failed to converge; best residual was {self._lastImplicitResidual:.3e}.")
+
+    def getdXdt(self, t, xCurr):
+        profiles = tuple(np.asarray(xCurr[i], dtype=np.float64).reshape((-1, 2)).copy() for i in range(3))
+        interfaces = self._validate_interfaces(np.asarray(xCurr[3], dtype=np.float64), strict=True)
+        etas = np.asarray(xCurr[4], dtype=np.float64).reshape(2)
+        interface_compositions = self._interface_compositions(etas)
+        profiles[0][-1] = interface_compositions[0][0]
+        profiles[1][0] = interface_compositions[0][1]
+        profiles[1][-1] = interface_compositions[1][0]
+        profiles[2][0] = interface_compositions[1][1]
+        dt = self._compute_dt(t)
+        if self._nearFinalNoop:
+            return [np.zeros_like(profiles[0]), np.zeros_like(profiles[1]), np.zeros_like(profiles[2]), np.zeros(2), np.zeros(2)]
+
+        last_error = None
+        trial_dt = float(dt)
+        for retry in range(self.maxStepRetries):
+            self._currdt = trial_dt
+            try:
+                candidate = self._solve_interface_planar(profiles, interfaces, etas, trial_dt)
+                self._currdt = trial_dt
+                self._lastStepRetries = retry
+                self._lastInterfaceCompositions = candidate.interface_compositions
+                return [
+                    (candidate.profiles[0] - profiles[0]) / trial_dt,
+                    (candidate.profiles[1] - profiles[1]) / trial_dt,
+                    (candidate.profiles[2] - profiles[2]) / trial_dt,
+                    (candidate.interfaces - interfaces) / trial_dt,
+                    (candidate.etas - etas) / trial_dt,
+                ]
+            except (RuntimeError, ValueError, ZeroDivisionError) as exc:
+                last_error = exc
+                trial_dt *= self.retryFactor
+        raise RuntimeError("Three-phase Illingworth step failed after timestep retries.") from last_error
+
+    def getDt(self, dXdt):
+        if np.isfinite(self._currdt) and self._currdt > 0.0:
+            return self._currdt
+        return self.timeStep
+
+    def postProcess(self, time, x):
+        if self._nearFinalNoop:
+            self.currentTime = time
+            self._nearFinalNoop = False
+            return self.getCurrentX(), True
+        GenericModel.postProcess(self, time, x)
+        profiles = tuple(np.asarray(x[i], dtype=np.float64).reshape((-1, 2)).copy() for i in range(3))
+        interfaces = self._validate_interfaces(np.asarray(x[3], dtype=np.float64), strict=True)
+        etas = np.asarray(x[4], dtype=np.float64).reshape(2)
+        interface_compositions = self._interface_compositions(etas)
+        profiles[0][-1] = interface_compositions[0][0]
+        profiles[1][0] = interface_compositions[0][1]
+        profiles[1][-1] = interface_compositions[1][0]
+        profiles[2][0] = interface_compositions[1][1]
+        for i, profile in enumerate(profiles):
+            self._validate_profile_compositions(profile, f"transformed profile {i}")
+        physical = self._reconstruct_physical_profile(profiles, interfaces)
+        self.data.record(time, physical)
+        self.interfaceData.record(time, interfaces)
+        self.etaData.record(time, etas)
+        if self.recordPqData:
+            for history, profile in zip(self.profileData, profiles):
+                history.record(time, profile)
+        self.inventoryData.record(time, self.getTotalInventoryFromState(profiles, interfaces))
+
+        self._interfaces_old = self._interfaces_curr.copy()
+        self._profiles_curr = tuple(profile.copy() for profile in profiles)
+        self._interfaces_curr = interfaces.copy()
+        self._etas_curr = etas.copy()
+        self.updateCoupledModels()
+        return self.getCurrentX(), False
+
+    def postSolve(self):
+        self.data.finalize()
+        self.interfaceData.finalize()
+        self.etaData.finalize()
+        self.inventoryData.finalize()
+        if self.profileData is not None:
+            for history in self.profileData:
+                history.finalize()
+
+    def reset(self):
+        super().reset()
+        self.interfaceData.reset()
+        self.interfaceData.record(0, self.initialInterfacePositions)
+        self.etaData.reset()
+        self.inventoryData.reset()
+        self.profileData = None
+        self._currdt = np.inf
+        self._semiLogTimes = None
+        self._semiLogNextIndex = 0
+        self._nearFinalNoop = False
+        self._lastStepRetries = 0
+        self._lastImplicitIterations = 0
+        self._lastImplicitResidual = np.nan
+        self._lastImplicitPhysicalResidual = np.nan
+        self._lastImplicitConverged = False
+        self._lastImplicitFailureReason = None
+        self._lastInterfaceCompositions = None
+        self._initialInventory = None
+        self._z = None
+        self._R = None
+        self._grids = None
+        self._profiles_curr = None
+        self._interfaces_curr = None
+        self._interfaces_old = None
+        self._etas_curr = None
+
+    def getInterfacePositions(self, time=None):
+        """Returns the two recorded interface positions ``[s_AB, s_BC]``."""
+        return self.interfaceData.y(time)
+
+    def getInterfaceEtas(self, time=None):
+        """Returns the two recorded tie-line coordinates ``[eta_AB, eta_BC]``."""
+        return self.etaData.y(time)
+
+    def getInterfaceCompositions(self, time=None):
+        """Returns ``((A_AB, B_AB), (B_BC, C_BC))`` interface compositions."""
+        return self._interface_compositions(self.getInterfaceEtas(time))
+
+    def getTransformedState(self, time=None):
+        """Returns the three recorded transformed phase profiles."""
+        if self.profileData is None:
+            raise ValueError("Transformed profile history is not available; set record_pq_data=True.")
+        return tuple(history.y(time) for history in self.profileData)
+
+    def getTotalInventoryFromState(self, profiles, interfaces):
+        """Returns componentwise inventory for the three transformed intervals."""
+        return integrate_planar_transformed_profile_sequence(profiles, interfaces, self._R, self._grids)
+
+    def getTotalInventory(self, time=None):
+        if time is None:
+            return self.getTotalInventoryFromState(self._profiles_curr, self._interfaces_curr)
+        return self.inventoryData.y(time)
+
+    def getTotalMass(self, time=None):
+        return self.getTotalInventory(time=time)
+
+    def getCompositions(self, time=None):
+        """
+        Returns full ternary mole fractions on the physical mesh.
+
+        The stored response profile contains the two independent substitutional
+        components; the dependent component is reconstructed from the simplex
+        constraint.
+        """
+        independent = np.asarray(self.data.y(time), dtype=np.float64)
+        dependent = 1.0 - np.sum(independent, axis=1)
+        return np.column_stack((dependent, independent))
+
+    def checkConservation(self, tolerance: float, time=None):
+        """
+        Checks componentwise transformed-inventory drift from the initial value.
+
+        The return value is the absolute drift vector for the two independent
+        components. A warning is emitted when any component exceeds
+        ``tolerance``.
+        """
+        if self._initialInventory is None:
+            raise ValueError("Model must be setup before conservation checks.")
+        drift = np.abs(self.getTotalInventory(time=time) - self._initialInventory)
+        if np.any(drift > float(tolerance)):
+            warnings.warn(
+                f"Three-phase ternary Illingworth inventory drift {drift} exceeded tolerance {float(tolerance):.3e}.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return drift
+
+    def toDict(self):
+        """Converts solved three-phase Illingworth histories to a restart dictionary."""
+        data = super().toDict()
+        data.update(
+            {
+                "interface_positions": self.interfaceData._y,
+                "interface_etas": self.etaData._y,
+                "inventory": self.inventoryData._y,
+                "interface_interval": self.interfaceData.recordInterval,
+                "interface_index": self.interfaceData.N,
+            }
+        )
+        if self.profileData is not None:
+            data["profiles"] = np.asarray([history._y for history in self.profileData], dtype=object)
+        return data

@@ -92,6 +92,90 @@ def reconstruct_planar_transformed_profile_components(z, p, q, s: float, domain_
     return out
 
 
+def _validate_transformed_sequence(profiles, interfaces, domain_length, grids):
+    """
+    Validates a sequential set of ternary transformed phase profiles.
+
+    The intervals are interpreted as ``[0, s0]``, ``[s0, s1]``, ...,
+    ``[s_last, domain_length]``. Each profile stores the two independent
+    ternary components on its own Landau grid, and each grid must span
+    ``[0, 1]`` so that trapezoidal integration remains length-scaled.
+    """
+    profiles = tuple(validate_ternary_profile(profile, f"profiles[{i}]") for i, profile in enumerate(profiles))
+    grids = tuple(np.asarray(grid, dtype=np.float64).reshape(-1) for grid in grids)
+    interfaces = np.asarray(interfaces, dtype=np.float64).reshape(-1)
+    domain_length = float(domain_length)
+    if len(profiles) != len(grids):
+        raise ValueError("profiles and grids must contain the same number of phases.")
+    if len(profiles) < 1:
+        raise ValueError("At least one transformed phase profile is required.")
+    if interfaces.size != len(profiles) - 1:
+        raise ValueError("interfaces must contain exactly one fewer entry than profiles.")
+    if not np.isfinite(domain_length) or domain_length <= 0.0:
+        raise ValueError("domain_length must be positive and finite.")
+    if not np.all(np.isfinite(interfaces)):
+        raise ValueError("interfaces must contain only finite values.")
+    if interfaces.size and (interfaces[0] <= 0.0 or interfaces[-1] >= domain_length or not np.all(np.diff(interfaces) > 0.0)):
+        raise ValueError("interfaces must be strictly ordered inside the domain.")
+    for i, (profile, grid) in enumerate(zip(profiles, grids)):
+        if len(grid) != len(profile):
+            raise ValueError(f"grids[{i}] length must match profiles[{i}].")
+        if len(grid) < 3:
+            raise ValueError(f"grids[{i}] must contain at least three nodes.")
+        if not np.all(np.isfinite(grid)):
+            raise ValueError(f"grids[{i}] must contain only finite values.")
+        if not np.isclose(grid[0], 0.0, rtol=0.0, atol=1e-14) or not np.isclose(grid[-1], 1.0, rtol=0.0, atol=1e-14):
+            raise ValueError(f"grids[{i}] must start at 0 and end at 1.")
+        if not np.all(np.diff(grid) > 0.0):
+            raise ValueError(f"grids[{i}] must be strictly increasing.")
+    return profiles, interfaces, domain_length, grids
+
+
+def integrate_planar_transformed_profile_sequence(profiles, interfaces, domain_length: float, grids):
+    """
+    Integrates sequential ternary phase profiles in planar transformed space.
+
+    The conserved inventory is the sum of ``phase_length * int_0^1 c_i dxi``
+    over all intervals. This is the three-or-more phase extension of
+    :func:`integrate_planar_transformed_profile_components`.
+    """
+    profiles, interfaces, domain_length, grids = _validate_transformed_sequence(profiles, interfaces, domain_length, grids)
+    boundaries = np.concatenate(([0.0], interfaces, [domain_length]))
+    inventory = np.zeros(2, dtype=np.float64)
+    for profile, grid, left, right in zip(profiles, grids, boundaries[:-1], boundaries[1:]):
+        inventory += (float(right) - float(left)) * np.trapezoid(profile, grid, axis=0)
+    return inventory
+
+
+def reconstruct_planar_transformed_profile_sequence(z, profiles, interfaces, domain_length: float, grids):
+    """
+    Maps sequential transformed ternary profiles onto physical mesh nodes.
+
+    Nodes are assigned to the leftmost matching interval so discontinuities at
+    moving interfaces are preserved deterministically. The dependent ternary
+    component is not reconstructed here.
+    """
+    z = flatten_1d_coordinates(z)
+    profiles, interfaces, domain_length, grids = _validate_transformed_sequence(profiles, interfaces, domain_length, grids)
+    boundaries = np.concatenate(([0.0], interfaces, [domain_length]))
+    out = np.empty((len(z), 2), dtype=np.float64)
+    assigned = np.zeros(len(z), dtype=bool)
+    for phase_index, (profile, grid, left, right) in enumerate(zip(profiles, grids, boundaries[:-1], boundaries[1:])):
+        if phase_index == len(profiles) - 1:
+            mask = (z >= left) & (z <= right)
+        else:
+            mask = (z >= left) & (z <= right) & ~assigned
+        if not np.any(mask):
+            continue
+        query = np.clip((z[mask] - float(left)) / max(float(right) - float(left), 1e-300), 0.0, 1.0)
+        for component in range(2):
+            out[mask, component] = np.interp(query, grid, profile[:, component])
+        assigned[mask] = True
+    if not np.all(assigned):
+        raise ValueError("Physical coordinates must lie within the transformed profile domain.")
+    return out
+
+
 _BLOCK_PIVOT_CONDITION_LIMIT = 1.0e12
 _BLOCK_PIVOT_RCOND_LIMIT = 1.0 / _BLOCK_PIVOT_CONDITION_LIMIT
 _BLOCK_PIVOT_STATUS_VALID = "valid"
