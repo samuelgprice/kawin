@@ -60,6 +60,31 @@ class _ThreePhaseCandidate:
     bulk_results: tuple[_ThreePhaseBulkResult, _ThreePhaseBulkResult, _ThreePhaseBulkResult]
 
 
+@dataclass(frozen=True, slots=True)
+class ThreePhaseInitialEtaEstimate:
+    """
+    Diagnostics from initial tie-line selection for the three-phase model.
+
+    ``etas`` are the selected A|B and B|C tie-line coordinates. ``velocities``
+    are the instantaneous interface velocities that satisfy the same component
+    balances used by the finite-step interface solve, evaluated with initial
+    adjacent-node gradients.
+    """
+
+    etas: np.ndarray
+    velocities: np.ndarray
+    residual_norm: float
+    residual: np.ndarray
+    flux_delta: np.ndarray
+    interface_compositions: tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]
+    method: str
+    solver: str
+    brackets: tuple[tuple[float, float], tuple[float, float]]
+    converged: bool
+    iterations: int
+    function_calls: int
+
+
 class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     """
     Three-phase sequential ternary Illingworth moving-boundary model.
@@ -83,6 +108,11 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         time_step: float,
         interface_equilibria,
         initial_eta_guess=None,
+        initial_eta_method: str = "instantaneous_balance",
+        initial_eta_brackets=None,
+        initial_eta_root_xtol: float = 1e-12,
+        initial_eta_root_maxiter: int = 100,
+        initial_velocity_guess=None,
         bulk_diffusivity_mode: str = _BULK_DIFFUSIVITY_PHASE_UNIFORM,
         bulk_picard_rtol: float | None = None,
         bulk_picard_atol: float = 1e-12,
@@ -108,6 +138,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self.timeStep = float(time_step)
         self.interfaceEquilibria = self._coerce_interface_equilibria(interface_equilibria)
         self.initialEtaGuess = None if initial_eta_guess is None else np.asarray(initial_eta_guess, dtype=np.float64).reshape(-1)
+        self.initialEtaMethod = str(initial_eta_method)
+        self.initialEtaBrackets = initial_eta_brackets
+        self.initialEtaRootXtol = float(initial_eta_root_xtol)
+        self.initialEtaRootMaxiter = int(initial_eta_root_maxiter)
+        self.initialVelocityGuess = None if initial_velocity_guess is None else np.asarray(initial_velocity_guess, dtype=np.float64).reshape(-1)
+        self.initialEtaEstimate = None
         self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
         self.bulkPicardRtol = None if bulk_picard_rtol is None else float(bulk_picard_rtol)
         self.bulkPicardAtol = float(bulk_picard_atol)
@@ -219,6 +255,14 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             raise ValueError("dt_mode must be 'fixed' or 'semi_log'.")
         if self.dtMode == "semi_log" and ((self.semiLog_dt is None) or (self.semiLogT0 is None)):
             raise ValueError("semiLog_dt and semiLogT0 must be specified when dt_mode is 'semi_log'.")
+        if self.initialEtaMethod != "instantaneous_balance":
+            raise ValueError("initial_eta_method must be 'instantaneous_balance'.")
+        if self.initialEtaRootXtol <= 0.0:
+            raise ValueError("initial_eta_root_xtol must be positive.")
+        if self.initialEtaRootMaxiter < 1:
+            raise ValueError("initial_eta_root_maxiter must be at least 1.")
+        if self.initialVelocityGuess is not None and self.initialVelocityGuess.shape != (2,):
+            raise ValueError("initial_velocity_guess must contain two interface velocities.")
         if self.initialInterfacePositions.shape != (2,) or not np.all(np.isfinite(self.initialInterfacePositions)):
             raise ValueError("interfacePositions must contain two finite values.")
         if self.maxIterations < 2:
@@ -312,17 +356,217 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     def _eta_bounds(self):
         return tuple(_validate_eta_bounds(closure) for closure in self.interfaceEquilibria)
 
-    def _initial_etas(self):
+    def _initial_eta_brackets(self):
         bounds = self._eta_bounds()
+        if self.initialEtaBrackets is None:
+            return bounds
+        values = tuple(np.asarray(self.initialEtaBrackets, dtype=np.float64).reshape(2, 2))
+        brackets = []
+        for i, bracket in enumerate(values):
+            lower, upper = float(bracket[0]), float(bracket[1])
+            eta_lower, eta_upper = bounds[i]
+            if (
+                not np.isfinite(lower)
+                or not np.isfinite(upper)
+                or upper <= lower
+                or lower < eta_lower
+                or upper > eta_upper
+            ):
+                raise ValueError("initial_eta_brackets must lie within each interface eta bound and be increasing.")
+            brackets.append((lower, upper))
+        return tuple(brackets)
+
+    def _initial_eta_start(self, brackets):
         if self.initialEtaGuess is None:
-            return np.asarray([0.5 * (lower + upper) for lower, upper in bounds], dtype=np.float64)
+            return np.asarray([0.5 * (lower + upper) for lower, upper in brackets], dtype=np.float64)
         if self.initialEtaGuess.shape != (2,):
             raise ValueError("initial_eta_guess must contain two eta values.")
         etas = self.initialEtaGuess.astype(np.float64).copy()
-        for i, (lower, upper) in enumerate(bounds):
+        for i, (lower, upper) in enumerate(brackets):
             if etas[i] < lower or etas[i] > upper:
-                raise ValueError("initial_eta_guess must lie within each interface eta bound.")
+                raise ValueError("initial_eta_guess must lie within each initial eta bracket.")
         return etas
+
+    def _initial_adjacent_compositions(self, composition, interfaces):
+        """Interpolates initial bulk compositions adjacent to both interfaces."""
+        c = np.asarray(composition, dtype=np.float64)
+        s_ab, s_bc = np.asarray(interfaces, dtype=np.float64).reshape(2)
+        boundaries = np.asarray([0.0, s_ab, s_bc, self._R], dtype=np.float64)
+        adjacent = []
+        for phase_index, grid in enumerate(self._grids):
+            left, right = boundaries[phase_index], boundaries[phase_index + 1]
+            mask = (self._z >= left) & (self._z <= right)
+            if not np.any(mask):
+                raise ValueError("Initial interfaces leave an empty phase.")
+            if phase_index == 0:
+                query = left + (right - left) * grid[-2]
+                values = [np.interp(query, self._z[mask], c[mask, component]) for component in range(2)]
+                adjacent.append(np.asarray(values, dtype=np.float64))
+            elif phase_index == 1:
+                query_left = left + (right - left) * grid[1]
+                query_right = left + (right - left) * grid[-2]
+                values_left = [np.interp(query_left, self._z[mask], c[mask, component]) for component in range(2)]
+                values_right = [np.interp(query_right, self._z[mask], c[mask, component]) for component in range(2)]
+                adjacent.append((np.asarray(values_left, dtype=np.float64), np.asarray(values_right, dtype=np.float64)))
+            else:
+                query = left + (right - left) * grid[1]
+                values = [np.interp(query, self._z[mask], c[mask, component]) for component in range(2)]
+                adjacent.append(np.asarray(values, dtype=np.float64))
+        return adjacent[0], adjacent[1][0], adjacent[1][1], adjacent[2]
+
+    def _interface_face_diffusivity(self, composition, phase_index, position, context):
+        """Returns one validated diffusivity matrix for an initial interface-face estimate."""
+        T = np.asarray(self.temperatureParameters(np.asarray([[float(position)]], dtype=np.float64), 0.0), dtype=np.float64).reshape(-1)
+        try:
+            D = self.therm.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index], query_context=context)
+        except TypeError:
+            D = self.therm.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index])
+        return _validate_ternary_diffusivity_matrix(D, self.phases[phase_index], context=context)
+
+    def _initial_flux_terms(self, interfaces, interface_compositions, adjacent):
+        """Evaluates initial face flux differences at A|B and B|C."""
+        s_ab, s_bc = np.asarray(interfaces, dtype=np.float64).reshape(2)
+        p_a, p_b_left, p_b_right, p_c = adjacent
+        c_a_ab, c_b_ab = interface_compositions[0]
+        c_b_bc, c_c_bc = interface_compositions[1]
+        width_a = s_ab
+        width_b = s_bc - s_ab
+        width_c = self._R - s_bc
+        u_a = self._grids[0]
+        u_b = self._grids[1]
+        u_c = self._grids[2]
+
+        if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
+            D_a = self._interface_face_diffusivity(c_a_ab, 0, s_ab, "initial-eta interface")
+            D_b = self._interface_face_diffusivity(0.5 * (c_b_ab + c_b_bc), 1, 0.5 * (s_ab + s_bc), "initial-eta interface")
+            D_c = self._interface_face_diffusivity(c_c_bc, 2, s_bc, "initial-eta interface")
+            D_b_left = D_b
+            D_b_right = D_b
+        else:
+            D_a = self._interface_face_diffusivity(0.5 * (p_a + c_a_ab), 0, s_ab, "initial-eta bulk")
+            D_b_left = self._interface_face_diffusivity(0.5 * (c_b_ab + p_b_left), 1, s_ab, "initial-eta bulk")
+            D_b_right = self._interface_face_diffusivity(0.5 * (p_b_right + c_b_bc), 1, s_bc, "initial-eta bulk")
+            D_c = self._interface_face_diffusivity(0.5 * (c_c_bc + p_c), 2, s_bc, "initial-eta bulk")
+
+        flux_a_right = np.matmul(D_a, (c_a_ab - p_a) / (width_a * (1.0 - u_a[-2])))
+        flux_b_left = np.matmul(D_b_left, (p_b_left - c_b_ab) / (width_b * u_b[1]))
+        flux_b_right = np.matmul(D_b_right, (c_b_bc - p_b_right) / (width_b * (1.0 - u_b[-2])))
+        flux_c_left = np.matmul(D_c, (p_c - c_c_bc) / (width_c * u_c[1]))
+        return np.concatenate((flux_b_left - flux_a_right, flux_c_left - flux_b_right))
+
+    def _estimate_initial_etas(self, composition, interfaces):
+        """
+        Solves the instantaneous two-interface balance for startup etas.
+
+        The unknowns are two scaled interface velocities and one eta for each
+        interface. This mirrors the two-phase Illingworth ternary initializer
+        while using the three-phase residual convention directly.
+        """
+        brackets = self._initial_eta_brackets()
+        eta0 = self._initial_eta_start(brackets)
+        adjacent = self._initial_adjacent_compositions(composition, interfaces)
+
+        def evaluate(etas):
+            interface_compositions = self._interface_compositions(etas)
+            flux_delta = self._initial_flux_terms(interfaces, interface_compositions, adjacent)
+            jumps = np.concatenate((interface_compositions[0][0] - interface_compositions[0][1], interface_compositions[1][0] - interface_compositions[1][1]))
+            return interface_compositions, flux_delta, jumps
+
+        interface_compositions0, flux_delta0, jumps0 = evaluate(eta0)
+        velocity_scales = []
+        velocity0 = []
+        for i in range(2):
+            jump = jumps0[2 * i : 2 * i + 2]
+            flux = flux_delta0[2 * i : 2 * i + 2]
+            scale = float(np.linalg.norm(flux) / max(float(np.linalg.norm(jump)), 1e-300))
+            if not np.isfinite(scale) or scale <= 0.0:
+                scale = 1.0
+            velocity_scales.append(scale)
+            if self.initialVelocityGuess is None:
+                velocity = float(np.dot(jump, flux) / max(float(np.dot(jump, jump)), 1e-300))
+            else:
+                velocity = float(self.initialVelocityGuess[i])
+            velocity0.append(velocity / scale)
+
+        lower = np.asarray([-np.inf, -np.inf, brackets[0][0], brackets[1][0]], dtype=np.float64)
+        upper = np.asarray([np.inf, np.inf, brackets[0][1], brackets[1][1]], dtype=np.float64)
+        x = np.asarray([velocity0[0], velocity0[1], eta0[0], eta0[1]], dtype=np.float64)
+        x = np.clip(x, lower, upper)
+        velocity_scales = np.asarray(velocity_scales, dtype=np.float64)
+        best = None
+        success = False
+        nfev = 0
+
+        def residual_unknowns(values):
+            velocities = np.asarray(values[:2], dtype=np.float64) * velocity_scales
+            etas = np.asarray(values[2:], dtype=np.float64)
+            interface_compositions, flux_delta, jumps = evaluate(etas)
+            residual = np.concatenate((velocities[0] * jumps[:2], velocities[1] * jumps[2:])) - flux_delta
+            if not np.all(np.isfinite(residual)):
+                raise ValueError("Initial eta residual is non-finite.")
+            return residual, flux_delta, interface_compositions
+
+        for iteration in range(1, self.initialEtaRootMaxiter + 1):
+            residual, flux_delta, interface_compositions = residual_unknowns(x)
+            nfev += 1
+            norm_current = float(np.max(np.abs(residual)))
+            if best is None or norm_current < best[0]:
+                best = (norm_current, x.copy(), residual.copy(), flux_delta.copy(), interface_compositions)
+            if norm_current <= self.initialEtaRootXtol:
+                success = True
+                break
+
+            jacobian = np.zeros((4, 4), dtype=np.float64)
+            for variable in range(4):
+                step, x_perturbed, direction = _bounded_finite_difference_perturbation(x, lower, upper, variable)
+                residual_perturbed, _, _ = residual_unknowns(x_perturbed)
+                nfev += 1
+                if direction == "forward":
+                    jacobian[:, variable] = (residual_perturbed - residual) / step
+                else:
+                    jacobian[:, variable] = (residual - residual_perturbed) / step
+
+            try:
+                step = np.linalg.solve(jacobian, -residual)
+            except np.linalg.LinAlgError:
+                step = np.linalg.lstsq(jacobian, -residual, rcond=None)[0]
+
+            accepted = False
+            for scale in (1.0, 0.5, 0.25, 0.125, 0.0625):
+                trial = np.clip(x + scale * step, lower, upper)
+                residual_trial, flux_delta_trial, interface_compositions_trial = residual_unknowns(trial)
+                nfev += 1
+                norm_trial = float(np.max(np.abs(residual_trial)))
+                if np.isfinite(norm_trial) and norm_trial < norm_current:
+                    x = trial
+                    accepted = True
+                    if best is None or norm_trial < best[0]:
+                        best = (norm_trial, trial.copy(), residual_trial.copy(), flux_delta_trial.copy(), interface_compositions_trial)
+                    break
+            if not accepted:
+                break
+
+        if best is None:
+            raise ValueError("Instantaneous initial eta solve did not produce a finite residual.")
+        residual_norm, x_best, residual, flux_delta, interface_compositions = best
+        if not success and residual_norm > self.initialEtaRootXtol:
+            raise ValueError("Instantaneous three-phase initial eta solve failed to converge.")
+        estimate = ThreePhaseInitialEtaEstimate(
+            etas=np.asarray(x_best[2:], dtype=np.float64).copy(),
+            velocities=np.asarray(x_best[:2], dtype=np.float64) * velocity_scales,
+            residual_norm=float(residual_norm),
+            residual=residual.copy(),
+            flux_delta=flux_delta.copy(),
+            interface_compositions=interface_compositions,
+            method="instantaneous_balance",
+            solver="damped_newton_4x4",
+            brackets=brackets,
+            converged=bool(success),
+            iterations=int(iteration),
+            function_calls=int(nfev),
+        )
+        self.initialEtaEstimate = estimate
+        return estimate.etas.copy()
 
     def _interface_compositions(self, etas):
         etas = np.asarray(etas, dtype=np.float64).reshape(2)
@@ -390,11 +634,11 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._R = float(self._z[-1] - self._z[0])
         interfaces0 = self._validate_interfaces(self.initialInterfacePositions, strict=True)
         self.initialInterfacePositions = interfaces0.copy()
-        etas0 = self._initial_etas()
         self._grids = self._build_transformed_grids(interfaces0)
         self.profileData = [_ArrayHistory((len(grid), 2), self.interfaceData.recordInterval) for grid in self._grids] if self.recordPqData else None
 
         c0 = np.asarray(self.data.currentY, dtype=np.float64)
+        etas0 = self._estimate_initial_etas(c0, interfaces0)
         profiles = self._initialize_transformed_state(c0, interfaces0, etas0)
         self._profiles_curr = tuple(profile.copy() for profile in profiles)
         self._interfaces_curr = interfaces0.copy()

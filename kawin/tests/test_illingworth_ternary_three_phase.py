@@ -23,6 +23,20 @@ class _ConstantPairEquilibrium:
         return self.left.copy(), self.right.copy()
 
 
+class _LinearPairEquilibrium:
+    eta_bounds = (0.0, 1.0)
+
+    def __init__(self, left_base, left_slope, right_base, right_slope):
+        self.left_base = np.asarray(left_base, dtype=np.float64)
+        self.left_slope = np.asarray(left_slope, dtype=np.float64)
+        self.right_base = np.asarray(right_base, dtype=np.float64)
+        self.right_slope = np.asarray(right_slope, dtype=np.float64)
+
+    def interface_compositions(self, eta):
+        eta = float(eta)
+        return self.left_base + eta * self.left_slope, self.right_base + eta * self.right_slope
+
+
 class _ThreePhaseStepProfile:
     def __init__(self, interfaces, values):
         self.interfaces = tuple(float(v) for v in interfaces)
@@ -147,6 +161,42 @@ def test_three_phase_stationary_profile_stays_stationary_and_records_histories()
     assert len(profiles) == 3
     assert model.interfaceData._y[: model.interfaceData.N + 1].shape[1] == 2
     assert model.etaData._y[: model.etaData.N + 1].shape[1] == 2
+
+
+def test_three_phase_initial_etas_are_estimated_from_instantaneous_balance():
+    target_etas = np.asarray([0.2, 0.8], dtype=np.float64)
+    eq_ab = _LinearPairEquilibrium([0.20, 0.10], [0.10, 0.0], [0.30, 0.15], [0.10, 0.0])
+    eq_bc = _LinearPairEquilibrium([0.24, 0.15], [0.10, 0.0], [0.18, 0.20], [0.10, 0.0])
+    phase_values = (
+        eq_ab.interface_compositions(target_etas[0])[0],
+        eq_ab.interface_compositions(target_etas[0])[1],
+        eq_bc.interface_compositions(target_etas[1])[1],
+    )
+    interfaces = (0.35, 0.7)
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 31)
+    mesh.setResponseProfile(ProfileBuilder([(_ThreePhaseStepProfile(interfaces, phase_values), ["X", "Y"])]))
+    model = MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(
+        mesh=mesh,
+        elements=["Z", "X", "Y"],
+        phases=["A", "B", "C"],
+        thermodynamics=_RecordingThreePhaseThermodynamics(),
+        temperature=1000.0,
+        interfacePositions=interfaces,
+        interface_equilibria=(eq_ab, eq_bc),
+        initial_eta_guess=(0.5, 0.5),
+        bulk_diffusivity_mode=_BULK_DIFFUSIVITY_PHASE_UNIFORM,
+        phase_nodes=(5, 5, 5),
+        time_step=1e-4,
+        record=False,
+        tolerance=1e-10,
+        residual_tolerance=1e-10,
+    )
+
+    model.setup()
+
+    assert np.allclose(model.getInterfaceEtas(), target_etas, atol=1e-8)
+    assert np.allclose(model.initialEtaEstimate.etas, target_etas, atol=1e-8)
+    assert model.initialEtaEstimate.residual_norm <= model.initialEtaRootXtol
 
 
 def test_three_phase_interface_candidate_rejects_invalid_bulk_profile():
