@@ -102,6 +102,7 @@ DIFFUSIVITY_INTERPOLATION = "simplex_linear" # "nearest", "continuous_grid"
 BULK_DIFFUSIVITY_MODE = "composition_dependent_lagged"
 BULK_DIFFUSIVITY_POINTS = None
 BULK_DIFFUSIVITY_GRIDS = None
+GLOBAL_MINIMIZATION_MAX_GRID_POINTS = 2000
 
 NODES = 165
 PHASE_NODES = (81, 9, 81)
@@ -137,6 +138,7 @@ _OVERRIDE_KEY_ALIASES = {
     "bulk_diffusivity_points": "BULK_DIFFUSIVITY_POINTS",
     "dt_mode": "DT_MODE",
     "fixed_time_step": "FIXED_TIME_STEP",
+    "global_minimization_max_grid_points": "GLOBAL_MINIMIZATION_MAX_GRID_POINTS",
     "interface_positions": "INTERFACE_POSITIONS",
     "max_iterations": "MAX_ITERATIONS",
     "max_step_retries": "MAX_STEP_RETRIES",
@@ -208,6 +210,7 @@ def _make_tc_config(phases):
         elements=ELEMENTS,
         phases=tuple(phases),
         reference_element="NB",
+        global_minimization_max_grid_points=GLOBAL_MINIMIZATION_MAX_GRID_POINTS,
         cache_dir=OUTPUTS / "tc_cache",
     )
 

@@ -105,10 +105,57 @@ class FakeSystemBuilder:
 
     def get_system(self):
         self.calls.append(("get_system",))
-        return {
-            "used_without_default_phases": self.used_without_default_phases,
-            "selected_phases": tuple(self.selected_phases),
-        }
+        return FakeTCSystem(
+            self.calls,
+            used_without_default_phases=self.used_without_default_phases,
+            selected_phases=tuple(self.selected_phases),
+        )
+
+
+class FakeTCCalculation:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def with_options(self, options):
+        self.calls.append(("with_options", type(options).__name__))
+        return self
+
+    def set_phase_to_dormant(self, phase):
+        self.calls.append(("set_phase_to_dormant", phase))
+
+    def set_phase_to_entered(self, phase):
+        self.calls.append(("set_phase_to_entered", phase))
+
+    def set_phase_to_suspended(self, phase):
+        self.calls.append(("set_phase_to_suspended", phase))
+
+
+class FakeTCSystem(dict):
+    def __init__(self, calls, **kwargs):
+        super().__init__(**kwargs)
+        self.calls = calls
+
+    def with_single_equilibrium_calculation(self):
+        self.calls.append(("with_single_equilibrium_calculation",))
+        return FakeTCCalculation(self.calls)
+
+
+class FakeSingleEquilibriumOptions:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def set_global_minimization_max_grid_points(self, value):
+        self.calls.append(("options_set_global_minimization_max_grid_points", value))
+        return self
+
+
+class FakeTCPythonModule:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def SingleEquilibriumOptions(self):
+        self.calls.append(("SingleEquilibriumOptions",))
+        return FakeSingleEquilibriumOptions(self.calls)
 
 
 class FakeTCPythonSetup:
@@ -168,6 +215,25 @@ def test_phase_selection_can_restrict_to_configured_phases():
 
     assert system["used_without_default_phases"]
     assert system["selected_phases"] == config.phases
+
+
+def test_global_minimization_grid_points_are_applied_to_calculations():
+    config = ThermoCalcConfig(global_minimization_max_grid_points=2500)
+    backend = _TCPythonBackend()
+    backend._setup = FakeTCPythonSetup()
+    backend._config = config
+    backend._tc_python = FakeTCPythonModule(backend._setup.calls)
+
+    backend._get_calculation("equilibrium", None)
+
+    assert ("SingleEquilibriumOptions",) in backend._setup.calls
+    assert ("options_set_global_minimization_max_grid_points", 2500) in backend._setup.calls
+    assert ("with_options", "FakeSingleEquilibriumOptions") in backend._setup.calls
+
+
+def test_global_minimization_grid_points_must_be_positive():
+    with pytest.raises(ThermoCalcInputError, match="global_minimization_max_grid_points"):
+        ThermoCalcConfig(global_minimization_max_grid_points=0)
 
 
 def test_driving_force_conversion_and_default_phase():

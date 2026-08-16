@@ -51,7 +51,9 @@ class ThermoCalcConfig:
     equilibrium-like calculations keep Thermo-Calc's default phase selection so
     additional stable phases are not hidden by the adapter. Set
     ``use_default_phases=False`` to reproduce the older behavior where only
-    ``phases`` are selected in the Thermo-Calc system.
+    ``phases`` are selected in the Thermo-Calc system. The optional
+    ``global_minimization_max_grid_points`` value is applied through
+    TC-Python's ``SingleEquilibriumOptions`` object.
     """
 
     thermodynamic_database: str = "TCFE9"
@@ -62,6 +64,7 @@ class ThermoCalcConfig:
     reference_element: str = "FE"
     pressure: float = 101325.0
     use_default_phases: bool = True
+    global_minimization_max_grid_points: int | None = None
     cache_dir: str | Path | None = Path("examples") / "ThermoCalc" / "outputs" / "tc_cache"
     timeout_seconds: float | None = 300.0
     calculation_version: int = 1
@@ -85,6 +88,11 @@ class ThermoCalcConfig:
             raise ThermoCalcInputError(
                 "Use either a commercial thermodynamic/kinetic database pair or a single user_database_path."
             )
+        if self.global_minimization_max_grid_points is not None:
+            value = int(self.global_minimization_max_grid_points)
+            if value < 1:
+                raise ThermoCalcInputError("global_minimization_max_grid_points must be a positive integer when set.")
+            object.__setattr__(self, "global_minimization_max_grid_points", value)
 
     @property
     def independent_elements(self) -> tuple[str, ...]:
@@ -399,6 +407,7 @@ class _TCPythonBackend:
 
         system = self._get_system(include_default_phases)
         calc = system.with_single_equilibrium_calculation()
+        calc = self._configure_global_minimization(calc, config)
         if kind == "driving_force":
             calc.set_phase_to_dormant(phase)
         elif kind == "kinetics":
@@ -418,6 +427,35 @@ class _TCPythonBackend:
             return calc.calculate()
         except Exception as exc:
             raise ThermoCalcCalculationError(f"TC-Python {kind} calculation failed: {exc}") from exc
+
+    def _configure_global_minimization(self, calc: Any, config: ThermoCalcConfig):
+        """Apply optional global-minimization options to a single-equilibrium calculation."""
+        max_grid_points = config.global_minimization_max_grid_points
+        if max_grid_points is None:
+            return calc
+        if self._tc_python is None:
+            raise ThermoCalcBackendError("TC-Python module is not available for SingleEquilibriumOptions.")
+
+        options_factory = getattr(self._tc_python, "SingleEquilibriumOptions", None)
+        if options_factory is None:
+            raise ThermoCalcBackendError("This TC-Python version does not expose SingleEquilibriumOptions.")
+
+        options = options_factory()
+        setter = getattr(options, "set_global_minimization_max_grid_points", None)
+        if setter is None:
+            raise ThermoCalcBackendError(
+                "This TC-Python SingleEquilibriumOptions object does not support "
+                "set_global_minimization_max_grid_points()."
+            )
+        configured_options = setter(int(max_grid_points))
+        if configured_options is not None:
+            options = configured_options
+
+        with_options = getattr(calc, "with_options", None)
+        if with_options is None:
+            raise ThermoCalcBackendError("This TC-Python calculation object does not support with_options().")
+        configured_calc = with_options(options)
+        return calc if configured_calc is None else configured_calc
 
     def _get_system(self, include_default_phases: bool):
         """Return a cached system for the requested phase-selection mode."""
