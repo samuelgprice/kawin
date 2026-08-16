@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -145,6 +147,39 @@ def test_three_phase_stationary_profile_stays_stationary_and_records_histories()
     assert len(profiles) == 3
     assert model.interfaceData._y[: model.interfaceData.N + 1].shape[1] == 2
     assert model.etaData._y[: model.etaData.N + 1].shape[1] == 2
+
+
+def test_three_phase_interface_candidate_rejects_invalid_bulk_profile():
+    model, _ = _make_stationary_model(record=False)
+    model.setup()
+    invalid_profiles = [profile.copy() for profile in model.getTransformedState()]
+    invalid_profiles[1][2] = [0.51, 0.51]
+    zero_flux = np.zeros(2, dtype=np.float64)
+
+    def invalid_bulk_profiles(*args, **kwargs):
+        return tuple(
+            SimpleNamespace(
+                profile=profile,
+                left_flux=zero_flux.copy(),
+                right_flux=zero_flux.copy(),
+                left_face_matrix=None,
+                right_face_matrix=None,
+            )
+            for profile in invalid_profiles
+        )
+
+    model._solve_bulk_profiles = invalid_bulk_profiles
+    x_hat = model._physical_to_scaled(model.getInterfacePositions(), model.getInterfaceEtas())
+    residual_scale = model._residual_scale(model.getTransformedState(), model.getInterfacePositions())
+
+    with pytest.raises(ValueError, match="candidate transformed profile 1 violates ternary composition bounds"):
+        model._evaluate_interface_candidate(
+            model.getTransformedState(),
+            model.getInterfacePositions(),
+            x_hat,
+            residual_scale,
+            model.timeStep,
+        )
 
 
 @pytest.mark.parametrize(

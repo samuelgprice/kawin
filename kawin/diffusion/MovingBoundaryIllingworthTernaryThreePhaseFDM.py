@@ -346,10 +346,39 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
 
     def _validate_profile_compositions(self, profile, name):
         profile = validate_ternary_profile(profile, name)
+        violation = self._profile_composition_violation(profile)
+        if violation is not None:
+            raise ValueError(f"{name} violates ternary composition bounds: {violation}.")
+
+    def _profile_composition_violation(self, profile):
+        """
+        Returns a short diagnostic for the first simplex violation in a profile.
+
+        Interval solves are linear solves and are not positivity preserving for
+        all coupled diffusivity matrices, timestep sizes, and moving-boundary
+        guesses. Candidate profiles must therefore be rejected before their
+        interface residuals are considered converged.
+        """
+        profile = np.asarray(profile, dtype=np.float64)
         min_comp = float(self.constraints.minComposition)
         dependent = 1.0 - np.sum(profile, axis=1)
-        if np.any(profile < min_comp) or np.any(dependent < min_comp):
-            raise ValueError(f"{name} violates ternary composition bounds.")
+        component_bad = np.argwhere(profile < min_comp)
+        if component_bad.size:
+            node, component = component_bad[0]
+            return f"node {int(node)} component {int(component)} = {profile[node, component]:.6g}"
+        dependent_bad = np.flatnonzero(dependent < min_comp)
+        if dependent_bad.size:
+            node = int(dependent_bad[0])
+            return f"node {node} dependent component = {dependent[node]:.6g}"
+        return None
+
+    def _validate_candidate_profiles(self, profiles):
+        """Rejects nonlinear trial states whose transformed profiles leave the ternary simplex."""
+        for i, profile in enumerate(profiles):
+            profile = validate_ternary_profile(profile, f"candidate transformed profile {i}")
+            violation = self._profile_composition_violation(profile)
+            if violation is not None:
+                raise ValueError(f"candidate transformed profile {i} violates ternary composition bounds: {violation}.")
 
     def setup(self):
         super().setup()
@@ -808,11 +837,13 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         interfaces = self._validate_interfaces(interfaces, strict=True)
         interface_compositions = self._interface_compositions(etas)
         bulk_results = self._solve_bulk_profiles(profiles, old_interfaces, interfaces, interface_compositions)
+        candidate_profiles = tuple(result.profile for result in bulk_results)
+        self._validate_candidate_profiles(candidate_profiles)
         residual = self._interface_residuals(old_interfaces, interfaces, interface_compositions, bulk_results, dt)
         scaled = residual / residual_scale
         return _ThreePhaseCandidate(
             x_hat=np.asarray(x_hat, dtype=np.float64).copy(),
-            profiles=tuple(result.profile for result in bulk_results),
+            profiles=candidate_profiles,
             interfaces=interfaces.copy(),
             etas=etas.copy(),
             interface_compositions=interface_compositions,
