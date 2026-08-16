@@ -102,11 +102,22 @@ BULK_DIFFUSIVITY_POINTS = None
 
 NODES = 165
 PHASE_NODES = (81, 9, 81)
+
+# Time stepping:
+#   DT_MODE = "fixed"    -> advance by FIXED_TIME_STEP.
+#   DT_MODE = "semi_log" -> advance to semi-log-spaced target times starting
+#                           at SEMI_LOG_T0 with natural-log spacing SEMI_LOG_DT.
+#                           SEMI_LOG_BASE_TIME_STEP remains a positive fallback
+#                           scale used internally by the model.
+DT_MODE = "semi_log"
 FIXED_TIME_STEP = 1.0e-3
+SEMI_LOG_BASE_TIME_STEP = 1.0e-3
+SEMI_LOG_DT = 0.05
+SEMI_LOG_T0 = 1.0e-6
 SOLVE_TIME = 1.0
 TOLERANCE = 1.0e-10
 MAX_ITERATIONS = 25
-MAX_STEP_RETRIES = 8
+MAX_STEP_RETRIES = 32
 MIN_DT_FRAC = 1.0e-16
 VERBOSE = True
 VERBOSE_INTERVAL = 10
@@ -120,6 +131,7 @@ RUN_SOLVE = True
 _OVERRIDE_KEY_ALIASES = {
     "bulk_diffusivity_mode": "BULK_DIFFUSIVITY_MODE",
     "bulk_diffusivity_points": "BULK_DIFFUSIVITY_POINTS",
+    "dt_mode": "DT_MODE",
     "fixed_time_step": "FIXED_TIME_STEP",
     "interface_positions": "INTERFACE_POSITIONS",
     "max_iterations": "MAX_ITERATIONS",
@@ -129,6 +141,9 @@ _OVERRIDE_KEY_ALIASES = {
     "phase_nodes": "PHASE_NODES",
     "run_preflight": "RUN_PREFLIGHT",
     "run_solve": "RUN_SOLVE",
+    "semi_log_base_time_step": "SEMI_LOG_BASE_TIME_STEP",
+    "semi_log_dt": "SEMI_LOG_DT",
+    "semi_log_t0": "SEMI_LOG_T0",
     "solve_time": "SOLVE_TIME",
     "temperature": "TEMPERATURE",
     "tolerance": "TOLERANCE",
@@ -361,8 +376,36 @@ def make_mesh():
     return mesh
 
 
+def get_time_step_options():
+    """Returns constructor kwargs for the selected three-phase timestep mode."""
+    if DT_MODE == "fixed":
+        if not np.isfinite(FIXED_TIME_STEP) or FIXED_TIME_STEP <= 0.0:
+            raise ValueError("FIXED_TIME_STEP must be positive and finite when DT_MODE is 'fixed'.")
+        return {
+            "time_step": float(FIXED_TIME_STEP),
+            "dt_mode": "fixed",
+            "semiLog_dt": None,
+            "semiLogT0": None,
+        }
+    if DT_MODE == "semi_log":
+        if not np.isfinite(SEMI_LOG_BASE_TIME_STEP) or SEMI_LOG_BASE_TIME_STEP <= 0.0:
+            raise ValueError("SEMI_LOG_BASE_TIME_STEP must be positive and finite when DT_MODE is 'semi_log'.")
+        if not np.isfinite(SEMI_LOG_DT) or SEMI_LOG_DT <= 0.0:
+            raise ValueError("SEMI_LOG_DT must be positive and finite when DT_MODE is 'semi_log'.")
+        if not np.isfinite(SEMI_LOG_T0) or SEMI_LOG_T0 <= 0.0:
+            raise ValueError("SEMI_LOG_T0 must be positive and finite when DT_MODE is 'semi_log'.")
+        return {
+            "time_step": float(SEMI_LOG_BASE_TIME_STEP),
+            "dt_mode": "semi_log",
+            "semiLog_dt": float(SEMI_LOG_DT),
+            "semiLogT0": float(SEMI_LOG_T0),
+        }
+    raise ValueError("DT_MODE must be either 'fixed' or 'semi_log'.")
+
+
 def build_model(surrogate_ab, surrogate_bc):
     """Constructs the three-phase Illingworth model without starting the solve."""
+    time_step_options = get_time_step_options()
     return MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(
         mesh=make_mesh(),
         elements=ELEMENTS,
@@ -373,8 +416,10 @@ def build_model(surrogate_ab, surrogate_bc):
         interface_equilibria=(surrogate_ab, surrogate_bc),
         initial_eta_guess=INITIAL_ETA_GUESS,
         bulk_diffusivity_mode=BULK_DIFFUSIVITY_MODE,
-        time_step=FIXED_TIME_STEP,
-        dt_mode="fixed",
+        time_step=time_step_options["time_step"],
+        dt_mode=time_step_options["dt_mode"],
+        semiLog_dt=time_step_options["semiLog_dt"],
+        semiLogT0=time_step_options["semiLogT0"],
         phase_nodes=PHASE_NODES,
         tolerance=TOLERANCE,
         residual_tolerance=TOLERANCE,
@@ -430,7 +475,7 @@ def run_case(overrides=None, *, make_plots=True):
     Builds the TC-Python surrogates, constructs the model, and optionally solves.
 
     ``overrides`` can temporarily replace module-level values, for example
-    ``run_case({"solve_time": 0.1, "fixed_time_step": 1e-4})``.
+    ``run_case({"dt_mode": "semi_log", "solve_time": 0.1, "semi_log_dt": 0.05})``.
     """
     with _temporary_config(overrides):
         therm_ab, therm_bc = build_thermodynamics()
@@ -442,6 +487,18 @@ def run_case(overrides=None, *, make_plots=True):
         surrogate_ab, surrogate_bc = build_interface_surrogates(therm_ab, therm_bc)
         print(f"Built interface surrogates in {time.perf_counter() - start:.1f} s.")
 
+        if DT_MODE == "fixed":
+            n_steps = int(np.ceil(SOLVE_TIME / FIXED_TIME_STEP))
+        elif DT_MODE == "semi_log":
+            if SEMI_LOG_DT is None or SEMI_LOG_T0 is None:
+                raise ValueError("semiLog_dt and semiLogT0 must be set when dt_mode is 'semi_log'.")
+            if SEMI_LOG_DT <= 0 or SEMI_LOG_T0 <= 0:
+                raise ValueError("semiLog_dt and semiLogT0 must be positive when dt_mode is 'semi_log'.")
+            if SOLVE_TIME <= SEMI_LOG_T0:
+                n_steps = 1
+            else:
+                n_steps = int(np.ceil((np.log(SOLVE_TIME) - np.log(SEMI_LOG_T0)) / SEMI_LOG_DT)) + 1
+        print(f"Estimated number of time-steps: {n_steps}")
         model = build_model(surrogate_ab, surrogate_bc)
         if RUN_SOLVE:
             model.solve(
