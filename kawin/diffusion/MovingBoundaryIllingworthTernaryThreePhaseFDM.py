@@ -29,6 +29,18 @@ from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
 
+def debugInPlace():
+    try:
+        import debugpy
+        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+        debugpy.listen(5678)
+        print("Waiting for debugger attach")
+        debugpy.wait_for_client()
+        debugpy.breakpoint()
+        print('break on this line')
+    except:
+        pass
+
 
 @dataclass(frozen=True, slots=True)
 class _ThreePhaseBulkResult:
@@ -624,6 +636,14 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             if violation is not None:
                 raise ValueError(f"candidate transformed profile {i} violates ternary composition bounds: {violation}.")
 
+    def _is_infeasible_candidate_error(self, exc):
+        """Returns True for candidate states rejected by admissible-composition bounds."""
+        message = str(exc)
+        return isinstance(exc, ValueError) and (
+            "candidate transformed profile" in message
+            or "violates ternary composition bounds" in message
+        )
+
     def setup(self):
         super().setup()
         self._validateModelConfiguration()
@@ -1125,32 +1145,61 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                     x_perturbed = x_hat.copy()
                     x_perturbed[variable] -= step_size
                     direction = "backward"
-                perturbed = self._evaluate_interface_candidate(profiles, interfaces, x_perturbed, residual_scale, dt)
+                try:
+                    perturbed = self._evaluate_interface_candidate(profiles, interfaces, x_perturbed, residual_scale, dt)
+                except ValueError as exc:
+                    if not self._is_infeasible_candidate_error(exc):
+                        raise
+                    x_perturbed = x_hat.copy()
+                    if direction == "forward":
+                        x_perturbed[variable] -= step_size
+                        direction = "backward"
+                    else:
+                        x_perturbed[variable] += step_size
+                        direction = "forward"
+                    if not self._scaled_variables_in_bounds(x_perturbed, lower, upper):
+                        failure_reason = f"finite-difference perturbation left admissible composition bounds for variable {variable}"
+                        break
+                    try:
+                        perturbed = self._evaluate_interface_candidate(profiles, interfaces, x_perturbed, residual_scale, dt)
+                    except ValueError as exc2:
+                        if self._is_infeasible_candidate_error(exc2):
+                            failure_reason = f"finite-difference perturbation left admissible composition bounds for variable {variable}"
+                            break
+                        raise
                 if direction == "forward":
                     jacobian[:, variable] = (perturbed.scaled_residual - candidate.scaled_residual) / step_size
                 else:
                     jacobian[:, variable] = (candidate.scaled_residual - perturbed.scaled_residual) / step_size
-
-            try:
-                step = np.linalg.solve(jacobian, -candidate.scaled_residual)
-            except np.linalg.LinAlgError:
-                step = np.linalg.lstsq(jacobian, -candidate.scaled_residual, rcond=None)[0]
-            step, alpha_start = self._bounded_newton_step(x_hat, step, lower, upper)
-            accepted = False
-            for scale in (alpha_start, 0.5 * alpha_start, 0.25 * alpha_start, 0.125 * alpha_start, 0.0625 * alpha_start):
-                if scale <= 0.0:
-                    continue
-                trial = x_hat + scale * step
-                if not self._scaled_variables_in_bounds(trial, lower, upper):
-                    continue
-                trial_candidate = self._evaluate_interface_candidate(profiles, interfaces, trial, residual_scale, dt)
-                if np.isfinite(trial_candidate.scaled_norm) and trial_candidate.scaled_norm < candidate.scaled_norm:
-                    x_hat = trial
-                    accepted = True
+            else:
+                try:
+                    step = np.linalg.solve(jacobian, -candidate.scaled_residual)
+                except np.linalg.LinAlgError:
+                    step = np.linalg.lstsq(jacobian, -candidate.scaled_residual, rcond=None)[0]
+                step, alpha_start = self._bounded_newton_step(x_hat, step, lower, upper)
+                accepted = False
+                for scale in (alpha_start, 0.5 * alpha_start, 0.25 * alpha_start, 0.125 * alpha_start, 0.0625 * alpha_start):
+                    if scale <= 0.0:
+                        continue
+                    trial = x_hat + scale * step
+                    if not self._scaled_variables_in_bounds(trial, lower, upper):
+                        continue
+                    try:
+                        trial_candidate = self._evaluate_interface_candidate(profiles, interfaces, trial, residual_scale, dt)
+                    except ValueError as exc:
+                        if self._is_infeasible_candidate_error(exc):
+                            continue
+                        raise
+                    if np.isfinite(trial_candidate.scaled_norm) and trial_candidate.scaled_norm < candidate.scaled_norm:
+                        x_hat = trial
+                        accepted = True
+                        break
+                if not accepted:
+                    failure_reason = "line search failed"
                     break
-            if not accepted:
-                failure_reason = "line search failed"
-                break
+                continue
+
+            break
         self._lastImplicitIterations = self.maxIterations
         self._lastImplicitResidual = np.inf if best is None else best.scaled_norm
         self._lastImplicitPhysicalResidual = np.inf if best is None else best.physical_norm
@@ -1190,6 +1239,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             except (RuntimeError, ValueError, ZeroDivisionError) as exc:
                 last_error = exc
                 trial_dt *= self.retryFactor
+        debugInPlace()
         raise RuntimeError("Three-phase Illingworth step failed after timestep retries.") from last_error
 
     def getDt(self, dXdt):

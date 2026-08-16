@@ -76,7 +76,7 @@ TEMPERATURE = 1300.0
 # Full mole fractions are listed in ELEMENTS order: [NB, NI, TI].
 LEFT_BCC_FULL = np.array([0.899, 0.001, 0.100], dtype=np.float64)
 LIQUID_FULL = np.array([0.100, 0.300, 0.600], dtype=np.float64)
-RIGHT_BCC_FULL = np.array([0.002, 0.499, 0.499], dtype=np.float64)
+RIGHT_BCC_FULL = np.array([0.01, 0.495, 0.495], dtype=np.float64)
 
 LEFT_WIDTH = 40.0e-6
 LIQUID_WIDTH = 2.0e-6
@@ -117,7 +117,7 @@ SEMI_LOG_T0 = 1.0e-6
 SOLVE_TIME = 1.0
 TOLERANCE = 1.0e-10
 MAX_ITERATIONS = 25
-MAX_STEP_RETRIES = 32
+MAX_STEP_RETRIES = 8
 MIN_DT_FRAC = 1.0e-16
 VERBOSE = True
 VERBOSE_INTERVAL = 10
