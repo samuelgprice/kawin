@@ -47,7 +47,11 @@ class ThermoCalcConfig:
     Elements are stored in kawin order with the reference element first.
     Public composition inputs use independent mole fractions in the order of
     ``independent_elements``; for the default Fe-Cr-Ni case this is
-    ``[x_CR, x_NI]`` and ``x_FE`` is computed by closure.
+    ``[x_CR, x_NI]`` and ``x_FE`` is computed by closure. By default,
+    equilibrium-like calculations keep Thermo-Calc's default phase selection so
+    additional stable phases are not hidden by the adapter. Set
+    ``use_default_phases=False`` to reproduce the older behavior where only
+    ``phases`` are selected in the Thermo-Calc system.
     """
 
     thermodynamic_database: str = "TCFE9"
@@ -57,6 +61,7 @@ class ThermoCalcConfig:
     phases: tuple[str, ...] = ("BCC_A2", "FCC_A1")
     reference_element: str = "FE"
     pressure: float = 101325.0
+    use_default_phases: bool = True
     cache_dir: str | Path | None = Path("examples") / "ThermoCalc" / "outputs" / "tc_cache"
     timeout_seconds: float | None = 300.0
     calculation_version: int = 1
@@ -182,8 +187,9 @@ class _TCPythonBackend:
         self._session = None
         self._setup = None
         self._system = None
+        self._systems: dict[bool, Any] = {}
         self._config: ThermoCalcConfig | None = None
-        self._calculations: dict[tuple[str, str | None], Any] = {}
+        self._calculations: dict[tuple[str, str | None, bool], Any] = {}
 
     def start(self, config: ThermoCalcConfig):
         """Start TC-Python and build the selected system."""
@@ -208,7 +214,7 @@ class _TCPythonBackend:
                 cache_dir = Path(config.cache_dir)
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 self._setup.set_cache_folder(str(cache_dir))
-            self._system = self._build_system(config)
+            self._system = self._get_system(config.use_default_phases)
         except Exception as exc:
             self.close()
             self._raise_backend_error(exc)
@@ -223,6 +229,7 @@ class _TCPythonBackend:
                 self._session = None
                 self._setup = None
                 self._system = None
+                self._systems = {}
                 self._calculations = {}
 
     def restart(self):
@@ -264,22 +271,39 @@ class _TCPythonBackend:
         }
 
     def calculate_equilibrium(self, x: np.ndarray, T: float) -> dict[str, Any]:
-        """Calculate equilibrium phases, phase amounts, compositions, and chemical potentials."""
+        """Calculate equilibrium phases, phase amounts, compositions, and chemical potentials.
+
+        Stable phases are reported by base phase name. When Thermo-Calc creates
+        multiple composition sets such as ``BCC_B2#2``, amounts are summed by
+        base phase and the representative composition is taken from the largest
+        composition set for that base phase.
+        """
 
         config = self._require_config()
         result = self._calculate("equilibrium", None, x, T)
-        stable_phases = [base_phase_name(phase) for phase in result.get_stable_phases()]
-        stable_set = set(stable_phases)
+        raw_stable_phases = [str(phase).upper() for phase in result.get_stable_phases()]
+        stable_phases = [base_phase_name(phase) for phase in raw_stable_phases]
+        stable_phase_names = list(dict.fromkeys(stable_phases))
+        phase_amounts = {phase: 0.0 for phase in config.phases}
+        phase_compositions = {}
+        representative_amounts = {}
+        for raw_phase, base_phase in zip(raw_stable_phases, stable_phases):
+            amount = self._safe_value(result, self._tq().mole_fraction_of_a_phase(raw_phase), default=0.0)
+            phase_amounts[base_phase] = phase_amounts.get(base_phase, 0.0) + amount
+            if amount >= representative_amounts.get(base_phase, -np.inf):
+                representative_amounts[base_phase] = amount
+                phase_compositions[base_phase] = self._phase_composition(result, raw_phase)
+        reported_phases = tuple(dict.fromkeys((*config.phases, *stable_phases)))
         return {
-            "stable_phases": stable_phases,
+            "stable_phases": stable_phase_names,
             "phase_amounts": {
-                phase: self._safe_value(result, self._tq().mole_fraction_of_a_phase(phase), default=0.0)
-                for phase in config.phases
+                phase: phase_amounts.get(phase, 0.0)
+                for phase in reported_phases
             },
             "phase_compositions": {
-                phase: self._phase_composition(result, phase)
-                for phase in config.phases
-                if phase in stable_set
+                phase: phase_compositions[phase]
+                for phase in reported_phases
+                if phase in phase_compositions
             },
             "chemical_potentials": {
                 element: self._value(result, self._tq().chemical_potential_of_component(tc_element_name(element)))
@@ -346,7 +370,8 @@ class _TCPythonBackend:
             "units": "m^2/s",
         }
 
-    def _build_system(self, config: ThermoCalcConfig):
+    def _build_system(self, config: ThermoCalcConfig, include_default_phases: bool):
+        """Build a TC-Python system with either default or phase-restricted selection."""
         elements = [tc_element_name(element) for element in config.elements]
         if config.user_database_path is None and config.kinetic_database is None:
             builder = self._setup.select_database_and_elements(config.thermodynamic_database, elements)
@@ -359,18 +384,21 @@ class _TCPythonBackend:
         else:
             builder = self._setup.select_user_database_and_elements(str(config.user_database_path), elements)
 
-        builder = builder.without_default_phases()
-        for phase in config.phases:
-            builder = builder.select_phase(phase)
+        if not include_default_phases:
+            builder = builder.without_default_phases()
+            for phase in config.phases:
+                builder = builder.select_phase(phase)
         return builder.get_system()
 
     def _get_calculation(self, kind: str, phase: str | None):
-        key = (kind, phase)
+        config = self._require_config()
+        include_default_phases = config.use_default_phases if kind != "kinetics" else False
+        key = (kind, phase, include_default_phases)
         if key in self._calculations:
             return self._calculations[key]
 
-        config = self._require_config()
-        calc = self._system.with_single_equilibrium_calculation()
+        system = self._get_system(include_default_phases)
+        calc = system.with_single_equilibrium_calculation()
         if kind == "driving_force":
             calc.set_phase_to_dormant(phase)
         elif kind == "kinetics":
@@ -390,6 +418,14 @@ class _TCPythonBackend:
             return calc.calculate()
         except Exception as exc:
             raise ThermoCalcCalculationError(f"TC-Python {kind} calculation failed: {exc}") from exc
+
+    def _get_system(self, include_default_phases: bool):
+        """Return a cached system for the requested phase-selection mode."""
+        config = self._require_config()
+        include_default_phases = bool(include_default_phases)
+        if include_default_phases not in self._systems:
+            self._systems[include_default_phases] = self._build_system(config, include_default_phases)
+        return self._systems[include_default_phases]
 
     def _set_conditions(self, calc: Any, x: np.ndarray, T: float):
         config = self._require_config()
@@ -427,7 +463,7 @@ class _TCPythonBackend:
         return self._tc_python.ThermodynamicQuantity
 
     def _require_config(self) -> ThermoCalcConfig:
-        if self._config is None or self._system is None:
+        if self._config is None or self._setup is None:
             raise ThermoCalcBackendError("TC-Python backend has not been started.")
         return self._config
 

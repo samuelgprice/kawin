@@ -15,6 +15,7 @@ from examples.ThermoCalc.tc_python_adapter import (
     independent_to_full_composition,
     normalized_driving_force_to_j_per_mol,
     validate_independent_composition,
+    _TCPythonBackend,
 )
 from examples.ThermoCalc.training_data import (
     build_moving_boundary_surrogate,
@@ -86,6 +87,46 @@ class FakeThermoCalcBackend:
             raise ThermoCalcCalculationError(f"transient {group} failure")
 
 
+class FakeSystemBuilder:
+    def __init__(self, calls):
+        self.calls = calls
+        self.selected_phases = []
+        self.used_without_default_phases = False
+
+    def without_default_phases(self):
+        self.calls.append(("without_default_phases",))
+        self.used_without_default_phases = True
+        return self
+
+    def select_phase(self, phase):
+        self.calls.append(("select_phase", phase))
+        self.selected_phases.append(phase)
+        return self
+
+    def get_system(self):
+        self.calls.append(("get_system",))
+        return {
+            "used_without_default_phases": self.used_without_default_phases,
+            "selected_phases": tuple(self.selected_phases),
+        }
+
+
+class FakeTCPythonSetup:
+    def __init__(self):
+        self.calls = []
+
+    def select_thermodynamic_and_kinetic_databases_with_elements(self, thermodynamic_database, kinetic_database, elements):
+        self.calls.append(
+            (
+                "select_thermodynamic_and_kinetic_databases_with_elements",
+                thermodynamic_database,
+                kinetic_database,
+                tuple(elements),
+            )
+        )
+        return FakeSystemBuilder(self.calls)
+
+
 def test_composition_closure_and_validation():
     config = ThermoCalcConfig()
 
@@ -98,6 +139,35 @@ def test_composition_closure_and_validation():
         validate_independent_composition([0.1, -0.1], config)
     with pytest.raises(ThermoCalcInputError):
         validate_independent_composition([0.1, 0.2, 0.3], config)
+
+
+def test_phase_selection_defaults_to_thermocalc_default_phases():
+    config = ThermoCalcConfig()
+    backend = _TCPythonBackend()
+    backend._setup = FakeTCPythonSetup()
+    backend._config = config
+
+    default_system = backend._get_system(True)
+    restricted_system = backend._get_system(False)
+
+    assert config.use_default_phases is True
+    assert not default_system["used_without_default_phases"]
+    assert default_system["selected_phases"] == ()
+    assert restricted_system["used_without_default_phases"]
+    assert restricted_system["selected_phases"] == config.phases
+    assert ("without_default_phases",) not in backend._setup.calls[:2]
+
+
+def test_phase_selection_can_restrict_to_configured_phases():
+    config = ThermoCalcConfig(use_default_phases=False)
+    backend = _TCPythonBackend()
+    backend._setup = FakeTCPythonSetup()
+    backend._config = config
+
+    system = backend._get_system(config.use_default_phases)
+
+    assert system["used_without_default_phases"]
+    assert system["selected_phases"] == config.phases
 
 
 def test_driving_force_conversion_and_default_phase():

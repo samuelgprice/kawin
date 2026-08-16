@@ -49,13 +49,26 @@ from kawin.solver import explicitEulerIterator
 OUTPUTS = REPO_ROOT / "examples" / "ThermoCalc" / "outputs"
 OUTPUTS.mkdir(parents=True, exist_ok=True)
 
+if __name__ == "__main__":
+    def debugInPlace():
+        try:
+            import debugpy
+            # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+            debugpy.listen(5678)
+            print("Waiting for debugger attach")
+            debugpy.wait_for_client()
+            debugpy.breakpoint()
+            print('break on this line')
+        except:
+            pass
+    
 
 # %%
 # Editable case configuration
 
 ELEMENTS = ("NB", "NI", "TI")
 INDEPENDENT_ELEMENTS = ("NI", "TI")
-PHASE_BCC = "BCC_A2"
+PHASE_BCC = "BCC_B2"
 PHASE_LIQUID = "LIQUID"
 PHASES_FOR_MODEL = (PHASE_BCC, PHASE_LIQUID, PHASE_BCC)
 TEMPERATURE = 1300.0
@@ -74,16 +87,16 @@ INTERFACE_POSITIONS = np.array([LEFT_WIDTH, LEFT_WIDTH + LIQUID_WIDTH], dtype=np
 # Tie-line probes use independent mole fractions in [NI, TI] order. The
 # defaults connect the requested nominal phase compositions at each interface.
 ETA_SAMPLES = np.linspace(0.0, 1.0, 9)
-AB_PROBE_START = LEFT_BCC_FULL[1:]
-AB_PROBE_END = LIQUID_FULL[1:]
-BC_PROBE_START = LIQUID_FULL[1:]
-BC_PROBE_END = RIGHT_BCC_FULL[1:]
+AB_PROBE_START = np.array([0.16, 0.83], dtype=np.float64)
+AB_PROBE_END = np.array([0.217, 0.394], dtype=np.float64)
+BC_PROBE_START = np.array([0.39, 0.468], dtype=np.float64)
+BC_PROBE_END = np.array([0.4099, 0.59], dtype=np.float64)
 INITIAL_ETA_GUESS = (0.5, 0.5)
 
 # ``nearest`` lets the bulk-diffusivity sample points follow the ternary
 # simplex without requiring a rectangular grid that would include invalid
 # Ni+Ti > 1 compositions.
-DIFFUSIVITY_INTERPOLATION = "nearest"
+DIFFUSIVITY_INTERPOLATION = "nearest" # "continuous_grid"
 BULK_DIFFUSIVITY_MODE = "composition_dependent_lagged"
 BULK_DIFFUSIVITY_POINTS = None
 
@@ -221,9 +234,84 @@ def build_thermodynamics():
     return therm_ab, therm_bc
 
 
+def _validate_tieline_probe_path(thermodynamics, label, probe_start, probe_end, tieline_phases):
+    """
+    Checks that each eta sample lies in the requested two-phase field.
+
+    TC-Python can fail later with a low-level null-pointer exception when the
+    surrogate builder asks for tie-line endpoints outside the intended
+    two-phase region. This preflight keeps the error at the thermodynamic
+    boundary: every sampled bulk composition must return both endpoint phases
+    with positive phase amounts.
+    """
+    expected = tuple(str(phase).upper() for phase in tieline_phases)
+    bad_samples = []
+    for eta in np.asarray(ETA_SAMPLES, dtype=np.float64):
+        point = (1.0 - eta) * np.asarray(probe_start, dtype=np.float64) + eta * np.asarray(probe_end, dtype=np.float64)
+        equilibrium = thermodynamics.getEquilibriumData(point, TEMPERATURE, removeCache=False)
+        stable_phases = tuple(str(phase).upper() for phase in equilibrium.get("stable_phases", ()))
+        phase_amounts = {
+            str(phase).upper(): float(amount)
+            for phase, amount in equilibrium.get("phase_amounts", {}).items()
+        }
+        missing = [
+            phase
+            for phase in expected
+            if phase not in stable_phases or phase_amounts.get(phase, 0.0) <= 1.0e-12
+        ]
+        extra = [
+            phase
+            for phase in stable_phases
+            if phase not in expected and phase_amounts.get(phase, 1.0) > 1.0e-12
+        ]
+        if missing or extra:
+            bad_samples.append((float(eta), point, stable_phases, phase_amounts, tuple(missing), tuple(extra)))
+
+    if bad_samples:
+        details = []
+        for eta, point, stable_phases, phase_amounts, missing, extra in bad_samples[:5]:
+            details.append(
+                "eta={:.3g}, x[NI,TI]={}, stable={}, amounts={}, missing={}, extra={}".format(
+                    eta,
+                    np.array2string(point, precision=6, separator=", "),
+                    stable_phases,
+                    phase_amounts,
+                    missing,
+                    extra,
+                )
+            )
+        if len(bad_samples) > 5:
+            details.append(f"... {len(bad_samples) - 5} more invalid eta samples")
+        raise ValueError(
+            f"{label} tie-line probe path is not in the {expected} two-phase field at "
+            f"{TEMPERATURE:g} K.\n"
+            + "\n".join(details)
+            + "\nChoose probe endpoints inside the intended two-phase region, or check "
+            "the selected phase name/database/temperature. This is the condition that "
+            "can otherwise surface from TC-Python as "
+            "'GeneralCalculationException: Null pointer exception'."
+        )
+
+
 def build_interface_surrogates(therm_ab, therm_bc):
     """Samples BCC/liquid and liquid/BCC tie-line families from Thermo-Calc."""
     bulk_points = _make_default_bulk_points() if BULK_DIFFUSIVITY_POINTS is None else np.asarray(BULK_DIFFUSIVITY_POINTS, dtype=np.float64)
+    with therm_ab:
+        _validate_tieline_probe_path(
+            therm_ab,
+            "BCC/liquid",
+            AB_PROBE_START,
+            AB_PROBE_END,
+            (PHASE_BCC, PHASE_LIQUID),
+        )
+    with therm_bc:
+        _validate_tieline_probe_path(
+            therm_bc,
+            "Liquid/BCC",
+            BC_PROBE_START,
+            BC_PROBE_END,
+            (PHASE_LIQUID, PHASE_BCC),
+        )
     with therm_ab:
         surrogate_ab = TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
             thermodynamics=therm_ab,
@@ -382,6 +470,7 @@ def run_case(overrides=None, *, make_plots=True):
 
 # %%
 if __name__ == "__main__":
+    # debugInPlace()
     result = run_case(make_plots=True)
 
 # %%
