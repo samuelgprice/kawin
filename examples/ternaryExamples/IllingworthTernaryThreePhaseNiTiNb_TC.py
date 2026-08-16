@@ -93,12 +93,15 @@ BC_PROBE_START = np.array([0.39, 0.468], dtype=np.float64)
 BC_PROBE_END = np.array([0.4099, 0.59], dtype=np.float64)
 INITIAL_ETA_GUESS = (0.5, 0.5)
 
-# ``nearest`` lets the bulk-diffusivity sample points follow the ternary
-# simplex without requiring a rectangular grid that would include invalid
-# Ni+Ti > 1 compositions.
-DIFFUSIVITY_INTERPOLATION = "nearest" # "continuous_grid"
+# ``simplex_linear`` samples a rectangular candidate grid but keeps only
+# simplex-valid points before building a scattered linear diffusivity
+# interpolator. This is better suited than ``continuous_grid`` for the present
+# Ni-Ti-Nb paths, which sit close to Ni+Ti=1 where rectangular grids would have
+# invalid upper-right corners.
+DIFFUSIVITY_INTERPOLATION = "simplex_linear" # "nearest", "continuous_grid"
 BULK_DIFFUSIVITY_MODE = "composition_dependent_lagged"
 BULK_DIFFUSIVITY_POINTS = None
+BULK_DIFFUSIVITY_GRIDS = None
 
 NODES = 165
 PHASE_NODES = (81, 9, 81)
@@ -130,6 +133,7 @@ RUN_SOLVE = True
 
 _OVERRIDE_KEY_ALIASES = {
     "bulk_diffusivity_mode": "BULK_DIFFUSIVITY_MODE",
+    "bulk_diffusivity_grids": "BULK_DIFFUSIVITY_GRIDS",
     "bulk_diffusivity_points": "BULK_DIFFUSIVITY_POINTS",
     "dt_mode": "DT_MODE",
     "fixed_time_step": "FIXED_TIME_STEP",
@@ -236,6 +240,73 @@ def _make_default_bulk_points():
     return np.unique(np.asarray(points, dtype=np.float64), axis=0)
 
 
+def _make_default_bulk_grids():
+    """
+    Returns [NI, TI] axes whose simplex-valid subset covers the case path.
+
+    The axes intentionally include nominal phase compositions and probe
+    endpoints. ``simplex_linear`` discards invalid axis combinations where
+    Ni+Ti exceeds one; ``continuous_grid`` requires the whole rectangle to be
+    valid, so users may need narrower custom axes for that mode.
+    """
+    ni_axis = np.unique(
+        np.asarray(
+            [
+                0.001,
+                0.05,
+                0.10,
+                0.16,
+                0.217,
+                0.30,
+                0.39,
+                0.4099,
+                0.495,
+                0.55,
+            ],
+            dtype=np.float64,
+        )
+    )
+    ti_axis = np.unique(
+        np.asarray(
+            [
+                0.10,
+                0.20,
+                0.39,
+                0.468,
+                0.495,
+                0.59,
+                0.60,
+                0.72,
+                0.83,
+                0.899,
+            ],
+            dtype=np.float64,
+        )
+    )
+    return ni_axis, ti_axis
+
+
+def _surrogate_diffusivity_sampling_kwargs():
+    """Returns diffusivity sampling kwargs for the selected surrogate mode."""
+    interpolation = str(DIFFUSIVITY_INTERPOLATION)
+    if interpolation == "nearest":
+        bulk_points = _make_default_bulk_points() if BULK_DIFFUSIVITY_POINTS is None else np.asarray(BULK_DIFFUSIVITY_POINTS, dtype=np.float64)
+        return {
+            "diffusivity_interpolation": interpolation,
+            "diffusivity_bulk_points": bulk_points,
+        }
+    if interpolation in {"simplex_linear", "continuous_grid"}:
+        grids = _make_default_bulk_grids() if BULK_DIFFUSIVITY_GRIDS is None else tuple(np.asarray(axis, dtype=np.float64) for axis in BULK_DIFFUSIVITY_GRIDS)
+        kwargs = {
+            "diffusivity_interpolation": interpolation,
+            "diffusivity_bulk_grids": grids,
+        }
+        if interpolation == "simplex_linear" and BULK_DIFFUSIVITY_POINTS is not None:
+            kwargs["diffusivity_bulk_points"] = np.asarray(BULK_DIFFUSIVITY_POINTS, dtype=np.float64)
+        return kwargs
+    raise ValueError("DIFFUSIVITY_INTERPOLATION must be 'nearest', 'continuous_grid', or 'simplex_linear'.")
+
+
 def build_thermodynamics():
     """
     Builds TC-Python thermodynamics facades for the two adjacent interfaces.
@@ -310,7 +381,7 @@ def _validate_tieline_probe_path(thermodynamics, label, probe_start, probe_end, 
 
 def build_interface_surrogates(therm_ab, therm_bc):
     """Samples BCC/liquid and liquid/BCC tie-line families from Thermo-Calc."""
-    bulk_points = _make_default_bulk_points() if BULK_DIFFUSIVITY_POINTS is None else np.asarray(BULK_DIFFUSIVITY_POINTS, dtype=np.float64)
+    diffusivity_sampling = _surrogate_diffusivity_sampling_kwargs()
     with therm_ab:
         _validate_tieline_probe_path(
             therm_ab,
@@ -338,8 +409,7 @@ def build_interface_surrogates(therm_ab, therm_bc):
             probe_end=AB_PROBE_END,
             eta_samples=ETA_SAMPLES,
             precipitate_phase=PHASE_LIQUID,
-            diffusivity_bulk_points=bulk_points,
-            diffusivity_interpolation=DIFFUSIVITY_INTERPOLATION,
+            **diffusivity_sampling,
         )
     with therm_bc:
         surrogate_bc = TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
@@ -352,8 +422,7 @@ def build_interface_surrogates(therm_ab, therm_bc):
             probe_end=BC_PROBE_END,
             eta_samples=ETA_SAMPLES,
             precipitate_phase=PHASE_BCC,
-            diffusivity_bulk_points=bulk_points,
-            diffusivity_interpolation=DIFFUSIVITY_INTERPOLATION,
+            **diffusivity_sampling,
         )
     return surrogate_ab, surrogate_bc
 

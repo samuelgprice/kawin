@@ -4,8 +4,10 @@ from pathlib import Path
 import numpy as np
 from scipy import optimize
 try:
-    from scipy.interpolate import PchipInterpolator, RectBivariateSpline
+    from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator, PchipInterpolator, RectBivariateSpline
 except ImportError:  # pragma: no cover - SciPy is a package dependency.
+    LinearNDInterpolator = None
+    NearestNDInterpolator = None
     PchipInterpolator = None
     RectBivariateSpline = None
 
@@ -14,6 +16,7 @@ from kawin.thermo import MulticomponentThermodynamics
 
 _DIFFUSIVITY_INTERPOLATION_NEAREST = "nearest"
 _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID = "continuous_grid"
+_DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR = "simplex_linear"
 
 
 def _as_path_with_npz_suffix(path):
@@ -84,9 +87,13 @@ def _validate_positive_2x2_matrix(matrix, label):
 
 def _coerce_diffusivity_interpolation(mode):
     mode = _DIFFUSIVITY_INTERPOLATION_NEAREST if mode is None else str(mode)
-    if mode not in {_DIFFUSIVITY_INTERPOLATION_NEAREST, _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID}:
+    if mode not in {
+        _DIFFUSIVITY_INTERPOLATION_NEAREST,
+        _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID,
+        _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR,
+    }:
         raise ValueError(
-            "diffusivity_interpolation must be 'nearest' or 'continuous_grid'."
+            "diffusivity_interpolation must be 'nearest', 'continuous_grid', or 'simplex_linear'."
         )
     return mode
 
@@ -132,6 +139,16 @@ def _bulk_grid_axes(diffusivity_bulk_grids, min_composition):
 
 def _bulk_points_from_axes(axes):
     return np.asarray(np.meshgrid(*axes, indexing="ij"), dtype=np.float64).reshape(2, -1).T
+
+
+def _bulk_points_from_simplex_axes(axes, min_composition):
+    if axes is None:
+        return None
+    points = _bulk_points_from_axes(axes)
+    points = points[_valid_simplex_mask(points, min_composition)]
+    if points.shape[0] < 3:
+        raise ValueError("diffusivity_bulk_grids must contain at least three simplex-valid points.")
+    return points
 
 
 def _densified_axes_from_bounds(bounds, counts):
@@ -318,6 +335,46 @@ class _BulkDiffusivityGridSpline2D:
             _validate_positive_2x2_matrix(matrix, f"{label} dense bulk sample {i}")
 
 
+class _BulkDiffusivitySimplexLinear2D:
+    """
+    Linear scattered interpolator over simplex-valid ternary bulk samples.
+
+    This mode is intended for composition regions near the ternary simplex
+    boundary where a rectangular ``continuous_grid`` would require invalid
+    corner compositions. Matrix components are interpolated after the same
+    signed cube-root transform used by the regular-grid spline. Queries outside
+    the sampled convex hull fall back to the nearest sampled point.
+    """
+
+    def __init__(self, points, matrices):
+        if LinearNDInterpolator is None or NearestNDInterpolator is None:  # pragma: no cover - SciPy is a package dependency.
+            raise ImportError("LinearNDInterpolator and NearestNDInterpolator are required for simplex_linear diffusivity interpolation.")
+        self.points = np.asarray(points, dtype=np.float64)
+        values = np.asarray(matrices, dtype=np.float64)
+        if self.points.ndim != 2 or self.points.shape[1] != 2:
+            raise ValueError("simplex_linear bulk diffusivity points must have shape (n_points, 2).")
+        if self.points.shape[0] < 3:
+            raise ValueError("simplex_linear bulk diffusivity requires at least three sample points.")
+        if values.shape != (self.points.shape[0], 2, 2):
+            raise ValueError("simplex_linear bulk diffusivity matrices must have shape (n_points, 2, 2).")
+        transformed = _signed_cuberoot(values.reshape(self.points.shape[0], 4))
+        self._linear = LinearNDInterpolator(self.points, transformed, fill_value=np.nan)
+        self._nearest = NearestNDInterpolator(self.points, transformed)
+
+    def evaluate(self, values):
+        values = np.asarray(values, dtype=np.float64)
+        transformed = np.asarray(self._linear(values), dtype=np.float64)
+        missing = ~np.all(np.isfinite(transformed), axis=1)
+        if np.any(missing):
+            transformed[missing] = np.asarray(self._nearest(values[missing]), dtype=np.float64)
+        return (transformed ** 3).reshape(values.shape[0], 2, 2)
+
+    def validate_dense(self, label):
+        matrices = self.evaluate(self.points)
+        for i, matrix in enumerate(matrices):
+            _validate_positive_2x2_matrix(matrix, f"{label} training sample {i}")
+
+
 def _validate_tieline_phases(tieline_phases):
     phases = tuple(str(p) for p in tieline_phases)
     if len(phases) != 2:
@@ -437,7 +494,10 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
     and general/bulk diffusivities are evaluated from a regular rectangular
     composition grid that lies inside the ternary simplex. Continuous mode runs
     dense build-time matrix validation so implicit composition-dependent bulk
-    solves can use cheap runtime evaluations without matrix repair.
+    solves can use cheap runtime evaluations without matrix repair. With
+    ``diffusivity_interpolation='simplex_linear'``, general/bulk diffusivities
+    are linearly interpolated over simplex-valid scattered samples with nearest
+    fallback outside the sampled convex hull.
     """
 
     def __init__(
@@ -495,6 +555,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         self._bulkDiffusivityInterpolators = {}
         if self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID:
             self._build_continuous_diffusivity_interpolators(diffusivity_bulk_grids)
+        elif self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR:
+            self._build_simplex_linear_diffusivity_interpolators()
 
     @classmethod
     def from_database(
@@ -527,6 +589,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         exactly the two explicitly requested ``tieline_phases``. Continuous
         bulk diffusivity interpolation requires explicit ``diffusivity_bulk_grids``
         so the rectangular sampling domain and array ordering are reproducible.
+        Simplex-linear interpolation accepts scattered ``diffusivity_bulk_points``
+        and can also sample the simplex-valid subset of ``diffusivity_bulk_grids``.
         """
         if tieline_phases is None:
             raise ValueError("tieline_phases must be provided explicitly.")
@@ -539,6 +603,13 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             if diffusivity_bulk_points is not None or diffusivity_bulk_bbox is not None or diffusivity_bulk_spacing is not None:
                 raise ValueError("continuous_grid diffusivity interpolation uses diffusivity_bulk_grids only.")
             bulk_grid_axes = _bulk_grid_axes(diffusivity_bulk_grids, float(min_composition))
+        elif diffusivity_interpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR and diffusivity_bulk_grids is not None:
+            bulk_grid_axes = tuple(np.asarray(axis, dtype=np.float64).reshape(-1).copy() for axis in diffusivity_bulk_grids)
+            for i, axis in enumerate(bulk_grid_axes):
+                if axis.size < 2:
+                    raise ValueError(f"diffusivity_bulk_grids axis {i} must contain at least two samples.")
+                if not np.all(np.isfinite(axis)) or not np.all(np.diff(axis) > 0.0):
+                    raise ValueError(f"diffusivity_bulk_grids axis {i} must be finite and strictly increasing.")
         validation_database_source = validation_database
         if validation_database_source is None and thermodynamics is None and isinstance(database, (str, Path)):
             validation_database_source = database
@@ -625,11 +696,16 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                         )
                     )
         else:
+            grid_points = (
+                _bulk_points_from_simplex_axes(bulk_grid_axes, float(min_composition))
+                if diffusivity_interpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR
+                else _bulk_points_from_grids(diffusivity_bulk_grids)
+            )
             bulk_points = cls._merge_bulk_points(
                 elements,
                 min_composition,
                 diffusivity_bulk_points,
-                _bulk_points_from_grids(diffusivity_bulk_grids),
+                grid_points,
                 _bulk_points_from_bbox(diffusivity_bulk_bbox, diffusivity_bulk_spacing),
             )
             general_diff_x = {phase: [*interface_diff_x[phase]] for phase in tieline_phases}
@@ -748,6 +824,31 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             )
             interface.validate_dense(f"continuous interface diffusivity for phase {phase}")
             bulk.validate_dense(f"continuous bulk diffusivity for phase {phase}")
+            self._interfaceDiffusivityInterpolators[phase] = interface
+            self._bulkDiffusivityInterpolators[phase] = bulk
+
+    def _build_simplex_linear_diffusivity_interpolators(self):
+        """
+        Builds interface splines and simplex-linear bulk diffusivity evaluators.
+
+        The bulk samples may be scattered over the valid ternary simplex. This
+        avoids the rectangular-grid restriction of ``continuous_grid`` for
+        systems whose useful composition path sits near ``x0 + x1 = 1``.
+        """
+        for phase in self.tieline_phases:
+            if self.diffusivity_compositions["interface"][phase].shape[0] != self.eta_samples.size:
+                raise ValueError(f"simplex_linear interface diffusivity samples for phase {phase} must match eta_samples.")
+            interface = _InterfaceDiffusivitySpline1D(
+                self.eta_samples,
+                self.tieline_compositions[phase],
+                self.diffusivities["interface"][phase],
+            )
+            bulk = _BulkDiffusivitySimplexLinear2D(
+                self.diffusivity_compositions["general"][phase],
+                self.diffusivities["general"][phase],
+            )
+            interface.validate_dense(f"simplex-linear interface diffusivity for phase {phase}")
+            bulk.validate_dense(f"simplex-linear bulk diffusivity for phase {phase}")
             self._interfaceDiffusivityInterpolators[phase] = interface
             self._bulkDiffusivityInterpolators[phase] = bulk
 
@@ -948,7 +1049,9 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         default ``nearest`` mode this preserves nearest-sampled behavior. In
         ``continuous_grid`` mode interface values are 1D eta splines and bulk
         values are tensor-product splines over the configured rectangular
-        composition grid.
+        composition grid. In ``simplex_linear`` mode interface values use the
+        same 1D eta splines and bulk values use scattered linear interpolation
+        over simplex-valid training points.
         """
         self._validate_temperature(T)
         phase = self._phase_index(phase)
@@ -958,7 +1061,10 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         values = np.atleast_2d(values)
         if values.shape[1] != 2:
             raise ValueError("getInterdiffusivity expects independent ternary compositions with shape (n, 2).")
-        if self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID:
+        if self.diffusivityInterpolation in {
+            _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID,
+            _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR,
+        }:
             if context == "interface":
                 out = self._interfaceDiffusivityInterpolators[phase].evaluate(values)
             else:

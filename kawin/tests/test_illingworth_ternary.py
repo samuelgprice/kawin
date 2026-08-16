@@ -2936,6 +2936,24 @@ def test_ternary_continuous_surrogate_rejects_grid_outside_simplex():
         )
 
 
+def test_ternary_simplex_linear_surrogate_accepts_grid_crossing_simplex_boundary():
+    surrogate = _build_surrogate(
+        diffusivity_interpolation="simplex_linear",
+        diffusivity_bulk_grids=(
+            np.asarray([0.18, 0.30, 0.42, 0.70], dtype=np.float64),
+            np.asarray([0.06, 0.18, 0.30, 0.45], dtype=np.float64),
+        ),
+    )
+
+    matrix = surrogate.getInterdiffusivity([0.36, 0.22], 1000.0, phase="ALPHA", query_context="general")
+    nearby = surrogate.getInterdiffusivity([0.361, 0.221], 1000.0, phase="ALPHA", query_context="general")
+
+    assert matrix.shape == (2, 2)
+    assert np.all(np.isfinite(matrix))
+    assert not np.array_equal(matrix, nearby)
+    assert np.linalg.norm(matrix - nearby, ord=np.inf) < 1.0e-2
+
+
 def test_ternary_continuous_surrogate_interface_uses_tieline_only():
     first = _direct_continuous_surrogate(bulk_scale=10.0)
     second = _direct_continuous_surrogate(bulk_scale=100.0)
