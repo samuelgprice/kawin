@@ -233,11 +233,11 @@ def test_three_phase_sequence_inventory_and_reconstruction_helpers():
         grids,
     )
 
-    assert np.allclose(inventory, 0.25 * profiles[0][0] + 0.5 * profiles[1][0] + 0.25 * profiles[2][0])
-    assert np.allclose(reconstructed[0], profiles[0][0])
-    assert np.allclose(reconstructed[2], profiles[0][0])
-    assert np.allclose(reconstructed[3], profiles[1][0])
-    assert np.allclose(reconstructed[-1], profiles[2][0])
+    assert np.allclose(inventory, 0.25 * profiles[0][0] + 0.5 * profiles[1][0] + 0.25 * profiles[2][0], rtol=0.0, atol=1.0e-15)
+    assert np.allclose(reconstructed[0], profiles[0][0], rtol=0.0, atol=1.0e-15)
+    assert np.allclose(reconstructed[2], profiles[0][0], rtol=0.0, atol=1.0e-15)
+    assert np.allclose(reconstructed[3], profiles[1][0], rtol=0.0, atol=1.0e-15)
+    assert np.allclose(reconstructed[-1], profiles[2][0], rtol=0.0, atol=1.0e-15)
 
 
 def test_three_phase_interval_translation_satisfies_ale_finite_volume_equation():
@@ -272,8 +272,8 @@ def test_three_phase_interval_translation_satisfies_ale_finite_volume_equation()
     )
     residual = _interval_fv_residual(old_profile, result.profile, grid, old_bounds, new_bounds, D_faces, model._currdt, old_profile[0], old_profile[-1])
 
-    assert not np.allclose(result.profile[1:-1], old_profile[1:-1])
-    assert np.allclose(residual, 0.0, atol=2e-15)
+    assert np.max(np.abs(result.profile[1:-1] - old_profile[1:-1])) > 1.0e-4
+    assert np.allclose(residual, 0.0, rtol=0.0, atol=2e-15)
 
 
 def test_three_phase_middle_interval_uses_face_local_ale_upwinding():
@@ -314,28 +314,47 @@ def test_three_phase_middle_interval_uses_face_local_ale_upwinding():
 
     assert np.any(displacements > 0.0)
     assert np.any(displacements < 0.0)
-    assert np.allclose(residual, 0.0, atol=2e-15)
+    assert np.allclose(residual, 0.0, rtol=0.0, atol=2e-15)
     assert np.max(np.abs(all_right_residual)) > 1e-4
     assert np.max(np.abs(all_left_residual)) > 1e-4
 
 
-def test_three_phase_left_interval_reduces_to_two_phase_left_moving_grid_solve():
+@pytest.mark.parametrize(
+    "interval, old_s, new_s",
+    [
+        ("left", 0.45, 0.52),
+        ("left", 0.45, 0.38),
+        ("right", 0.45, 0.52),
+        ("right", 0.45, 0.38),
+    ],
+)
+def test_three_phase_outer_interval_reduces_to_two_phase_moving_grid_solve(interval, old_s, new_s):
     c_left = np.asarray([0.26, 0.11], dtype=np.float64)
     c_right = np.asarray([0.34, 0.16], dtype=np.float64)
     grid = np.asarray([0.0, 0.2, 0.5, 0.75, 1.0], dtype=np.float64)
-    profile = np.asarray(
-        [
-            [0.18, 0.06],
-            [0.21, 0.09],
-            [0.25, 0.10],
-            [0.28, 0.12],
-            c_left,
-        ],
-        dtype=np.float64,
-    )
+    if interval == "left":
+        profile = np.asarray(
+            [
+                [0.18, 0.06],
+                [0.21, 0.09],
+                [0.25, 0.10],
+                [0.28, 0.12],
+                c_left,
+            ],
+            dtype=np.float64,
+        )
+    else:
+        profile = np.asarray(
+            [
+                c_right,
+                [0.35, 0.18],
+                [0.32, 0.17],
+                [0.30, 0.15],
+                [0.28, 0.14],
+            ],
+            dtype=np.float64,
+        )
     D = np.asarray([[1.3, 0.08], [0.04, 0.9]], dtype=np.float64)
-    old_s = 0.45
-    new_s = 0.52
     dt = 0.015
     three_phase, _ = _make_stationary_model(record=False)
     three_phase.setup()
@@ -358,10 +377,39 @@ def test_three_phase_left_interval_reduces_to_two_phase_left_moving_grid_solve()
     )
     two_phase.setup()
 
-    generic = three_phase._solve_interval_planar(profile, grid, [0.0, old_s], [0.0, new_s], 0, None, c_left, D)
-    reference = two_phase._solve_concentration_left_planar(profile, old_s, new_s, dt, c_left, D, "positive")
+    branch = "positive" if new_s > old_s else "negative"
+    if interval == "left":
+        generic = three_phase._solve_interval_planar(profile, grid, [0.0, old_s], [0.0, new_s], 0, None, c_left, D)
+        reference = two_phase._solve_concentration_left_planar(profile, old_s, new_s, dt, c_left, D, branch)
+    else:
+        generic = three_phase._solve_interval_planar(profile, grid, [old_s, 1.0], [new_s, 1.0], 2, c_right, None, D)
+        reference = two_phase._solve_concentration_right_planar(profile, old_s, new_s, dt, c_right, D, branch)
 
-    assert np.allclose(generic.profile, reference.profile, atol=1e-13)
+    assert np.allclose(generic.profile, reference.profile, rtol=1.0e-13, atol=1e-13)
+
+
+def test_three_phase_constant_profile_preserved_by_geometric_motion_with_zero_diffusion():
+    model, _ = _make_stationary_model(record=False)
+    model.setup()
+    grid = np.asarray([0.0, 0.17, 0.48, 0.79, 1.0], dtype=np.float64)
+    value = np.asarray([0.27, 0.13], dtype=np.float64)
+    profile = np.broadcast_to(value, (len(grid), 2)).copy()
+    D_faces = np.zeros((len(grid) - 1, 2, 2), dtype=np.float64)
+    model._currdt = 0.025
+
+    result = model._solve_interval_planar(
+        profile,
+        grid,
+        old_bounds=[0.24, 0.82],
+        new_bounds=[0.36, 0.68],
+        phase_index=1,
+        left_value=value,
+        right_value=value,
+        D_faces=D_faces,
+        validate_diffusivity=False,
+    )
+
+    assert np.allclose(result.profile, profile, rtol=0.0, atol=2.0e-16)
 
 
 def test_three_phase_model_rejects_non_three_phase_input():
@@ -390,9 +438,9 @@ def test_three_phase_stationary_profile_stays_stationary_and_records_histories()
 
     model.solve(1e-4)
 
-    assert np.allclose(model.getInterfacePositions(), [0.35, 0.7], atol=1e-12)
-    assert np.allclose(model.getInterfaceEtas(), [0.25, 0.75], atol=1e-12)
-    assert np.allclose(model.checkConservation(1e-10), [0.0, 0.0], atol=1e-12)
+    assert np.allclose(model.getInterfacePositions(), [0.35, 0.7], rtol=0.0, atol=1e-12)
+    assert np.allclose(model.getInterfaceEtas(), [0.25, 0.75], rtol=0.0, atol=1e-12)
+    assert np.allclose(model.checkConservation(1e-10), [0.0, 0.0], rtol=0.0, atol=1e-12)
     profiles = model.getTransformedState()
     assert len(profiles) == 3
     assert model.interfaceData._y[: model.interfaceData.N + 1].shape[1] == 2
@@ -430,9 +478,39 @@ def test_three_phase_initial_etas_are_estimated_from_instantaneous_balance():
 
     model.setup()
 
-    assert np.allclose(model.getInterfaceEtas(), target_etas, atol=1e-8)
-    assert np.allclose(model.initialEtaEstimate.etas, target_etas, atol=1e-8)
+    assert np.allclose(model.getInterfaceEtas(), target_etas, rtol=0.0, atol=1e-8)
+    assert np.allclose(model.initialEtaEstimate.etas, target_etas, rtol=0.0, atol=1e-8)
     assert model.initialEtaEstimate.residual_norm <= model.initialEtaRootXtol
+
+
+def test_three_phase_nonconverged_candidate_residuals_telescope_total_inventory():
+    model = _make_eta_varying_three_phase_model(record=False)
+    model.setup()
+    old_interfaces = np.asarray([0.35, 0.7], dtype=np.float64)
+    old_etas = np.asarray([0.2, 0.8], dtype=np.float64)
+    old_interface_compositions = model._interface_compositions(old_etas)
+    c_a_ab_old, c_b_ab_old = old_interface_compositions[0]
+    c_b_bc_old, c_c_bc_old = old_interface_compositions[1]
+    old_profiles = (
+        np.linspace(np.asarray([0.17, 0.07], dtype=np.float64), c_a_ab_old, len(model._grids[0])),
+        np.linspace(c_b_ab_old, c_b_bc_old, len(model._grids[1])),
+        np.linspace(c_c_bc_old, np.asarray([0.31, 0.17], dtype=np.float64), len(model._grids[2])),
+    )
+    old_profiles[0][1:-1] += np.asarray([0.01, -0.004], dtype=np.float64)
+    old_profiles[1][1:-1] += np.asarray([-0.006, 0.008], dtype=np.float64)
+    old_profiles[2][1:-1] += np.asarray([0.008, -0.005], dtype=np.float64)
+    new_interfaces = np.asarray([0.41, 0.66], dtype=np.float64)
+    new_interface_compositions = model._interface_compositions(np.asarray([0.73, 0.41], dtype=np.float64))
+    model._currdt = 1e-5
+
+    bulk_results = model._solve_bulk_profiles(old_profiles, old_interfaces, new_interfaces, new_interface_compositions)
+    residual = model._interface_residuals(old_profiles, old_interfaces, new_interfaces, new_interface_compositions, bulk_results)
+    old_inventory = model.getTotalInventoryFromState(old_profiles, old_interfaces)
+    new_inventory = model.getTotalInventoryFromState(tuple(result.profile for result in bulk_results), new_interfaces)
+    residual_sum = residual[:2] + residual[2:]
+
+    assert np.max(np.abs(residual_sum)) > 1.0e-4
+    assert np.allclose(new_inventory - old_inventory, residual_sum, rtol=0.0, atol=5.0e-16)
 
 
 @pytest.mark.parametrize("mode", [_BULK_DIFFUSIVITY_PHASE_UNIFORM, _BULK_DIFFUSIVITY_LAGGED, _BULK_DIFFUSIVITY_IMPLICIT])
@@ -442,19 +520,16 @@ def test_three_phase_moving_raw_candidate_conserves_inventory_without_correction
     state = _nonuniform_moving_candidate_state(model)
     old_inventory = model.getTotalInventoryFromState(tuple(state[:3]), state[3])
 
-    def fail_if_called(*args, **kwargs):
-        raise AssertionError("raw candidate profiles should not be inventory-corrected")
-
-    model._correct_candidate_inventory = fail_if_called
     dXdt = model.getdXdt(model.currentTime, state)
     raw_profiles = tuple(state[i] + model._currdt * dXdt[i] for i in range(3))
     raw_interfaces = state[3] + model._currdt * dXdt[3]
     raw_inventory = model.getTotalInventoryFromState(raw_profiles, raw_interfaces)
+    drift_bound = 2.0 * model._lastImplicitPhysicalResidual + 5.0e-15
 
     assert np.max(np.abs(dXdt[3])) > 0.0
     assert np.max(np.abs(dXdt[4])) > 0.0
     assert model._lastImplicitResidual <= model.residualTolerance
-    assert np.allclose(raw_inventory, old_inventory, atol=2e-15)
+    assert np.all(np.abs(raw_inventory - old_inventory) <= drift_bound)
 
 
 def test_three_phase_interface_candidate_rejects_invalid_bulk_profile():
@@ -468,8 +543,8 @@ def test_three_phase_interface_candidate_rejects_invalid_bulk_profile():
         return tuple(
             SimpleNamespace(
                 profile=profile,
-                left_flux=zero_flux.copy(),
-                right_flux=zero_flux.copy(),
+                left_transfer=zero_flux.copy(),
+                right_transfer=zero_flux.copy(),
                 left_face_matrix=None,
                 right_face_matrix=None,
             )

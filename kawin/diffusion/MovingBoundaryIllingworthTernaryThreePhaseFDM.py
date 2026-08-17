@@ -34,15 +34,15 @@ from kawin.thermo.Mobility import interstitials
 class _ThreePhaseBulkResult:
     """Result from one transformed interval solve in the three-phase model.
 
-    ``left_flux`` and ``right_flux`` are the total ALE plus diffusive transfers
+    ``left_transfer`` and ``right_transfer`` are the total ALE plus diffusive transfers
     over the timestep on the interface-adjacent internal faces. They use the
     same orientation as the interval grid, from smaller to larger transformed
     coordinate.
     """
 
     profile: np.ndarray
-    left_flux: np.ndarray
-    right_flux: np.ndarray
+    left_transfer: np.ndarray
+    right_transfer: np.ndarray
     left_face_matrix: np.ndarray | None
     right_face_matrix: np.ndarray | None
     inner_iterations: int = 0
@@ -1005,14 +1005,14 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         right_matrix = None if right_value is None else D_faces[-1]
         zero = np.zeros(2, dtype=np.float64)
         if left_value is None:
-            left_flux = zero.copy()
+            left_transfer = zero.copy()
         else:
-            left_flux = self._evaluate_face_transfer(*face_coefficients[0], solved[0], solved[1])
+            left_transfer = self._evaluate_face_transfer(*face_coefficients[0], solved[0], solved[1])
         if right_value is None:
-            right_flux = zero.copy()
+            right_transfer = zero.copy()
         else:
-            right_flux = self._evaluate_face_transfer(*face_coefficients[-1], solved[-2], solved[-1])
-        return _ThreePhaseBulkResult(solved, left_flux, right_flux, left_matrix, right_matrix)
+            right_transfer = self._evaluate_face_transfer(*face_coefficients[-1], solved[-2], solved[-1])
+        return _ThreePhaseBulkResult(solved, left_transfer, right_transfer, left_matrix, right_matrix)
 
     def _solve_interval_picard(self, profile, grid, old_bounds, new_bounds, phase_index, left_value, right_value):
         """Solves one interval with composition-dependent Picard face matrices."""
@@ -1032,8 +1032,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             if update_norm <= threshold:
                 return _ThreePhaseBulkResult(
                     linear.profile,
-                    linear.left_flux,
-                    linear.right_flux,
+                    linear.left_transfer,
+                    linear.right_transfer,
                     linear.left_face_matrix,
                     linear.right_face_matrix,
                     inner_iterations=iteration,
@@ -1067,7 +1067,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             results.append(result)
         return tuple(results)
 
-    def _interface_residuals(self, old_profiles, old_interfaces, new_interfaces, interface_compositions, bulk_results, dt):
+    def _interface_residuals(self, old_profiles, old_interfaces, new_interfaces, interface_compositions, bulk_results):
         """
         Returns interface residuals from the same discrete transfers as the bulk.
 
@@ -1098,8 +1098,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         endpoint_ab += self._endpoint_inventory_change(self._grids[1], old_profiles[1], c_b_ab, old_lengths[1], new_lengths[1], "left")
         endpoint_bc = self._endpoint_inventory_change(self._grids[1], old_profiles[1], c_b_bc, old_lengths[1], new_lengths[1], "right")
         endpoint_bc += self._endpoint_inventory_change(self._grids[2], old_profiles[2], c_c_bc, old_lengths[2], new_lengths[2], "left")
-        residual_ab = endpoint_ab + bulk_results[0].right_flux - bulk_results[1].left_flux
-        residual_bc = endpoint_bc + bulk_results[1].right_flux - bulk_results[2].left_flux
+        residual_ab = endpoint_ab + bulk_results[0].right_transfer - bulk_results[1].left_transfer
+        residual_bc = endpoint_bc + bulk_results[1].right_transfer - bulk_results[2].left_transfer
         return np.concatenate((residual_ab, residual_bc))
 
     def _endpoint_inventory_change(self, grid, old_profile, new_value, old_length, new_length, side):
@@ -1118,70 +1118,6 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     def _residual_scale(self, profiles, interfaces):
         inventory = self.getTotalInventoryFromState(profiles, interfaces)
         return np.maximum(np.maximum(np.repeat(np.maximum(np.abs(inventory), self._R), 2), 1e-300), 1e-300)
-
-    def _grid_trapezoid_node_weights(self, grid):
-        """Returns node weights for trapezoidal integration on one Landau grid."""
-        grid = np.asarray(grid, dtype=np.float64).reshape(-1)
-        weights = np.empty_like(grid)
-        weights[0] = 0.5 * (grid[1] - grid[0])
-        weights[-1] = 0.5 * (grid[-1] - grid[-2])
-        weights[1:-1] = 0.5 * (grid[2:] - grid[:-2])
-        return weights
-
-    def _inventory_correction_masks(self):
-        """
-        Returns endpoint-preserving masks for transformed inventory correction.
-
-        Nodes fixed by moving-interface Dirichlet values are excluded:
-        phase A right endpoint, phase B both endpoints, and phase C left
-        endpoint. External closed-boundary nodes and interior nodes remain
-        adjustable.
-        """
-        masks = []
-        for phase_index, grid in enumerate(self._grids):
-            mask = np.ones(len(grid), dtype=bool)
-            if phase_index == 0:
-                mask[-1] = False
-            elif phase_index == 1:
-                mask[0] = False
-                mask[-1] = False
-            else:
-                mask[0] = False
-            masks.append(mask)
-        return tuple(masks)
-
-    def _correct_candidate_inventory(self, old_profiles, old_interfaces, candidate_profiles, candidate_interfaces):
-        """
-        Applies a uniform endpoint-preserving correction to conserve inventory.
-
-        The three-phase middle interval has two moving boundaries, so the local
-        interface residuals can leave a small mismatch in the global
-        trapezoidal inventory. This correction distributes the stepwise
-        inventory residual over non-interface transformed nodes while preserving
-        all phase-side interface compositions used by the nonlinear solve.
-        """
-        target = self.getTotalInventoryFromState(old_profiles, old_interfaces)
-        current = self.getTotalInventoryFromState(candidate_profiles, candidate_interfaces)
-        delta = target - current
-        if not np.any(np.isfinite(delta)):
-            raise ValueError("Inventory correction encountered non-finite drift.")
-        masks = self._inventory_correction_masks()
-        boundaries = np.concatenate(([0.0], np.asarray(candidate_interfaces, dtype=np.float64), [self._R]))
-        denominator = 0.0
-        for phase_index, (grid, mask) in enumerate(zip(self._grids, masks)):
-            weights = self._grid_trapezoid_node_weights(grid)
-            denominator += float(boundaries[phase_index + 1] - boundaries[phase_index]) * float(np.sum(weights[mask]))
-        if not np.isfinite(denominator) or denominator <= 0.0:
-            raise ValueError("Inventory correction has no adjustable transformed profile nodes.")
-        correction = delta / denominator
-        corrected = []
-        for profile, mask in zip(candidate_profiles, masks):
-            values = np.asarray(profile, dtype=np.float64).copy()
-            values[mask] += correction
-            corrected.append(values)
-        corrected = tuple(corrected)
-        self._validate_candidate_profiles(corrected)
-        return corrected
 
     def _scaled_bounds(self):
         eps = 1e-14
@@ -1246,7 +1182,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         bulk_results = self._solve_bulk_profiles(profiles, old_interfaces, interfaces, interface_compositions)
         candidate_profiles = tuple(result.profile for result in bulk_results)
         self._validate_candidate_profiles(candidate_profiles)
-        residual = self._interface_residuals(profiles, old_interfaces, interfaces, interface_compositions, bulk_results, dt)
+        residual = self._interface_residuals(profiles, old_interfaces, interfaces, interface_compositions, bulk_results)
         scaled = residual / residual_scale
         return _ThreePhaseCandidate(
             x_hat=np.asarray(x_hat, dtype=np.float64).copy(),

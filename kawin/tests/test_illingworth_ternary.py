@@ -2373,7 +2373,6 @@ def test_three_phase_interface_residuals_include_endpoint_inventory_change_when_
         new_interfaces,
         new_compositions,
         bulk_results,
-        dt,
     )
     old_lengths = np.asarray([old_interfaces[0], old_interfaces[1] - old_interfaces[0], model._R - old_interfaces[1]])
     new_lengths = np.asarray([new_interfaces[0], new_interfaces[1] - new_interfaces[0], model._R - new_interfaces[1]])
@@ -2386,8 +2385,8 @@ def test_three_phase_interface_residuals_include_endpoint_inventory_change_when_
     endpoint_change = np.concatenate((endpoint_ab, endpoint_bc))
     expected = np.concatenate(
         (
-            endpoint_ab + bulk_results[0].right_flux - bulk_results[1].left_flux,
-            endpoint_bc + bulk_results[1].right_flux - bulk_results[2].left_flux,
+            endpoint_ab + bulk_results[0].right_transfer - bulk_results[1].left_transfer,
+            endpoint_bc + bulk_results[1].right_transfer - bulk_results[2].left_transfer,
         )
     )
 
@@ -2397,60 +2396,6 @@ def test_three_phase_interface_residuals_include_endpoint_inventory_change_when_
     assert not np.allclose(new_compositions[1][1], c_c_bc_old)
     assert np.linalg.norm(endpoint_change, ord=np.inf) > 1.0e-4
     assert np.allclose(residual, expected, rtol=1.0e-13, atol=1.0e-15)
-
-
-def test_three_phase_inventory_correction_preserves_interface_endpoints_and_removes_step_drift():
-    eq_ab = _LinearInterfaceEquilibrium()
-    eq_bc = _LinearInterfaceEquilibrium()
-    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 31)
-    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.5, [0.24, 0.10], [0.34, 0.16]), ["X", "Y"])]))
-    model = MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(
-        mesh=mesh,
-        elements=["Z", "X", "Y"],
-        phases=["ALPHA", "BETA", "GAMMA"],
-        thermodynamics=_CoupledTernaryThermodynamics(),
-        temperature=1000.0,
-        interfacePositions=(0.4, 0.7),
-        interface_equilibria=(eq_ab, eq_bc),
-        initial_eta_guess=(0.2, 0.3),
-        initial_eta_root_xtol=1.0,
-        time_step=1.0e-4,
-        phase_nodes=(5, 6, 5),
-        tolerance=1.0e-12,
-        max_iterations=20,
-        record=True,
-    )
-    model.setup()
-    old_interfaces = np.asarray([0.4, 0.7], dtype=np.float64)
-    new_interfaces = np.asarray([0.43, 0.66], dtype=np.float64)
-    old_compositions = model._interface_compositions(np.asarray([0.2, 0.3], dtype=np.float64))
-    c_a_ab_old, c_b_ab_old = old_compositions[0]
-    c_b_bc_old, c_c_bc_old = old_compositions[1]
-    old_profiles = (
-        np.linspace(np.asarray([0.18, 0.08], dtype=np.float64), c_a_ab_old, len(model._grids[0])),
-        np.linspace(c_b_ab_old, c_b_bc_old, len(model._grids[1])),
-        np.linspace(c_c_bc_old, np.asarray([0.38, 0.18], dtype=np.float64), len(model._grids[2])),
-    )
-    candidate_profiles = tuple(profile.copy() for profile in old_profiles)
-    candidate_profiles[0][1:-1] += np.asarray([2.0e-3, -1.0e-3], dtype=np.float64)
-    candidate_profiles[1][1:-1] += np.asarray([-1.0e-3, 1.5e-3], dtype=np.float64)
-    candidate_profiles[2][1:] += np.asarray([1.0e-3, 2.0e-3], dtype=np.float64)
-    endpoint_values = (
-        candidate_profiles[0][-1].copy(),
-        candidate_profiles[1][0].copy(),
-        candidate_profiles[1][-1].copy(),
-        candidate_profiles[2][0].copy(),
-    )
-
-    corrected = model._correct_candidate_inventory(old_profiles, old_interfaces, candidate_profiles, new_interfaces)
-    old_inventory = model.getTotalInventoryFromState(old_profiles, old_interfaces)
-    corrected_inventory = model.getTotalInventoryFromState(corrected, new_interfaces)
-
-    assert np.allclose(corrected_inventory, old_inventory, rtol=0.0, atol=1.0e-14)
-    assert np.allclose(corrected[0][-1], endpoint_values[0])
-    assert np.allclose(corrected[1][0], endpoint_values[1])
-    assert np.allclose(corrected[1][-1], endpoint_values[2])
-    assert np.allclose(corrected[2][0], endpoint_values[3])
 
 
 def test_instantaneous_balance_estimator_solves_velocity_and_eta():
