@@ -72,8 +72,8 @@ class ThreePhaseInitialEtaEstimate:
     Diagnostics from initial tie-line selection for the three-phase model.
 
     ``etas`` are the selected A|B and B|C tie-line coordinates. ``velocities``
-    are instantaneous Stefan-balance estimates evaluated with initial
-    adjacent-node gradients; they are used only to seed the finite-step
+    are instantaneous discrete conservative-balance estimates evaluated with
+    initial adjacent-node gradients; they are used only to seed the finite-step
     discrete nonlinear solve.
     """
 
@@ -429,18 +429,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             D = self.therm.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index])
         return _validate_ternary_diffusivity_matrix(D, self.phases[phase_index], context=context)
 
-    def _initial_flux_terms(self, interfaces, interface_compositions, adjacent):
-        """Evaluates initial face flux differences at A|B and B|C."""
+    def _initial_face_diffusivity_matrices(self, interfaces, interface_compositions, adjacent):
+        """Returns diffusivity matrices for the four initial interface-adjacent faces."""
         s_ab, s_bc = np.asarray(interfaces, dtype=np.float64).reshape(2)
         p_a, p_b_left, p_b_right, p_c = adjacent
         c_a_ab, c_b_ab = interface_compositions[0]
         c_b_bc, c_c_bc = interface_compositions[1]
-        width_a = s_ab
-        width_b = s_bc - s_ab
-        width_c = self._R - s_bc
-        u_a = self._grids[0]
-        u_b = self._grids[1]
-        u_c = self._grids[2]
 
         if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
             D_a = self._interface_face_diffusivity(c_a_ab, 0, s_ab, "initial-eta interface")
@@ -453,52 +447,138 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             D_b_left = self._interface_face_diffusivity(0.5 * (c_b_ab + p_b_left), 1, s_ab, "initial-eta bulk")
             D_b_right = self._interface_face_diffusivity(0.5 * (p_b_right + c_b_bc), 1, s_bc, "initial-eta bulk")
             D_c = self._interface_face_diffusivity(0.5 * (c_c_bc + p_c), 2, s_bc, "initial-eta bulk")
+        return D_a, D_b_left, D_b_right, D_c
 
-        flux_a_right = np.matmul(D_a, (c_a_ab - p_a) / (width_a * (1.0 - u_a[-2])))
-        flux_b_left = np.matmul(D_b_left, (p_b_left - c_b_ab) / (width_b * u_b[1]))
-        flux_b_right = np.matmul(D_b_right, (c_b_bc - p_b_right) / (width_b * (1.0 - u_b[-2])))
-        flux_c_left = np.matmul(D_c, (p_c - c_c_bc) / (width_c * u_c[1]))
-        return np.concatenate((flux_b_left - flux_a_right, flux_c_left - flux_b_right))
+    def _initial_face_transfer_rate(self, face_velocity, D_face, length, dxi, left_value, right_value):
+        """
+        Returns the instantaneous conservative ALE plus diffusive face transfer.
+
+        The sign convention matches the transient interval transfer ``H``:
+        positive physical face velocity uses the right transformed node as the
+        ALE donor because the transformed advection velocity has the opposite
+        sign.
+        """
+        diffusive = np.matmul(np.asarray(D_face, dtype=np.float64), (np.asarray(right_value, dtype=np.float64) - np.asarray(left_value, dtype=np.float64)) / (float(length) * float(dxi)))
+        face_velocity = float(face_velocity)
+        if face_velocity > 0.0:
+            return face_velocity * np.asarray(right_value, dtype=np.float64) + diffusive
+        if face_velocity < 0.0:
+            return face_velocity * np.asarray(left_value, dtype=np.float64) + diffusive
+        return diffusive
+
+    def _initial_discrete_interface_terms(self, interfaces, interface_compositions, adjacent, velocities, *, return_zero_velocity=False):
+        """
+        Evaluates the discrete conservative ALE instantaneous interface balance.
+
+        Initial non-interface profile nodes and phase widths are held fixed.
+        ``velocities`` contains ``[V_AB, V_BC]``; eta affects only the
+        equilibrium endpoint compositions supplied in ``interface_compositions``.
+        When requested, the zero-velocity residual is returned from the same
+        face diffusivity evaluation so diagnostics do not repeat thermodynamic
+        work during the nonlinear initial-eta solve.
+        """
+        s_ab, s_bc = np.asarray(interfaces, dtype=np.float64).reshape(2)
+        v_ab, v_bc = np.asarray(velocities, dtype=np.float64).reshape(2)
+        p_a, p_b_left, p_b_right, p_c = adjacent
+        c_a_ab, c_b_ab = interface_compositions[0]
+        c_b_bc, c_c_bc = interface_compositions[1]
+        length_a = s_ab
+        length_b = s_bc - s_ab
+        length_c = self._R - s_bc
+        u_a = self._grids[0]
+        u_b = self._grids[1]
+        u_c = self._grids[2]
+        D_a, D_b_left, D_b_right, D_c = self._initial_face_diffusivity_matrices(interfaces, interface_compositions, adjacent)
+
+        xi_a_right = 0.5 * (u_a[-2] + 1.0)
+        xi_b_left = 0.5 * u_b[1]
+        xi_b_right = 0.5 * (u_b[-2] + 1.0)
+        xi_c_left = 0.5 * u_c[1]
+        w_a_right = xi_a_right * v_ab
+        w_b_left = (1.0 - xi_b_left) * v_ab + xi_b_left * v_bc
+        w_b_right = (1.0 - xi_b_right) * v_ab + xi_b_right * v_bc
+        w_c_left = (1.0 - xi_c_left) * v_bc
+
+        transfer_a_right = self._initial_face_transfer_rate(w_a_right, D_a, length_a, 1.0 - u_a[-2], p_a, c_a_ab)
+        transfer_b_left = self._initial_face_transfer_rate(w_b_left, D_b_left, length_b, u_b[1], c_b_ab, p_b_left)
+        transfer_b_right = self._initial_face_transfer_rate(w_b_right, D_b_right, length_b, 1.0 - u_b[-2], p_b_right, c_b_bc)
+        transfer_c_left = self._initial_face_transfer_rate(w_c_left, D_c, length_c, u_c[1], c_c_bc, p_c)
+
+        length_rate_a = v_ab
+        length_rate_b = v_bc - v_ab
+        length_rate_c = -v_bc
+        dm_a_right = 0.5 * (1.0 - u_a[-2]) * length_rate_a * c_a_ab
+        dm_b_left = 0.5 * u_b[1] * length_rate_b * c_b_ab
+        dm_b_right = 0.5 * (1.0 - u_b[-2]) * length_rate_b * c_b_bc
+        dm_c_left = 0.5 * u_c[1] * length_rate_c * c_c_bc
+
+        residual_ab = dm_a_right + dm_b_left + transfer_a_right - transfer_b_left
+        residual_bc = dm_b_right + dm_c_left + transfer_b_right - transfer_c_left
+        residual = np.concatenate((residual_ab, residual_bc))
+        if not return_zero_velocity:
+            return residual, None
+
+        zero_a_right = self._initial_face_transfer_rate(0.0, D_a, length_a, 1.0 - u_a[-2], p_a, c_a_ab)
+        zero_b_left = self._initial_face_transfer_rate(0.0, D_b_left, length_b, u_b[1], c_b_ab, p_b_left)
+        zero_b_right = self._initial_face_transfer_rate(0.0, D_b_right, length_b, 1.0 - u_b[-2], p_b_right, c_b_bc)
+        zero_c_left = self._initial_face_transfer_rate(0.0, D_c, length_c, u_c[1], c_c_bc, p_c)
+        zero_velocity_residual = np.concatenate((zero_a_right - zero_b_left, zero_b_right - zero_c_left))
+        return residual, zero_velocity_residual
+
+    def _initial_discrete_interface_residuals(self, interfaces, interface_compositions, adjacent, velocities):
+        """Returns the instantaneous residual from ``_initial_discrete_interface_terms``."""
+        residual, _ = self._initial_discrete_interface_terms(interfaces, interface_compositions, adjacent, velocities)
+        return residual
 
     def _estimate_initial_etas(self, composition, interfaces):
         """
-        Solves the instantaneous two-interface balance for startup etas.
+        Solves the discrete instantaneous two-interface balance for startup etas.
 
         The unknowns are two scaled interface velocities and one eta for each
-        interface. This mirrors the two-phase Illingworth ternary initializer
-        while using the three-phase residual convention directly.
+        interface. Initial phase widths and non-interface transformed profile
+        nodes are held fixed, and the residual is the ``dt -> 0`` limit of the
+        conservative ALE finite-step interface balance.
         """
         brackets = self._initial_eta_brackets()
         eta0 = self._initial_eta_start(brackets)
         adjacent = self._initial_adjacent_compositions(composition, interfaces)
 
-        def evaluate(etas):
+        def evaluate(velocities, etas):
             interface_compositions = self._interface_compositions(etas)
-            flux_delta = self._initial_flux_terms(interfaces, interface_compositions, adjacent)
-            jumps = np.concatenate((interface_compositions[0][0] - interface_compositions[0][1], interface_compositions[1][0] - interface_compositions[1][1]))
-            return interface_compositions, flux_delta, jumps
+            residual, zero_velocity_residual = self._initial_discrete_interface_terms(
+                interfaces,
+                interface_compositions,
+                adjacent,
+                velocities,
+                return_zero_velocity=True,
+            )
+            flux_delta = -zero_velocity_residual
+            return interface_compositions, residual, flux_delta
 
-        interface_compositions0, flux_delta0, jumps0 = evaluate(eta0)
-        velocity_scales = []
-        velocity0 = []
+        _, residual_at_zero, _ = evaluate(np.zeros(2, dtype=np.float64), eta0)
+        velocity_columns = np.column_stack(
+            [
+                evaluate(np.asarray([1.0, 0.0], dtype=np.float64), eta0)[1] - residual_at_zero,
+                evaluate(np.asarray([0.0, 1.0], dtype=np.float64), eta0)[1] - residual_at_zero,
+            ]
+        )
+        velocity_scales = np.empty(2, dtype=np.float64)
         for i in range(2):
-            jump = jumps0[2 * i : 2 * i + 2]
-            flux = flux_delta0[2 * i : 2 * i + 2]
-            scale = float(np.linalg.norm(flux) / max(float(np.linalg.norm(jump)), 1e-300))
-            if not np.isfinite(scale) or scale <= 0.0:
-                scale = 1.0
-            velocity_scales.append(scale)
-            if self.initialVelocityGuess is None:
-                velocity = float(np.dot(jump, flux) / max(float(np.dot(jump, jump)), 1e-300))
-            else:
-                velocity = float(self.initialVelocityGuess[i])
-            velocity0.append(velocity / scale)
+            scale = float(np.linalg.norm(residual_at_zero) / max(float(np.linalg.norm(velocity_columns[:, i])), 1e-300))
+            velocity_scales[i] = scale if np.isfinite(scale) and scale > 0.0 else 1.0
+        if self.initialVelocityGuess is None:
+            try:
+                velocity0_physical = np.linalg.lstsq(velocity_columns, -residual_at_zero, rcond=None)[0]
+            except np.linalg.LinAlgError:
+                velocity0_physical = np.zeros(2, dtype=np.float64)
+        else:
+            velocity0_physical = np.asarray(self.initialVelocityGuess, dtype=np.float64).reshape(2)
+        velocity0 = velocity0_physical / velocity_scales
 
         lower = np.asarray([-np.inf, -np.inf, brackets[0][0], brackets[1][0]], dtype=np.float64)
         upper = np.asarray([np.inf, np.inf, brackets[0][1], brackets[1][1]], dtype=np.float64)
         x = np.asarray([velocity0[0], velocity0[1], eta0[0], eta0[1]], dtype=np.float64)
         x = np.clip(x, lower, upper)
-        velocity_scales = np.asarray(velocity_scales, dtype=np.float64)
         best = None
         success = False
         nfev = 0
@@ -506,8 +586,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         def residual_unknowns(values):
             velocities = np.asarray(values[:2], dtype=np.float64) * velocity_scales
             etas = np.asarray(values[2:], dtype=np.float64)
-            interface_compositions, flux_delta, jumps = evaluate(etas)
-            residual = np.concatenate((velocities[0] * jumps[:2], velocities[1] * jumps[2:])) - flux_delta
+            interface_compositions, residual, flux_delta = evaluate(velocities, etas)
             if not np.all(np.isfinite(residual)):
                 raise ValueError("Initial eta residual is non-finite.")
             return residual, flux_delta, interface_compositions

@@ -5,6 +5,7 @@ import pytest
 
 from kawin.diffusion import MovingBoundaryIllingworthTernaryThreePhaseFD1DModel
 from kawin.diffusion import MovingBoundaryIllingworthTernaryFD1DModel
+from kawin.diffusion import estimate_initial_eta_from_instantaneous_balance
 from kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM import _BULK_DIFFUSIVITY_IMPLICIT, _BULK_DIFFUSIVITY_LAGGED, _BULK_DIFFUSIVITY_PHASE_UNIFORM
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
@@ -136,6 +137,101 @@ def _make_eta_varying_three_phase_model(*, mode=_BULK_DIFFUSIVITY_PHASE_UNIFORM,
     )
 
 
+def _flatten_adjacent(adjacent):
+    return np.concatenate([np.asarray(values, dtype=np.float64).reshape(2) for values in adjacent])
+
+
+def _unflatten_adjacent(values):
+    values = np.asarray(values, dtype=np.float64).reshape(4, 2)
+    return tuple(values[i].copy() for i in range(4))
+
+
+def _simplex_admissible(values):
+    values = np.asarray(values, dtype=np.float64)
+    return bool(np.all(values > 0.0) and np.all(np.sum(values, axis=-1) < 1.0))
+
+
+def _construct_balanced_initial_adjacent(model, interfaces, target_etas, target_velocities, base_adjacent=None, locked_components=()):
+    interface_compositions = model._interface_compositions(target_etas)
+    if base_adjacent is None:
+        c_a_ab, c_b_ab = interface_compositions[0]
+        c_b_bc, c_c_bc = interface_compositions[1]
+        base_adjacent = (c_a_ab, c_b_ab, c_b_bc, c_c_bc)
+
+    base = _flatten_adjacent(base_adjacent)
+    locked = set(locked_components)
+    free = np.asarray([index for index in range(base.size) if index not in locked], dtype=int)
+
+    def residual_from_flat(flat):
+        adjacent = _unflatten_adjacent(flat)
+        return model._initial_discrete_interface_residuals(interfaces, interface_compositions, adjacent, target_velocities)
+
+    residual0 = residual_from_flat(base)
+    jacobian = np.zeros((4, len(free)), dtype=np.float64)
+    for column, index in enumerate(free):
+        perturbed = base.copy()
+        perturbed[index] += 1.0e-7
+        jacobian[:, column] = (residual_from_flat(perturbed) - residual0) / 1.0e-7
+
+    correction = np.linalg.lstsq(jacobian, -residual0, rcond=None)[0]
+    balanced = base.copy()
+    balanced[free] += correction
+    adjacent = _unflatten_adjacent(balanced)
+    final_residual = residual_from_flat(balanced)
+
+    assert _simplex_admissible(balanced.reshape(4, 2))
+    assert np.allclose(final_residual, 0.0, rtol=0.0, atol=2.0e-11)
+    return adjacent
+
+
+def _estimate_from_controlled_adjacent(model, interfaces, adjacent, eta_guess, velocity_guess):
+    model.initialEtaGuess = np.asarray(eta_guess, dtype=np.float64)
+    model.initialVelocityGuess = None if velocity_guess is None else np.asarray(velocity_guess, dtype=np.float64)
+    model._initial_adjacent_compositions = lambda composition, queried_interfaces: adjacent
+    returned_etas = model._estimate_initial_etas(model.data.currentY, interfaces)
+    assert np.allclose(returned_etas, model.initialEtaEstimate.etas, rtol=0.0, atol=0.0)
+    return model.initialEtaEstimate
+
+
+def _construct_two_phase_known_profile(equilibrium, target_eta, target_velocity, interface_position, domain_length, u_grid, v_grid):
+    c_left, c_right = equilibrium.interface_compositions(target_eta)
+    u_adjacent = float(u_grid[-2])
+    v_adjacent = float(v_grid[1])
+    base = np.concatenate((c_left, c_right))
+
+    def residual_from_flat(flat):
+        p_adjacent = flat[:2]
+        q_adjacent = flat[2:]
+        g_left = (c_left - p_adjacent) / (interface_position * (1.0 - u_adjacent))
+        g_right = (q_adjacent - c_right) / ((domain_length - interface_position) * v_adjacent)
+        flux_delta = g_right - g_left
+        if target_velocity > 0.0:
+            swept = c_left - q_adjacent * (1.0 - v_adjacent / 2.0) - c_right * v_adjacent / 2.0
+        else:
+            swept = p_adjacent * ((1.0 + u_adjacent) / 2.0) + c_left * ((1.0 - u_adjacent) / 2.0) - c_right
+        return target_velocity * swept - flux_delta
+
+    balanced = base.copy()
+    for _ in range(2):
+        residual0 = residual_from_flat(balanced)
+        jacobian = np.zeros((2, 4), dtype=np.float64)
+        for index in range(4):
+            perturbed = balanced.copy()
+            perturbed[index] += 1.0e-7
+            jacobian[:, index] = (residual_from_flat(perturbed) - residual0) / 1.0e-7
+        balanced += np.linalg.lstsq(jacobian, -residual0, rcond=None)[0]
+    assert _simplex_admissible(balanced.reshape(2, 2))
+    assert np.allclose(residual_from_flat(balanced), 0.0, rtol=0.0, atol=2.0e-13)
+
+    p_adjacent = balanced[:2]
+    q_adjacent = balanced[2:]
+    z_left = interface_position * u_adjacent
+    z_right = interface_position + (domain_length - interface_position) * v_adjacent
+    z = np.asarray([0.0, z_left, interface_position, z_right, domain_length], dtype=np.float64)
+    composition = np.vstack((p_adjacent, p_adjacent, c_left, q_adjacent, q_adjacent))
+    return z, composition, p_adjacent, q_adjacent
+
+
 def _nonuniform_moving_candidate_state(model):
     state = model.getCurrentX()
     state[0][0:3] -= [0.03, 0.01]
@@ -213,6 +309,37 @@ def _interval_fv_residual_with_uniform_ale_donor(old_profile, new_profile, grid,
     for i in range(1, n - 1):
         residual.append(new_widths[i] * new_profile[i] - old_widths[i] * old_profile[i] - (internal_H[i] - internal_H[i - 1]))
     return np.asarray(residual, dtype=np.float64)
+
+
+def _manual_initial_ale_residual(model, interfaces, interface_compositions, adjacent, velocities):
+    s_ab, s_bc = np.asarray(interfaces, dtype=np.float64).reshape(2)
+    v_ab, v_bc = np.asarray(velocities, dtype=np.float64).reshape(2)
+    p_a, p_b_left, p_b_right, p_c = adjacent
+    c_a_ab, c_b_ab = interface_compositions[0]
+    c_b_bc, c_c_bc = interface_compositions[1]
+    u_a, u_b, u_c = model._grids
+    xi_a_right = 0.5 * (u_a[-2] + 1.0)
+    xi_b_left = 0.5 * u_b[1]
+    xi_b_right = 0.5 * (u_b[-2] + 1.0)
+    xi_c_left = 0.5 * u_c[1]
+    w_a_right = xi_a_right * v_ab
+    w_b_left = (1.0 - xi_b_left) * v_ab + xi_b_left * v_bc
+    w_b_right = (1.0 - xi_b_right) * v_ab + xi_b_right * v_bc
+    w_c_left = (1.0 - xi_c_left) * v_bc
+
+    def donor_term(w, left, right):
+        if w > 0.0:
+            return w * right
+        if w < 0.0:
+            return w * left
+        return np.zeros(2, dtype=np.float64)
+
+    length_rate_b = v_bc - v_ab
+    endpoint_ab = 0.5 * (1.0 - u_a[-2]) * v_ab * c_a_ab + 0.5 * u_b[1] * length_rate_b * c_b_ab
+    endpoint_bc = 0.5 * (1.0 - u_b[-2]) * length_rate_b * c_b_bc - 0.5 * u_c[1] * v_bc * c_c_bc
+    residual_ab = endpoint_ab + donor_term(w_a_right, p_a, c_a_ab) - donor_term(w_b_left, c_b_ab, p_b_left)
+    residual_bc = endpoint_bc + donor_term(w_b_right, p_b_right, c_b_bc) - donor_term(w_c_left, c_c_bc, p_c)
+    return np.concatenate((residual_ab, residual_bc))
 
 
 def test_three_phase_sequence_inventory_and_reconstruction_helpers():
@@ -481,6 +608,237 @@ def test_three_phase_initial_etas_are_estimated_from_instantaneous_balance():
     assert np.allclose(model.getInterfaceEtas(), target_etas, rtol=0.0, atol=1e-8)
     assert np.allclose(model.initialEtaEstimate.etas, target_etas, rtol=0.0, atol=1e-8)
     assert model.initialEtaEstimate.residual_norm <= model.initialEtaRootXtol
+
+
+@pytest.mark.parametrize(
+    "target_velocities, velocity_guess",
+    [
+        (np.asarray([0.08, 0.05], dtype=np.float64), np.asarray([0.02, 0.01], dtype=np.float64)),
+        (np.asarray([-0.08, -0.05], dtype=np.float64), np.asarray([-0.02, -0.01], dtype=np.float64)),
+        (np.asarray([0.08, -0.05], dtype=np.float64), np.asarray([0.02, -0.01], dtype=np.float64)),
+        (np.asarray([-0.08, 0.05], dtype=np.float64), np.asarray([-0.02, 0.01], dtype=np.float64)),
+    ],
+    ids=["both-positive", "both-negative", "ab-positive-bc-negative", "ab-negative-bc-positive"],
+)
+@pytest.mark.parametrize(
+    "use_automatic_velocity_guess",
+    [False, True],
+    ids=["explicit-velocity-guess", "automatic-velocity-guess"],
+)
+def test_three_phase_initial_eta_solver_converges_to_moving_known_solution(use_automatic_velocity_guess, target_velocities, velocity_guess):
+    model = _make_eta_varying_three_phase_model(record=False)
+    model.setup()
+    interfaces = np.asarray([0.35, 0.7], dtype=np.float64)
+    target_etas = np.asarray([0.2, 0.8], dtype=np.float64)
+    adjacent = _construct_balanced_initial_adjacent(model, interfaces, target_etas, target_velocities)
+
+    estimate = _estimate_from_controlled_adjacent(
+        model,
+        interfaces,
+        adjacent,
+        eta_guess=np.asarray([0.35, 0.65], dtype=np.float64),
+        velocity_guess=None if use_automatic_velocity_guess else velocity_guess,
+    )
+
+    assert estimate.converged
+    assert estimate.residual_norm <= model.initialEtaRootXtol
+    assert np.allclose(estimate.etas, target_etas, rtol=0.0, atol=5.0e-10)
+    assert np.allclose(estimate.velocities, target_velocities, rtol=2.0e-10, atol=5.0e-12)
+
+
+def test_three_phase_initial_eta_solver_crosses_ale_donor_switch():
+    model = _make_eta_varying_three_phase_model(record=False)
+    model.setup()
+    interfaces = np.asarray([0.35, 0.7], dtype=np.float64)
+    target_etas = np.asarray([0.2, 0.8], dtype=np.float64)
+    target_velocities = np.asarray([0.08, -0.05], dtype=np.float64)
+    initial_velocity_guess = np.asarray([-0.02, -0.05], dtype=np.float64)
+    adjacent = _construct_balanced_initial_adjacent(model, interfaces, target_etas, target_velocities)
+    xi_a_right = 0.5 * (model._grids[0][-2] + 1.0)
+    xi_b_left = 0.5 * model._grids[1][1]
+
+    estimate = _estimate_from_controlled_adjacent(
+        model,
+        interfaces,
+        adjacent,
+        eta_guess=np.asarray([0.35, 0.65], dtype=np.float64),
+        velocity_guess=initial_velocity_guess,
+    )
+
+    w_b_left_initial = (1.0 - xi_b_left) * initial_velocity_guess[0] + xi_b_left * initial_velocity_guess[1]
+    w_b_left_final = (1.0 - xi_b_left) * estimate.velocities[0] + xi_b_left * estimate.velocities[1]
+    assert xi_a_right * initial_velocity_guess[0] < 0.0
+    assert xi_a_right * estimate.velocities[0] > 0.0
+    assert w_b_left_initial < 0.0
+    assert w_b_left_final > 0.0
+    assert estimate.converged
+    assert estimate.residual_norm <= model.initialEtaRootXtol
+    assert np.allclose(estimate.etas, target_etas, rtol=0.0, atol=5.0e-10)
+    assert np.allclose(estimate.velocities, target_velocities, rtol=2.0e-10, atol=5.0e-12)
+
+
+def test_three_phase_initial_residual_is_finite_step_residual_limit():
+    model = _make_eta_varying_three_phase_model(record=False)
+    model.setup()
+    old_interfaces = np.asarray([0.35, 0.7], dtype=np.float64)
+    velocities = np.asarray([1.4, -0.9], dtype=np.float64)
+    etas = np.asarray([0.63, 0.27], dtype=np.float64)
+    interface_compositions = model._interface_compositions(etas)
+    c_a_ab, c_b_ab = interface_compositions[0]
+    c_b_bc, c_c_bc = interface_compositions[1]
+    old_profiles = (
+        np.linspace(np.asarray([0.18, 0.075], dtype=np.float64), c_a_ab, len(model._grids[0])),
+        np.linspace(c_b_ab, c_b_bc, len(model._grids[1])),
+        np.linspace(c_c_bc, np.asarray([0.28, 0.18], dtype=np.float64), len(model._grids[2])),
+    )
+    old_profiles[0][1:-1] += np.asarray([0.006, -0.003], dtype=np.float64)
+    old_profiles[1][1:-1] += np.asarray([-0.004, 0.005], dtype=np.float64)
+    old_profiles[2][1:-1] += np.asarray([0.005, -0.004], dtype=np.float64)
+    adjacent = (old_profiles[0][-2], old_profiles[1][1], old_profiles[1][-2], old_profiles[2][1])
+    instantaneous = model._initial_discrete_interface_residuals(old_interfaces, interface_compositions, adjacent, velocities)
+
+    errors = []
+    for epsilon in (8.0e-7, 4.0e-7, 2.0e-7):
+        model._currdt = epsilon
+        new_interfaces = old_interfaces + epsilon * velocities
+        bulk_results = model._solve_bulk_profiles(old_profiles, old_interfaces, new_interfaces, interface_compositions)
+        finite_step = model._interface_residuals(old_profiles, old_interfaces, new_interfaces, interface_compositions, bulk_results)
+        errors.append(float(np.max(np.abs(finite_step / epsilon - instantaneous))))
+
+    assert errors[-1] < errors[0]
+    assert errors[-1] < 5.0e-6
+
+
+def test_three_phase_initial_balance_uses_face_local_b_upwinding():
+    model = _make_eta_varying_three_phase_model(record=False)
+    model.setup()
+    interfaces = np.asarray([0.35, 0.7], dtype=np.float64)
+    interface_compositions = model._interface_compositions(np.asarray([0.4, 0.6], dtype=np.float64))
+    adjacent = (
+        np.asarray([0.19, 0.09], dtype=np.float64),
+        np.asarray([0.34, 0.17], dtype=np.float64),
+        np.asarray([0.27, 0.16], dtype=np.float64),
+        np.asarray([0.24, 0.19], dtype=np.float64),
+    )
+    residual_zero = model._initial_discrete_interface_residuals(interfaces, interface_compositions, adjacent, [0.0, 0.0])
+    positive_b_left = np.asarray([1.0, -10.0], dtype=np.float64)
+    negative_b_left = np.asarray([1.0, -14.0], dtype=np.float64)
+
+    for velocities in (positive_b_left, negative_b_left):
+        actual_ale = model._initial_discrete_interface_residuals(interfaces, interface_compositions, adjacent, velocities) - residual_zero
+        expected_ale = _manual_initial_ale_residual(model, interfaces, interface_compositions, adjacent, velocities)
+        assert np.allclose(actual_ale, expected_ale, rtol=0.0, atol=1.0e-15)
+
+    xi_b_left = 0.5 * model._grids[1][1]
+    assert (1.0 - xi_b_left) * positive_b_left[0] + xi_b_left * positive_b_left[1] > 0.0
+    assert (1.0 - xi_b_left) * negative_b_left[0] + xi_b_left * negative_b_left[1] < 0.0
+
+
+@pytest.mark.parametrize(
+    "interface, velocity",
+    [
+        ("ab", 1.25),
+        ("ab", -1.25),
+        ("bc", 1.25),
+        ("bc", -1.25),
+    ],
+)
+def test_three_phase_initial_balance_reduces_to_two_phase_swept_inventory(interface, velocity):
+    model = _make_eta_varying_three_phase_model(record=False)
+    model.setup()
+    interfaces = np.asarray([0.35, 0.7], dtype=np.float64)
+    interface_compositions = model._interface_compositions(np.asarray([0.4, 0.6], dtype=np.float64))
+    c_a_ab, c_b_ab = interface_compositions[0]
+    c_b_bc, c_c_bc = interface_compositions[1]
+    adjacent = (
+        np.asarray([0.19, 0.09], dtype=np.float64),
+        np.asarray([0.34, 0.17], dtype=np.float64),
+        np.asarray([0.27, 0.16], dtype=np.float64),
+        np.asarray([0.24, 0.19], dtype=np.float64),
+    )
+    residual_zero = model._initial_discrete_interface_residuals(interfaces, interface_compositions, adjacent, [0.0, 0.0])
+    velocities = np.asarray([velocity, 0.0] if interface == "ab" else [0.0, velocity], dtype=np.float64)
+    coefficient = (model._initial_discrete_interface_residuals(interfaces, interface_compositions, adjacent, velocities) - residual_zero) / velocity
+
+    if interface == "ab" and velocity > 0.0:
+        expected = c_a_ab - adjacent[1] * (1.0 - model._grids[1][1] / 2.0) - c_b_ab * model._grids[1][1] / 2.0
+        actual = coefficient[:2]
+    elif interface == "ab":
+        expected = adjacent[0] * ((1.0 + model._grids[0][-2]) / 2.0) + c_a_ab * ((1.0 - model._grids[0][-2]) / 2.0) - c_b_ab
+        actual = coefficient[:2]
+    elif velocity > 0.0:
+        expected = c_b_bc - adjacent[3] * (1.0 - model._grids[2][1] / 2.0) - c_c_bc * model._grids[2][1] / 2.0
+        actual = coefficient[2:]
+    else:
+        expected = adjacent[2] * ((1.0 + model._grids[1][-2]) / 2.0) + c_b_bc * ((1.0 - model._grids[1][-2]) / 2.0) - c_c_bc
+        actual = coefficient[2:]
+    assert np.allclose(actual, expected, rtol=0.0, atol=1.0e-14)
+
+
+@pytest.mark.parametrize("target_velocity", [0.08, -0.08])
+def test_three_phase_initial_eta_ab_limit_matches_two_phase_initializer(target_velocity):
+    model = _make_eta_varying_three_phase_model(record=False)
+    model.setup()
+    interfaces = np.asarray([0.35, 0.7], dtype=np.float64)
+    target_eta_ab = 0.2
+    target_eta_bc = 0.8
+    domain_length = float(interfaces[1])
+    z, composition, p_adjacent, q_adjacent = _construct_two_phase_known_profile(
+        model.interfaceEquilibria[0],
+        target_eta_ab,
+        target_velocity,
+        interface_position=float(interfaces[0]),
+        domain_length=domain_length,
+        u_grid=model._grids[0],
+        v_grid=model._grids[1],
+    )
+
+    two_phase = estimate_initial_eta_from_instantaneous_balance(
+        composition=composition,
+        z=z,
+        interface_position=float(interfaces[0]),
+        phases=["A", "B"],
+        thermodynamics=_RecordingThreePhaseThermodynamics(),
+        temperature=1000.0,
+        interface_equilibrium=model.interfaceEquilibria[0],
+        transformed_u_grid=model._grids[0],
+        transformed_v_grid=model._grids[1],
+        eta_bracket=(0.0, 1.0),
+        eta_guess=0.35,
+        velocity_guess=0.25 * target_velocity,
+        root_xtol=1.0e-12,
+        bulk_diffusivity_mode=_BULK_DIFFUSIVITY_PHASE_UNIFORM,
+    )
+    assert two_phase.converged
+    assert np.isclose(two_phase.eta, target_eta_ab, rtol=0.0, atol=2.0e-10)
+    assert np.isclose(two_phase.velocity, target_velocity, rtol=2.0e-10, atol=5.0e-12)
+
+    c_b_bc, c_c_bc = model._interface_compositions([target_eta_ab, target_eta_bc])[1]
+    target_etas = np.asarray([two_phase.eta, target_eta_bc], dtype=np.float64)
+    target_velocities = np.asarray([two_phase.velocity, 0.0], dtype=np.float64)
+    adjacent = _construct_balanced_initial_adjacent(
+        model,
+        interfaces,
+        target_etas,
+        target_velocities,
+        base_adjacent=(p_adjacent, q_adjacent, c_b_bc, c_c_bc),
+        locked_components=(0, 1, 2, 3),
+    )
+
+    estimate = _estimate_from_controlled_adjacent(
+        model,
+        interfaces,
+        adjacent,
+        eta_guess=np.asarray([0.35, 0.65], dtype=np.float64),
+        velocity_guess=np.asarray([0.25 * target_velocity, 0.0], dtype=np.float64),
+    )
+
+    assert estimate.converged
+    assert np.allclose(adjacent[0], p_adjacent, rtol=0.0, atol=0.0)
+    assert np.allclose(adjacent[1], q_adjacent, rtol=0.0, atol=0.0)
+    assert np.isclose(estimate.etas[0], two_phase.eta, rtol=0.0, atol=5.0e-10)
+    assert np.isclose(estimate.velocities[0], two_phase.velocity, rtol=2.0e-10, atol=5.0e-12)
+    assert np.isclose(estimate.velocities[1], 0.0, rtol=0.0, atol=5.0e-12)
 
 
 def test_three_phase_nonconverged_candidate_residuals_telescope_total_inventory():
