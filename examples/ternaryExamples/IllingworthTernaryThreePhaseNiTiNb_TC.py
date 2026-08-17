@@ -98,11 +98,19 @@ INTERFACE_POSITIONS = np.array([LEFT_WIDTH, LEFT_WIDTH + LIQUID_WIDTH], dtype=np
 
 # Tie-line probes use independent mole fractions in [NI, TI] order. The
 # defaults connect the requested nominal phase compositions at each interface.
+TIELINE_SURROGATE_BUILD_MODE = "line"  # "line" or "seed_point"
 ETA_SAMPLES = np.linspace(0.0, 1.0, 9)
 AB_PROBE_START = np.array([0.16, 0.83], dtype=np.float64)
 AB_PROBE_END = np.array([0.217, 0.394], dtype=np.float64)
 BC_PROBE_START = np.array([0.39, 0.468], dtype=np.float64)
 BC_PROBE_END = np.array([0.4099, 0.59], dtype=np.float64)
+AB_PROBE_POINT = np.array([np.nan, np.nan], dtype=np.float64)
+BC_PROBE_POINT = np.array([np.nan, np.nan], dtype=np.float64)
+PROBE_SAMPLES_PER_SIDE = 8
+PROBE_BOUNDARY_MARGIN = 1.0e-3
+PROBE_BOUNDARY_SEARCH_STEP = 1.0e-2
+PROBE_BOUNDARY_XTOL = 1.0e-6
+PROBE_MAX_SEARCH_STEPS = 200
 INITIAL_ETA_GUESS = (0.5, 0.5)
 
 # ``simplex_linear`` samples a rectangular candidate grid but keeps only
@@ -131,7 +139,7 @@ FIXED_TIME_STEP = 1.0e-3
 SEMI_LOG_BASE_TIME_STEP = 1.0e-3
 SEMI_LOG_DT = 0.05
 SEMI_LOG_T0 = 1.0e-6
-SOLVE_TIME = 1.0e3
+SOLVE_TIME = 1.69e2
 TOLERANCE = 1.0e-10
 MAX_ITERATIONS = 100
 MAX_STEP_RETRIES = 8
@@ -162,10 +170,18 @@ _CASE_DEFAULTS = {
         "LIQUID_WIDTH": 2.0e-6,
         "RIGHT_WIDTH": 40.0e-6,
         "INTERFACE_POSITIONS": np.array([40.0e-6, 42.0e-6], dtype=np.float64),
+        "TIELINE_SURROGATE_BUILD_MODE": "line",
         "AB_PROBE_START": np.array([0.16, 0.83], dtype=np.float64),
         "AB_PROBE_END": np.array([0.217, 0.394], dtype=np.float64),
         "BC_PROBE_START": np.array([0.39, 0.468], dtype=np.float64),
         "BC_PROBE_END": np.array([0.4099, 0.59], dtype=np.float64),
+        "AB_PROBE_POINT": np.array([np.nan, np.nan], dtype=np.float64),
+        "BC_PROBE_POINT": np.array([np.nan, np.nan], dtype=np.float64),
+        "PROBE_SAMPLES_PER_SIDE": 8,
+        "PROBE_BOUNDARY_MARGIN": 1.0e-3,
+        "PROBE_BOUNDARY_SEARCH_STEP": 1.0e-2,
+        "PROBE_BOUNDARY_XTOL": 1.0e-6,
+        "PROBE_MAX_SEARCH_STEPS": 200,
         "RUN_PREFLIGHT": True,
     },
     CASE_FE_CR_NI_PYCALPHAD: {
@@ -187,10 +203,18 @@ _CASE_DEFAULTS = {
         "LIQUID_WIDTH": 10.0e-6,
         "RIGHT_WIDTH": 50.0e-6,
         "INTERFACE_POSITIONS": np.array([50.0e-6, 60.0e-6], dtype=np.float64),
+        "TIELINE_SURROGATE_BUILD_MODE": "line",
         "AB_PROBE_START": np.array([0.3815, 0.319], dtype=np.float64),
         "AB_PROBE_END": np.array([0.417, 0.58], dtype=np.float64),
         "BC_PROBE_START": np.array([0.446, 0.264], dtype=np.float64),
         "BC_PROBE_END": np.array([0.638, 0.36], dtype=np.float64),
+        "AB_PROBE_POINT": np.array([0.4, 0.47], dtype=np.float64),
+        "BC_PROBE_POINT": np.array([0.55, 0.31], dtype=np.float64),
+        "PROBE_SAMPLES_PER_SIDE": 25,
+        "PROBE_BOUNDARY_MARGIN": 1.0e-3,
+        "PROBE_BOUNDARY_SEARCH_STEP": 1.0e-2,
+        "PROBE_BOUNDARY_XTOL": 1.0e-6,
+        "PROBE_MAX_SEARCH_STEPS": 10000,
         "RUN_PREFLIGHT": False,
     },
 }
@@ -224,6 +248,14 @@ _OVERRIDE_KEY_ALIASES = {
     "semi_log_t0": "SEMI_LOG_T0",
     "solve_time": "SOLVE_TIME",
     "temperature": "TEMPERATURE",
+    "tieline_surrogate_build_mode": "TIELINE_SURROGATE_BUILD_MODE",
+    "ab_probe_point": "AB_PROBE_POINT",
+    "bc_probe_point": "BC_PROBE_POINT",
+    "probe_samples_per_side": "PROBE_SAMPLES_PER_SIDE",
+    "probe_boundary_margin": "PROBE_BOUNDARY_MARGIN",
+    "probe_boundary_search_step": "PROBE_BOUNDARY_SEARCH_STEP",
+    "probe_boundary_xtol": "PROBE_BOUNDARY_XTOL",
+    "probe_max_search_steps": "PROBE_MAX_SEARCH_STEPS",
     "tolerance": "TOLERANCE",
     "verbose": "VERBOSE",
     "verbose_interval": "VERBOSE_INTERVAL",
@@ -678,26 +710,48 @@ def _validate_tieline_probe_path(thermodynamics, label, probe_start, probe_end, 
         )
 
 
+def _tieline_surrogate_probe_kwargs(probe_start, probe_end, probe_point):
+    """Returns from_database probe arguments for line or seed-point surrogate builds."""
+    mode = str(TIELINE_SURROGATE_BUILD_MODE).lower()
+    if mode == "line":
+        return {
+            "probe_start": np.asarray(probe_start, dtype=np.float64),
+            "probe_end": np.asarray(probe_end, dtype=np.float64),
+            "eta_samples": np.asarray(ETA_SAMPLES, dtype=np.float64),
+        }
+    if mode == "seed_point":
+        return {
+            "probe_point": np.asarray(probe_point, dtype=np.float64),
+            "probe_samples_per_side": PROBE_SAMPLES_PER_SIDE,
+            "probe_boundary_margin": PROBE_BOUNDARY_MARGIN,
+            "probe_boundary_search_step": PROBE_BOUNDARY_SEARCH_STEP,
+            "probe_boundary_xtol": PROBE_BOUNDARY_XTOL,
+            "probe_max_search_steps": PROBE_MAX_SEARCH_STEPS,
+        }
+    raise ValueError("TIELINE_SURROGATE_BUILD_MODE must be 'line' or 'seed_point'.")
+
+
 def build_interface_surrogates(therm_ab, therm_bc):
     """Samples the selected A|B and B|C tie-line families."""
     diffusivity_sampling = _surrogate_diffusivity_sampling_kwargs()
     pair_ab, pair_bc = _interface_phase_pairs()
-    with therm_ab:
-        _validate_tieline_probe_path(
-            therm_ab,
-            f"{pair_ab[0]}/{pair_ab[1]}",
-            AB_PROBE_START,
-            AB_PROBE_END,
-            pair_ab,
-        )
-    with therm_bc:
-        _validate_tieline_probe_path(
-            therm_bc,
-            f"{pair_bc[0]}/{pair_bc[1]}",
-            BC_PROBE_START,
-            BC_PROBE_END,
-            pair_bc,
-        )
+    if str(TIELINE_SURROGATE_BUILD_MODE).lower() == "line":
+        with therm_ab:
+            _validate_tieline_probe_path(
+                therm_ab,
+                f"{pair_ab[0]}/{pair_ab[1]}",
+                AB_PROBE_START,
+                AB_PROBE_END,
+                pair_ab,
+            )
+        with therm_bc:
+            _validate_tieline_probe_path(
+                therm_bc,
+                f"{pair_bc[0]}/{pair_bc[1]}",
+                BC_PROBE_START,
+                BC_PROBE_END,
+                pair_bc,
+            )
     with therm_ab:
         kwargs_ab = {}
         if CASE_NAME == CASE_FE_CR_NI_PYCALPHAD:
@@ -708,9 +762,7 @@ def build_interface_surrogates(therm_ab, therm_bc):
             phases=pair_ab,
             tieline_phases=pair_ab,
             temperature=TEMPERATURE,
-            probe_start=AB_PROBE_START,
-            probe_end=AB_PROBE_END,
-            eta_samples=ETA_SAMPLES,
+            **_tieline_surrogate_probe_kwargs(AB_PROBE_START, AB_PROBE_END, AB_PROBE_POINT),
             precipitate_phase=pair_ab[1],
             **diffusivity_sampling,
             **kwargs_ab,
@@ -725,9 +777,7 @@ def build_interface_surrogates(therm_ab, therm_bc):
             phases=pair_bc,
             tieline_phases=pair_bc,
             temperature=TEMPERATURE,
-            probe_start=BC_PROBE_START,
-            probe_end=BC_PROBE_END,
-            eta_samples=ETA_SAMPLES,
+            **_tieline_surrogate_probe_kwargs(BC_PROBE_START, BC_PROBE_END, BC_PROBE_POINT),
             precipitate_phase=pair_bc[1],
             **diffusivity_sampling,
             **kwargs_bc,
@@ -877,12 +927,14 @@ def run_case(overrides=None, *, make_plots=True):
         if RUN_PREFLIGHT:
             pair_ab, pair_bc = _interface_phase_pairs()
             if hasattr(therm_ab, "preflight"):
-                print(f"{pair_ab[0]}/{pair_ab[1]} preflight:", therm_ab.preflight(x=AB_PROBE_START, T=TEMPERATURE))
-                print(f"{pair_bc[0]}/{pair_bc[1]} preflight:", therm_bc.preflight(x=BC_PROBE_START, T=TEMPERATURE))
+                if str(TIELINE_SURROGATE_BUILD_MODE).lower() == "line":
+                    print(f"{pair_ab[0]}/{pair_ab[1]} preflight:", therm_ab.preflight(x=AB_PROBE_START, T=TEMPERATURE))
+                    print(f"{pair_bc[0]}/{pair_bc[1]} preflight:", therm_bc.preflight(x=BC_PROBE_START, T=TEMPERATURE))
             else:
-                _validate_tieline_probe_path(therm_ab, f"{pair_ab[0]}/{pair_ab[1]}", AB_PROBE_START, AB_PROBE_END, pair_ab)
-                _validate_tieline_probe_path(therm_bc, f"{pair_bc[0]}/{pair_bc[1]}", BC_PROBE_START, BC_PROBE_END, pair_bc)
-                print(f"Validated {pair_ab[0]}/{pair_ab[1]} and {pair_bc[0]}/{pair_bc[1]} tie-line probe paths.")
+                if str(TIELINE_SURROGATE_BUILD_MODE).lower() == "line":
+                    _validate_tieline_probe_path(therm_ab, f"{pair_ab[0]}/{pair_ab[1]}", AB_PROBE_START, AB_PROBE_END, pair_ab)
+                    _validate_tieline_probe_path(therm_bc, f"{pair_bc[0]}/{pair_bc[1]}", BC_PROBE_START, BC_PROBE_END, pair_bc)
+                    print(f"Validated {pair_ab[0]}/{pair_ab[1]} and {pair_bc[0]}/{pair_bc[1]} tie-line probe paths.")
 
         start = time.perf_counter()
         surrogate_ab, surrogate_bc = build_interface_surrogates(therm_ab, therm_bc)

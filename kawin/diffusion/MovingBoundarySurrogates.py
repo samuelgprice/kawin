@@ -453,8 +453,219 @@ def _call_interfacial_composition(thermodynamics, composition, temperature, prec
             returnMeta=True,
         )
     if len(result) != 3:
-        raise ValueError(f"getInterfacialComposition did not return metadata at eta={float(eta):.8g}.")
+        raise ValueError(f"getInterfacialComposition did not return metadata for {_sample_label(eta=eta, composition=composition)}.")
     return result
+
+
+def _sample_expected_tieline(
+    thermodynamics,
+    composition,
+    temperature,
+    precipitate_phase,
+    tieline_phases,
+    elements,
+    min_composition,
+    *,
+    eta=None,
+):
+    """
+    Samples one tie-line and phase-endpoint diffusivities from a valid probe.
+
+    The probe must be an independent ternary composition inside the simplex and
+    the returned metadata must contain exactly the requested two phases. The
+    returned midpoint is the phase-endpoint average used by seed-point scans to
+    adapt the next probe location along a fixed normal direction.
+    """
+    probe = _as_independent_ternary_components(composition, elements, "probe composition")
+    probe = _validate_independent_composition(probe, float(min_composition), "probe composition")
+    _, _, meta = _call_interfacial_composition(thermodynamics, probe, temperature, precipitate_phase, eta)
+    endpoints = _extract_expected_tieline(
+        meta,
+        tieline_phases,
+        elements,
+        float(min_composition),
+        eta=eta,
+        composition=probe,
+    )
+    diffusivities = tuple(
+        _validate_2x2_matrix(
+            thermodynamics.getInterdiffusivity(comp, temperature, phase=phase),
+            f"interface diffusivity for phase {phase} at {_sample_label(eta=eta, composition=probe)}",
+        )
+        for phase, comp in zip(tieline_phases, endpoints)
+    )
+    return {
+        "probe": probe,
+        "endpoints": endpoints,
+        "diffusivities": diffusivities,
+        "midpoint": 0.5 * (endpoints[0] + endpoints[1]),
+    }
+
+
+def _seed_tieline_scan_direction(seed_endpoints):
+    """
+    Returns a deterministic unit normal to the seed tie-line in composition space.
+
+    Seed-mode sampling assumes the local two-phase region can be traversed by a
+    fixed normal to the seed tie-line while each next probe is recentered on the
+    previous tie-line midpoint.
+    """
+    direction = np.asarray(seed_endpoints[1], dtype=np.float64) - np.asarray(seed_endpoints[0], dtype=np.float64)
+    norm = float(np.linalg.norm(direction))
+    if not np.isfinite(norm) or norm <= 0.0:
+        raise ValueError("Seed tie-line endpoints must be distinct to define a scan direction.")
+    normal = np.asarray([-direction[1], direction[0]], dtype=np.float64) / norm
+    dominant = 0 if abs(normal[0]) >= abs(normal[1]) else 1
+    if normal[dominant] < 0.0:
+        normal = -normal
+    return normal
+
+
+def _coerce_seed_scan_parameters(samples_per_side, boundary_margin, search_step, xtol, max_search_steps):
+    samples_per_side = int(samples_per_side)
+    if samples_per_side < 1:
+        raise ValueError("probe_samples_per_side must be at least 1.")
+    boundary_margin = float(boundary_margin)
+    search_step = float(search_step)
+    xtol = float(xtol)
+    max_search_steps = int(max_search_steps)
+    if not np.isfinite(boundary_margin) or boundary_margin < 0.0:
+        raise ValueError("probe_boundary_margin must be nonnegative and finite.")
+    if not np.isfinite(search_step) or search_step <= 0.0:
+        raise ValueError("probe_boundary_search_step must be positive and finite.")
+    if not np.isfinite(xtol) or xtol <= 0.0:
+        raise ValueError("probe_boundary_xtol must be positive and finite.")
+    if max_search_steps < 1:
+        raise ValueError("probe_max_search_steps must be at least 1.")
+    return samples_per_side, boundary_margin, search_step, xtol, max_search_steps
+
+
+def _find_seed_scan_extent(
+    thermodynamics,
+    seed_sample,
+    sign,
+    scan_direction,
+    temperature,
+    precipitate_phase,
+    tieline_phases,
+    elements,
+    min_composition,
+    search_step,
+    xtol,
+    max_search_steps,
+):
+    """
+    Marches a seed scan side until the expected two-phase metadata fails.
+
+    Distances are accumulated from the requested normal offsets. Each accepted
+    step is launched from the previous tie-line midpoint, which lets the probe
+    path follow gently curved two-phase regions without rotating the seed normal.
+    """
+    sign = float(sign)
+    last_sample = seed_sample
+    accepted_distance = 0.0
+    last_error = None
+    for _ in range(max_search_steps):
+        probe = last_sample["midpoint"] + sign * float(search_step) * scan_direction
+        try:
+            candidate = _sample_expected_tieline(
+                thermodynamics,
+                probe,
+                temperature,
+                precipitate_phase,
+                tieline_phases,
+                elements,
+                min_composition,
+            )
+        except ValueError as exc:
+            last_error = exc
+            low = 0.0
+            high = float(search_step)
+            low_sample = last_sample
+            while high - low > xtol:
+                middle = 0.5 * (low + high)
+                middle_probe = last_sample["midpoint"] + sign * middle * scan_direction
+                try:
+                    middle_sample = _sample_expected_tieline(
+                        thermodynamics,
+                        middle_probe,
+                        temperature,
+                        precipitate_phase,
+                        tieline_phases,
+                        elements,
+                        min_composition,
+                    )
+                except ValueError:
+                    high = middle
+                else:
+                    low = middle
+                    low_sample = middle_sample
+            return accepted_distance + low, low_sample
+        else:
+            accepted_distance += float(search_step)
+            last_sample = candidate
+
+    message = (
+        "Seed-point tie-line scan did not leave the expected two-phase region "
+        f"within probe_max_search_steps={max_search_steps} on sign {int(sign)}."
+    )
+    if last_error is not None:
+        message = f"{message} Last rejected probe error: {last_error}"
+    raise ValueError(message)
+
+
+def _resample_seed_scan_side(
+    thermodynamics,
+    seed_sample,
+    sign,
+    scan_direction,
+    temperature,
+    precipitate_phase,
+    tieline_phases,
+    elements,
+    min_composition,
+    extent,
+    boundary_margin,
+    samples_per_side,
+):
+    """
+    Replays one seed scan side with an exact number of margin-limited samples.
+
+    The final target distance is kept ``probe_boundary_margin`` inside the
+    detected two-phase boundary. Failure at any generated sample is reported as
+    a topology/sampling problem rather than silently changing the eta grid.
+    """
+    usable_extent = float(extent) - float(boundary_margin)
+    if not np.isfinite(usable_extent) or usable_extent <= 0.0:
+        raise ValueError(
+            "probe_boundary_margin leaves no valid sampling interval on one side of the seed tie-line."
+        )
+    targets = np.linspace(usable_extent / int(samples_per_side), usable_extent, int(samples_per_side))
+    samples = []
+    last_sample = seed_sample
+    previous_distance = 0.0
+    for target in targets:
+        step = float(target) - previous_distance
+        probe = last_sample["midpoint"] + float(sign) * step * scan_direction
+        try:
+            sample = _sample_expected_tieline(
+                thermodynamics,
+                probe,
+                temperature,
+                precipitate_phase,
+                tieline_phases,
+                elements,
+                min_composition,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "Seed-point generated probe left the expected two-phase region "
+                f"at signed scan distance {float(sign) * float(target):.8g}."
+            ) from exc
+        samples.append((float(target), sample))
+        last_sample = sample
+        previous_distance = float(target)
+    return samples
 
 
 def _bulk_points_from_grids(diffusivity_bulk_grids):
@@ -570,6 +781,12 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         temperature=None,
         probe_start=None,
         probe_end=None,
+        probe_point=None,
+        probe_samples_per_side=8,
+        probe_boundary_margin=1e-3,
+        probe_boundary_search_step=1e-2,
+        probe_boundary_xtol=1e-6,
+        probe_max_search_steps=200,
         eta_samples=None,
         precipitate_phase=None,
         diffusivity_bulk_points=None,
@@ -586,8 +803,12 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         Samples tie-lines and diffusivities from a thermodynamics source.
 
         Every tie-line sample is accepted only if equilibrium metadata contains
-        exactly the two explicitly requested ``tieline_phases``. Continuous
-        bulk diffusivity interpolation requires explicit ``diffusivity_bulk_grids``
+        exactly the two explicitly requested ``tieline_phases``. The default
+        line mode samples between ``probe_start`` and ``probe_end`` at explicit
+        ``eta_samples``. Seed-point mode instead takes one ``probe_point`` in
+        the two-phase region, scans both directions normal to the seed tie-line,
+        and assigns eta from cumulative scan distance. Continuous bulk
+        diffusivity interpolation requires explicit ``diffusivity_bulk_grids``
         so the rectangular sampling domain and array ordering are reproducible.
         Simplex-linear interpolation accepts scattered ``diffusivity_bulk_points``
         and can also sample the simplex-valid subset of ``diffusivity_bulk_grids``.
@@ -642,41 +863,149 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             if phase not in phases:
                 raise ValueError(f"tieline phase '{phase}' must be included in phases.")
 
-        if eta_samples is None: 
-            raise ValueError("eta_samples must be provided.")
-        eta_samples = np.asarray(eta_samples, dtype=np.float64).reshape(-1)
-        if eta_samples.size < 2:
-            raise ValueError("At least two eta_samples are required.")
-        if not np.all(np.isfinite(eta_samples)) or not np.all(np.diff(eta_samples) > 0.0):
-            raise ValueError("eta_samples must be finite and strictly increasing.")
-        probe_start = _as_independent_ternary_components(probe_start, elements, "probe_start")
-        probe_end = _as_independent_ternary_components(probe_end, elements, "probe_end")
         precipitate_phase = tieline_phases[1] if precipitate_phase is None else str(precipitate_phase)
+        seed_mode = probe_point is not None
+        if seed_mode and (probe_start is not None or probe_end is not None or eta_samples is not None):
+            raise ValueError("probe_point seed mode cannot be combined with probe_start, probe_end, or eta_samples.")
+        if not seed_mode and (probe_start is None or probe_end is None or eta_samples is None):
+            raise ValueError("probe_start, probe_end, and eta_samples are required unless probe_point seed mode is used.")
 
         tieline_values = {phase: [] for phase in tieline_phases}
         interface_diff_x = {phase: [] for phase in tieline_phases}
         interface_diff_d = {phase: [] for phase in tieline_phases}
-        for eta in eta_samples:
-            fraction = (float(eta) - float(eta_samples[0])) / (float(eta_samples[-1]) - float(eta_samples[0]))
-            probe = probe_start + fraction * (probe_end - probe_start)
-            _, _, meta = _call_interfacial_composition(thermodynamics, probe, temperature, precipitate_phase, eta)
-            endpoints = _extract_expected_tieline(
-                meta,
+        if seed_mode:
+            (
+                probe_samples_per_side,
+                probe_boundary_margin,
+                probe_boundary_search_step,
+                probe_boundary_xtol,
+                probe_max_search_steps,
+            ) = _coerce_seed_scan_parameters(
+                probe_samples_per_side,
+                probe_boundary_margin,
+                probe_boundary_search_step,
+                probe_boundary_xtol,
+                probe_max_search_steps,
+            )
+            seed_sample = _sample_expected_tieline(
+                thermodynamics,
+                probe_point,
+                temperature,
+                precipitate_phase,
                 tieline_phases,
                 elements,
                 float(min_composition),
-                eta=eta,
-                composition=probe,
             )
-            for phase, comp in zip(tieline_phases, endpoints):
-                tieline_values[phase].append(comp)
-                interface_diff_x[phase].append(comp)
-                interface_diff_d[phase].append(
-                    _validate_2x2_matrix(
-                        thermodynamics.getInterdiffusivity(comp, temperature, phase=phase),
-                        f"interface diffusivity for phase {phase} at eta={float(eta):.8g}",
-                    )
+            scan_direction = _seed_tieline_scan_direction(seed_sample["endpoints"])
+            negative_extent, _ = _find_seed_scan_extent(
+                thermodynamics,
+                seed_sample,
+                -1.0,
+                scan_direction,
+                temperature,
+                precipitate_phase,
+                tieline_phases,
+                elements,
+                float(min_composition),
+                probe_boundary_search_step,
+                probe_boundary_xtol,
+                probe_max_search_steps,
+            )
+            positive_extent, _ = _find_seed_scan_extent(
+                thermodynamics,
+                seed_sample,
+                1.0,
+                scan_direction,
+                temperature,
+                precipitate_phase,
+                tieline_phases,
+                elements,
+                float(min_composition),
+                probe_boundary_search_step,
+                probe_boundary_xtol,
+                probe_max_search_steps,
+            )
+            negative_side = _resample_seed_scan_side(
+                thermodynamics,
+                seed_sample,
+                -1.0,
+                scan_direction,
+                temperature,
+                precipitate_phase,
+                tieline_phases,
+                elements,
+                float(min_composition),
+                negative_extent,
+                probe_boundary_margin,
+                probe_samples_per_side,
+            )
+            positive_side = _resample_seed_scan_side(
+                thermodynamics,
+                seed_sample,
+                1.0,
+                scan_direction,
+                temperature,
+                precipitate_phase,
+                tieline_phases,
+                elements,
+                float(min_composition),
+                positive_extent,
+                probe_boundary_margin,
+                probe_samples_per_side,
+            )
+            signed_samples = [(-distance, sample) for distance, sample in reversed(negative_side)]
+            signed_samples.append((0.0, seed_sample))
+            signed_samples.extend((distance, sample) for distance, sample in positive_side)
+            signed_distances = np.asarray([distance for distance, _ in signed_samples], dtype=np.float64)
+            eta_samples = (signed_distances - signed_distances[0]) / (signed_distances[-1] - signed_distances[0])
+            sampling_metadata = {
+                "source": "from_database_seed_point",
+                "probe_point": np.asarray(seed_sample["probe"], dtype=np.float64).tolist(),
+                "probe_scan_direction": scan_direction.tolist(),
+                "probe_samples_per_side": int(probe_samples_per_side),
+                "probe_boundary_margin": float(probe_boundary_margin),
+                "probe_boundary_search_step": float(probe_boundary_search_step),
+                "generated_probe_points": [
+                    np.asarray(sample["probe"], dtype=np.float64).tolist() for _, sample in signed_samples
+                ],
+                "negative_extent": float(negative_extent),
+                "positive_extent": float(positive_extent),
+            }
+            for _, sample in signed_samples:
+                for phase, comp, diffusivity in zip(tieline_phases, sample["endpoints"], sample["diffusivities"]):
+                    tieline_values[phase].append(comp)
+                    interface_diff_x[phase].append(comp)
+                    interface_diff_d[phase].append(diffusivity)
+        else:
+            eta_samples = np.asarray(eta_samples, dtype=np.float64).reshape(-1)
+            if eta_samples.size < 2:
+                raise ValueError("At least two eta_samples are required.")
+            if not np.all(np.isfinite(eta_samples)) or not np.all(np.diff(eta_samples) > 0.0):
+                raise ValueError("eta_samples must be finite and strictly increasing.")
+            probe_start = _as_independent_ternary_components(probe_start, elements, "probe_start")
+            probe_end = _as_independent_ternary_components(probe_end, elements, "probe_end")
+            sampling_metadata = {
+                "source": "from_database",
+                "probe_start": probe_start.tolist(),
+                "probe_end": probe_end.tolist(),
+            }
+            for eta in eta_samples:
+                fraction = (float(eta) - float(eta_samples[0])) / (float(eta_samples[-1]) - float(eta_samples[0]))
+                probe = probe_start + fraction * (probe_end - probe_start)
+                sample = _sample_expected_tieline(
+                    thermodynamics,
+                    probe,
+                    temperature,
+                    precipitate_phase,
+                    tieline_phases,
+                    elements,
+                    float(min_composition),
+                    eta=eta,
                 )
+                for phase, comp, diffusivity in zip(tieline_phases, sample["endpoints"], sample["diffusivities"]):
+                    tieline_values[phase].append(comp)
+                    interface_diff_x[phase].append(comp)
+                    interface_diff_d[phase].append(diffusivity)
 
         tieline_values = {phase: np.asarray(values, dtype=np.float64) for phase, values in tieline_values.items()}
         interface_diff_x = {phase: np.asarray(values, dtype=np.float64) for phase, values in interface_diff_x.items()}
@@ -736,9 +1065,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             diffusivity_interpolation=diffusivity_interpolation,
             diffusivity_bulk_grids=bulk_grid_axes,
             metadata={
-                "source": "from_database",
-                "probe_start": probe_start.tolist(),
-                "probe_end": probe_end.tolist(),
+                **sampling_metadata,
                 "precipitate_phase": precipitate_phase,
                 **validation_metadata,
             },

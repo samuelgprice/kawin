@@ -379,6 +379,52 @@ class _TieLineSamplingThermodynamics:
         return np.asarray([[base, -0.5 * composition[1]], [0.1 * composition[1], base + 0.25]], dtype=np.float64)
 
 
+class _SeedScanThermodynamics:
+    def __init__(
+        self,
+        *,
+        seed_y=0.20,
+        negative_extent=0.03,
+        positive_extent=0.07,
+        half_tieline_length=0.04,
+        endpoint_mode="valid",
+    ):
+        self.elements = ["Z", "X", "Y"]
+        self.phases = ["ALPHA", "BETA"]
+        self.seed_y = float(seed_y)
+        self.negative_extent = float(negative_extent)
+        self.positive_extent = float(positive_extent)
+        self.half_tieline_length = float(half_tieline_length)
+        self.endpoint_mode = endpoint_mode
+
+    def clearCache(self):
+        pass
+
+    def _inside_two_phase_region(self, composition):
+        y = float(np.asarray(composition, dtype=np.float64).reshape(2)[1])
+        return self.seed_y - self.negative_extent <= y <= self.seed_y + self.positive_extent
+
+    def getInterfacialComposition(self, x, T, gExtra=0, precPhase=None, returnMeta=False):
+        x = np.asarray(x, dtype=np.float64).reshape(2)
+        left = np.asarray([x[0] - self.half_tieline_length, x[1]], dtype=np.float64)
+        right = np.asarray([x[0] + self.half_tieline_length, x[1]], dtype=np.float64)
+        endpoints = [
+            {"phase": "ALPHA", "composition": left},
+            {"phase": "BETA", "composition": right},
+        ]
+        if self.endpoint_mode == "extra" or not self._inside_two_phase_region(x):
+            endpoints = [
+                {"phase": "ALPHA", "composition": left},
+                {"phase": "GAMMA", "composition": right},
+            ]
+        if not returnMeta:
+            return left, right
+        return left, right, {"endpoint_phases": tuple(e.get("phase") for e in endpoints), "endpoints": tuple(endpoints)}
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        return _test_continuous_matrix(composition, phase)
+
+
 class _QuasiBinaryCuZnDummyEquilibrium:
     """Fixed Cu-Zn endpoints with eta-pinned dummy interface compositions."""
 
@@ -2706,6 +2752,23 @@ def _build_surrogate(**kwargs):
     return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(**params)
 
 
+def _build_seed_surrogate(**kwargs):
+    params = {
+        "thermodynamics": _SeedScanThermodynamics(),
+        "elements": ["Z", "X", "Y"],
+        "phases": ["ALPHA", "BETA"],
+        "tieline_phases": ("ALPHA", "BETA"),
+        "temperature": 1000.0,
+        "probe_point": np.asarray([0.30, 0.20], dtype=np.float64),
+        "probe_samples_per_side": 2,
+        "probe_boundary_margin": 0.005,
+        "probe_boundary_search_step": 0.02,
+        "probe_boundary_xtol": 1.0e-6,
+    }
+    params.update(kwargs)
+    return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(**params)
+
+
 def _continuous_bulk_grids():
     return (
         np.asarray([0.18, 0.24, 0.30, 0.36, 0.42], dtype=np.float64),
@@ -2852,6 +2915,93 @@ def test_ternary_surrogate_requires_explicit_tieline_phases():
 def test_ternary_surrogate_rejects_unexpected_tieline_phase_metadata(endpoint_mode):
     with pytest.raises(ValueError):
         _build_surrogate(thermodynamics=_TieLineSamplingThermodynamics(endpoint_mode=endpoint_mode))
+
+
+def test_ternary_surrogate_seed_point_builds_asymmetric_eta_samples():
+    surrogate = _build_seed_surrogate()
+
+    assert surrogate.metadata["source"] == "from_database_seed_point"
+    assert surrogate.eta_samples.shape == (5,)
+    assert np.isclose(surrogate.eta_samples[0], 0.0)
+    assert np.isclose(surrogate.eta_samples[-1], 1.0)
+    assert np.all(np.diff(surrogate.eta_samples) > 0.0)
+    assert not np.isclose(surrogate.eta_samples[2], 0.5)
+    assert np.allclose(surrogate.metadata["probe_scan_direction"], [0.0, 1.0])
+
+    generated = np.asarray(surrogate.metadata["generated_probe_points"], dtype=np.float64)
+    assert generated.shape == (5, 2)
+    assert np.min(generated[:, 1]) >= 0.20 - 0.03 + 0.005 - 1.0e-6
+    assert np.max(generated[:, 1]) <= 0.20 + 0.07 - 0.005 + 1.0e-6
+
+
+def test_ternary_surrogate_seed_point_rejects_invalid_seed_metadata():
+    with pytest.raises(ValueError, match="Unexpected tie-line phases"):
+        _build_seed_surrogate(thermodynamics=_SeedScanThermodynamics(endpoint_mode="extra"))
+
+
+def test_ternary_surrogate_seed_point_rejects_mixed_line_arguments():
+    with pytest.raises(ValueError, match="probe_point seed mode cannot be combined"):
+        _build_seed_surrogate(probe_start=np.asarray([0.20, 0.10], dtype=np.float64))
+    with pytest.raises(ValueError, match="probe_point seed mode cannot be combined"):
+        _build_seed_surrogate(eta_samples=np.asarray([0.0, 0.5, 1.0], dtype=np.float64))
+
+
+def test_ternary_surrogate_line_mode_still_requires_line_arguments():
+    with pytest.raises(ValueError, match="probe_start, probe_end, and eta_samples"):
+        _build_surrogate(probe_start=None)
+
+
+def test_ternary_surrogate_seed_point_margin_must_fit_detected_boundaries():
+    with pytest.raises(ValueError, match="probe_boundary_margin"):
+        _build_seed_surrogate(probe_boundary_margin=0.031)
+
+
+def test_seed_scan_resample_rejects_generated_samples_outside_expected_region():
+    thermodynamics = _SeedScanThermodynamics()
+    seed_sample = surrogate_module._sample_expected_tieline(
+        thermodynamics,
+        [0.30, 0.20],
+        1000.0,
+        "BETA",
+        ("ALPHA", "BETA"),
+        ["Z", "X", "Y"],
+        1.0e-10,
+    )
+
+    with pytest.raises(ValueError, match="generated probe left the expected two-phase region"):
+        surrogate_module._resample_seed_scan_side(
+            thermodynamics,
+            seed_sample,
+            1.0,
+            np.asarray([0.0, 1.0], dtype=np.float64),
+            1000.0,
+            "BETA",
+            ("ALPHA", "BETA"),
+            ["Z", "X", "Y"],
+            1.0e-10,
+            0.08,
+            0.0,
+            1,
+        )
+
+
+@pytest.mark.parametrize("diffusivity_interpolation", ["nearest", "continuous_grid", "simplex_linear"])
+def test_ternary_surrogate_seed_point_supports_diffusivity_interpolation_modes(diffusivity_interpolation):
+    kwargs = {}
+    if diffusivity_interpolation == "continuous_grid":
+        kwargs["diffusivity_bulk_grids"] = _continuous_bulk_grids()
+    elif diffusivity_interpolation == "simplex_linear":
+        kwargs["diffusivity_bulk_grids"] = (
+            np.asarray([0.18, 0.30, 0.42, 0.70], dtype=np.float64),
+            np.asarray([0.06, 0.18, 0.30, 0.45], dtype=np.float64),
+        )
+    surrogate = _build_seed_surrogate(diffusivity_interpolation=diffusivity_interpolation, **kwargs)
+
+    matrix = surrogate.getInterdiffusivity([0.30, 0.20], 1000.0, phase="ALPHA", query_context="general")
+
+    assert surrogate.diffusivityInterpolation == diffusivity_interpolation
+    assert matrix.shape == (2, 2)
+    assert np.all(np.isfinite(matrix))
 
 
 def test_ternary_surrogate_interpolates_tielines_and_returns_metadata():
