@@ -2376,28 +2376,27 @@ def test_three_phase_interface_residuals_include_endpoint_inventory_change_when_
         dt,
     )
     old_lengths = np.asarray([old_interfaces[0], old_interfaces[1] - old_interfaces[0], model._R - old_interfaces[1]])
+    new_lengths = np.asarray([new_interfaces[0], new_interfaces[1] - new_interfaces[0], model._R - new_interfaces[1]])
     c_a_ab, c_b_ab = new_compositions[0]
     c_b_bc, c_c_bc = new_compositions[1]
-    legacy = np.concatenate(
+    endpoint_ab = 0.5 * (1.0 - model._grids[0][-2]) * (new_lengths[0] * c_a_ab - old_lengths[0] * profiles[0][-1])
+    endpoint_ab += 0.5 * model._grids[1][1] * (new_lengths[1] * c_b_ab - old_lengths[1] * profiles[1][0])
+    endpoint_bc = 0.5 * (1.0 - model._grids[1][-2]) * (new_lengths[1] * c_b_bc - old_lengths[1] * profiles[1][-1])
+    endpoint_bc += 0.5 * model._grids[2][1] * (new_lengths[2] * c_c_bc - old_lengths[2] * profiles[2][0])
+    endpoint_change = np.concatenate((endpoint_ab, endpoint_bc))
+    expected = np.concatenate(
         (
-            (new_interfaces[0] - old_interfaces[0]) * (c_a_ab - c_b_ab)
-            - dt * (bulk_results[1].left_flux - bulk_results[0].right_flux),
-            (new_interfaces[1] - old_interfaces[1]) * (c_b_bc - c_c_bc)
-            - dt * (bulk_results[2].left_flux - bulk_results[1].right_flux),
+            endpoint_ab + bulk_results[0].right_flux - bulk_results[1].left_flux,
+            endpoint_bc + bulk_results[1].right_flux - bulk_results[2].left_flux,
         )
     )
-    endpoint_ab = old_lengths[0] * 0.5 * (1.0 - model._grids[0][-2]) * (c_a_ab - profiles[0][-1])
-    endpoint_ab += old_lengths[1] * 0.5 * model._grids[1][1] * (c_b_ab - profiles[1][0])
-    endpoint_bc = old_lengths[1] * 0.5 * (1.0 - model._grids[1][-2]) * (c_b_bc - profiles[1][-1])
-    endpoint_bc += old_lengths[2] * 0.5 * model._grids[2][1] * (c_c_bc - profiles[2][0])
-    endpoint_change = np.concatenate((endpoint_ab, endpoint_bc))
 
     assert not np.allclose(new_compositions[0][0], c_a_ab_old)
     assert not np.allclose(new_compositions[0][1], c_b_ab_old)
     assert not np.allclose(new_compositions[1][0], c_b_bc_old)
     assert not np.allclose(new_compositions[1][1], c_c_bc_old)
     assert np.linalg.norm(endpoint_change, ord=np.inf) > 1.0e-4
-    assert np.allclose(residual, legacy + endpoint_change, rtol=1.0e-13, atol=1.0e-15)
+    assert np.allclose(residual, expected, rtol=1.0e-13, atol=1.0e-15)
 
 
 def test_three_phase_inventory_correction_preserves_interface_endpoints_and_removes_step_drift():

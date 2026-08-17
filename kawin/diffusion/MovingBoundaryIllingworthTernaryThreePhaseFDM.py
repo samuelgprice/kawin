@@ -29,22 +29,16 @@ from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
 
-def debugInPlace():
-    try:
-        import debugpy
-        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-        debugpy.listen(5678)
-        print("Waiting for debugger attach")
-        debugpy.wait_for_client()
-        debugpy.breakpoint()
-        print('break on this line')
-    except:
-        pass
-
 
 @dataclass(frozen=True, slots=True)
 class _ThreePhaseBulkResult:
-    """Result from one transformed interval solve in the three-phase model."""
+    """Result from one transformed interval solve in the three-phase model.
+
+    ``left_flux`` and ``right_flux`` are the total ALE plus diffusive transfers
+    over the timestep on the interface-adjacent internal faces. They use the
+    same orientation as the interval grid, from smaller to larger transformed
+    coordinate.
+    """
 
     profile: np.ndarray
     left_flux: np.ndarray
@@ -78,9 +72,9 @@ class ThreePhaseInitialEtaEstimate:
     Diagnostics from initial tie-line selection for the three-phase model.
 
     ``etas`` are the selected A|B and B|C tie-line coordinates. ``velocities``
-    are the instantaneous interface velocities that satisfy the same component
-    balances used by the finite-step interface solve, evaluated with initial
-    adjacent-node gradients.
+    are instantaneous Stefan-balance estimates evaluated with initial
+    adjacent-node gradients; they are used only to seed the finite-step
+    discrete nonlinear solve.
     """
 
     etas: np.ndarray
@@ -902,14 +896,49 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             self._face_positions(grid, new_bounds),
         )
 
+    def _internal_face_displacements(self, grid, old_bounds, new_bounds):
+        """Returns physical displacement of each internal transformed face."""
+        grid = np.asarray(grid, dtype=np.float64).reshape(-1)
+        face_xi = 0.5 * (grid[:-1] + grid[1:])
+        old_left, old_right = float(old_bounds[0]), float(old_bounds[1])
+        new_left, new_right = float(new_bounds[0]), float(new_bounds[1])
+        return (1.0 - face_xi) * (new_left - old_left) + face_xi * (new_right - old_right)
+
+    def _face_transfer_coefficients(self, delta_x, D_face, dt, length, dxi):
+        """
+        Returns node coefficients for one conservative ALE plus diffusive face.
+
+        The returned pair ``(left_coeff, right_coeff)`` satisfies
+        ``H_f = left_coeff @ C_j + right_coeff @ C_{j+1}`` for a face between
+        transformed nodes ``j`` and ``j + 1``. Positive face displacement uses
+        the right node as the ALE donor because the transformed advection
+        velocity has the opposite sign to physical grid motion.
+        """
+        I = self._identity()
+        A = float(dt) * np.asarray(D_face, dtype=np.float64) / (float(length) * float(dxi))
+        left_coeff = -A
+        right_coeff = A.copy()
+        delta_x = float(delta_x)
+        if delta_x > 0.0:
+            right_coeff = right_coeff + delta_x * I
+        elif delta_x < 0.0:
+            left_coeff = left_coeff + delta_x * I
+        return left_coeff, right_coeff
+
+    def _evaluate_face_transfer(self, left_coeff, right_coeff, left_value, right_value):
+        """Evaluates a preassembled total face transfer from its node coefficients."""
+        return np.matmul(left_coeff, np.asarray(left_value, dtype=np.float64)) + np.matmul(right_coeff, np.asarray(right_value, dtype=np.float64))
+
     def _solve_interval_planar(self, profile, grid, old_bounds, new_bounds, phase_index, left_value, right_value, D_faces, validate_diffusivity=True):
         """
         Solves one transformed planar interval on a moving Landau grid.
 
-        The finite-volume equation uses old and new physical control-volume
-        widths so phase-length changes are included in the discrete inventory.
-        Endpoint values are Dirichlet when supplied; ``None`` means homogeneous
-        zero flux at a fixed external boundary.
+        The finite-volume equation is assembled face by face as
+        ``L_new*DeltaXi*C_new - L_old*DeltaXi*C_old = H_right - H_left``.
+        ``H`` contains both the face-local upwind ALE transfer and the implicit
+        diffusive transfer. Endpoint values are exact Dirichlet constraints when
+        supplied; ``None`` means the fixed external boundary has homogeneous
+        zero transfer.
         """
         profile = validate_ternary_profile(profile, "interval profile")
         grid = np.asarray(grid, dtype=np.float64).reshape(-1)
@@ -937,28 +966,39 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         upper = np.zeros((n, 2, 2), dtype=np.float64)
         rhs = np.zeros((n, 2), dtype=np.float64)
         I = self._identity()
+        fixed_rows = np.zeros(n, dtype=bool)
+        if left_value is not None:
+            fixed_rows[0] = True
+        if right_value is not None:
+            fixed_rows[-1] = True
 
         for i in range(n):
-            if i == 0 and left_value is not None:
+            if fixed_rows[i]:
                 diagonal[i] = I
-                rhs[i] = np.asarray(left_value, dtype=np.float64)
-                continue
-            if i == n - 1 and right_value is not None:
-                diagonal[i] = I
-                rhs[i] = np.asarray(right_value, dtype=np.float64)
+                rhs[i] = np.asarray(left_value if i == 0 else right_value, dtype=np.float64)
                 continue
             diagonal[i] = new_widths[i] * I
             rhs[i] = old_widths[i] * profile[i]
-            if i > 0:
-                dx_left = new_length * (grid[i] - grid[i - 1])
-                A_left = float(self._currdt) * D_faces[i - 1] / dx_left
-                diagonal[i] += A_left
-                lower[i] -= A_left
-            if i < n - 1:
-                dx_right = new_length * (grid[i + 1] - grid[i])
-                A_right = float(self._currdt) * D_faces[i] / dx_right
-                diagonal[i] += A_right
-                upper[i] -= A_right
+
+        face_displacements = self._internal_face_displacements(grid, old_bounds, new_bounds)
+        face_coefficients = []
+        for face in range(n - 1):
+            left_coeff, right_coeff = self._face_transfer_coefficients(
+                face_displacements[face],
+                D_faces[face],
+                float(self._currdt),
+                new_length,
+                grid[face + 1] - grid[face],
+            )
+            face_coefficients.append((left_coeff, right_coeff))
+            left_row = face
+            right_row = face + 1
+            if not fixed_rows[left_row]:
+                diagonal[left_row] -= left_coeff
+                upper[left_row] -= right_coeff
+            if not fixed_rows[right_row]:
+                lower[right_row] += left_coeff
+                diagonal[right_row] += right_coeff
 
         solved = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
         left_matrix = None if left_value is None else D_faces[0]
@@ -967,11 +1007,11 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         if left_value is None:
             left_flux = zero.copy()
         else:
-            left_flux = np.matmul(left_matrix, (solved[1] - np.asarray(left_value, dtype=np.float64)) / (new_length * grid[1]))
+            left_flux = self._evaluate_face_transfer(*face_coefficients[0], solved[0], solved[1])
         if right_value is None:
             right_flux = zero.copy()
         else:
-            right_flux = np.matmul(right_matrix, (np.asarray(right_value, dtype=np.float64) - solved[-2]) / (new_length * (1.0 - grid[-2])))
+            right_flux = self._evaluate_face_transfer(*face_coefficients[-1], solved[-2], solved[-1])
         return _ThreePhaseBulkResult(solved, left_flux, right_flux, left_matrix, right_matrix)
 
     def _solve_interval_picard(self, profile, grid, old_bounds, new_bounds, phase_index, left_value, right_value):
@@ -1029,18 +1069,13 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
 
     def _interface_residuals(self, old_profiles, old_interfaces, new_interfaces, interface_compositions, bulk_results, dt):
         """
-        Returns the two interface inventory residuals for one implicit trial.
+        Returns interface residuals from the same discrete transfers as the bulk.
 
-        The transformed profiles are integrated with a trapezoidal rule, so
-        each moving-interface endpoint occupies an interface-adjacent half-cell.
-        When eta changes during a step, the phase-side endpoint compositions
-        change even if the interface displacement is small. The endpoint
-        corrections below account for those old-geometry half-cell inventory
-        changes; without them the nonlinear solve balances flux and interface
-        motion but not the discrete inventory that is recorded after the step.
+        Endpoint inventory is represented by the trapezoidal endpoint half-cell
+        weights. Combining those endpoint inventory changes with the
+        interface-adjacent total face transfers makes the residual telescope
+        exactly with the conservative bulk cell equations.
         """
-        ds_ab = float(new_interfaces[0] - old_interfaces[0])
-        ds_bc = float(new_interfaces[1] - old_interfaces[1])
         c_a_ab, c_b_ab = interface_compositions[0]
         c_b_bc, c_c_bc = interface_compositions[1]
         old_lengths = np.asarray(
@@ -1051,35 +1086,34 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             ],
             dtype=np.float64,
         )
-        residual_ab = ds_ab * (c_a_ab - c_b_ab) - float(dt) * (bulk_results[1].left_flux - bulk_results[0].right_flux)
-        residual_bc = ds_bc * (c_b_bc - c_c_bc) - float(dt) * (bulk_results[2].left_flux - bulk_results[1].right_flux)
-        endpoint_ab = (
-            old_lengths[0]
-            * 0.5
-            * (1.0 - self._grids[0][-2])
-            * (np.asarray(c_a_ab, dtype=np.float64) - np.asarray(old_profiles[0][-1], dtype=np.float64))
+        new_lengths = np.asarray(
+            [
+                float(new_interfaces[0]),
+                float(new_interfaces[1] - new_interfaces[0]),
+                float(self._R - new_interfaces[1]),
+            ],
+            dtype=np.float64,
         )
-        endpoint_ab += (
-            old_lengths[1]
-            * 0.5
-            * self._grids[1][1]
-            * (np.asarray(c_b_ab, dtype=np.float64) - np.asarray(old_profiles[1][0], dtype=np.float64))
-        )
-        endpoint_bc = (
-            old_lengths[1]
-            * 0.5
-            * (1.0 - self._grids[1][-2])
-            * (np.asarray(c_b_bc, dtype=np.float64) - np.asarray(old_profiles[1][-1], dtype=np.float64))
-        )
-        endpoint_bc += (
-            old_lengths[2]
-            * 0.5
-            * self._grids[2][1]
-            * (np.asarray(c_c_bc, dtype=np.float64) - np.asarray(old_profiles[2][0], dtype=np.float64))
-        )
-        residual_ab = residual_ab + endpoint_ab
-        residual_bc = residual_bc + endpoint_bc
+        endpoint_ab = self._endpoint_inventory_change(self._grids[0], old_profiles[0], c_a_ab, old_lengths[0], new_lengths[0], "right")
+        endpoint_ab += self._endpoint_inventory_change(self._grids[1], old_profiles[1], c_b_ab, old_lengths[1], new_lengths[1], "left")
+        endpoint_bc = self._endpoint_inventory_change(self._grids[1], old_profiles[1], c_b_bc, old_lengths[1], new_lengths[1], "right")
+        endpoint_bc += self._endpoint_inventory_change(self._grids[2], old_profiles[2], c_c_bc, old_lengths[2], new_lengths[2], "left")
+        residual_ab = endpoint_ab + bulk_results[0].right_flux - bulk_results[1].left_flux
+        residual_bc = endpoint_bc + bulk_results[1].right_flux - bulk_results[2].left_flux
         return np.concatenate((residual_ab, residual_bc))
+
+    def _endpoint_inventory_change(self, grid, old_profile, new_value, old_length, new_length, side):
+        """Returns the transformed trapezoidal endpoint inventory change."""
+        grid = np.asarray(grid, dtype=np.float64).reshape(-1)
+        if side == "left":
+            weight = 0.5 * grid[1]
+            old_value = np.asarray(old_profile[0], dtype=np.float64)
+        elif side == "right":
+            weight = 0.5 * (1.0 - grid[-2])
+            old_value = np.asarray(old_profile[-1], dtype=np.float64)
+        else:
+            raise ValueError("endpoint side must be 'left' or 'right'.")
+        return weight * (float(new_length) * np.asarray(new_value, dtype=np.float64) - float(old_length) * old_value)
 
     def _residual_scale(self, profiles, interfaces):
         inventory = self.getTotalInventoryFromState(profiles, interfaces)
@@ -1335,21 +1369,19 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             self._currdt = trial_dt
             try:
                 candidate = self._solve_interface_planar(profiles, interfaces, etas, trial_dt)
-                corrected_profiles = self._correct_candidate_inventory(profiles, interfaces, candidate.profiles, candidate.interfaces)
                 self._currdt = trial_dt
                 self._lastStepRetries = retry
                 self._lastInterfaceCompositions = candidate.interface_compositions
                 return [
-                    (corrected_profiles[0] - profiles[0]) / trial_dt,
-                    (corrected_profiles[1] - profiles[1]) / trial_dt,
-                    (corrected_profiles[2] - profiles[2]) / trial_dt,
+                    (candidate.profiles[0] - profiles[0]) / trial_dt,
+                    (candidate.profiles[1] - profiles[1]) / trial_dt,
+                    (candidate.profiles[2] - profiles[2]) / trial_dt,
                     (candidate.interfaces - interfaces) / trial_dt,
                     (candidate.etas - etas) / trial_dt,
                 ]
             except (RuntimeError, ValueError, ZeroDivisionError) as exc:
                 last_error = exc
                 trial_dt *= self.retryFactor
-        # debugInPlace()
         raise RuntimeError("Three-phase Illingworth step failed after timestep retries.") from last_error
 
     def getDt(self, dXdt):
