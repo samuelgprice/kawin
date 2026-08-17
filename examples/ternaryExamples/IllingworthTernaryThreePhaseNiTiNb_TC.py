@@ -126,7 +126,7 @@ GLOBAL_MINIMIZATION_MAX_GRID_POINTS = 2000
 FECRNI_LIQUID_DIFFUSIVITY_MATRIX =  np.array([[1e-9, 0.0], [0.0, 1e-9]])
 
 NODES = 165
-PHASE_NODES = (81, 9, 81)
+PHASE_NODES = (50*2, 10*2, 50*2)
 
 # Time stepping:
 #   DT_MODE = "fixed"    -> advance by FIXED_TIME_STEP.
@@ -139,7 +139,7 @@ FIXED_TIME_STEP = 1.0e-3
 SEMI_LOG_BASE_TIME_STEP = 1.0e-3
 SEMI_LOG_DT = 0.05
 SEMI_LOG_T0 = 1.0e-6
-SOLVE_TIME = 1.69e2
+SOLVE_TIME = 1e3
 TOLERANCE = 1.0e-10
 MAX_ITERATIONS = 100
 MAX_STEP_RETRIES = 8
@@ -203,7 +203,7 @@ _CASE_DEFAULTS = {
         "LIQUID_WIDTH": 10.0e-6,
         "RIGHT_WIDTH": 50.0e-6,
         "INTERFACE_POSITIONS": np.array([50.0e-6, 60.0e-6], dtype=np.float64),
-        "TIELINE_SURROGATE_BUILD_MODE": "line",
+        "TIELINE_SURROGATE_BUILD_MODE": ["line", "seed_point"][1],
         "AB_PROBE_START": np.array([0.3815, 0.319], dtype=np.float64),
         "AB_PROBE_END": np.array([0.417, 0.58], dtype=np.float64),
         "BC_PROBE_START": np.array([0.446, 0.264], dtype=np.float64),
@@ -894,6 +894,7 @@ def plot_phase_widths(model):
         ax.plot(times, widths[:, i] * 1.0e6, label=label)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Width (um)")
+    ax.set_ylim(0, 60)
     ax.legend()
     fig.tight_layout()
     return fig, ax
@@ -910,6 +911,24 @@ def plot_independent_profiles(model, time=None):
         ax.axvline(position * 1.0e6, color="0.35", linestyle="--", linewidth=1)
     ax.set_xlabel("Distance (um)")
     ax.set_ylabel("Mole fraction")
+    ax.set_ylim(0.15, 0.55)
+    ax.legend()
+    fig.tight_layout()
+    return fig, ax
+
+
+def plot_inventory_drift(model):
+    """Plots componentwise total-inventory drift from the initial state."""
+    times = model.inventoryData._time[: model.inventoryData.N + 1]
+    inventory = model.inventoryData._y[: model.inventoryData.N + 1]
+    drift = inventory - inventory[0]
+    fig, ax = plt.subplots(figsize=(6, 4))
+    for i, element in enumerate(INDEPENDENT_ELEMENTS):
+        ax.plot(times, drift[:, i], label=f"{element}")
+    ax.axhline(0.0, color="0.35", linestyle="--", linewidth=1)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Inventory drift")
+    ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
     ax.legend()
     fig.tight_layout()
     return fig, ax
@@ -968,6 +987,7 @@ def run_case(overrides=None, *, make_plots=True):
         if make_plots and model.currentTime > 0.0:
             figures["phase_widths"] = plot_phase_widths(model)
             figures["profiles"] = plot_independent_profiles(model)
+            figures["inventory_drift"] = plot_inventory_drift(model)
             plt.show()
         return {
             "model": model,

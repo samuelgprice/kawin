@@ -1349,7 +1349,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             except (RuntimeError, ValueError, ZeroDivisionError) as exc:
                 last_error = exc
                 trial_dt *= self.retryFactor
-        debugInPlace()
+        # debugInPlace()
         raise RuntimeError("Three-phase Illingworth step failed after timestep retries.") from last_error
 
     def getDt(self, dXdt):
