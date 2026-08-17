@@ -1027,18 +1027,127 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             results.append(result)
         return tuple(results)
 
-    def _interface_residuals(self, old_interfaces, new_interfaces, interface_compositions, bulk_results, dt):
+    def _interface_residuals(self, old_profiles, old_interfaces, new_interfaces, interface_compositions, bulk_results, dt):
+        """
+        Returns the two interface inventory residuals for one implicit trial.
+
+        The transformed profiles are integrated with a trapezoidal rule, so
+        each moving-interface endpoint occupies an interface-adjacent half-cell.
+        When eta changes during a step, the phase-side endpoint compositions
+        change even if the interface displacement is small. The endpoint
+        corrections below account for those old-geometry half-cell inventory
+        changes; without them the nonlinear solve balances flux and interface
+        motion but not the discrete inventory that is recorded after the step.
+        """
         ds_ab = float(new_interfaces[0] - old_interfaces[0])
         ds_bc = float(new_interfaces[1] - old_interfaces[1])
         c_a_ab, c_b_ab = interface_compositions[0]
         c_b_bc, c_c_bc = interface_compositions[1]
+        old_lengths = np.asarray(
+            [
+                float(old_interfaces[0]),
+                float(old_interfaces[1] - old_interfaces[0]),
+                float(self._R - old_interfaces[1]),
+            ],
+            dtype=np.float64,
+        )
         residual_ab = ds_ab * (c_a_ab - c_b_ab) - float(dt) * (bulk_results[1].left_flux - bulk_results[0].right_flux)
         residual_bc = ds_bc * (c_b_bc - c_c_bc) - float(dt) * (bulk_results[2].left_flux - bulk_results[1].right_flux)
+        endpoint_ab = (
+            old_lengths[0]
+            * 0.5
+            * (1.0 - self._grids[0][-2])
+            * (np.asarray(c_a_ab, dtype=np.float64) - np.asarray(old_profiles[0][-1], dtype=np.float64))
+        )
+        endpoint_ab += (
+            old_lengths[1]
+            * 0.5
+            * self._grids[1][1]
+            * (np.asarray(c_b_ab, dtype=np.float64) - np.asarray(old_profiles[1][0], dtype=np.float64))
+        )
+        endpoint_bc = (
+            old_lengths[1]
+            * 0.5
+            * (1.0 - self._grids[1][-2])
+            * (np.asarray(c_b_bc, dtype=np.float64) - np.asarray(old_profiles[1][-1], dtype=np.float64))
+        )
+        endpoint_bc += (
+            old_lengths[2]
+            * 0.5
+            * self._grids[2][1]
+            * (np.asarray(c_c_bc, dtype=np.float64) - np.asarray(old_profiles[2][0], dtype=np.float64))
+        )
+        residual_ab = residual_ab + endpoint_ab
+        residual_bc = residual_bc + endpoint_bc
         return np.concatenate((residual_ab, residual_bc))
 
     def _residual_scale(self, profiles, interfaces):
         inventory = self.getTotalInventoryFromState(profiles, interfaces)
         return np.maximum(np.maximum(np.repeat(np.maximum(np.abs(inventory), self._R), 2), 1e-300), 1e-300)
+
+    def _grid_trapezoid_node_weights(self, grid):
+        """Returns node weights for trapezoidal integration on one Landau grid."""
+        grid = np.asarray(grid, dtype=np.float64).reshape(-1)
+        weights = np.empty_like(grid)
+        weights[0] = 0.5 * (grid[1] - grid[0])
+        weights[-1] = 0.5 * (grid[-1] - grid[-2])
+        weights[1:-1] = 0.5 * (grid[2:] - grid[:-2])
+        return weights
+
+    def _inventory_correction_masks(self):
+        """
+        Returns endpoint-preserving masks for transformed inventory correction.
+
+        Nodes fixed by moving-interface Dirichlet values are excluded:
+        phase A right endpoint, phase B both endpoints, and phase C left
+        endpoint. External closed-boundary nodes and interior nodes remain
+        adjustable.
+        """
+        masks = []
+        for phase_index, grid in enumerate(self._grids):
+            mask = np.ones(len(grid), dtype=bool)
+            if phase_index == 0:
+                mask[-1] = False
+            elif phase_index == 1:
+                mask[0] = False
+                mask[-1] = False
+            else:
+                mask[0] = False
+            masks.append(mask)
+        return tuple(masks)
+
+    def _correct_candidate_inventory(self, old_profiles, old_interfaces, candidate_profiles, candidate_interfaces):
+        """
+        Applies a uniform endpoint-preserving correction to conserve inventory.
+
+        The three-phase middle interval has two moving boundaries, so the local
+        interface residuals can leave a small mismatch in the global
+        trapezoidal inventory. This correction distributes the stepwise
+        inventory residual over non-interface transformed nodes while preserving
+        all phase-side interface compositions used by the nonlinear solve.
+        """
+        target = self.getTotalInventoryFromState(old_profiles, old_interfaces)
+        current = self.getTotalInventoryFromState(candidate_profiles, candidate_interfaces)
+        delta = target - current
+        if not np.any(np.isfinite(delta)):
+            raise ValueError("Inventory correction encountered non-finite drift.")
+        masks = self._inventory_correction_masks()
+        boundaries = np.concatenate(([0.0], np.asarray(candidate_interfaces, dtype=np.float64), [self._R]))
+        denominator = 0.0
+        for phase_index, (grid, mask) in enumerate(zip(self._grids, masks)):
+            weights = self._grid_trapezoid_node_weights(grid)
+            denominator += float(boundaries[phase_index + 1] - boundaries[phase_index]) * float(np.sum(weights[mask]))
+        if not np.isfinite(denominator) or denominator <= 0.0:
+            raise ValueError("Inventory correction has no adjustable transformed profile nodes.")
+        correction = delta / denominator
+        corrected = []
+        for profile, mask in zip(candidate_profiles, masks):
+            values = np.asarray(profile, dtype=np.float64).copy()
+            values[mask] += correction
+            corrected.append(values)
+        corrected = tuple(corrected)
+        self._validate_candidate_profiles(corrected)
+        return corrected
 
     def _scaled_bounds(self):
         eps = 1e-14
@@ -1103,7 +1212,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         bulk_results = self._solve_bulk_profiles(profiles, old_interfaces, interfaces, interface_compositions)
         candidate_profiles = tuple(result.profile for result in bulk_results)
         self._validate_candidate_profiles(candidate_profiles)
-        residual = self._interface_residuals(old_interfaces, interfaces, interface_compositions, bulk_results, dt)
+        residual = self._interface_residuals(profiles, old_interfaces, interfaces, interface_compositions, bulk_results, dt)
         scaled = residual / residual_scale
         return _ThreePhaseCandidate(
             x_hat=np.asarray(x_hat, dtype=np.float64).copy(),
@@ -1226,13 +1335,14 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             self._currdt = trial_dt
             try:
                 candidate = self._solve_interface_planar(profiles, interfaces, etas, trial_dt)
+                corrected_profiles = self._correct_candidate_inventory(profiles, interfaces, candidate.profiles, candidate.interfaces)
                 self._currdt = trial_dt
                 self._lastStepRetries = retry
                 self._lastInterfaceCompositions = candidate.interface_compositions
                 return [
-                    (candidate.profiles[0] - profiles[0]) / trial_dt,
-                    (candidate.profiles[1] - profiles[1]) / trial_dt,
-                    (candidate.profiles[2] - profiles[2]) / trial_dt,
+                    (corrected_profiles[0] - profiles[0]) / trial_dt,
+                    (corrected_profiles[1] - profiles[1]) / trial_dt,
+                    (corrected_profiles[2] - profiles[2]) / trial_dt,
                     (candidate.interfaces - interfaces) / trial_dt,
                     (candidate.etas - etas) / trial_dt,
                 ]
