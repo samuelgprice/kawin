@@ -1,15 +1,13 @@
 # %%
 """
-Ni-Ti-Nb three-phase Illingworth ternary moving-boundary example.
+Selectable three-phase Illingworth ternary moving-boundary examples.
 
-This cell script demonstrates the sequential ``BCC_A2 | LIQUID | BCC_A2``
-three-phase model at 1300 K using Thermo-Calc TCHEA5 and MOBHEA4 through the
-example-local TC-Python adapter. The two BCC regions use the same Thermo-Calc
-phase model but are tracked as separate left and right spatial intervals.
-
-Run cells top-to-bottom in VS Code/Jupyter, or run the file directly. A local
-Thermo-Calc installation, TC-Python, and licensed access to TCHEA5/MOBHEA4 are
-required.
+This cell script can run either the original ``BCC_A2 | LIQUID | BCC_A2``
+Ni-Ti-Nb Thermo-Calc case or a ``FCC_A1 | LIQUID | BCC_A2`` Fe-Cr-Ni pycalphad
+case. The Thermo-Calc case requires TC-Python, TCHEA5, MOBHEA4, and a license.
+The Fe-Cr-Ni case uses kawin/pycalphad with the checked-in Lee-style TDB, but
+requires an explicit fixed LIQUID diffusivity matrix because that TDB does not
+define LIQUID mobility terms.
 """
 
 # %%
@@ -44,10 +42,12 @@ from kawin.diffusion import (
 )
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder
 from kawin.solver import explicitEulerIterator
+from kawin.thermo import MulticomponentThermodynamics
 
 
 OUTPUTS = REPO_ROOT / "examples" / "ThermoCalc" / "outputs"
 OUTPUTS.mkdir(parents=True, exist_ok=True)
+EXAMPLES_DIR = REPO_ROOT / "examples"
 
 if __name__ == "__main__":
     def debugInPlace():
@@ -66,17 +66,29 @@ if __name__ == "__main__":
 # %%
 # Editable case configuration
 
+CASE_NI_TI_NB_TC = "ni_ti_nb_tc"
+CASE_FE_CR_NI_PYCALPHAD = "fe_cr_ni_pycalphad"
+CASE_NAME = CASE_FE_CR_NI_PYCALPHAD = "fe_cr_ni_pycalphad"
+
 ELEMENTS = ("NB", "NI", "TI")
 INDEPENDENT_ELEMENTS = ("NI", "TI")
 PHASE_BCC = "BCC_B2"
+PHASE_FCC = None
 PHASE_LIQUID = "LIQUID"
 PHASES_FOR_MODEL = (PHASE_BCC, PHASE_LIQUID, PHASE_BCC)
 TEMPERATURE = 1300.0
+REFERENCE_ELEMENT = "NB"
+TDB_PATH = None
 
 # Full mole fractions are listed in ELEMENTS order: [NB, NI, TI].
 LEFT_BCC_FULL = np.array([0.899, 0.001, 0.100], dtype=np.float64)
 LIQUID_FULL = np.array([0.100, 0.300, 0.600], dtype=np.float64)
 RIGHT_BCC_FULL = np.array([0.01, 0.495, 0.495], dtype=np.float64)
+INITIAL_PHASE_COMPOSITIONS = (
+    np.array([0.001, 0.100], dtype=np.float64),
+    np.array([0.300, 0.600], dtype=np.float64),
+    np.array([0.495, 0.495], dtype=np.float64),
+)
 
 LEFT_WIDTH = 40.0e-6
 LIQUID_WIDTH = 2.0e-6
@@ -103,6 +115,7 @@ BULK_DIFFUSIVITY_MODE = "composition_dependent_lagged"
 BULK_DIFFUSIVITY_POINTS = None
 BULK_DIFFUSIVITY_GRIDS = None
 GLOBAL_MINIMIZATION_MAX_GRID_POINTS = 2000
+FECRNI_LIQUID_DIFFUSIVITY_MATRIX =  np.array([[1e-9, 0.0], [0.0, 1e-9]])
 
 NODES = 165
 PHASE_NODES = (81, 9, 81)
@@ -118,15 +131,72 @@ FIXED_TIME_STEP = 1.0e-3
 SEMI_LOG_BASE_TIME_STEP = 1.0e-3
 SEMI_LOG_DT = 0.05
 SEMI_LOG_T0 = 1.0e-6
-SOLVE_TIME = 1.0
+SOLVE_TIME = 1.0e3
 TOLERANCE = 1.0e-10
-MAX_ITERATIONS = 25
+MAX_ITERATIONS = 100
 MAX_STEP_RETRIES = 8
 MIN_DT_FRAC = 1.0e-16
 VERBOSE = True
 VERBOSE_INTERVAL = 10
 RUN_PREFLIGHT = True
 RUN_SOLVE = True
+
+
+_CASE_DEFAULTS = {
+    CASE_NI_TI_NB_TC: {
+        "ELEMENTS": ("NB", "NI", "TI"),
+        "INDEPENDENT_ELEMENTS": ("NI", "TI"),
+        "PHASE_BCC": "BCC_B2",
+        "PHASE_FCC": None,
+        "PHASE_LIQUID": "LIQUID",
+        "PHASES_FOR_MODEL": ("BCC_B2", "LIQUID", "BCC_B2"),
+        "TEMPERATURE": 1300.0,
+        "REFERENCE_ELEMENT": "NB",
+        "TDB_PATH": None,
+        "INITIAL_PHASE_COMPOSITIONS": (
+            np.array([0.001, 0.100], dtype=np.float64),
+            np.array([0.300, 0.600], dtype=np.float64),
+            np.array([0.495, 0.495], dtype=np.float64),
+        ),
+        "LEFT_WIDTH": 40.0e-6,
+        "LIQUID_WIDTH": 2.0e-6,
+        "RIGHT_WIDTH": 40.0e-6,
+        "INTERFACE_POSITIONS": np.array([40.0e-6, 42.0e-6], dtype=np.float64),
+        "AB_PROBE_START": np.array([0.16, 0.83], dtype=np.float64),
+        "AB_PROBE_END": np.array([0.217, 0.394], dtype=np.float64),
+        "BC_PROBE_START": np.array([0.39, 0.468], dtype=np.float64),
+        "BC_PROBE_END": np.array([0.4099, 0.59], dtype=np.float64),
+        "RUN_PREFLIGHT": True,
+    },
+    CASE_FE_CR_NI_PYCALPHAD: {
+        "ELEMENTS": ("FE", "CR", "NI"),
+        "INDEPENDENT_ELEMENTS": ("CR", "NI"),
+        "PHASE_BCC": "BCC_A2",
+        "PHASE_FCC": "FCC_A1",
+        "PHASE_LIQUID": "LIQUID",
+        "PHASES_FOR_MODEL": ("FCC_A1", "LIQUID", "BCC_A2"),
+        "TEMPERATURE": 1650.0,
+        "REFERENCE_ELEMENT": "FE",
+        "TDB_PATH": EXAMPLES_DIR / "FeCrNi_Lee1993_L_style_ternary_checked_withMobility.tdb",
+        "INITIAL_PHASE_COMPOSITIONS": (
+            np.array([0.30, 0.34], dtype=np.float64),
+            np.array([0.43, 0.37], dtype=np.float64),
+            np.array([0.52, 0.14], dtype=np.float64),
+        ),
+        "LEFT_WIDTH": 50.0e-6,
+        "LIQUID_WIDTH": 10.0e-6,
+        "RIGHT_WIDTH": 50.0e-6,
+        "INTERFACE_POSITIONS": np.array([50.0e-6, 60.0e-6], dtype=np.float64),
+        "AB_PROBE_START": np.array([0.3815, 0.319], dtype=np.float64),
+        "AB_PROBE_END": np.array([0.417, 0.58], dtype=np.float64),
+        "BC_PROBE_START": np.array([0.446, 0.264], dtype=np.float64),
+        "BC_PROBE_END": np.array([0.638, 0.36], dtype=np.float64),
+        "RUN_PREFLIGHT": False,
+    },
+}
+
+_CASE_CONFIG_KEYS = tuple(dict.fromkeys(key for config in _CASE_DEFAULTS.values() for key in config))
+_APPLIED_CASE_NAME = None
 
 
 # %%
@@ -136,7 +206,9 @@ _OVERRIDE_KEY_ALIASES = {
     "bulk_diffusivity_mode": "BULK_DIFFUSIVITY_MODE",
     "bulk_diffusivity_grids": "BULK_DIFFUSIVITY_GRIDS",
     "bulk_diffusivity_points": "BULK_DIFFUSIVITY_POINTS",
+    "case_name": "CASE_NAME",
     "dt_mode": "DT_MODE",
+    "fecrni_liquid_diffusivity_matrix": "FECRNI_LIQUID_DIFFUSIVITY_MATRIX",
     "fixed_time_step": "FIXED_TIME_STEP",
     "global_minimization_max_grid_points": "GLOBAL_MINIMIZATION_MAX_GRID_POINTS",
     "interface_positions": "INTERFACE_POSITIONS",
@@ -158,6 +230,40 @@ _OVERRIDE_KEY_ALIASES = {
 }
 
 
+def _copy_case_value(value):
+    """Returns a mutable-safe copy of a case-default value."""
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if isinstance(value, tuple):
+        return tuple(_copy_case_value(item) for item in value)
+    return value
+
+
+def _refresh_derived_config():
+    """Refresh derived geometry after case/default overrides are applied."""
+    global LENGTH
+    LENGTH = float(LEFT_WIDTH) + float(LIQUID_WIDTH) + float(RIGHT_WIDTH)
+
+
+def select_case(case_name):
+    """Applies one of the selectable three-phase example configurations."""
+    global _APPLIED_CASE_NAME
+    case_name = str(case_name)
+    if case_name not in _CASE_DEFAULTS:
+        raise ValueError(f"Unknown three-phase example CASE_NAME '{case_name}'.")
+    globals()["CASE_NAME"] = case_name
+    for key, value in _CASE_DEFAULTS[case_name].items():
+        globals()[key] = _copy_case_value(value)
+    _refresh_derived_config()
+    _APPLIED_CASE_NAME = case_name
+
+
+def _ensure_selected_case_defaults():
+    """Applies case defaults when ``CASE_NAME`` was changed directly."""
+    if CASE_NAME != _APPLIED_CASE_NAME:
+        select_case(CASE_NAME)
+
+
 def _normalize_override_key(key):
     key = str(key)
     if key in globals():
@@ -167,26 +273,39 @@ def _normalize_override_key(key):
         return upper_key
     if key in _OVERRIDE_KEY_ALIASES:
         return _OVERRIDE_KEY_ALIASES[key]
-    raise KeyError(f"Unknown Ni-Ti-Nb three-phase example override '{key}'.")
+    raise KeyError(f"Unknown three-phase example override '{key}'.")
 
 
 @contextmanager
 def _temporary_config(overrides=None):
     """Temporarily applies module-level example configuration overrides."""
     if not overrides:
+        _ensure_selected_case_defaults()
         yield
         return
     normalized = {_normalize_override_key(key): value for key, value in dict(overrides).items()}
-    old_values = {key: globals()[key] for key in normalized}
+    old_values = {
+        key: _copy_case_value(globals()[key])
+        for key in dict.fromkeys((*_CASE_CONFIG_KEYS, *normalized.keys()))
+        if key in globals()
+    }
     try:
+        if "CASE_NAME" in normalized:
+            select_case(normalized["CASE_NAME"])
         globals().update(normalized)
+        _refresh_derived_config()
         yield
     finally:
         globals().update(old_values)
+        _refresh_derived_config()
+        globals()["_APPLIED_CASE_NAME"] = CASE_NAME
+
+
+select_case(CASE_NAME)
 
 
 class ThreePhaseStepProfile:
-    """Piecewise-constant initial profile for ``BCC_A2 | LIQUID | BCC_A2``."""
+    """Piecewise-constant initial profile for the selected three-phase order."""
 
     def __init__(self, interface_positions, independent_values):
         self.interface_positions = np.asarray(interface_positions, dtype=np.float64).reshape(2)
@@ -202,6 +321,118 @@ class ThreePhaseStepProfile:
         return out
 
 
+class FixedPhaseDiffusivityThermodynamics:
+    """
+    Thermodynamics wrapper that supplies one fixed phase diffusivity matrix.
+
+    This is used for the Fe-Cr-Ni LIQUID phase because the checked-in Lee TDB
+    has BCC/FCC mobility terms but no LIQUID mobility terms. Equilibrium and
+    all non-fixed diffusivity queries are delegated to the wrapped kawin
+    thermodynamics object.
+    """
+
+    def __init__(self, thermodynamics, fixed_phase, diffusivity_matrix):
+        self.thermodynamics = thermodynamics
+        self.fixed_phase = str(fixed_phase)
+        self.diffusivity_matrix = _validate_liquid_diffusivity_matrix(diffusivity_matrix)
+        self.elements = list(getattr(thermodynamics, "elements", ELEMENTS))
+        self.phases = list(getattr(thermodynamics, "phases", ()))
+
+    def __enter__(self):
+        """Enters the wrapped context manager when it has one, otherwise no-ops."""
+        enter = getattr(self.thermodynamics, "__enter__", None)
+        if enter is not None:
+            enter()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        """Exits the wrapped context manager when it has one."""
+        exit_ = getattr(self.thermodynamics, "__exit__", None)
+        if exit_ is not None:
+            return exit_(exc_type, exc, traceback)
+        return False
+
+    def clearCache(self):
+        """Clears the wrapped thermodynamics cache when available."""
+        clear_cache = getattr(self.thermodynamics, "clearCache", None)
+        if clear_cache is not None:
+            clear_cache()
+
+    def getInterfacialComposition(self, *args, **kwargs):
+        """Delegates tie-line equilibrium queries to the wrapped thermodynamics object."""
+        return self.thermodynamics.getInterfacialComposition(*args, **kwargs)
+
+    def getInterdiffusivity(self, x, T=None, phase=None, query_context=None, **kwargs):
+        """Returns the fixed matrix for ``fixed_phase`` and delegates all other phases."""
+        if str(phase) == self.fixed_phase:
+            values = np.asarray(x, dtype=np.float64)
+            if values.ndim == 2:
+                return np.broadcast_to(self.diffusivity_matrix, (values.shape[0], 2, 2)).copy()
+            return self.diffusivity_matrix.copy()
+        try:
+            return self.thermodynamics.getInterdiffusivity(x, T, phase=phase, query_context=query_context, **kwargs)
+        except TypeError:
+            return self.thermodynamics.getInterdiffusivity(x, T, phase=phase, **kwargs)
+
+
+class ThreePhaseDiffusivityProvider:
+    """
+    Routes model bulk-diffusivity queries to phase-specific providers.
+
+    The three-phase solver asks one object for all phases. This adapter lets the
+    Fe-Cr-Ni case use the FCC/liquid surrogate for FCC, the liquid/BCC surrogate
+    for BCC, and a fixed matrix for LIQUID.
+    """
+
+    def __init__(self, phase_sources):
+        self.phase_sources = {str(phase): source for phase, source in dict(phase_sources).items()}
+
+    def clearCache(self):
+        """Clears each unique source cache when available."""
+        seen = set()
+        for source in self.phase_sources.values():
+            if id(source) in seen:
+                continue
+            seen.add(id(source))
+            clear_cache = getattr(source, "clearCache", None)
+            if clear_cache is not None:
+                clear_cache()
+
+    def getInterdiffusivity(self, x, T=None, phase=None, query_context=None, **kwargs):
+        """Delegates a diffusivity query to the provider registered for ``phase``."""
+        phase = str(phase)
+        if phase not in self.phase_sources:
+            raise ValueError(f"No diffusivity provider is registered for phase '{phase}'.")
+        source = self.phase_sources[phase]
+        try:
+            return source.getInterdiffusivity(x, T, phase=phase, query_context=query_context, **kwargs)
+        except TypeError:
+            return source.getInterdiffusivity(x, T, phase=phase, **kwargs)
+
+
+def _interface_phase_pairs():
+    """Returns the ordered A|B and B|C phase pairs for the selected case."""
+    return (
+        (PHASES_FOR_MODEL[0], PHASES_FOR_MODEL[1]),
+        (PHASES_FOR_MODEL[1], PHASES_FOR_MODEL[2]),
+    )
+
+
+def _validate_liquid_diffusivity_matrix(matrix):
+    """Validates the explicit fixed LIQUID diffusivity matrix for Fe-Cr-Ni."""
+    if matrix is None:
+        raise ValueError(
+            "The Fe-Cr-Ni pycalphad case requires FECRNI_LIQUID_DIFFUSIVITY_MATRIX because "
+            "FeCrNi_Lee1993_L_style_ternary_checked_withMobility.tdb does not define LIQUID "
+            "mobility terms. Set it to a finite 2x2 NumPy array, for example "
+            "np.array([[D_CrCr, D_CrNi], [D_NiCr, D_NiNi]], dtype=np.float64)."
+        )
+    values = np.asarray(matrix, dtype=np.float64)
+    if values.shape != (2, 2) or not np.all(np.isfinite(values)):
+        raise ValueError("FECRNI_LIQUID_DIFFUSIVITY_MATRIX must be a finite 2x2 matrix.")
+    return values.copy()
+
+
 def _make_tc_config(phases):
     """Returns a TC-Python config for one ordered two-phase interface."""
     return ThermoCalcConfig(
@@ -209,7 +440,7 @@ def _make_tc_config(phases):
         kinetic_database="MOBHEA4",
         elements=ELEMENTS,
         phases=tuple(phases),
-        reference_element="NB",
+        reference_element=REFERENCE_ELEMENT,
         global_minimization_max_grid_points=GLOBAL_MINIMIZATION_MAX_GRID_POINTS,
         cache_dir=OUTPUTS / "tc_cache",
     )
@@ -217,13 +448,13 @@ def _make_tc_config(phases):
 
 def _make_default_bulk_points():
     """
-    Returns simplex-valid [NI, TI] points for nearest-neighbor bulk diffusivity.
+    Returns simplex-valid independent-component points for bulk diffusivity.
 
     The list includes the three nominal phase compositions and small local
     perturbations clipped to the ternary simplex so the surrogate can answer
     bulk queries without sampling an invalid rectangular composition domain.
     """
-    centers = np.asarray([LEFT_BCC_FULL[1:], LIQUID_FULL[1:], RIGHT_BCC_FULL[1:]], dtype=np.float64)
+    centers = np.asarray(INITIAL_PHASE_COMPOSITIONS, dtype=np.float64)
     offsets = np.asarray(
         [
             [0.0, 0.0],
@@ -245,13 +476,47 @@ def _make_default_bulk_points():
 
 def _make_default_bulk_grids():
     """
-    Returns [NI, TI] axes whose simplex-valid subset covers the case path.
+    Returns independent-composition axes whose simplex-valid subset covers the case path.
 
     The axes intentionally include nominal phase compositions and probe
     endpoints. ``simplex_linear`` discards invalid axis combinations where
     Ni+Ti exceeds one; ``continuous_grid`` requires the whole rectangle to be
     valid, so users may need narrower custom axes for that mode.
     """
+    if CASE_NAME == CASE_FE_CR_NI_PYCALPHAD:
+        cr_axis = np.unique(
+            np.asarray(
+                [
+                    0.30,
+                    0.36,
+                    0.378,
+                    0.404,
+                    0.43,
+                    0.448,
+                    0.484,
+                    0.52,
+                ],
+                dtype=np.float64,
+            )
+        )
+        ni_axis = np.unique(
+            np.asarray(
+                [
+                    0.14,
+                    0.20,
+                    0.232,
+                    0.30,
+                    0.324,
+                    0.34,
+                    0.358,
+                    0.364,
+                    0.37,
+                ],
+                dtype=np.float64,
+            )
+        )
+        return cr_axis, ni_axis
+
     ni_axis = np.unique(
         np.asarray(
             [
@@ -312,15 +577,33 @@ def _surrogate_diffusivity_sampling_kwargs():
 
 def build_thermodynamics():
     """
-    Builds TC-Python thermodynamics facades for the two adjacent interfaces.
+    Builds thermodynamics facades for the two adjacent selected interfaces.
 
-    Separate facades are used because the TC-Python adapter treats the first
-    configured phase as the matrix-side endpoint returned by
-    ``getInterfacialComposition``.
+    TC-Python and kawin/pycalphad both treat the first configured phase as the
+    matrix-side endpoint returned by ``getInterfacialComposition``. The Fe-Cr-Ni
+    pycalphad case wraps LIQUID diffusivity with an explicit fixed matrix.
     """
-    therm_ab = TCPythonThermodynamics(_make_tc_config((PHASE_BCC, PHASE_LIQUID)))
-    therm_bc = TCPythonThermodynamics(_make_tc_config((PHASE_LIQUID, PHASE_BCC)))
-    return therm_ab, therm_bc
+    pair_ab, pair_bc = _interface_phase_pairs()
+    if CASE_NAME == CASE_NI_TI_NB_TC:
+        therm_ab = TCPythonThermodynamics(_make_tc_config(pair_ab))
+        therm_bc = TCPythonThermodynamics(_make_tc_config(pair_bc))
+        return therm_ab, therm_bc
+    if CASE_NAME == CASE_FE_CR_NI_PYCALPHAD:
+        liquid_matrix = _validate_liquid_diffusivity_matrix(FECRNI_LIQUID_DIFFUSIVITY_MATRIX)
+        if TDB_PATH is None or not Path(TDB_PATH).exists():
+            raise FileNotFoundError(f"Could not find Fe-Cr-Ni TDB at {TDB_PATH}.")
+        therm_ab = FixedPhaseDiffusivityThermodynamics(
+            MulticomponentThermodynamics(str(TDB_PATH), list(ELEMENTS), list(pair_ab)),
+            PHASE_LIQUID,
+            liquid_matrix,
+        )
+        therm_bc = FixedPhaseDiffusivityThermodynamics(
+            MulticomponentThermodynamics(str(TDB_PATH), list(ELEMENTS), list(pair_bc)),
+            PHASE_LIQUID,
+            liquid_matrix,
+        )
+        return therm_ab, therm_bc
+    raise ValueError(f"Unknown three-phase example CASE_NAME '{CASE_NAME}'.")
 
 
 def _validate_tieline_probe_path(thermodynamics, label, probe_start, probe_end, tieline_phases):
@@ -337,22 +620,34 @@ def _validate_tieline_probe_path(thermodynamics, label, probe_start, probe_end, 
     bad_samples = []
     for eta in np.asarray(ETA_SAMPLES, dtype=np.float64):
         point = (1.0 - eta) * np.asarray(probe_start, dtype=np.float64) + eta * np.asarray(probe_end, dtype=np.float64)
-        equilibrium = thermodynamics.getEquilibriumData(point, TEMPERATURE, removeCache=False)
-        stable_phases = tuple(str(phase).upper() for phase in equilibrium.get("stable_phases", ()))
-        phase_amounts = {
-            str(phase).upper(): float(amount)
-            for phase, amount in equilibrium.get("phase_amounts", {}).items()
-        }
-        missing = [
-            phase
-            for phase in expected
-            if phase not in stable_phases or phase_amounts.get(phase, 0.0) <= 1.0e-12
-        ]
-        extra = [
-            phase
-            for phase in stable_phases
-            if phase not in expected and phase_amounts.get(phase, 1.0) > 1.0e-12
-        ]
+        if hasattr(thermodynamics, "getEquilibriumData"):
+            equilibrium = thermodynamics.getEquilibriumData(point, TEMPERATURE, removeCache=False)
+            stable_phases = tuple(str(phase).upper() for phase in equilibrium.get("stable_phases", ()))
+            phase_amounts = {
+                str(phase).upper(): float(amount)
+                for phase, amount in equilibrium.get("phase_amounts", {}).items()
+            }
+            missing = [
+                phase
+                for phase in expected
+                if phase not in stable_phases or phase_amounts.get(phase, 0.0) <= 1.0e-12
+            ]
+            extra = [
+                phase
+                for phase in stable_phases
+                if phase not in expected and phase_amounts.get(phase, 1.0) > 1.0e-12
+            ]
+        else:
+            _, _, metadata = thermodynamics.getInterfacialComposition(
+                point,
+                TEMPERATURE,
+                precPhase=tieline_phases[1],
+                returnMeta=True,
+            )
+            stable_phases = tuple(str(phase).upper() for phase in metadata.get("endpoint_phases", ()))
+            phase_amounts = {}
+            missing = [phase for phase in expected if phase not in stable_phases]
+            extra = [phase for phase in stable_phases if phase not in expected]
         if missing or extra:
             bad_samples.append((float(eta), point, stable_phases, phase_amounts, tuple(missing), tuple(extra)))
 
@@ -360,8 +655,9 @@ def _validate_tieline_probe_path(thermodynamics, label, probe_start, probe_end, 
         details = []
         for eta, point, stable_phases, phase_amounts, missing, extra in bad_samples[:5]:
             details.append(
-                "eta={:.3g}, x[NI,TI]={}, stable={}, amounts={}, missing={}, extra={}".format(
+                "eta={:.3g}, x{}={}, stable={}, amounts={}, missing={}, extra={}".format(
                     eta,
+                    list(INDEPENDENT_ELEMENTS),
                     np.array2string(point, precision=6, separator=", "),
                     stable_phases,
                     phase_amounts,
@@ -383,62 +679,89 @@ def _validate_tieline_probe_path(thermodynamics, label, probe_start, probe_end, 
 
 
 def build_interface_surrogates(therm_ab, therm_bc):
-    """Samples BCC/liquid and liquid/BCC tie-line families from Thermo-Calc."""
+    """Samples the selected A|B and B|C tie-line families."""
     diffusivity_sampling = _surrogate_diffusivity_sampling_kwargs()
+    pair_ab, pair_bc = _interface_phase_pairs()
     with therm_ab:
         _validate_tieline_probe_path(
             therm_ab,
-            "BCC/liquid",
+            f"{pair_ab[0]}/{pair_ab[1]}",
             AB_PROBE_START,
             AB_PROBE_END,
-            (PHASE_BCC, PHASE_LIQUID),
+            pair_ab,
         )
     with therm_bc:
         _validate_tieline_probe_path(
             therm_bc,
-            "Liquid/BCC",
+            f"{pair_bc[0]}/{pair_bc[1]}",
             BC_PROBE_START,
             BC_PROBE_END,
-            (PHASE_LIQUID, PHASE_BCC),
+            pair_bc,
         )
     with therm_ab:
+        kwargs_ab = {}
+        if CASE_NAME == CASE_FE_CR_NI_PYCALPHAD:
+            kwargs_ab["validation_database"] = TDB_PATH
         surrogate_ab = TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
             thermodynamics=therm_ab,
             elements=ELEMENTS,
-            phases=(PHASE_BCC, PHASE_LIQUID),
-            tieline_phases=(PHASE_BCC, PHASE_LIQUID),
+            phases=pair_ab,
+            tieline_phases=pair_ab,
             temperature=TEMPERATURE,
             probe_start=AB_PROBE_START,
             probe_end=AB_PROBE_END,
             eta_samples=ETA_SAMPLES,
-            precipitate_phase=PHASE_LIQUID,
+            precipitate_phase=pair_ab[1],
             **diffusivity_sampling,
+            **kwargs_ab,
         )
     with therm_bc:
+        kwargs_bc = {}
+        if CASE_NAME == CASE_FE_CR_NI_PYCALPHAD:
+            kwargs_bc["validation_database"] = TDB_PATH
         surrogate_bc = TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
             thermodynamics=therm_bc,
             elements=ELEMENTS,
-            phases=(PHASE_LIQUID, PHASE_BCC),
-            tieline_phases=(PHASE_LIQUID, PHASE_BCC),
+            phases=pair_bc,
+            tieline_phases=pair_bc,
             temperature=TEMPERATURE,
             probe_start=BC_PROBE_START,
             probe_end=BC_PROBE_END,
             eta_samples=ETA_SAMPLES,
-            precipitate_phase=PHASE_BCC,
+            precipitate_phase=pair_bc[1],
             **diffusivity_sampling,
+            **kwargs_bc,
         )
     return surrogate_ab, surrogate_bc
 
 
+def build_bulk_diffusivity_provider(surrogate_ab, surrogate_bc):
+    """Returns the model thermodynamics/diffusivity provider for the selected case."""
+    if CASE_NAME == CASE_FE_CR_NI_PYCALPHAD:
+        liquid_source = FixedPhaseDiffusivityThermodynamics(
+            surrogate_ab,
+            PHASE_LIQUID,
+            _validate_liquid_diffusivity_matrix(FECRNI_LIQUID_DIFFUSIVITY_MATRIX),
+        )
+        return ThreePhaseDiffusivityProvider(
+            {
+                PHASES_FOR_MODEL[0]: surrogate_ab,
+                PHASES_FOR_MODEL[1]: liquid_source,
+                PHASES_FOR_MODEL[2]: surrogate_bc,
+            }
+        )
+    return surrogate_ab
+
+
 def make_mesh():
-    """Builds the initial three-phase [NI, TI] profile on a Cartesian FD mesh."""
+    """Builds the initial three-phase independent-composition profile."""
     mesh = CartesianFD1D(INDEPENDENT_ELEMENTS, [0.0, LENGTH], NODES)
     profile = ProfileBuilder(
         [
             (
                 ThreePhaseStepProfile(
                     INTERFACE_POSITIONS,
-                    (LEFT_BCC_FULL[1:], LIQUID_FULL[1:], RIGHT_BCC_FULL[1:]),
+                    INITIAL_PHASE_COMPOSITIONS,
                 ),
                 INDEPENDENT_ELEMENTS,
             )
@@ -475,14 +798,14 @@ def get_time_step_options():
     raise ValueError("DT_MODE must be either 'fixed' or 'semi_log'.")
 
 
-def build_model(surrogate_ab, surrogate_bc):
+def build_model(surrogate_ab, surrogate_bc, bulk_thermodynamics=None):
     """Constructs the three-phase Illingworth model without starting the solve."""
     time_step_options = get_time_step_options()
     return MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(
         mesh=make_mesh(),
         elements=ELEMENTS,
         phases=PHASES_FOR_MODEL,
-        thermodynamics=surrogate_ab,
+        thermodynamics=surrogate_ab if bulk_thermodynamics is None else bulk_thermodynamics,
         temperature=TEMPERATURE,
         interfacePositions=INTERFACE_POSITIONS,
         interface_equilibria=(surrogate_ab, surrogate_bc),
@@ -508,16 +831,16 @@ def print_case_summary(model):
     print("Interface positions (um):", positions * 1.0e6)
     print("Phase widths A|B|C (um):", widths * 1.0e6)
     if model.currentTime > 0.0:
-        print("Inventory drift [NI, TI]:", model.checkConservation(TOLERANCE))
+        print(f"Inventory drift {list(INDEPENDENT_ELEMENTS)}:", model.checkConservation(TOLERANCE))
 
 
 def plot_phase_widths(model):
-    """Plots BCC/liquid/BCC widths over time."""
+    """Plots selected phase widths over time."""
     times = model.interfaceData._time[: model.interfaceData.N + 1]
     positions = model.interfaceData._y[: model.interfaceData.N + 1]
     widths = np.column_stack((positions[:, 0], positions[:, 1] - positions[:, 0], LENGTH - positions[:, 1]))
     fig, ax = plt.subplots(figsize=(6, 4))
-    for i, label in enumerate(("left BCC_A2", "LIQUID", "right BCC_A2")):
+    for i, label in enumerate(PHASES_FOR_MODEL):
         ax.plot(times, widths[:, i] * 1.0e6, label=label)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Width (um)")
@@ -527,7 +850,7 @@ def plot_phase_widths(model):
 
 
 def plot_independent_profiles(model, time=None):
-    """Plots independent [NI, TI] profiles on the physical mesh."""
+    """Plots selected independent-component profiles on the physical mesh."""
     z_um = model._z * 1.0e6
     y = model.data.y(time)
     fig, ax = plt.subplots(figsize=(6, 4))
@@ -544,16 +867,22 @@ def plot_independent_profiles(model, time=None):
 
 def run_case(overrides=None, *, make_plots=True):
     """
-    Builds the TC-Python surrogates, constructs the model, and optionally solves.
+    Builds selected interface surrogates, constructs the model, and optionally solves.
 
     ``overrides`` can temporarily replace module-level values, for example
-    ``run_case({"dt_mode": "semi_log", "solve_time": 0.1, "semi_log_dt": 0.05})``.
+    ``run_case({"case_name": "fe_cr_ni_pycalphad", "run_solve": False})``.
     """
     with _temporary_config(overrides):
         therm_ab, therm_bc = build_thermodynamics()
         if RUN_PREFLIGHT:
-            print("BCC/liquid preflight:", therm_ab.preflight(x=AB_PROBE_START, T=TEMPERATURE))
-            print("Liquid/BCC preflight:", therm_bc.preflight(x=BC_PROBE_START, T=TEMPERATURE))
+            pair_ab, pair_bc = _interface_phase_pairs()
+            if hasattr(therm_ab, "preflight"):
+                print(f"{pair_ab[0]}/{pair_ab[1]} preflight:", therm_ab.preflight(x=AB_PROBE_START, T=TEMPERATURE))
+                print(f"{pair_bc[0]}/{pair_bc[1]} preflight:", therm_bc.preflight(x=BC_PROBE_START, T=TEMPERATURE))
+            else:
+                _validate_tieline_probe_path(therm_ab, f"{pair_ab[0]}/{pair_ab[1]}", AB_PROBE_START, AB_PROBE_END, pair_ab)
+                _validate_tieline_probe_path(therm_bc, f"{pair_bc[0]}/{pair_bc[1]}", BC_PROBE_START, BC_PROBE_END, pair_bc)
+                print(f"Validated {pair_ab[0]}/{pair_ab[1]} and {pair_bc[0]}/{pair_bc[1]} tie-line probe paths.")
 
         start = time.perf_counter()
         surrogate_ab, surrogate_bc = build_interface_surrogates(therm_ab, therm_bc)
@@ -571,7 +900,8 @@ def run_case(overrides=None, *, make_plots=True):
             else:
                 n_steps = int(np.ceil((np.log(SOLVE_TIME) - np.log(SEMI_LOG_T0)) / SEMI_LOG_DT)) + 1
         print(f"Estimated number of time-steps: {n_steps}")
-        model = build_model(surrogate_ab, surrogate_bc)
+        bulk_thermodynamics = build_bulk_diffusivity_provider(surrogate_ab, surrogate_bc)
+        model = build_model(surrogate_ab, surrogate_bc, bulk_thermodynamics=bulk_thermodynamics)
         if RUN_SOLVE:
             model.solve(
                 SOLVE_TIME,
@@ -591,6 +921,7 @@ def run_case(overrides=None, *, make_plots=True):
             "model": model,
             "surrogate_ab": surrogate_ab,
             "surrogate_bc": surrogate_bc,
+            "bulk_thermodynamics": bulk_thermodynamics,
             "therm_ab": therm_ab,
             "therm_bc": therm_bc,
             "figures": figures,
