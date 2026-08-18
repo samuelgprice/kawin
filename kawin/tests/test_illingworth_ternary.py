@@ -426,6 +426,37 @@ class _SeedScanThermodynamics:
         return _test_continuous_matrix(composition, phase)
 
 
+class _RotatingSeedScanThermodynamics:
+    """Synthetic seed-scan source whose tie-line normal rotates with probe y."""
+
+    def __init__(self, *, seed_y=0.20, half_tieline_length=0.04, rotation_rate=10.0):
+        self.elements = ["Z", "X", "Y"]
+        self.phases = ["ALPHA", "BETA"]
+        self.seed_y = float(seed_y)
+        self.half_tieline_length = float(half_tieline_length)
+        self.rotation_rate = float(rotation_rate)
+
+    def clearCache(self):
+        pass
+
+    def getInterfacialComposition(self, x, T, gExtra=0, precPhase=None, returnMeta=False):
+        x = np.asarray(x, dtype=np.float64).reshape(2)
+        angle = self.rotation_rate * (float(x[1]) - self.seed_y)
+        direction = np.asarray([np.cos(angle), np.sin(angle)], dtype=np.float64)
+        left = x - self.half_tieline_length * direction
+        right = x + self.half_tieline_length * direction
+        endpoints = [
+            {"phase": "ALPHA", "composition": left},
+            {"phase": "BETA", "composition": right},
+        ]
+        if not returnMeta:
+            return left, right
+        return left, right, {"endpoint_phases": tuple(e["phase"] for e in endpoints), "endpoints": tuple(endpoints)}
+
+    def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+        return _test_continuous_matrix(composition, phase)
+
+
 class _QuasiBinaryCuZnDummyEquilibrium:
     """Fixed Cu-Zn endpoints with eta-pinned dummy interface compositions."""
 
@@ -3118,11 +3149,14 @@ def test_ternary_surrogate_seed_point_builds_asymmetric_eta_samples():
     assert np.all(np.diff(surrogate.eta_samples) > 0.0)
     assert not np.isclose(surrogate.eta_samples[2], 0.5)
     assert np.allclose(surrogate.metadata["probe_scan_direction"], [0.0, 1.0])
+    assert surrogate.metadata["probe_scan_direction_mode"] == "local_tieline_normal"
 
     generated = np.asarray(surrogate.metadata["generated_probe_points"], dtype=np.float64)
     assert generated.shape == (5, 2)
     assert np.min(generated[:, 1]) >= 0.20 - 0.03 + 0.005 - 1.0e-6
     assert np.max(generated[:, 1]) <= 0.20 + 0.07 - 0.005 + 1.0e-6
+    generated_directions = np.asarray(surrogate.metadata["generated_scan_directions"], dtype=np.float64)
+    assert generated_directions.shape == (5, 2)
 
 
 def test_ternary_surrogate_seed_point_rejects_invalid_seed_metadata():
@@ -3174,6 +3208,41 @@ def test_seed_scan_resample_rejects_generated_samples_outside_expected_region():
             0.0,
             1,
         )
+
+
+def test_seed_scan_resample_updates_direction_from_last_sampled_tieline():
+    thermodynamics = _RotatingSeedScanThermodynamics()
+    seed_sample = surrogate_module._sample_expected_tieline(
+        thermodynamics,
+        [0.30, 0.20],
+        1000.0,
+        "BETA",
+        ("ALPHA", "BETA"),
+        ["Z", "X", "Y"],
+        1.0e-10,
+    )
+    initial_direction = surrogate_module._seed_tieline_scan_direction(seed_sample["endpoints"])
+
+    samples = surrogate_module._resample_seed_scan_side(
+        thermodynamics,
+        seed_sample,
+        1.0,
+        initial_direction,
+        1000.0,
+        "BETA",
+        ("ALPHA", "BETA"),
+        ["Z", "X", "Y"],
+        1.0e-10,
+        0.08,
+        0.0,
+        4,
+    )
+
+    probes = np.asarray([sample["probe"] for _, sample in samples], dtype=np.float64)
+    scan_directions = np.asarray([sample["scan_direction"] for _, sample in samples], dtype=np.float64)
+    assert np.all(np.einsum("ij,ij->i", scan_directions[:-1], scan_directions[1:]) > 0.0)
+    assert not np.allclose(scan_directions[0], scan_directions[-1])
+    assert probes[1, 0] < probes[0, 0] - 1.0e-4
 
 
 @pytest.mark.parametrize("diffusivity_interpolation", ["nearest", "continuous_grid", "simplex_linear"])

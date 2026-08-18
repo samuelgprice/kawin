@@ -502,22 +502,31 @@ def _sample_expected_tieline(
     }
 
 
-def _seed_tieline_scan_direction(seed_endpoints):
+def _seed_tieline_scan_direction(seed_endpoints, reference_direction=None):
     """
-    Returns a deterministic unit normal to the seed tie-line in composition space.
+    Returns a unit normal to a tie-line in composition space.
 
-    Seed-mode sampling assumes the local two-phase region can be traversed by a
-    fixed normal to the seed tie-line while each next probe is recentered on the
-    previous tie-line midpoint.
+    Without a reference direction, the normal orientation is chosen
+    deterministically from its dominant component. With a reference direction,
+    the sign is chosen to keep the local normal continuous with the previous
+    scan step.
     """
     direction = np.asarray(seed_endpoints[1], dtype=np.float64) - np.asarray(seed_endpoints[0], dtype=np.float64)
     norm = float(np.linalg.norm(direction))
     if not np.isfinite(norm) or norm <= 0.0:
         raise ValueError("Seed tie-line endpoints must be distinct to define a scan direction.")
     normal = np.asarray([-direction[1], direction[0]], dtype=np.float64) / norm
-    dominant = 0 if abs(normal[0]) >= abs(normal[1]) else 1
-    if normal[dominant] < 0.0:
-        normal = -normal
+    if reference_direction is None:
+        dominant = 0 if abs(normal[0]) >= abs(normal[1]) else 1
+        if normal[dominant] < 0.0:
+            normal = -normal
+    else:
+        reference_direction = np.asarray(reference_direction, dtype=np.float64).reshape(-1)
+        reference_norm = float(np.linalg.norm(reference_direction))
+        if reference_direction.shape != (2,) or not np.isfinite(reference_norm) or reference_norm <= 0.0:
+            raise ValueError("Reference scan direction must be a finite nonzero two-component vector.")
+        if float(np.dot(normal, reference_direction)) < 0.0:
+            normal = -normal
     return normal
 
 
@@ -558,14 +567,16 @@ def _find_seed_scan_extent(
     Marches a seed scan side until the expected two-phase metadata fails.
 
     Distances are accumulated from the requested normal offsets. Each accepted
-    step is launched from the previous tie-line midpoint, which lets the probe
-    path follow gently curved two-phase regions without rotating the seed normal.
+    step is launched from the previous tie-line midpoint along a local normal to
+    that previous tie-line, which lets the probe path follow curved two-phase
+    regions whose tie-lines rotate across composition space.
     """
     sign = float(sign)
     last_sample = seed_sample
     accepted_distance = 0.0
     last_error = None
     for _ in range(max_search_steps):
+        scan_direction = _seed_tieline_scan_direction(last_sample["endpoints"], reference_direction=scan_direction)
         probe = last_sample["midpoint"] + sign * float(search_step) * scan_direction
         try:
             candidate = _sample_expected_tieline(
@@ -604,7 +615,6 @@ def _find_seed_scan_extent(
         else:
             accepted_distance += float(search_step)
             last_sample = candidate
-
     message = (
         "Seed-point tie-line scan did not leave the expected two-phase region "
         f"within probe_max_search_steps={max_search_steps} on sign {int(sign)}."
@@ -632,8 +642,10 @@ def _resample_seed_scan_side(
     Replays one seed scan side with an exact number of margin-limited samples.
 
     The final target distance is kept ``probe_boundary_margin`` inside the
-    detected two-phase boundary. Failure at any generated sample is reported as
-    a topology/sampling problem rather than silently changing the eta grid.
+    detected two-phase boundary. Generated probes advance from the last accepted
+    tie-line midpoint along that tie-line's local normal. Failure at any
+    generated sample is reported as a topology/sampling problem rather than
+    silently changing the eta grid.
     """
     usable_extent = float(extent) - float(boundary_margin)
     if not np.isfinite(usable_extent) or usable_extent <= 0.0:
@@ -646,6 +658,7 @@ def _resample_seed_scan_side(
     previous_distance = 0.0
     for target in targets:
         step = float(target) - previous_distance
+        scan_direction = _seed_tieline_scan_direction(last_sample["endpoints"], reference_direction=scan_direction)
         probe = last_sample["midpoint"] + float(sign) * step * scan_direction
         try:
             sample = _sample_expected_tieline(
@@ -662,6 +675,8 @@ def _resample_seed_scan_side(
                 "Seed-point generated probe left the expected two-phase region "
                 f"at signed scan distance {float(sign) * float(target):.8g}."
             ) from exc
+        sample = dict(sample)
+        sample["scan_direction"] = scan_direction
         samples.append((float(target), sample))
         last_sample = sample
         previous_distance = float(target)
@@ -1194,8 +1209,9 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         exactly the two explicitly requested ``tieline_phases``. The default
         line mode samples between ``probe_start`` and ``probe_end`` at explicit
         ``eta_samples``. Seed-point mode instead takes one ``probe_point`` in
-        the two-phase region, scans both directions normal to the seed tie-line,
-        and assigns eta from cumulative scan distance. Continuous bulk
+        the two-phase region, scans both directions using normals updated from
+        the last sampled tie-line, and assigns eta from cumulative scan
+        distance. Continuous bulk
         diffusivity interpolation requires explicit ``diffusivity_bulk_grids``
         so the rectangular sampling domain and array ordering are reproducible.
         Simplex-linear interpolation accepts scattered ``diffusivity_bulk_points``
@@ -1350,11 +1366,16 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 "source": "from_database_seed_point",
                 "probe_point": np.asarray(seed_sample["probe"], dtype=np.float64).tolist(),
                 "probe_scan_direction": scan_direction.tolist(),
+                "probe_scan_direction_mode": "local_tieline_normal",
                 "probe_samples_per_side": int(probe_samples_per_side),
                 "probe_boundary_margin": float(probe_boundary_margin),
                 "probe_boundary_search_step": float(probe_boundary_search_step),
                 "generated_probe_points": [
                     np.asarray(sample["probe"], dtype=np.float64).tolist() for _, sample in signed_samples
+                ],
+                "generated_scan_directions": [
+                    np.asarray(sample.get("scan_direction", scan_direction), dtype=np.float64).tolist()
+                    for _, sample in signed_samples
                 ],
                 "negative_extent": float(negative_extent),
                 "positive_extent": float(positive_extent),
