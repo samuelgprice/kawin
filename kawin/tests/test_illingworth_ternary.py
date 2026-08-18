@@ -2933,6 +2933,126 @@ def _direct_nearest_surrogate(*, scale=1.0, invalid=False):
     )
 
 
+def _shared_phase_matrix(point, *, scale=1.0):
+    point = np.asarray(point, dtype=np.float64)
+    return scale * np.asarray(
+        [
+            [1.0 + point[0], 0.05],
+            [0.02, 2.0 + point[1]],
+        ],
+        dtype=np.float64,
+    ) * 1e-14
+
+
+def _shared_phase_surrogate(tieline_phases, shared_general_points, *, duplicate_scale=1.0):
+    eta = np.asarray([0.0, 1.0], dtype=np.float64)
+    first, second = tieline_phases
+    if first == "BETA":
+        beta_tieline = np.asarray([[0.31, 0.20], [0.41, 0.20]], dtype=np.float64)
+        other_tieline = np.asarray([[0.45, 0.25], [0.50, 0.25]], dtype=np.float64)
+    else:
+        other_tieline = np.asarray([[0.15, 0.15], [0.20, 0.15]], dtype=np.float64)
+        beta_tieline = np.asarray([[0.21, 0.20], [0.31, 0.20]], dtype=np.float64)
+    tielines = {
+        "BETA": beta_tieline,
+        first if first != "BETA" else second: other_tieline,
+    }
+    phases = tuple(tieline_phases)
+    general_points = {
+        "BETA": np.asarray(shared_general_points, dtype=np.float64),
+        first if first != "BETA" else second: np.asarray([[0.18, 0.12], [0.22, 0.12], [0.26, 0.12]], dtype=np.float64),
+    }
+    diffusivities = {}
+    for context, points_by_phase in (
+        ("interface", tielines),
+        ("general", general_points),
+    ):
+        diffusivities[context] = {}
+        for phase, points in points_by_phase.items():
+            scale = duplicate_scale if phase == "BETA" else 1.0
+            diffusivities[context][phase] = np.asarray(
+                [_shared_phase_matrix(point, scale=scale) for point in points],
+                dtype=np.float64,
+            )
+    return TernaryMovingBoundaryThermodynamicsSurrogate(
+        elements=["A", "B", "C"],
+        phases=phases,
+        tieline_phases=phases,
+        temperature=1000.0,
+        eta_samples=eta,
+        tieline_compositions=tielines,
+        diffusivity_compositions={"interface": tielines, "general": general_points},
+        diffusivities=diffusivities,
+    )
+
+
+def test_merge_phase_diffusivity_surrogates_combines_shared_phase_samples():
+    surrogate_ab = _shared_phase_surrogate(
+        ("ALPHA", "BETA"),
+        [[0.20, 0.20], [0.30, 0.20], [0.35, 0.20]],
+    )
+    surrogate_bc = _shared_phase_surrogate(
+        ("BETA", "GAMMA"),
+        [[0.30, 0.20], [0.40, 0.20], [0.45, 0.20]],
+    )
+
+    merged = surrogate_module.merge_phase_diffusivity_surrogates(surrogate_ab, surrogate_bc, "BETA")
+    value = merged.getInterdiffusivity([0.40, 0.20], 1000.0, phase="BETA")
+
+    assert merged.phases == ("BETA",)
+    assert merged.diffusivity_compositions["general"].shape == (5, 2)
+    assert merged.merge_report["contexts"]["general"]["duplicate_count"] == 1
+    assert merged.merge_report["contexts"]["interface"]["duplicate_count"] == 1
+    assert merged.merge_report["disagreement_count"] == 0
+    np.testing.assert_allclose(value, _shared_phase_matrix([0.40, 0.20]))
+
+
+def test_merge_phase_diffusivity_surrogates_reports_duplicate_disagreements():
+    surrogate_ab = _shared_phase_surrogate(
+        ("ALPHA", "BETA"),
+        [[0.20, 0.20], [0.30, 0.20], [0.35, 0.20]],
+    )
+    surrogate_bc = _shared_phase_surrogate(
+        ("BETA", "GAMMA"),
+        [[0.30, 0.20], [0.40, 0.20], [0.45, 0.20]],
+        duplicate_scale=1.1,
+    )
+
+    with pytest.raises(ValueError, match="disagree"):
+        surrogate_module.merge_phase_diffusivity_surrogates(surrogate_ab, surrogate_bc, "BETA")
+
+    merged = surrogate_module.merge_phase_diffusivity_surrogates(
+        surrogate_ab,
+        surrogate_bc,
+        "BETA",
+        raise_on_disagreement=False,
+    )
+
+    assert merged.merge_report["disagreement_count"] == 2
+    assert merged.merge_report["contexts"]["general"]["disagreement_count"] == 1
+    assert merged.merge_report["contexts"]["interface"]["disagreement_count"] == 1
+    assert merged.merge_report["contexts"]["general"]["disagreements"][0]["max_relative_difference"] > 0.0
+
+
+def test_merged_phase_diffusivity_surrogate_rejects_non_diffusivity_use():
+    surrogate_ab = _shared_phase_surrogate(
+        ("ALPHA", "BETA"),
+        [[0.20, 0.20], [0.30, 0.20], [0.35, 0.20]],
+    )
+    surrogate_bc = _shared_phase_surrogate(
+        ("BETA", "GAMMA"),
+        [[0.30, 0.20], [0.40, 0.20], [0.45, 0.20]],
+    )
+    merged = surrogate_module.merge_phase_diffusivity_surrogates(surrogate_ab, surrogate_bc, "BETA")
+
+    with pytest.raises(ValueError, match="only supports phase"):
+        merged.getInterdiffusivity([0.40, 0.20], 1000.0, phase="ALPHA")
+    with pytest.raises(TypeError, match="does not provide"):
+        merged.getInterfacialComposition(0.5)
+    with pytest.raises(TypeError, match="only provides getInterdiffusivity"):
+        merged.getTracerDiffusivity([0.40, 0.20], 1000.0, phase="BETA")
+
+
 class _ContinuousMatrixTruth:
     def __init__(self, scale=1.0):
         self.scale = float(scale)

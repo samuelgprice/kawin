@@ -692,6 +692,394 @@ def _bulk_points_from_bbox(diffusivity_bulk_bbox, diffusivity_bulk_spacing):
     return np.asarray(np.meshgrid(*axes), dtype=np.float64).T.reshape(-1, 2)
 
 
+_MERGED_DIFFUSIVITY_CONTEXTS = ("interface", "general")
+
+
+class MergedPhaseDiffusivitySurrogate:
+    """
+    Diffusivity-only surrogate for one phase merged from multiple sources.
+
+    The wrapper exposes only ``getInterdiffusivity`` for ``phase``. It is meant
+    for three-phase moving-boundary bulk-diffusivity routing where the same
+    physical phase appears in two adjacent interface surrogates.
+    """
+
+    def __init__(
+        self,
+        *,
+        elements,
+        phase,
+        temperature,
+        diffusivity_compositions,
+        diffusivities,
+        diffusivity_interpolation=_DIFFUSIVITY_INTERPOLATION_NEAREST,
+        min_composition=1e-10,
+        metadata=None,
+        merge_report=None,
+    ):
+        self.elements = tuple(str(e) for e in elements)
+        if len(self.elements) != 3:
+            raise ValueError("MergedPhaseDiffusivitySurrogate requires exactly three elements.")
+        self.phase = str(phase)
+        self.phases = (self.phase,)
+        self.tieline_phases = self.phases
+        self.temperature = _finite_float(temperature, "temperature")
+        self.min_composition = _finite_float(min_composition, "min_composition", minimum=0.0)
+        self.diffusivityInterpolation = _coerce_merged_diffusivity_interpolation(diffusivity_interpolation)
+        self.diffusivity_compositions = _coerce_merged_samples(
+            diffusivity_compositions,
+            "diffusivity_compositions",
+            self.min_composition,
+        )
+        self.diffusivities = _coerce_merged_samples(
+            diffusivities,
+            "diffusivities",
+            self.min_composition,
+            matrices=True,
+        )
+        for context in _MERGED_DIFFUSIVITY_CONTEXTS:
+            if self.diffusivities[context].shape[0] != self.diffusivity_compositions[context].shape[0]:
+                raise ValueError(f"diffusivity sample counts differ for context '{context}'.")
+        self.metadata = {} if metadata is None else dict(metadata)
+        self.merge_report = {} if merge_report is None else dict(merge_report)
+        self._bulkDiffusivityInterpolators = (
+            {
+                context: _BulkDiffusivitySimplexLinear2D(
+                    self.diffusivity_compositions[context],
+                    self.diffusivities[context],
+                )
+                for context in _MERGED_DIFFUSIVITY_CONTEXTS
+            }
+            if self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR
+            else {}
+        )
+
+    def clearCache(self):
+        """No-op cache hook for thermodynamics-provider compatibility."""
+        return
+
+    def getInterdiffusivity(self, x, T=None, phase=None, query_context=None, **kwargs):
+        """
+        Return merged 2x2 interdiffusivity matrices for the configured phase.
+
+        ``query_context='interface'`` uses merged interface samples. Any other
+        context uses merged general/bulk samples.
+        """
+        _validate_merged_temperature(T, self.temperature)
+        if phase is not None and str(phase) != self.phase:
+            raise ValueError(f"Merged diffusivity surrogate only supports phase '{self.phase}', got '{phase}'.")
+        values = np.asarray(x, dtype=np.float64)
+        single = values.ndim == 1
+        values = np.atleast_2d(values)
+        if values.shape[1] != 2:
+            raise ValueError("getInterdiffusivity expects independent ternary compositions with shape (n, 2).")
+        context = "interface" if query_context == "interface" else "general"
+        if self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR:
+            out = self._bulkDiffusivityInterpolators[context].evaluate(values)
+        else:
+            samples_x = self.diffusivity_compositions[context]
+            indices = np.argmin(np.sum((values[:, np.newaxis, :] - samples_x[np.newaxis, :, :]) ** 2, axis=2), axis=1)
+            out = self.diffusivities[context][indices]
+        return out[0].copy() if single else out.copy()
+
+    def _unsupported(self, *args, **kwargs):
+        raise TypeError(
+            "MergedPhaseDiffusivitySurrogate does not provide thermodynamics, tie-lines, or tracer diffusivity; "
+            f"it only provides getInterdiffusivity for phase '{self.phase}'."
+        )
+
+    getTracerDiffusivity = _unsupported
+    getInterfacialComposition = _unsupported
+    interface_compositions = _unsupported
+    getTielineOfGlobalComposition = _unsupported
+
+
+def _coerce_merged_diffusivity_interpolation(mode):
+    """Normalizes interpolation mode for scattered merged phase diffusivity."""
+    mode = _DIFFUSIVITY_INTERPOLATION_NEAREST if mode is None else str(mode)
+    if mode == _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID:
+        return _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR
+    if mode not in {_DIFFUSIVITY_INTERPOLATION_NEAREST, _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR}:
+        raise ValueError("merged diffusivity interpolation must be 'nearest' or 'simplex_linear'.")
+    return mode
+
+
+def _finite_float(value, name, minimum=None):
+    """Converts and validates a finite float, optionally with a lower bound."""
+    value = float(value)
+    if not np.isfinite(value) or (minimum is not None and value < minimum):
+        suffix = "finite" if minimum is None else f"finite and at least {minimum}"
+        raise ValueError(f"{name} must be {suffix}.")
+    return value
+
+
+def _coerce_merged_samples(samples, name, min_composition, matrices=False):
+    """Validates merged context samples for one phase's diffusivity-only wrapper."""
+    out = {}
+    expected_tail = (2, 2) if matrices else (2,)
+    for context in _MERGED_DIFFUSIVITY_CONTEXTS:
+        if context not in samples:
+            raise ValueError(f"{name} must include context '{context}'.")
+        values = np.asarray(samples[context], dtype=np.float64)
+        if values.ndim != 1 + len(expected_tail) or values.shape[1:] != expected_tail or values.shape[0] < 1:
+            raise ValueError(f"{name}[{context!r}] must have shape (n_samples, {', '.join(map(str, expected_tail))}).")
+        for i, value in enumerate(values):
+            label = f"{name}[{context!r}][{i}]"
+            _validate_2x2_matrix(value, label) if matrices else _validate_independent_composition(value, min_composition, label)
+        out[context] = values.copy()
+    return out
+
+
+def _validate_merged_temperature(T, expected):
+    """Validates isothermal queries for the merged phase diffusivity wrapper."""
+    if T is None:
+        return
+    values = np.asarray(T, dtype=np.float64)
+    if values.size == 0 or not np.all(np.isfinite(values)):
+        raise ValueError("T must be finite for the isothermal merged diffusivity surrogate.")
+    if not np.allclose(values, expected, rtol=0.0, atol=1e-8):
+        raise ValueError(
+            f"MergedPhaseDiffusivitySurrogate is isothermal at {expected}; "
+            f"received T={values.reshape(-1).tolist()}."
+        )
+
+
+def _phase_diffusivity_samples(source, phase, context):
+    """Extracts one phase/context's composition-matrix samples from a surrogate."""
+    try:
+        compositions = source.diffusivity_compositions[context][phase]
+        diffusivities = source.diffusivities[context][phase]
+    except KeyError as exc:
+        raise ValueError(f"Source surrogate does not contain {context!r} diffusivity samples for phase '{phase}'.") from exc
+    compositions = np.asarray(compositions, dtype=np.float64)
+    diffusivities = np.asarray(diffusivities, dtype=np.float64)
+    if compositions.ndim != 2 or compositions.shape[1] != 2:
+        raise ValueError(f"Source {context!r} compositions for phase '{phase}' must have shape (n_samples, 2).")
+    if diffusivities.shape != (compositions.shape[0], 2, 2):
+        raise ValueError(f"Source {context!r} diffusivities for phase '{phase}' must have shape (n_samples, 2, 2).")
+    return compositions, diffusivities
+
+
+def _matrix_difference(existing, incoming):
+    """Returns max absolute and relative elementwise matrix differences."""
+    scale = np.maximum.reduce([np.abs(existing), np.abs(incoming), np.full_like(existing, 1e-300)])
+    abs_diff = np.abs(existing - incoming)
+    return float(np.max(abs_diff)), float(np.max(abs_diff / scale))
+
+
+def _merge_phase_context_samples(
+    sources,
+    phase,
+    context,
+    *,
+    composition_atol,
+    matrix_rtol,
+    matrix_atol,
+    max_reported_disagreements,
+):
+    """
+    Merges duplicate composition samples for one context and reports mismatches.
+
+    Samples whose independent-component coordinates differ by at most
+    ``composition_atol`` are treated as duplicates. Duplicate matrices are
+    averaged after comparison so small roundoff differences do not bias toward
+    either source.
+    """
+    merged_x = []
+    merged_d = []
+    duplicate_count = 0
+    disagreement_count = 0
+    disagreements = []
+    max_abs_difference = 0.0
+    max_relative_difference = 0.0
+    source_sample_counts = []
+    for source_index, source in enumerate(sources):
+        compositions, diffusivities = _phase_diffusivity_samples(source, phase, context)
+        source_sample_counts.append(int(compositions.shape[0]))
+        for composition, diffusivity in zip(compositions, diffusivities):
+            match_index = None
+            for i, existing in enumerate(merged_x):
+                if np.max(np.abs(existing - composition)) <= composition_atol:
+                    match_index = i
+                    break
+            if match_index is None:
+                merged_x.append(composition.copy())
+                merged_d.append(diffusivity.copy())
+                continue
+            duplicate_count += 1
+            existing_d = merged_d[match_index]
+            abs_difference, relative_difference = _matrix_difference(existing_d, diffusivity)
+            max_abs_difference = max(max_abs_difference, abs_difference)
+            max_relative_difference = max(max_relative_difference, relative_difference)
+            if not np.allclose(existing_d, diffusivity, rtol=matrix_rtol, atol=matrix_atol):
+                disagreement_count += 1
+                if len(disagreements) < max_reported_disagreements:
+                    disagreements.append(
+                        {
+                            "source_index": int(source_index),
+                            "composition": composition.tolist(),
+                            "existing_matrix": existing_d.tolist(),
+                            "incoming_matrix": diffusivity.tolist(),
+                            "max_abs_difference": abs_difference,
+                            "max_relative_difference": relative_difference,
+                        }
+                    )
+            merged_d[match_index] = 0.5 * (existing_d + diffusivity)
+
+    return (
+        np.asarray(merged_x, dtype=np.float64),
+        np.asarray(merged_d, dtype=np.float64),
+        _merge_report_dict(
+            source_sample_counts,
+            len(merged_x),
+            duplicate_count,
+            disagreement_count,
+            max_abs_difference,
+            max_relative_difference,
+            disagreements,
+        ),
+    )
+
+
+def _merge_report_dict(
+    source_sample_counts,
+    merged_sample_count,
+    duplicate_count,
+    disagreement_count,
+    max_abs_difference,
+    max_relative_difference,
+    disagreements,
+):
+    """Builds the per-context merge diagnostics with stable key names."""
+    return {
+        "source_sample_counts": tuple(source_sample_counts),
+        "merged_sample_count": int(merged_sample_count),
+        "duplicate_count": int(duplicate_count),
+        "disagreement_count": int(disagreement_count),
+        "max_abs_difference": float(max_abs_difference),
+        "max_relative_difference": float(max_relative_difference),
+        "disagreements": disagreements,
+    }
+
+
+def merge_phase_diffusivity_surrogates(
+    surrogate_a,
+    surrogate_b,
+    phase,
+    *,
+    diffusivity_interpolation=None,
+    composition_atol=1e-12,
+    matrix_rtol=1e-6,
+    matrix_atol=0.0,
+    raise_on_disagreement=True,
+    max_reported_disagreements=10,
+):
+    """
+    Merge one phase's diffusivity samples from two ternary moving-boundary surrogates.
+
+    Duplicate composition samples are checked with ``np.allclose`` using
+    ``matrix_rtol`` and ``matrix_atol``. Agreeing duplicates are averaged. If
+    duplicates disagree, the returned object's ``merge_report`` records the
+    mismatch details; by default a ``ValueError`` is raised before returning.
+    The merged object is intentionally diffusivity-only and rejects
+    thermodynamic/tie-line calls or diffusivity queries for other phases.
+    """
+    phase = str(phase)
+    for name, value in (
+        ("composition_atol", composition_atol),
+        ("matrix_rtol", matrix_rtol),
+        ("matrix_atol", matrix_atol),
+    ):
+        value = float(value)
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError(f"{name} must be finite and nonnegative.")
+    max_reported_disagreements = int(max_reported_disagreements)
+    if max_reported_disagreements < 0:
+        raise ValueError("max_reported_disagreements must be nonnegative.")
+    sources = (surrogate_a, surrogate_b)
+    elements = tuple(getattr(surrogate_a, "elements", ()))
+    if elements != tuple(getattr(surrogate_b, "elements", ())):
+        raise ValueError("Cannot merge phase diffusivity from surrogates with different elements.")
+    temperature = float(getattr(surrogate_a, "temperature", np.nan))
+    if not np.allclose(temperature, float(getattr(surrogate_b, "temperature", np.nan)), rtol=0.0, atol=1e-8):
+        raise ValueError("Cannot merge phase diffusivity from surrogates with different temperatures.")
+    min_composition = max(
+        float(getattr(surrogate_a, "min_composition", 0.0)),
+        float(getattr(surrogate_b, "min_composition", 0.0)),
+    )
+    if diffusivity_interpolation is None:
+        modes = {getattr(source, "diffusivityInterpolation", _DIFFUSIVITY_INTERPOLATION_NEAREST) for source in sources}
+        diffusivity_interpolation = (
+            _DIFFUSIVITY_INTERPOLATION_NEAREST
+            if modes == {_DIFFUSIVITY_INTERPOLATION_NEAREST}
+            else _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR
+        )
+    diffusivity_interpolation = _coerce_merged_diffusivity_interpolation(diffusivity_interpolation)
+
+    merged_compositions = {}
+    merged_diffusivities = {}
+    contexts = {}
+    for context in ("interface", "general"):
+        x, d, context_report = _merge_phase_context_samples(
+            sources,
+            phase,
+            context,
+            composition_atol=float(composition_atol),
+            matrix_rtol=float(matrix_rtol),
+            matrix_atol=float(matrix_atol),
+            max_reported_disagreements=int(max_reported_disagreements),
+        )
+        merged_compositions[context] = x
+        merged_diffusivities[context] = d
+        contexts[context] = context_report
+
+    merge_report = {
+        "phase": phase,
+        "diffusivity_interpolation": diffusivity_interpolation,
+        "composition_atol": float(composition_atol),
+        "matrix_rtol": float(matrix_rtol),
+        "matrix_atol": float(matrix_atol),
+        "contexts": contexts,
+    }
+    disagreement_count = sum(report["disagreement_count"] for report in contexts.values())
+    merge_report["disagreement_count"] = int(disagreement_count)
+    if raise_on_disagreement and disagreement_count:
+        first_detail = None
+        for context, report in contexts.items():
+            if report["disagreements"]:
+                first = report["disagreements"][0]
+                first_detail = (
+                    f" First disagreement: context={context}, composition={first['composition']}, "
+                    f"max_abs_difference={first['max_abs_difference']:.8g}, "
+                    f"max_relative_difference={first['max_relative_difference']:.8g}."
+                )
+                break
+        raise ValueError(
+            f"Merged diffusivity samples for phase '{phase}' disagree at {disagreement_count} duplicate "
+            "composition point(s)."
+            + ("" if first_detail is None else first_detail)
+            + " Pass raise_on_disagreement=False to return a surrogate with merge_report diagnostics."
+        )
+
+    return MergedPhaseDiffusivitySurrogate(
+        elements=elements,
+        phase=phase,
+        temperature=temperature,
+        diffusivity_compositions=merged_compositions,
+        diffusivities=merged_diffusivities,
+        diffusivity_interpolation=diffusivity_interpolation,
+        min_composition=min_composition,
+        metadata={
+            "source": "merge_phase_diffusivity_surrogates",
+            "source_tieline_phases": (
+                tuple(getattr(surrogate_a, "tieline_phases", ())),
+                tuple(getattr(surrogate_b, "tieline_phases", ())),
+            ),
+        },
+        merge_report=merge_report,
+    )
+
+
 class TernaryMovingBoundaryThermodynamicsSurrogate:
     """
     Isothermal ternary surrogate for moving-boundary tie-lines and diffusivity.

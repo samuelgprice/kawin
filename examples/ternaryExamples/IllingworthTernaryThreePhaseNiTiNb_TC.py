@@ -39,6 +39,7 @@ from examples.ThermoCalc.tc_python_adapter import TCPythonThermodynamics, Thermo
 from kawin.diffusion import (
     MovingBoundaryIllingworthTernaryThreePhaseFD1DModel,
     TernaryMovingBoundaryThermodynamicsSurrogate,
+    merge_phase_diffusivity_surrogates,
 )
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder
 from kawin.solver import explicitEulerIterator
@@ -800,6 +801,21 @@ def build_bulk_diffusivity_provider(surrogate_ab, surrogate_bc):
                 PHASES_FOR_MODEL[2]: surrogate_bc,
             }
         )
+    elif CASE_NAME == CASE_NI_TI_NB_TC:
+        liquid_source = merge_phase_diffusivity_surrogates(
+            surrogate_ab,
+            surrogate_bc,
+            PHASES_FOR_MODEL[1],
+            diffusivity_interpolation=DIFFUSIVITY_INTERPOLATION,
+        )
+        return ThreePhaseDiffusivityProvider(
+                    {
+                        PHASES_FOR_MODEL[0]: surrogate_ab,
+                        PHASES_FOR_MODEL[1]: liquid_source,
+                        PHASES_FOR_MODEL[2]: surrogate_bc,
+                    }
+                )
+
     return surrogate_ab
 
 
