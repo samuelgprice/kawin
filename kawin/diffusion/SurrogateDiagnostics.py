@@ -168,19 +168,30 @@ def _angle_difference(first, second):
     return np.abs((np.asarray(first) - np.asarray(second) + 180.0) % 360.0 - 180.0)
 
 
-def _truth_endpoints(result, phases):
+def _independent_truth_endpoint(value, elements):
+    """Normalize an independent or reference-first full ternary endpoint."""
+    composition = np.asarray(value, dtype=np.float64).reshape(-1)
+    if composition.size == len(elements) == 3:
+        composition = composition[1:]
+    if composition.size != 2 or not np.all(np.isfinite(composition)):
+        raise ValueError(
+            "Ground-truth tie-line endpoints must contain either two independent "
+            "components or three finite full components in surrogate element order."
+        )
+    return composition
+
+
+def _truth_endpoints(result, phases, elements):
     """Validate and phase-order a thermodynamics interface-composition result."""
     if not isinstance(result, tuple) or len(result) not in {2, 3}:
         raise ValueError("getInterfacialComposition must return two endpoints and optional metadata.")
-    raw = tuple(np.asarray(value, dtype=np.float64).reshape(-1) for value in result[:2])
-    if any(value.size != 2 or not np.all(np.isfinite(value)) for value in raw):
-        raise ValueError("Ground-truth tie-line endpoints must be finite length-2 compositions.")
+    raw = tuple(_independent_truth_endpoint(value, elements) for value in result[:2])
     if len(result) == 2:
         return raw
     metadata = result[2]
     endpoints = metadata.get("endpoints", ()) if isinstance(metadata, Mapping) else ()
     by_phase = {
-        str(item.get("phase")): np.asarray(item.get("composition"), dtype=np.float64).reshape(-1)
+        str(item.get("phase")): _independent_truth_endpoint(item.get("composition"), elements)
         for item in endpoints
         if isinstance(item, Mapping) and item.get("phase") is not None
     }
@@ -190,8 +201,6 @@ def _truth_endpoints(result, phases):
         if missing or extra:
             raise ValueError(f"Ground-truth endpoint phases do not match {phases}: missing={missing}, extra={extra}.")
         ordered = tuple(by_phase[phase] for phase in phases)
-        if any(value.size != 2 or not np.all(np.isfinite(value)) for value in ordered):
-            raise ValueError("Ground-truth endpoint metadata contains invalid compositions.")
         return ordered
     endpoint_phases = tuple(str(value) for value in metadata.get("endpoint_phases", ())) if isinstance(metadata, Mapping) else ()
     if endpoint_phases and endpoint_phases != tuple(phases):
@@ -210,9 +219,10 @@ def evaluate_tieline_diagnostics(
     """Evaluate a ternary surrogate tie-line family and optional ground truth.
 
     Ground-truth points are evaluated at the original bulk probe path recorded
-    by line or seed-point surrogate construction.  With ``on_truth_error`` set
-    to ``"record"``, failed samples are retained as NaNs and described in the
-    returned ``failures`` list.
+    by line or seed-point surrogate construction. Ground-truth endpoints may
+    contain either the two independent components or all three components in
+    ``surrogate.elements`` order. With ``on_truth_error`` set to ``"record"``,
+    failed samples are retained as NaNs and described in ``failures``.
     """
     if not isinstance(surrogate, TernaryMovingBoundaryThermodynamicsSurrogate):
         raise TypeError("Tie-line diagnostics require TernaryMovingBoundaryThermodynamicsSurrogate.")
@@ -259,7 +269,7 @@ def evaluate_tieline_diagnostics(
                 precPhase=precipitate_phase,
                 returnMeta=True,
             )
-            ordered = _truth_endpoints(result, phases)
+            ordered = _truth_endpoints(result, phases, surrogate.elements)
             for phase, composition in zip(phases, ordered):
                 truth_endpoints[phase][index] = composition
         except Exception as exc:
@@ -641,6 +651,19 @@ def _composition_fields(compositions):
     }
 
 
+def _ternary_coordinates(compositions):
+    """Map reference-first ternary compositions to the diagnostic corner order."""
+    fields = _composition_fields(compositions)
+    return {"a": fields["x2"], "b": fields["x_ref"], "c": fields["x1"]}
+
+
+def _leave_room_above_ternary(fig, layout_name="ternary", gap=0.07):
+    """Lower a ternary subplot so its top-axis label clears its subplot title."""
+    ternary = getattr(fig.layout, layout_name)
+    lower, upper = ternary.domain.y
+    ternary.domain.y = (lower, upper - gap)
+
+
 def _matrix_hover_fields(phase_report, component=None, source="surrogate"):
     """Flatten matrix diagnostics into point-aligned fields for Plotly hover data."""
     matrices = phase_report["matrices"]
@@ -703,7 +726,14 @@ def plot_tieline_diagnostics(
     phase_region_report=None,
     renderer="browser",
 ):
-    """Create an interactive Plotly figure using the browser renderer by default."""
+    """Create an interactive Plotly tie-line figure.
+
+    The ternary overview places the first independent component at bottom
+    right, the second independent component at top, and the reference
+    component at bottom left. Ground-truth endpoint samples are shown as
+    unconnected markers above the surrogate curves. Plotly's browser renderer
+    is selected by default.
+    """
     go, make_subplots = _require_plotly(renderer)
     if report.get("kind") != "tieline":
         raise ValueError("plot_tieline_diagnostics requires a tie-line diagnostic report.")
@@ -716,6 +746,9 @@ def plot_tieline_diagnostics(
         rows=2,
         cols=2,
         specs=[[{"type": "ternary"}, {"type": "xy"}], [{"type": "xy"}, {"type": "xy", "secondary_y": True}]],
+        column_widths=(0.56, 0.44),
+        row_heights=(0.62, 0.38),
+        horizontal_spacing=0.10,
         subplot_titles=("Full ternary overview", "Zoomed composition view", "Endpoint components", "Tie-line geometry / error"),
     )
     colors = {phase: f"#{color}" for phase, color in zip(phases, ("1f77b4", "d62728"))}
@@ -743,10 +776,10 @@ def plot_tieline_diagnostics(
         partner = endpoints[phases[1 - index]]
         fields = endpoint_fields(phase, "surrogate", values, partner, index)
         custom, template = _hover_payload(fields, selected, len(eta), hover_format)
-        full = 1.0 - np.sum(values, axis=1)
+        ternary_values = _ternary_coordinates(values)
         fig.add_trace(
             go.Scatterternary(
-                a=full, b=values[:, 0], c=values[:, 1], mode="lines",
+                **ternary_values, mode="lines",
                 name=f"{phase} surrogate endpoints", legendgroup="surrogate",
                 line={"color": colors[phase]}, customdata=custom, hovertemplate=template,
             ), row=1, col=1,
@@ -763,7 +796,7 @@ def plot_tieline_diagnostics(
         train_custom, train_template = _hover_payload(train_fields, selected, int(np.count_nonzero(train)), hover_format)
         fig.add_trace(
             go.Scatterternary(
-                a=full[train], b=values[train, 0], c=values[train, 1], mode="markers",
+                **_ternary_coordinates(values[train]), mode="markers",
                 name=f"{phase} training endpoints", legendgroup="training",
                 marker={"color": colors[phase], "symbol": "diamond", "size": 8},
                 customdata=train_custom, hovertemplate=train_template,
@@ -801,7 +834,7 @@ def plot_tieline_diagnostics(
             segment_custom, segment_template = _hover_payload(segment_fields, selected, 2, hover_format)
             if trace_type == "ternary":
                 trace = go.Scatterternary(
-                    a=[1.0 - left.sum(), 1.0 - right.sum()], b=[left[0], right[0]], c=[left[1], right[1]],
+                    **_ternary_coordinates(segment_compositions),
                     mode="lines", line={"color": "rgba(80,80,80,0.35)", "width": 1},
                     name="Surrogate tie lines", legendgroup="tie-lines", showlegend=position == 0,
                     customdata=segment_custom, hovertemplate=segment_template,
@@ -833,7 +866,7 @@ def plot_tieline_diagnostics(
         )
         fig.add_trace(
             go.Scatterternary(
-                a=1.0 - np.sum(probe, axis=1), b=probe[:, 0], c=probe[:, 1], mode="lines+markers",
+                **_ternary_coordinates(probe), mode="lines+markers",
                 name="Probe path", legendgroup="probe", marker={"size": 4}, line={"dash": "dash"},
                 customdata=probe_custom, hovertemplate=probe_template,
             ), row=1, col=1,
@@ -854,21 +887,24 @@ def plot_tieline_diagnostics(
             truth_custom, truth_template = _hover_payload(truth_fields, selected, len(eta), hover_format)
             fig.add_trace(
                 go.Scatterternary(
-                    a=1.0 - np.sum(values, axis=1), b=values[:, 0], c=values[:, 1], mode="lines",
-                    name=f"{phase} truth endpoints", legendgroup="truth", line={"color": colors[phase], "dash": "dash"},
+                    **_ternary_coordinates(values), mode="markers",
+                    name=f"{phase} truth endpoints", legendgroup="truth",
+                    marker={"color": colors[phase], "symbol": "x", "size": 10, "line": {"width": 2}},
                     customdata=truth_custom, hovertemplate=truth_template,
                 ), row=1, col=1,
             )
             fig.add_trace(
-                go.Scatter(x=values[:, 0], y=values[:, 1], mode="lines", name=f"{phase} truth endpoints",
-                           legendgroup="truth", showlegend=False, line={"color": colors[phase], "dash": "dash"},
+                go.Scatter(x=values[:, 0], y=values[:, 1], mode="markers", name=f"{phase} truth endpoints",
+                           legendgroup="truth", showlegend=False,
+                           marker={"color": colors[phase], "symbol": "x", "size": 10, "line": {"width": 2}},
                            customdata=truth_custom, hovertemplate=truth_template),
                 row=1, col=2,
             )
             for component in range(2):
                 fig.add_trace(
-                    go.Scatter(x=eta, y=values[:, component], mode="lines", name=f"{phase} truth X({report['elements'][component + 1]})",
-                               legendgroup="truth", line={"color": colors[phase], "dash": "dash"}, visible="legendonly",
+                    go.Scatter(x=eta, y=values[:, component], mode="markers", name=f"{phase} truth X({report['elements'][component + 1]})",
+                               legendgroup="truth",
+                               marker={"color": colors[phase], "symbol": "x" if component == 0 else "cross", "size": 9, "line": {"width": 2}},
                                customdata=truth_custom, hovertemplate=truth_template),
                     row=2, col=1,
                 )
@@ -887,7 +923,7 @@ def plot_tieline_diagnostics(
         labels = np.asarray(phase_region_report["labels"], dtype=object)
         fig.add_trace(
             go.Scatterternary(
-                a=1.0 - np.sum(points, axis=1), b=points[:, 0], c=points[:, 1], mode="markers",
+                **_ternary_coordinates(points), mode="markers",
                 marker={"size": 4, "opacity": 0.25}, text=labels,
                 hovertemplate="Stable region: %{text}<extra></extra>", name="Phase regions", legendgroup="phase-regions",
             ), row=1, col=1,
@@ -901,9 +937,10 @@ def plot_tieline_diagnostics(
     fig.update_xaxes(title_text="eta", row=2, col=2)
     fig.update_layout(
         title=f"Tie-line surrogate diagnostics: {phases[0]} | {phases[1]} at {report['temperature']:g} K",
-        template="plotly_white", height=850, uirevision="tieline-diagnostics",
-        ternary={"sum": 1, "aaxis": {"title": report["elements"][0]}, "baxis": {"title": report["elements"][1]}, "caxis": {"title": report["elements"][2]}},
+        template="plotly_white", width=1250, height=950, margin={"t": 130}, uirevision="tieline-diagnostics",
+        ternary={"sum": 1, "aaxis": {"title": report["elements"][2]}, "baxis": {"title": report["elements"][0]}, "caxis": {"title": report["elements"][1]}},
     )
+    _leave_room_above_ternary(fig)
     return fig
 
 
@@ -914,15 +951,30 @@ def plot_interface_diffusivity_diagnostics(
     hover_format=".6g",
     renderer="browser",
 ):
-    """Create an interface diffusivity figure using the browser renderer by default."""
+    """Create an interface diffusivity figure with one y-axis per phase.
+
+    The two phase axes are independently scaled in every matrix-entry subplot
+    while sharing that subplot's eta axis. Ground-truth samples are shown as
+    unconnected markers above the surrogate curves. Plotly's browser renderer
+    is selected by default.
+    """
     go, make_subplots = _require_plotly(renderer)
     interface = report.get("interface")
     if report.get("kind") != "diffusivity" or interface is None:
         raise ValueError("Interface diffusivity plotting requires a full diffusivity report with interface data.")
     selected = _selected_hover_fields("diffusivity", hover_fields)
-    fig = make_subplots(rows=2, cols=2, subplot_titles=("D[0,0]", "D[0,1]", "D[1,0]", "D[1,1]"))
+    phase_items = tuple(interface["phases"].items())
+    if len(phase_items) > 2:
+        raise ValueError("Interface diffusivity plots support at most two phase-specific y-axes.")
+    fig = make_subplots(
+        rows=2,
+        cols=2,
+        specs=[[{"secondary_y": True}, {"secondary_y": True}], [{"secondary_y": True}, {"secondary_y": True}]],
+        subplot_titles=("D[0,0]", "D[0,1]", "D[1,0]", "D[1,1]"),
+    )
     colors = ("#1f77b4", "#d62728", "#2ca02c")
-    for phase_index, (phase, phase_report) in enumerate(interface["phases"].items()):
+    for phase_index, (phase, phase_report) in enumerate(phase_items):
+        secondary_y = phase_index == 1
         for flat_index, component in enumerate(((0, 0), (0, 1), (1, 0), (1, 1))):
             row, col = divmod(flat_index, 2)
             fields = _matrix_hover_fields(phase_report, component)
@@ -932,7 +984,7 @@ def plot_interface_diffusivity_diagnostics(
                     x=interface["eta"], y=phase_report["matrices"][:, component[0], component[1]], mode="lines",
                     name=f"{phase} surrogate", legendgroup=f"surrogate-{phase}", showlegend=flat_index == 0,
                     line={"color": colors[phase_index % len(colors)]}, customdata=custom, hovertemplate=template,
-                ), row=row + 1, col=col + 1,
+                ), row=row + 1, col=col + 1, secondary_y=secondary_y,
             )
             training = phase_report["training_mask"]
             if np.any(training):
@@ -950,7 +1002,7 @@ def plot_interface_diffusivity_diagnostics(
                         mode="markers", marker={"symbol": "diamond", "size": 7, "color": colors[phase_index % len(colors)]},
                         name=f"{phase} training", legendgroup=f"training-{phase}", showlegend=flat_index == 0,
                         customdata=training_custom, hovertemplate=training_template,
-                    ), row=row + 1, col=col + 1,
+                    ), row=row + 1, col=col + 1, secondary_y=secondary_y,
                 )
             invalid = ~phase_report["valid"]
             if np.any(invalid):
@@ -967,7 +1019,7 @@ def plot_interface_diffusivity_diagnostics(
                         mode="markers", marker={"symbol": "x", "size": 10, "color": "black"},
                         name=f"{phase} invalid", legendgroup=f"invalid-{phase}", showlegend=flat_index == 0,
                         customdata=invalid_custom, hovertemplate=invalid_template,
-                    ), row=row + 1, col=col + 1,
+                    ), row=row + 1, col=col + 1, secondary_y=secondary_y,
                 )
             truth = phase_report["truth"]
             if truth is not None:
@@ -987,11 +1039,11 @@ def plot_interface_diffusivity_diagnostics(
                 )
                 fig.add_trace(
                     go.Scatter(
-                        x=interface["eta"], y=truth["matrices"][:, component[0], component[1]], mode="lines",
+                        x=interface["eta"], y=truth["matrices"][:, component[0], component[1]], mode="markers",
                         name=f"{phase} truth", legendgroup=f"truth-{phase}", showlegend=flat_index == 0,
-                        line={"color": colors[phase_index % len(colors)], "dash": "dash"}, visible="legendonly",
+                        marker={"color": colors[phase_index % len(colors)], "symbol": "x", "size": 9, "line": {"width": 2}},
                         customdata=truth_custom, hovertemplate=truth_template,
-                    ), row=row + 1, col=col + 1,
+                    ), row=row + 1, col=col + 1, secondary_y=secondary_y,
                 )
                 fig.add_trace(
                     go.Scatter(
@@ -999,12 +1051,22 @@ def plot_interface_diffusivity_diagnostics(
                         name=f"{phase} absolute error", legendgroup=f"error-{phase}", showlegend=flat_index == 0,
                         line={"color": colors[phase_index % len(colors)], "dash": "dot"}, visible="legendonly",
                         customdata=error_custom, hovertemplate=error_template,
-                    ), row=row + 1, col=col + 1,
+                    ), row=row + 1, col=col + 1, secondary_y=secondary_y,
                 )
     for row in (1, 2):
         for col in (1, 2):
             fig.update_xaxes(title_text="eta", row=row, col=col)
-            fig.update_yaxes(title_text="m^2/s", exponentformat="e", row=row, col=col)
+            for phase_index, (phase, _) in enumerate(phase_items):
+                color = colors[phase_index % len(colors)]
+                fig.update_yaxes(
+                    title_text=f"{phase} (m^2/s)",
+                    exponentformat="e",
+                    title_font_color=color,
+                    tickfont_color=color,
+                    row=row,
+                    col=col,
+                    secondary_y=phase_index == 1,
+                )
     fig.update_layout(
         title=f"Interface diffusivity diagnostics at {report['temperature']:g} K",
         template="plotly_white", height=750, uirevision="interface-diffusivity",
@@ -1046,7 +1108,11 @@ def plot_bulk_diffusivity_diagnostics(
     hover_format=".6g",
     renderer="browser",
 ):
-    """Create a bulk diffusivity dashboard using the browser renderer by default."""
+    """Create a bulk diffusivity dashboard using the browser renderer by default.
+
+    Its ternary coverage view uses the same corner ordering as
+    :func:`plot_tieline_diagnostics`.
+    """
     go, make_subplots = _require_plotly(renderer)
     if report.get("kind") != "diffusivity" or phase not in report["bulk"]["phases"]:
         raise ValueError(f"Bulk diffusivity report does not contain phase '{phase}'.")
@@ -1064,7 +1130,7 @@ def plot_bulk_diffusivity_diagnostics(
     coverage_custom, coverage_template = _hover_payload(coverage_fields, selected, len(points), hover_format)
     fig.add_trace(
         go.Scatterternary(
-            a=1.0 - np.sum(points, axis=1), b=points[:, 0], c=points[:, 1], mode="markers",
+            **_ternary_coordinates(points), mode="markers",
             marker={"size": 5, "color": phase_report["nearest_training_distance"], "colorscale": "Viridis", "showscale": False},
             name="Evaluation grid", legendgroup="coverage", customdata=coverage_custom, hovertemplate=coverage_template,
         ), row=1, col=1,
@@ -1083,7 +1149,7 @@ def plot_bulk_diffusivity_diagnostics(
     )
     fig.add_trace(
         go.Scatterternary(
-            a=1.0 - np.sum(training, axis=1), b=training[:, 0], c=training[:, 1],
+            **_ternary_coordinates(training),
             mode="markers", marker={"symbol": "diamond", "size": 9, "color": "black"},
             name="Training samples", legendgroup="training",
             customdata=training_custom, hovertemplate=training_template,
@@ -1097,7 +1163,7 @@ def plot_bulk_diffusivity_diagnostics(
             boundary = training[np.append(hull.vertices, hull.vertices[0])]
             fig.add_trace(
                 go.Scatterternary(
-                    a=1.0 - np.sum(boundary, axis=1), b=boundary[:, 0], c=boundary[:, 1],
+                    **_ternary_coordinates(boundary),
                     mode="lines", line={"color": "black", "dash": "dash"},
                     name="Training convex hull", legendgroup="training-hull", hoverinfo="skip",
                 ), row=1, col=1,
@@ -1191,9 +1257,10 @@ def plot_bulk_diffusivity_diagnostics(
         fig.update_yaxes(title_text=f"X({report['elements'][2]})", range=y_range, row=row, col=col)
     fig.update_layout(
         title=f"Bulk diffusivity diagnostics: {phase} at {report['temperature']:g} K",
-        template="plotly_white", height=850, uirevision=f"bulk-diffusivity-{phase}",
-        ternary={"sum": 1, "aaxis": {"title": report["elements"][0]}, "baxis": {"title": report["elements"][1]}, "caxis": {"title": report["elements"][2]}},
+        template="plotly_white", height=850, margin={"t": 130}, uirevision=f"bulk-diffusivity-{phase}",
+        ternary={"sum": 1, "aaxis": {"title": report["elements"][2]}, "baxis": {"title": report["elements"][0]}, "caxis": {"title": report["elements"][1]}},
     )
+    _leave_room_above_ternary(fig)
     return fig
 
 

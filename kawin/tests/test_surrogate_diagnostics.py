@@ -74,9 +74,10 @@ def _surrogate(*, source="from_database", interpolation="nearest"):
 
 
 class _Truth:
-    def __init__(self, *, fail_tieline=False, fail_diffusivity=False, scale=1.0):
+    def __init__(self, *, fail_tieline=False, fail_diffusivity=False, full_tieline_compositions=False, scale=1.0):
         self.fail_tieline = fail_tieline
         self.fail_diffusivity = fail_diffusivity
+        self.full_tieline_compositions = full_tieline_compositions
         self.scale = float(scale)
         self.tieline_calls = 0
         self.diffusivity_calls = 0
@@ -89,6 +90,9 @@ class _Truth:
         fraction = (point[0] - 0.20) / 0.10
         left = LEFT[0] + fraction * (LEFT[-1] - LEFT[0])
         right = RIGHT[0] + fraction * (RIGHT[-1] - RIGHT[0])
+        if self.full_tieline_compositions:
+            left = np.concatenate(([1.0 - np.sum(left)], left))
+            right = np.concatenate(([1.0 - np.sum(right)], right))
         metadata = {
             "endpoint_phases": PHASES,
             "endpoints": (
@@ -130,6 +134,15 @@ def test_tieline_report_reconstructs_probe_path_and_exact_truth(source):
     assert report["summary"]["max_endpoint_error"] == pytest.approx(0.0)
     assert report["summary"]["failure_count"] == 0
     assert truth.tieline_calls == 5
+
+
+def test_tieline_report_accepts_reference_first_full_truth_compositions():
+    report = evaluate_tieline_diagnostics(
+        _surrogate(), thermodynamics=_Truth(full_tieline_compositions=True), eta_count=5
+    )
+
+    assert report["summary"]["max_endpoint_error"] == pytest.approx(0.0)
+    assert np.allclose(report["truth"]["endpoint_compositions"][PHASES[0]], np.linspace(LEFT[0], LEFT[-1], 5))
 
 
 def test_tieline_report_requires_probe_metadata_only_when_truth_requested():
@@ -231,7 +244,27 @@ def test_plotly_figures_have_expected_subplots_hover_and_layer_buttons():
     bulk = plot_bulk_diffusivity_diagnostics(diff_report, PHASES[0], hover_fields="diagnostic")
 
     assert "ternary" in tie.layout
+    alpha_ternary = next(trace for trace in tie.data if trace.name == "ALPHA surrogate endpoints" and trace.type == "scatterternary")
+    assert alpha_ternary.a[0] == pytest.approx(LEFT[0, 1])
+    assert alpha_ternary.b[0] == pytest.approx(1.0 - np.sum(LEFT[0]))
+    assert alpha_ternary.c[0] == pytest.approx(LEFT[0, 0])
+    assert tie.layout.ternary.aaxis.title.text == ELEMENTS[2]
+    assert tie.layout.ternary.baxis.title.text == ELEMENTS[0]
+    assert tie.layout.ternary.caxis.title.text == ELEMENTS[1]
+    assert tie.layout.ternary.domain.y[1] < tie.layout.annotations[0].y
+    assert tie.layout.width == 1250
+    assert tie.layout.height == 950
+    tie_truth = [trace for trace in tie.data if " truth " in f" {trace.name} " and "error" not in trace.name]
+    assert tie_truth
+    assert all(trace.mode == "markers" and trace.visible is None for trace in tie_truth)
     assert any(trace.customdata is not None and trace.customdata.shape[1] == 3 for trace in tie.data)
+    alpha_interface = next(trace for trace in interface.data if trace.name == "ALPHA surrogate")
+    beta_interface = next(trace for trace in interface.data if trace.name == "BETA surrogate")
+    assert alpha_interface.xaxis == beta_interface.xaxis
+    assert alpha_interface.yaxis != beta_interface.yaxis
+    interface_truth = [trace for trace in interface.data if trace.name in {"ALPHA truth", "BETA truth"}]
+    assert interface_truth
+    assert all(trace.mode == "markers" and trace.visible is None for trace in interface_truth)
     assert "training_distance" not in "".join(str(trace.hovertemplate) for trace in interface.data)
     assert len(bulk.layout.updatemenus[0].buttons) == 4
     assert "data" in bulk.to_plotly_json()
