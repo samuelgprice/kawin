@@ -36,6 +36,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from examples.ThermoCalc.tc_python_adapter import TCPythonThermodynamics, ThermoCalcConfig
+from examples.ternaryExamples.pycalphad_default_phase_adapter import create_pycalphad_thermodynamics_source
 from kawin.diffusion import (
     MovingBoundaryIllingworthTernaryThreePhaseFD1DModel,
     TernaryMovingBoundaryThermodynamicsSurrogate,
@@ -80,6 +81,8 @@ PHASES_FOR_MODEL = (PHASE_BCC, PHASE_LIQUID, PHASE_BCC)
 TEMPERATURE = 1300.0
 REFERENCE_ELEMENT = "NB"
 TDB_PATH = None
+PYCALPHAD_USE_DEFAULT_PHASES = True
+PYCALPHAD_EQUILIBRIUM_PHASES = None
 
 # Full mole fractions are listed in ELEMENTS order: [NB, NI, TI].
 LEFT_BCC_FULL = np.array([0.899, 0.001, 0.100], dtype=np.float64)
@@ -195,6 +198,8 @@ _CASE_DEFAULTS = {
         "TEMPERATURE": 1650.0,
         "REFERENCE_ELEMENT": "FE",
         "TDB_PATH": EXAMPLES_DIR / "FeCrNi_Lee1993_L_style_ternary_checked_withMobility.tdb",
+        "PYCALPHAD_USE_DEFAULT_PHASES": True,
+        "PYCALPHAD_EQUILIBRIUM_PHASES": None,
         "INITIAL_PHASE_COMPOSITIONS": (
             np.array([0.30, 0.34], dtype=np.float64),
             np.array([0.43, 0.37], dtype=np.float64),
@@ -257,6 +262,8 @@ _OVERRIDE_KEY_ALIASES = {
     "probe_boundary_search_step": "PROBE_BOUNDARY_SEARCH_STEP",
     "probe_boundary_xtol": "PROBE_BOUNDARY_XTOL",
     "probe_max_search_steps": "PROBE_MAX_SEARCH_STEPS",
+    "pycalphad_equilibrium_phases": "PYCALPHAD_EQUILIBRIUM_PHASES",
+    "pycalphad_use_default_phases": "PYCALPHAD_USE_DEFAULT_PHASES",
     "tolerance": "TOLERANCE",
     "verbose": "VERBOSE",
     "verbose_interval": "VERBOSE_INTERVAL",
@@ -394,6 +401,13 @@ class FixedPhaseDiffusivityThermodynamics:
     def getInterfacialComposition(self, *args, **kwargs):
         """Delegates tie-line equilibrium queries to the wrapped thermodynamics object."""
         return self.thermodynamics.getInterfacialComposition(*args, **kwargs)
+
+    def getEquilibriumData(self, *args, **kwargs):
+        """Delegates stable-phase equilibrium queries when the wrapped object supports them."""
+        equilibrium_data = getattr(self.thermodynamics, "getEquilibriumData", None)
+        if equilibrium_data is None:
+            raise AttributeError("Wrapped thermodynamics object does not provide getEquilibriumData.")
+        return equilibrium_data(*args, **kwargs)
 
     def getInterdiffusivity(self, x, T=None, phase=None, query_context=None, **kwargs):
         """Returns the fixed matrix for ``fixed_phase`` and delegates all other phases."""
@@ -626,12 +640,24 @@ def build_thermodynamics():
         if TDB_PATH is None or not Path(TDB_PATH).exists():
             raise FileNotFoundError(f"Could not find Fe-Cr-Ni TDB at {TDB_PATH}.")
         therm_ab = FixedPhaseDiffusivityThermodynamics(
-            MulticomponentThermodynamics(str(TDB_PATH), list(ELEMENTS), list(pair_ab)),
+            create_pycalphad_thermodynamics_source(
+                str(TDB_PATH),
+                list(ELEMENTS),
+                list(pair_ab),
+                use_default_phases=PYCALPHAD_USE_DEFAULT_PHASES,
+                equilibrium_phases=PYCALPHAD_EQUILIBRIUM_PHASES,
+            ),
             PHASE_LIQUID,
             liquid_matrix,
         )
         therm_bc = FixedPhaseDiffusivityThermodynamics(
-            MulticomponentThermodynamics(str(TDB_PATH), list(ELEMENTS), list(pair_bc)),
+            create_pycalphad_thermodynamics_source(
+                str(TDB_PATH),
+                list(ELEMENTS),
+                list(pair_bc),
+                use_default_phases=PYCALPHAD_USE_DEFAULT_PHASES,
+                equilibrium_phases=PYCALPHAD_EQUILIBRIUM_PHASES,
+            ),
             PHASE_LIQUID,
             liquid_matrix,
         )
@@ -653,8 +679,15 @@ def _validate_tieline_probe_path(thermodynamics, label, probe_start, probe_end, 
     bad_samples = []
     for eta in np.asarray(ETA_SAMPLES, dtype=np.float64):
         point = (1.0 - eta) * np.asarray(probe_start, dtype=np.float64) + eta * np.asarray(probe_end, dtype=np.float64)
-        if hasattr(thermodynamics, "getEquilibriumData"):
-            equilibrium = thermodynamics.getEquilibriumData(point, TEMPERATURE, removeCache=False)
+        equilibrium_data = getattr(thermodynamics, "getEquilibriumData", None)
+        if equilibrium_data is not None:
+            try:
+                equilibrium = equilibrium_data(point, TEMPERATURE, removeCache=False)
+            except AttributeError:
+                equilibrium = None
+        else:
+            equilibrium = None
+        if equilibrium is not None:
             stable_phases = tuple(str(phase).upper() for phase in equilibrium.get("stable_phases", ()))
             phase_amounts = {
                 str(phase).upper(): float(amount)
@@ -670,6 +703,8 @@ def _validate_tieline_probe_path(thermodynamics, label, probe_start, probe_end, 
                 for phase in stable_phases
                 if phase not in expected and phase_amounts.get(phase, 1.0) > 1.0e-12
             ]
+            if len(stable_phases) != len(set(stable_phases)):
+                extra = [*extra, "DUPLICATE_PHASE_SET"]
         else:
             _, _, metadata = thermodynamics.getInterfacialComposition(
                 point,
