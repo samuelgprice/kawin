@@ -530,23 +530,20 @@ def _seed_tieline_scan_direction(seed_endpoints, reference_direction=None):
     return normal
 
 
-def _coerce_seed_scan_parameters(samples_per_side, boundary_margin, search_step, xtol, max_search_steps):
+def _coerce_seed_scan_parameters(samples_per_side, search_step, xtol, max_search_steps):
     samples_per_side = int(samples_per_side)
     if samples_per_side < 1:
         raise ValueError("probe_samples_per_side must be at least 1.")
-    boundary_margin = float(boundary_margin)
     search_step = float(search_step)
     xtol = float(xtol)
     max_search_steps = int(max_search_steps)
-    if not np.isfinite(boundary_margin) or boundary_margin < 0.0:
-        raise ValueError("probe_boundary_margin must be nonnegative and finite.")
     if not np.isfinite(search_step) or search_step <= 0.0:
         raise ValueError("probe_boundary_search_step must be positive and finite.")
     if not np.isfinite(xtol) or xtol <= 0.0:
         raise ValueError("probe_boundary_xtol must be positive and finite.")
     if max_search_steps < 1:
         raise ValueError("probe_max_search_steps must be at least 1.")
-    return samples_per_side, boundary_margin, search_step, xtol, max_search_steps
+    return samples_per_side, search_step, xtol, max_search_steps
 
 
 def _find_seed_scan_extent(
@@ -564,18 +561,26 @@ def _find_seed_scan_extent(
     max_search_steps,
 ):
     """
-    Marches a seed scan side until the expected two-phase metadata fails.
+    Follow one side of a seed-point scan through the expected two-phase region.
 
-    Distances are accumulated from the requested normal offsets. Each accepted
-    step is launched from the previous tie-line midpoint along a local normal to
-    that previous tie-line, which lets the probe path follow curved two-phase
-    regions whose tie-lines rotate across composition space.
+    Starting from ``seed_sample``, probes are advanced by ``search_step`` along
+    the local normal to the most recently accepted tie line. When a probe first
+    leaves the expected two-phase region, the boundary is refined by bisection
+    to ``xtol`` and accepted/rejected bisection samples are recorded.
+
+    Returns
+    -------
+    tuple[list[dict], list[np.ndarray]]
+        Accepted tie-line samples along this scan side, followed by probe
+        compositions that failed the expected two-phase-region check. The seed
+        sample itself is not included in the accepted list.
     """
     sign = float(sign)
     last_sample = seed_sample
-    accepted_distance = 0.0
     last_error = None
-    for _ in range(max_search_steps):
+    lst_ofSamples = []
+    lst_ofFailedProbes = []
+    for i in range(max_search_steps):
         scan_direction = _seed_tieline_scan_direction(last_sample["endpoints"], reference_direction=scan_direction)
         probe = last_sample["midpoint"] + sign * float(search_step) * scan_direction
         try:
@@ -589,10 +594,11 @@ def _find_seed_scan_extent(
                 min_composition,
             )
         except ValueError as exc:
+            lst_ofFailedProbes.append(probe.copy())
             last_error = exc
             low = 0.0
             high = float(search_step)
-            low_sample = last_sample
+            
             while high - low > xtol:
                 middle = 0.5 * (low + high)
                 middle_probe = last_sample["midpoint"] + sign * middle * scan_direction
@@ -607,13 +613,15 @@ def _find_seed_scan_extent(
                         min_composition,
                     )
                 except ValueError:
+                    lst_ofFailedProbes.append(middle_probe.copy())
                     high = middle
                 else:
+                    lst_ofSamples.append(middle_sample.copy())
                     low = middle
-                    low_sample = middle_sample
-            return accepted_distance + low, low_sample
+
+            return lst_ofSamples.copy(), lst_ofFailedProbes.copy()
         else:
-            accepted_distance += float(search_step)
+            lst_ofSamples.append(candidate.copy())
             last_sample = candidate
     message = (
         "Seed-point tie-line scan did not leave the expected two-phase region "
@@ -626,7 +634,6 @@ def _find_seed_scan_extent(
 
 def _resample_seed_scan_side(
     thermodynamics,
-    seed_sample,
     sign,
     scan_direction,
     temperature,
@@ -634,36 +641,50 @@ def _resample_seed_scan_side(
     tieline_phases,
     elements,
     min_composition,
-    extent,
-    boundary_margin,
     samples_per_side,
+    lst_ofSamples,
 ):
-    """
-    Replays one seed scan side with an exact number of margin-limited samples.
 
-    The final target distance is kept ``probe_boundary_margin`` inside the
-    detected two-phase boundary. Generated probes advance from the last accepted
-    tie-line midpoint along that tie-line's local normal. Failure at any
-    generated sample is reported as a topology/sampling problem rather than
-    silently changing the eta grid.
     """
-    usable_extent = float(extent) - float(boundary_margin)
-    if not np.isfinite(usable_extent) or usable_extent <= 0.0:
-        raise ValueError(
-            "probe_boundary_margin leaves no valid sampling interval on one side of the seed tie-line."
-        )
-    targets = np.linspace(usable_extent / int(samples_per_side), usable_extent, int(samples_per_side))
+    Resample accepted seed-scan tie lines at uniform arclength fractions.
+
+    ``lst_ofSamples`` is expected to contain ordered tie-line samples whose
+    ``midpoint`` values trace the accepted two-phase region. The routine checks
+    that consecutive midpoint displacements remain aligned with the local
+    tie-line scan direction, interpolates along the midpoint path by cumulative
+    arclength, and re-evaluates tie-line samples at ``2 * samples_per_side + 1``
+    evenly spaced relative positions from 0 to 1.
+
+    Returned distances are relative arclength fractions, not physical
+    composition-space distances. A generated probe that leaves the expected
+    two-phase region is treated as a sampling/topology failure.
+    """
+
+    midpoints_arr = np.array([s['midpoint'] for s in lst_ofSamples]).copy()
+    diff_arr = np.diff(midpoints_arr, axis=0).copy()
+    scan_dir_arr = np.array([float(sign)*_seed_tieline_scan_direction(s["endpoints"], reference_direction=scan_direction) for s in lst_ofSamples])[:-1].copy()
+    def norm_vect(vect):
+        normed_vect = (vect / np.linalg.norm(vect)).copy()
+        return normed_vect
+    dot_arr = np.array([norm_vect(diff_arr[i])*norm_vect(scan_dir_arr[i]) for i in range(len(diff_arr))]).sum(axis=1)
+    if not (dot_arr>0).all():
+        raise ValueError("The dot product of the diff vector and scan direction vector is not positive for all samples.")
+    dist_arr = np.linalg.norm(diff_arr, axis=1).copy()
+    totalLength = dist_arr.sum()
+    relativeDistAlongRegion = (np.concatenate((np.array([0]), np.cumsum(dist_arr))) / totalLength).copy()
+    tielineMidpoint_interp_x = lambda x: np.interp(x, xp=relativeDistAlongRegion, fp=midpoints_arr[:, 0])
+    tielineMidpoint_interp_y = lambda x: np.interp(x, xp=relativeDistAlongRegion, fp=midpoints_arr[:, 1])
+    tielineMidpoint_interp = lambda x: np.column_stack((tielineMidpoint_interp_x(x), tielineMidpoint_interp_y(x)))
+    np.linalg.norm(tielineMidpoint_interp(relativeDistAlongRegion)-midpoints_arr, axis=1).max()
+    relativeDist_toSample = np.linspace(0, 1, (2*samples_per_side)+1).copy()
+    midPts_toSample = tielineMidpoint_interp(relativeDist_toSample)
+
     samples = []
-    last_sample = seed_sample
-    previous_distance = 0.0
-    for target in targets:
-        step = float(target) - previous_distance
-        scan_direction = _seed_tieline_scan_direction(last_sample["endpoints"], reference_direction=scan_direction)
-        probe = last_sample["midpoint"] + float(sign) * step * scan_direction
+    for relativeDist, target in zip(relativeDist_toSample, midPts_toSample):
         try:
             sample = _sample_expected_tieline(
                 thermodynamics,
-                probe,
+                target,
                 temperature,
                 precipitate_phase,
                 tieline_phases,
@@ -677,9 +698,7 @@ def _resample_seed_scan_side(
             ) from exc
         sample = dict(sample)
         sample["scan_direction"] = scan_direction
-        samples.append((float(target), sample))
-        last_sample = sample
-        previous_distance = float(target)
+        samples.append((float(relativeDist), sample))
     return samples
 
 
@@ -1186,7 +1205,6 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         probe_end=None,
         probe_point=None,
         probe_samples_per_side=8,
-        probe_boundary_margin=1e-3,
         probe_boundary_search_step=1e-2,
         probe_boundary_xtol=1e-6,
         probe_max_search_steps=200,
@@ -1280,13 +1298,11 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         if seed_mode:
             (
                 probe_samples_per_side,
-                probe_boundary_margin,
                 probe_boundary_search_step,
                 probe_boundary_xtol,
                 probe_max_search_steps,
             ) = _coerce_seed_scan_parameters(
                 probe_samples_per_side,
-                probe_boundary_margin,
                 probe_boundary_search_step,
                 probe_boundary_xtol,
                 probe_max_search_steps,
@@ -1301,7 +1317,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 float(min_composition),
             )
             scan_direction = _seed_tieline_scan_direction(seed_sample["endpoints"])
-            negative_extent, _ = _find_seed_scan_extent(
+            lst_ofSamples_neg, lst_ofFailedProbes_neg = _find_seed_scan_extent(
                 thermodynamics,
                 seed_sample,
                 -1.0,
@@ -1315,7 +1331,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 probe_boundary_xtol,
                 probe_max_search_steps,
             )
-            positive_extent, _ = _find_seed_scan_extent(
+            lst_ofSamples_pos, lst_ofFailedProbes_pos = _find_seed_scan_extent(
                 thermodynamics,
                 seed_sample,
                 1.0,
@@ -1329,23 +1345,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 probe_boundary_xtol,
                 probe_max_search_steps,
             )
-            negative_side = _resample_seed_scan_side(
+            both_sides = _resample_seed_scan_side(
                 thermodynamics,
-                seed_sample,
-                -1.0,
-                scan_direction,
-                temperature,
-                precipitate_phase,
-                tieline_phases,
-                elements,
-                float(min_composition),
-                negative_extent,
-                probe_boundary_margin,
-                probe_samples_per_side,
-            )
-            positive_side = _resample_seed_scan_side(
-                thermodynamics,
-                seed_sample,
                 1.0,
                 scan_direction,
                 temperature,
@@ -1353,13 +1354,10 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 tieline_phases,
                 elements,
                 float(min_composition),
-                positive_extent,
-                probe_boundary_margin,
                 probe_samples_per_side,
+                lst_ofSamples_neg[::-1] + [seed_sample] + lst_ofSamples_pos,
             )
-            signed_samples = [(-distance, sample) for distance, sample in reversed(negative_side)]
-            signed_samples.append((0.0, seed_sample))
-            signed_samples.extend((distance, sample) for distance, sample in positive_side)
+            signed_samples = [(distance, sample) for distance, sample in both_sides]
             signed_distances = np.asarray([distance for distance, _ in signed_samples], dtype=np.float64)
             eta_samples = (signed_distances - signed_distances[0]) / (signed_distances[-1] - signed_distances[0])
             sampling_metadata = {
@@ -1368,7 +1366,6 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 "probe_scan_direction": scan_direction.tolist(),
                 "probe_scan_direction_mode": "local_tieline_normal",
                 "probe_samples_per_side": int(probe_samples_per_side),
-                "probe_boundary_margin": float(probe_boundary_margin),
                 "probe_boundary_search_step": float(probe_boundary_search_step),
                 "generated_probe_points": [
                     np.asarray(sample["probe"], dtype=np.float64).tolist() for _, sample in signed_samples
@@ -1377,8 +1374,6 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                     np.asarray(sample.get("scan_direction", scan_direction), dtype=np.float64).tolist()
                     for _, sample in signed_samples
                 ],
-                "negative_extent": float(negative_extent),
-                "positive_extent": float(positive_extent),
             }
             for _, sample in signed_samples:
                 for phase, comp, diffusivity in zip(tieline_phases, sample["endpoints"], sample["diffusivities"]):
