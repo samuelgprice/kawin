@@ -72,14 +72,15 @@ if __name__ == "__main__":
 
 CASE_NI_TI_NB_TC = "ni_ti_nb_tc"
 CASE_FE_CR_NI_PYCALPHAD = "fe_cr_ni_pycalphad"
-CASE_NAME = CASE_FE_CR_NI_PYCALPHAD = "fe_cr_ni_pycalphad"
+CASE_FE_CR_NI_TC = "fe_cr_ni_tc"
+CASE_NAME =  [CASE_NI_TI_NB_TC, CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC][2]
 
 ELEMENTS = ("NB", "NI", "TI")
 INDEPENDENT_ELEMENTS = ("NI", "TI")
 PHASE_BCC = "BCC_B2"
 PHASE_FCC = None
 PHASE_LIQUID = "LIQUID"
-PHASES_FOR_MODEL = (PHASE_BCC, PHASE_LIQUID, PHASE_BCC)
+PHASES_FOR_MODEL = (None, None, None)
 TEMPERATURE = 1300.0
 REFERENCE_ELEMENT = "NB"
 TDB_PATH = None
@@ -113,7 +114,6 @@ BC_PROBE_END = np.array([0.4099, 0.59], dtype=np.float64)
 AB_PROBE_POINT = np.array([np.nan, np.nan], dtype=np.float64)
 BC_PROBE_POINT = np.array([np.nan, np.nan], dtype=np.float64)
 PROBE_SAMPLES_PER_SIDE = 8
-PROBE_BOUNDARY_MARGIN = 1.0e-3
 PROBE_BOUNDARY_SEARCH_STEP = 1.0e-2
 PROBE_BOUNDARY_XTOL = 1.0e-6
 PROBE_MAX_SEARCH_STEPS = 200
@@ -126,13 +126,16 @@ INITIAL_ETA_GUESS = (0.5, 0.5)
 # invalid upper-right corners.
 DIFFUSIVITY_INTERPOLATION = "simplex_linear" # "nearest", "continuous_grid"
 BULK_DIFFUSIVITY_MODE = "composition_dependent_lagged"
-BULK_DIFFUSIVITY_POINTS = None
+import pickle as pk
+with open(EXAMPLES_DIR / r"ternaryExamples\allValid_3Element_compositions_0.02inc_projTo1eminus4.pkl", 'rb') as fh:
+    projed_arr = pk.load(fh)
+BULK_DIFFUSIVITY_POINTS = projed_arr[:,:-1].copy()
 BULK_DIFFUSIVITY_GRIDS = None
 GLOBAL_MINIMIZATION_MAX_GRID_POINTS = 2000
 FECRNI_LIQUID_DIFFUSIVITY_MATRIX =  np.array([[1e-9, 0.0], [0.0, 1e-9]])
 
 NODES = 165
-PHASE_NODES = (50*2, 10*2, 50*2)
+PHASE_NODES = (100, 20, 50) # (50, 10, 50)
 
 # Time stepping:
 #   DT_MODE = "fixed"    -> advance by FIXED_TIME_STEP.
@@ -145,7 +148,7 @@ FIXED_TIME_STEP = 1.0e-3
 SEMI_LOG_BASE_TIME_STEP = 1.0e-3
 SEMI_LOG_DT = 0.05
 SEMI_LOG_T0 = 1.0e-6
-SOLVE_TIME = 1e3
+SOLVE_TIME = 1.0e5
 TOLERANCE = 1.0e-10
 MAX_ITERATIONS = 100
 MAX_STEP_RETRIES = 8
@@ -153,7 +156,7 @@ MIN_DT_FRAC = 1.0e-16
 VERBOSE = True
 VERBOSE_INTERVAL = 10
 RUN_PREFLIGHT = True
-RUN_SOLVE = True
+RUN_SOLVE = [True, False][0]
 
 
 _CASE_DEFAULTS = {
@@ -163,31 +166,36 @@ _CASE_DEFAULTS = {
         "PHASE_BCC": "BCC_B2",
         "PHASE_FCC": None,
         "PHASE_LIQUID": "LIQUID",
-        "PHASES_FOR_MODEL": ("BCC_B2", "LIQUID", "BCC_B2"),
-        "TEMPERATURE": 1300.0,
+        "PHASES_FOR_MODEL": ("BCC_B2#1", "LIQUID#1", "BCC_B2#2"),
+        "TEMPERATURE": 1398.0,
         "REFERENCE_ELEMENT": "NB",
         "TDB_PATH": None,
         "INITIAL_PHASE_COMPOSITIONS": (
-            np.array([0.001, 0.100], dtype=np.float64),
-            np.array([0.300, 0.600], dtype=np.float64),
+            np.array([0.001, 0.02], dtype=np.float64), # np.array([0.001, 0.100], dtype=np.float64),
+            np.array([0.35, 0.44], dtype=np.float64), # np.array([0.300, 0.600], dtype=np.float64),
             np.array([0.495, 0.495], dtype=np.float64),
         ),
-        "LEFT_WIDTH": 40.0e-6,
-        "LIQUID_WIDTH": 2.0e-6,
-        "RIGHT_WIDTH": 40.0e-6,
-        "INTERFACE_POSITIONS": np.array([40.0e-6, 42.0e-6], dtype=np.float64),
-        "TIELINE_SURROGATE_BUILD_MODE": "line",
+        "LEFT_WIDTH":  20*120.0e-6, # 40.0e-6,
+        "LIQUID_WIDTH": 1.0e-6, # 2.0e-6,
+        "RIGHT_WIDTH": 20*40.0e-6,
+        # "INTERFACE_POSITIONS": np.array([120.0e-6, 121.0e-6], dtype=np.float64),
+        "TIELINE_SURROGATE_BUILD_MODE": "seed_point",
         "AB_PROBE_START": np.array([0.16, 0.83], dtype=np.float64),
         "AB_PROBE_END": np.array([0.217, 0.394], dtype=np.float64),
         "BC_PROBE_START": np.array([0.39, 0.468], dtype=np.float64),
         "BC_PROBE_END": np.array([0.4099, 0.59], dtype=np.float64),
-        "AB_PROBE_POINT": np.array([np.nan, np.nan], dtype=np.float64),
-        "BC_PROBE_POINT": np.array([np.nan, np.nan], dtype=np.float64),
-        "PROBE_SAMPLES_PER_SIDE": 8,
-        "PROBE_BOUNDARY_MARGIN": 1.0e-3,
+        "AB_PROBE_POINT": np.array([0.19, 0.62], dtype=np.float64),
+        "BC_PROBE_POINT": np.array([0.4, 0.53], dtype=np.float64),
+        "PROBE_SAMPLES_PER_SIDE": 25,
         "PROBE_BOUNDARY_SEARCH_STEP": 1.0e-2,
-        "PROBE_BOUNDARY_XTOL": 1.0e-6,
-        "PROBE_MAX_SEARCH_STEPS": 200,
+        "PROBE_BOUNDARY_XTOL": 1.0e-8,
+        "PROBE_MAX_SEARCH_STEPS": 203,
+        "PHASE_NODES": (100, 20, 50),
+        "FIXED_TIME_STEP": 1.0e-3,
+        "SEMI_LOG_BASE_TIME_STEP": 1.0e-3,
+        "SEMI_LOG_DT": 0.05,
+        "SEMI_LOG_T0": 1.0e-6,
+        "SOLVE_TIME": 1.0e5,
         "RUN_PREFLIGHT": True,
     },
     CASE_FE_CR_NI_PYCALPHAD: {
@@ -210,7 +218,7 @@ _CASE_DEFAULTS = {
         "LEFT_WIDTH": 50.0e-6,
         "LIQUID_WIDTH": 10.0e-6,
         "RIGHT_WIDTH": 50.0e-6,
-        "INTERFACE_POSITIONS": np.array([50.0e-6, 60.0e-6], dtype=np.float64),
+        # "INTERFACE_POSITIONS": np.array([50.0e-6, 60.0e-6], dtype=np.float64),
         "TIELINE_SURROGATE_BUILD_MODE": ["line", "seed_point"][1],
         "AB_PROBE_START": np.array([0.3815, 0.319], dtype=np.float64),
         "AB_PROBE_END": np.array([0.417, 0.58], dtype=np.float64),
@@ -219,13 +227,24 @@ _CASE_DEFAULTS = {
         "AB_PROBE_POINT": np.array([0.4, 0.47], dtype=np.float64),
         "BC_PROBE_POINT": np.array([0.55, 0.31], dtype=np.float64),
         "PROBE_SAMPLES_PER_SIDE": 25,
-        "PROBE_BOUNDARY_MARGIN": 1.0e-3,
         "PROBE_BOUNDARY_SEARCH_STEP": 1.0e-2,
-        "PROBE_BOUNDARY_XTOL": 1.0e-6,
-        "PROBE_MAX_SEARCH_STEPS": 10000,
+        "PROBE_BOUNDARY_XTOL": 1.0e-10,
+        "PROBE_MAX_SEARCH_STEPS": 203,
+        "PHASE_NODES": (50, 20, 50),
+        "FIXED_TIME_STEP": 1.0e-3,
+        "SEMI_LOG_BASE_TIME_STEP": 1.0e-3,
+        "SEMI_LOG_DT": 0.05,
+        "SEMI_LOG_T0": 1.0e-6,
+        "SOLVE_TIME": 3.24e1,
         "RUN_PREFLIGHT": False,
     },
 }
+
+case_fe_cr_ni_tc_dict = _CASE_DEFAULTS[CASE_FE_CR_NI_PYCALPHAD].copy()
+case_fe_cr_ni_tc_dict.update({"PHASE_BCC": "BCC_B2#1", "PHASE_FCC": "FCC_L12#1", "PHASE_LIQUID": "LIQUID#1","PHASES_FOR_MODEL": ("FCC_L12#1", "LIQUID#1", "BCC_B2#1"), "RUN_PREFLIGHT":True})
+_CASE_DEFAULTS.update({CASE_FE_CR_NI_TC:case_fe_cr_ni_tc_dict.copy()})
+
+_CASE_DEFAULTS = {k:{**{k2: v2 for k2, v2 in v.items()}, **{"INTERFACE_POSITIONS":np.array([v["LEFT_WIDTH"], v["LEFT_WIDTH"]+v["LIQUID_WIDTH"]], dtype=np.float64)}} for k, v in _CASE_DEFAULTS.items()}.copy()
 
 _CASE_CONFIG_KEYS = tuple(dict.fromkeys(key for config in _CASE_DEFAULTS.values() for key in config))
 _APPLIED_CASE_NAME = None
@@ -260,7 +279,6 @@ _OVERRIDE_KEY_ALIASES = {
     "ab_probe_point": "AB_PROBE_POINT",
     "bc_probe_point": "BC_PROBE_POINT",
     "probe_samples_per_side": "PROBE_SAMPLES_PER_SIDE",
-    "probe_boundary_margin": "PROBE_BOUNDARY_MARGIN",
     "probe_boundary_search_step": "PROBE_BOUNDARY_SEARCH_STEP",
     "probe_boundary_xtol": "PROBE_BOUNDARY_XTOL",
     "probe_max_search_steps": "PROBE_MAX_SEARCH_STEPS",
@@ -532,37 +550,41 @@ def _make_default_bulk_grids():
     Ni+Ti exceeds one; ``continuous_grid`` requires the whole rectangle to be
     valid, so users may need narrower custom axes for that mode.
     """
-    if CASE_NAME == CASE_FE_CR_NI_PYCALPHAD:
+    if CASE_NAME in [CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC]:
         cr_axis = np.unique(
-            np.asarray(
-                [
-                    0.30,
-                    0.36,
-                    0.378,
-                    0.404,
-                    0.43,
-                    0.448,
-                    0.484,
-                    0.52,
-                ],
-                dtype=np.float64,
-            )
+            np.concatenate((np.array([0.0001]), np.arange(0, 1+1e-10, 0.05)[1:-1], np.array([0.9999])))
+            # np.asarray(
+            #     [
+            #         0.30,
+            #         0.36,
+            #         0.378,
+            #         0.404,
+            #         0.43,
+            #         0.448,
+            #         0.484,
+            #         0.52,
+            #         0.6
+            #     ],
+            #     dtype=np.float64,
+            # )
         )
         ni_axis = np.unique(
-            np.asarray(
-                [
-                    0.14,
-                    0.20,
-                    0.232,
-                    0.30,
-                    0.324,
-                    0.34,
-                    0.358,
-                    0.364,
-                    0.37,
-                ],
-                dtype=np.float64,
-            )
+            np.concatenate((np.array([0.0001]), np.arange(0, 1+1e-10, 0.05)[1:-1], np.array([0.9999])))
+            # np.asarray(
+            #     [
+            #         0.14,
+            #         0.20,
+            #         0.232,
+            #         0.30,
+            #         0.324,
+            #         0.34,
+            #         0.358,
+            #         0.364,
+            #         0.37,
+            #         0.5,
+            #     ],
+            #     dtype=np.float64,
+            # )
         )
         return cr_axis, ni_axis
 
@@ -588,7 +610,7 @@ def _make_default_bulk_grids():
             [
                 0.10,
                 0.20,
-                0.39,
+                0.35,
                 0.468,
                 0.495,
                 0.59,
@@ -613,7 +635,7 @@ def _surrogate_diffusivity_sampling_kwargs():
             "diffusivity_bulk_points": bulk_points,
         }
     if interpolation in {"simplex_linear", "continuous_grid"}:
-        grids = _make_default_bulk_grids() if BULK_DIFFUSIVITY_GRIDS is None else tuple(np.asarray(axis, dtype=np.float64) for axis in BULK_DIFFUSIVITY_GRIDS)
+        grids = None if BULK_DIFFUSIVITY_GRIDS is None else tuple(np.asarray(axis, dtype=np.float64) for axis in BULK_DIFFUSIVITY_GRIDS)
         kwargs = {
             "diffusivity_interpolation": interpolation,
             "diffusivity_bulk_grids": grids,
@@ -634,6 +656,10 @@ def build_thermodynamics():
     """
     pair_ab, pair_bc = _interface_phase_pairs()
     if CASE_NAME == CASE_NI_TI_NB_TC:
+        therm_ab = TCPythonThermodynamics(_make_tc_config(pair_ab))
+        therm_bc = TCPythonThermodynamics(_make_tc_config(pair_bc))
+        return therm_ab, therm_bc
+    if CASE_NAME == CASE_FE_CR_NI_TC:
         therm_ab = TCPythonThermodynamics(_make_tc_config(pair_ab))
         therm_bc = TCPythonThermodynamics(_make_tc_config(pair_bc))
         return therm_ab, therm_bc
@@ -761,7 +787,6 @@ def _tieline_surrogate_probe_kwargs(probe_start, probe_end, probe_point):
         return {
             "probe_point": np.asarray(probe_point, dtype=np.float64),
             "probe_samples_per_side": PROBE_SAMPLES_PER_SIDE,
-            "probe_boundary_margin": PROBE_BOUNDARY_MARGIN,
             "probe_boundary_search_step": PROBE_BOUNDARY_SEARCH_STEP,
             "probe_boundary_xtol": PROBE_BOUNDARY_XTOL,
             "probe_max_search_steps": PROBE_MAX_SEARCH_STEPS,
@@ -790,10 +815,14 @@ def build_interface_surrogates(therm_ab, therm_bc):
                 BC_PROBE_END,
                 pair_bc,
             )
+    print("756")
+    t0 = time.perf_counter()
     with therm_ab:
         kwargs_ab = {}
-        if CASE_NAME == CASE_FE_CR_NI_PYCALPHAD:
+        if CASE_NAME in [CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC]:
             kwargs_ab["validation_database"] = TDB_PATH
+        t1 = time.perf_counter()
+        print(f"Building {pair_ab[0]}/{pair_ab[1]} surrogate from database took {t1 - t0:.3f} s")
         surrogate_ab = TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
             thermodynamics=therm_ab,
             elements=ELEMENTS,
@@ -807,7 +836,7 @@ def build_interface_surrogates(therm_ab, therm_bc):
         )
     with therm_bc:
         kwargs_bc = {}
-        if CASE_NAME == CASE_FE_CR_NI_PYCALPHAD:
+        if CASE_NAME in [CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC]:
             kwargs_bc["validation_database"] = TDB_PATH
         surrogate_bc = TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
             thermodynamics=therm_bc,
@@ -820,12 +849,18 @@ def build_interface_surrogates(therm_ab, therm_bc):
             **diffusivity_sampling,
             **kwargs_bc,
         )
+    # raise
+    t1 = time.perf_counter()
+    print(f"Making surrogates took {t1 - t0:.3f} s")
+    # debugInPlace()
+    print(pair_ab, pair_bc)
     return surrogate_ab, surrogate_bc
 
 
 def build_bulk_diffusivity_provider(surrogate_ab, surrogate_bc):
+    # raise ValueError("Figure out better way of doing this!")
     """Returns the model thermodynamics/diffusivity provider for the selected case."""
-    if CASE_NAME == CASE_FE_CR_NI_PYCALPHAD:
+    if CASE_NAME in [CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC]:
         liquid_source = FixedPhaseDiffusivityThermodynamics(
             surrogate_ab,
             PHASE_LIQUID,
@@ -852,8 +887,9 @@ def build_bulk_diffusivity_provider(surrogate_ab, surrogate_bc):
                         PHASES_FOR_MODEL[2]: surrogate_bc,
                     }
                 )
-
-    return surrogate_ab
+    else:
+        raise ValueError('SHOULD CHECK THIS ENSURE RETURNING ONLY ONE SURROGATE IS INTENDED')
+        # return surrogate_ab
 
 
 def make_mesh():
@@ -964,7 +1000,10 @@ def plot_independent_profiles(model, time=None):
         ax.axvline(position * 1.0e6, color="0.35", linestyle="--", linewidth=1)
     ax.set_xlabel("Distance (um)")
     ax.set_ylabel("Mole fraction")
-    ax.set_ylim(0.15, 0.55)
+    possibleBounds = [(0.15, 0.55), (0, 0.55)]
+    for possibleBound in possibleBounds:
+        if (y.ravel().min() > possibleBound[0]) and (y.ravel().max() < possibleBound[1]):
+            ax.set_ylim(possibleBound)
     ax.legend()
     fig.tight_layout()
     return fig, ax
@@ -982,6 +1021,20 @@ def plot_inventory_drift(model):
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Inventory drift")
     ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
+    ax.legend()
+    fig.tight_layout()
+    return fig, ax
+
+def plot_etas(model):
+    """Plots interface compositions over time."""
+    times = model.etaData._time[: model.etaData.N + 1]
+    etas = model.etaData._y[: model.etaData.N + 1]
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(times, etas[:, 0], label="A|B interface eta")
+    ax.plot(times, etas[:, 1], label="B|C interface eta")
+    ax.set_yscale("log")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Eta")
     ax.legend()
     fig.tight_layout()
     return fig, ax
@@ -1097,6 +1150,10 @@ def run_case(overrides=None, *, make_plots=True):
         print(f"Estimated number of time-steps: {n_steps}")
         bulk_thermodynamics = build_bulk_diffusivity_provider(surrogate_ab, surrogate_bc)
         model = build_model(surrogate_ab, surrogate_bc, bulk_thermodynamics=bulk_thermodynamics)
+        terminalComps_pred = model._interface_compositions(np.array([0, 0]))
+        if np.linalg.norm(terminalComps_pred[0][1]-terminalComps_pred[1][0]) > 1e-12:
+            debugInPlace()
+            raise
         if RUN_SOLVE:
             model.solve(
                 SOLVE_TIME,
@@ -1112,6 +1169,7 @@ def run_case(overrides=None, *, make_plots=True):
             figures["phase_widths"] = plot_phase_widths(model)
             figures["profiles"] = plot_independent_profiles(model)
             figures["inventory_drift"] = plot_inventory_drift(model)
+            figures["etas"] = plot_etas(model)
             plt.show()
         return {
             "model": model,
@@ -1127,6 +1185,7 @@ def run_case(overrides=None, *, make_plots=True):
 # %%
 if __name__ == "__main__":
     # debugInPlace()
+    # raise ValueError("USE DEFAULT PHASES (OR MAYBE ALL/CORRECT PHASES WHEN USING PYCALPHAD)")
     result = run_case(make_plots=True)
     surrogate_diagnostics = plot_surrogate_diagnostics_for_run(result, compare_ground_truth=True, renderer="browser")
     surrogate_diagnostics["ab"]["figures"]["thermodynamics"].show()
