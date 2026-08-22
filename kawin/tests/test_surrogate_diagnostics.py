@@ -257,6 +257,19 @@ def test_plotly_figures_have_expected_subplots_hover_and_layer_buttons():
     tie_truth = [trace for trace in tie.data if " truth " in f" {trace.name} " and "error" not in trace.name]
     assert tie_truth
     assert all(trace.mode == "markers" and trace.visible is None for trace in tie_truth)
+    alpha_truth_index, alpha_truth = next(
+        (index, trace)
+        for index, trace in enumerate(tie.data)
+        if trace.name == "ALPHA truth endpoints" and trace.type == "scatterternary"
+    )
+    alpha_surrogate_index = next(
+        index
+        for index, trace in enumerate(tie.data)
+        if trace.name == "ALPHA surrogate endpoints" and trace.type == "scatterternary"
+    )
+    assert alpha_truth_index < alpha_surrogate_index
+    assert alpha_truth.marker.color != alpha_ternary.line.color
+    assert alpha_truth.marker.size < next(trace.marker.size for trace in tie.data if trace.name == "ALPHA training endpoints")
     assert any(trace.customdata is not None and trace.customdata.shape[1] == 3 for trace in tie.data)
     alpha_interface = next(trace for trace in interface.data if trace.name == "ALPHA surrogate")
     beta_interface = next(trace for trace in interface.data if trace.name == "BETA surrogate")
@@ -265,8 +278,23 @@ def test_plotly_figures_have_expected_subplots_hover_and_layer_buttons():
     interface_truth = [trace for trace in interface.data if trace.name in {"ALPHA truth", "BETA truth"}]
     assert interface_truth
     assert all(trace.mode == "markers" and trace.visible is None for trace in interface_truth)
+    assert interface.data.index(interface_truth[0]) < interface.data.index(alpha_interface)
+    assert interface_truth[0].marker.color != alpha_interface.line.color
+    assert interface_truth[0].marker.size < next(trace.marker.size for trace in interface.data if trace.name == "ALPHA training")
     assert "training_distance" not in "".join(str(trace.hovertemplate) for trace in interface.data)
     assert len(bulk.layout.updatemenus[0].buttons) == 4
+    assert bulk.layout.width == 1500
+    prediction_maps = [trace for trace in bulk.data if trace.name == "Prediction"]
+    assert len(prediction_maps) == 4
+    for trace, (row, col) in zip(prediction_maps, ((1, 2), (1, 3), (1, 4), (2, 1))):
+        subplot = bulk.get_subplot(row, col)
+        assert trace.showscale
+        assert trace.colorbar.x == pytest.approx(subplot.xaxis.domain[1] + 0.006)
+        assert trace.colorbar.y == pytest.approx(0.5 * sum(subplot.yaxis.domain))
+        assert trace.colorbar.len == pytest.approx(subplot.yaxis.domain[1] - subplot.yaxis.domain[0])
+    distance_map = next(trace for trace in bulk.data if trace.name == "Training distance")
+    distance_subplot = bulk.get_subplot(2, 2)
+    assert distance_map.colorbar.x == pytest.approx(distance_subplot.xaxis.domain[1] + 0.006)
     assert "data" in bulk.to_plotly_json()
     assert isinstance(bulk.to_json(), str)
 

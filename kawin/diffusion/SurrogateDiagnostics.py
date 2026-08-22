@@ -664,6 +664,19 @@ def _leave_room_above_ternary(fig, layout_name="ternary", gap=0.07):
     ternary.domain.y = (lower, upper - gap)
 
 
+def _draw_truth_below_predictions(fig):
+    """Place ground-truth traces below surrogate and training traces."""
+    def layer(trace):
+        legendgroup = str(trace.legendgroup or "")
+        if legendgroup == "phase-regions":
+            return 0
+        if legendgroup == "truth" or legendgroup.startswith("truth-"):
+            return 1
+        return 2
+
+    fig.data = tuple(sorted(fig.data, key=layer))
+
+
 def _matrix_hover_fields(phase_report, component=None, source="surrogate"):
     """Flatten matrix diagnostics into point-aligned fields for Plotly hover data."""
     matrices = phase_report["matrices"]
@@ -752,6 +765,7 @@ def plot_tieline_diagnostics(
         subplot_titles=("Full ternary overview", "Zoomed composition view", "Endpoint components", "Tie-line geometry / error"),
     )
     colors = {phase: f"#{color}" for phase, color in zip(phases, ("1f77b4", "d62728"))}
+    truth_colors = {phase: f"#{color}" for phase, color in zip(phases, ("5b9bd5", "e56b6f"))}
 
     def endpoint_fields(phase, source, values, partner, phase_index):
         fields = {"source": source, "phase": phase, "eta": eta, **_composition_fields(values)}
@@ -889,14 +903,14 @@ def plot_tieline_diagnostics(
                 go.Scatterternary(
                     **_ternary_coordinates(values), mode="markers",
                     name=f"{phase} truth endpoints", legendgroup="truth",
-                    marker={"color": colors[phase], "symbol": "x", "size": 10, "line": {"width": 2}},
+                    marker={"color": truth_colors[phase], "symbol": "x", "size": 7, "line": {"width": 1}},
                     customdata=truth_custom, hovertemplate=truth_template,
                 ), row=1, col=1,
             )
             fig.add_trace(
                 go.Scatter(x=values[:, 0], y=values[:, 1], mode="markers", name=f"{phase} truth endpoints",
                            legendgroup="truth", showlegend=False,
-                           marker={"color": colors[phase], "symbol": "x", "size": 10, "line": {"width": 2}},
+                           marker={"color": truth_colors[phase], "symbol": "x", "size": 7, "line": {"width": 1}},
                            customdata=truth_custom, hovertemplate=truth_template),
                 row=1, col=2,
             )
@@ -904,7 +918,7 @@ def plot_tieline_diagnostics(
                 fig.add_trace(
                     go.Scatter(x=eta, y=values[:, component], mode="markers", name=f"{phase} truth X({report['elements'][component + 1]})",
                                legendgroup="truth",
-                               marker={"color": colors[phase], "symbol": "x" if component == 0 else "cross", "size": 9, "line": {"width": 2}},
+                               marker={"color": truth_colors[phase], "symbol": "x" if component == 0 else "cross", "size": 6, "line": {"width": 1}},
                                customdata=truth_custom, hovertemplate=truth_template),
                     row=2, col=1,
                 )
@@ -941,6 +955,7 @@ def plot_tieline_diagnostics(
         ternary={"sum": 1, "aaxis": {"title": report["elements"][2]}, "baxis": {"title": report["elements"][0]}, "caxis": {"title": report["elements"][1]}},
     )
     _leave_room_above_ternary(fig)
+    _draw_truth_below_predictions(fig)
     return fig
 
 
@@ -973,6 +988,7 @@ def plot_interface_diffusivity_diagnostics(
         subplot_titles=("D[0,0]", "D[0,1]", "D[1,0]", "D[1,1]"),
     )
     colors = ("#1f77b4", "#d62728", "#2ca02c")
+    truth_colors = ("#5b9bd5", "#e56b6f", "#70ad75")
     for phase_index, (phase, phase_report) in enumerate(phase_items):
         secondary_y = phase_index == 1
         for flat_index, component in enumerate(((0, 0), (0, 1), (1, 0), (1, 1))):
@@ -1041,7 +1057,7 @@ def plot_interface_diffusivity_diagnostics(
                     go.Scatter(
                         x=interface["eta"], y=truth["matrices"][:, component[0], component[1]], mode="markers",
                         name=f"{phase} truth", legendgroup=f"truth-{phase}", showlegend=flat_index == 0,
-                        marker={"color": colors[phase_index % len(colors)], "symbol": "x", "size": 9, "line": {"width": 2}},
+                        marker={"color": truth_colors[phase_index % len(truth_colors)], "symbol": "x", "size": 6, "line": {"width": 1}},
                         customdata=truth_custom, hovertemplate=truth_template,
                     ), row=row + 1, col=col + 1, secondary_y=secondary_y,
                 )
@@ -1071,6 +1087,7 @@ def plot_interface_diffusivity_diagnostics(
         title=f"Interface diffusivity diagnostics at {report['temperature']:g} K",
         template="plotly_white", height=750, uirevision="interface-diffusivity",
     )
+    _draw_truth_below_predictions(fig)
     return fig
 
 
@@ -1100,6 +1117,26 @@ def _grid_customdata(bulk, fields, selected, hover_format):
     return custom, "<br>".join(template_lines) + "<extra></extra>"
 
 
+def _subplot_colorbar(fig, row, col, title):
+    """Position a compact heatmap colorbar beside its owning subplot."""
+    subplot = fig.get_subplot(row, col)
+    x_domain = subplot.xaxis.domain
+    y_domain = subplot.yaxis.domain
+    return {
+        "title": {"text": title},
+        "x": x_domain[1] + 0.006,
+        "xanchor": "left",
+        "y": 0.5 * (y_domain[0] + y_domain[1]),
+        "yanchor": "middle",
+        "len": y_domain[1] - y_domain[0],
+        "lenmode": "fraction",
+        "thickness": 10,
+        "thicknessmode": "pixels",
+        "outlinewidth": 0.5,
+        "xpad": 0,
+    }
+
+
 def plot_bulk_diffusivity_diagnostics(
     report,
     phase,
@@ -1111,7 +1148,9 @@ def plot_bulk_diffusivity_diagnostics(
     """Create a bulk diffusivity dashboard using the browser renderer by default.
 
     Its ternary coverage view uses the same corner ordering as
-    :func:`plot_tieline_diagnostics`.
+    :func:`plot_tieline_diagnostics`. Each heatmap colorbar is sized and
+    positioned relative to its own subplot, including switchable truth and
+    error layers.
     """
     go, make_subplots = _require_plotly(renderer)
     if report.get("kind") != "diffusivity" or phase not in report["bulk"]["phases"]:
@@ -1205,8 +1244,10 @@ def plot_bulk_diffusivity_diagnostics(
                     x=bulk["axes"][0], y=bulk["axes"][1], z=_grid_values(bulk, values),
                     colorscale="RdBu" if layer in {"prediction", "truth"} else "Viridis",
                     zmid=0.0 if layer in {"prediction", "truth"} else None,
-                    colorbar={"title": "m^2/s" if layer != "relative_error" else "relative"},
-                    name=layer.replace("_", " ").title(), showscale=False,
+                    colorbar=_subplot_colorbar(
+                        fig, row, col, "m^2/s" if layer != "relative_error" else "relative"
+                    ),
+                    name=layer.replace("_", " ").title(), showscale=True,
                     visible=layer == "prediction", customdata=layer_custom, hovertemplate=layer_template,
                 ), row=row, col=col,
             )
@@ -1218,6 +1259,7 @@ def plot_bulk_diffusivity_diagnostics(
         go.Heatmap(
             x=bulk["axes"][0], y=bulk["axes"][1], z=_grid_values(bulk, phase_report["nearest_training_distance"]),
             colorscale="Viridis", name="Training distance", showscale=True,
+            colorbar=_subplot_colorbar(fig, 2, 2, "distance"),
             customdata=distance_custom, hovertemplate=distance_template,
         ), row=2, col=2,
     )
@@ -1229,6 +1271,7 @@ def plot_bulk_diffusivity_diagnostics(
         go.Heatmap(
             x=bulk["axes"][0], y=bulk["axes"][1], z=_grid_values(bulk, diagnostic),
             colorscale="Magma", name="Matrix relative error" if truth is not None else "Invalid matrix", showscale=True,
+            colorbar=_subplot_colorbar(fig, 2, 3, "relative" if truth is not None else "invalid"),
             customdata=diagnostic_custom, hovertemplate=diagnostic_template,
         ), row=2, col=3,
     )
@@ -1257,7 +1300,7 @@ def plot_bulk_diffusivity_diagnostics(
         fig.update_yaxes(title_text=f"X({report['elements'][2]})", range=y_range, row=row, col=col)
     fig.update_layout(
         title=f"Bulk diffusivity diagnostics: {phase} at {report['temperature']:g} K",
-        template="plotly_white", height=850, margin={"t": 130}, uirevision=f"bulk-diffusivity-{phase}",
+        template="plotly_white", width=1500, height=850, margin={"t": 130}, uirevision=f"bulk-diffusivity-{phase}",
         ternary={"sum": 1, "aaxis": {"title": report["elements"][2]}, "baxis": {"title": report["elements"][0]}, "caxis": {"title": report["elements"][1]}},
     )
     _leave_room_above_ternary(fig)
