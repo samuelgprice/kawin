@@ -38,9 +38,11 @@ if str(REPO_ROOT) not in sys.path:
 from examples.ThermoCalc.tc_python_adapter import TCPythonThermodynamics, ThermoCalcConfig
 from examples.ternaryExamples.pycalphad_default_phase_adapter import create_pycalphad_thermodynamics_source
 from kawin.diffusion import (
+    MergedPhaseDiffusivitySurrogate,
     MovingBoundaryIllingworthTernaryThreePhaseFD1DModel,
     TernaryMovingBoundaryThermodynamicsSurrogate,
     merge_phase_diffusivity_surrogates,
+    plot_surrogate_diagnostics,
 )
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder
 from kawin.solver import explicitEulerIterator
@@ -984,6 +986,77 @@ def plot_inventory_drift(model):
     fig.tight_layout()
     return fig, ax
 
+def plot_surrogate_diagnostics_for_run(
+    result,
+    *,
+    compare_ground_truth=False,
+    hover_fields="diagnostic",
+    **diagnostic_kwargs,
+):
+    """Builds interactive surrogate diagnostics for a completed ``run_case`` result.
+
+    Ground-truth calls are made only when ``compare_ground_truth`` is true.
+    The returned Plotly figures are not shown or saved. In a notebook, display
+    a figure directly, or persist one with, for example,
+    ``diagnostics["ab"]["figures"]["thermodynamics"].write_html("ab.html")``.
+
+    Parameters
+    ----------
+    result : dict
+        Mapping returned by :func:`run_case`.
+    compare_ground_truth : bool, optional
+        Whether to compare A|B and B|C surrogates to their original
+        thermodynamics providers.
+    hover_fields : str, sequence, or mapping, optional
+        Hover preset or explicit field selection passed to the Plotly helper.
+    **diagnostic_kwargs
+        Additional sampling and rendering arguments accepted by
+        :func:`kawin.diffusion.plot_surrogate_diagnostics`.
+
+    Returns
+    -------
+    dict
+        Diagnostics keyed by ``"ab"``, ``"bc"``, and, when present,
+        ``"merged_bulk"``.
+    """
+    required = ("surrogate_ab", "surrogate_bc")
+    missing = [key for key in required if key not in result]
+    if missing:
+        raise KeyError(f"run_case result is missing required keys {missing}.")
+
+    output = {}
+    for label, surrogate_key, thermodynamics_key in (
+        ("ab", "surrogate_ab", "therm_ab"),
+        ("bc", "surrogate_bc", "therm_bc"),
+    ):
+        thermodynamics = None
+        if compare_ground_truth:
+            if thermodynamics_key not in result:
+                raise KeyError(f"Ground-truth comparison requires result['{thermodynamics_key}'].")
+            thermodynamics = result[thermodynamics_key]
+        output[label] = plot_surrogate_diagnostics(
+            result[surrogate_key],
+            thermodynamics=thermodynamics,
+            hover_fields=hover_fields,
+            **diagnostic_kwargs,
+        )
+
+    bulk_provider = result.get("bulk_thermodynamics")
+    phase_sources = getattr(bulk_provider, "phase_sources", {})
+    merged = {}
+    for phase, source in phase_sources.items():
+        if isinstance(source, MergedPhaseDiffusivitySurrogate):
+            merged_truth = result.get("therm_ab") if compare_ground_truth else None
+            merged[phase] = plot_surrogate_diagnostics(
+                source,
+                thermodynamics=merged_truth,
+                hover_fields=hover_fields,
+                **diagnostic_kwargs,
+            )
+    if merged:
+        output["merged_bulk"] = merged
+    return output
+
 
 def run_case(overrides=None, *, make_plots=True):
     """
@@ -1055,5 +1128,13 @@ def run_case(overrides=None, *, make_plots=True):
 if __name__ == "__main__":
     # debugInPlace()
     result = run_case(make_plots=True)
+    surrogate_diagnostics = plot_surrogate_diagnostics_for_run(result, compare_ground_truth=True, renderer="browser")
+    surrogate_diagnostics["ab"]["figures"]["thermodynamics"].show()
+    surrogate_diagnostics["bc"]["figures"]["thermodynamics"].show()
+    surrogate_diagnostics["ab"]["figures"]["interface_diffusivity"].show()
+    surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['LIQUID'].show()
+    surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['FCC_A1'].show()
+    surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['LIQUID#1'].show()
+    surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['FCC_L12#1'].show()
 
 # %%
