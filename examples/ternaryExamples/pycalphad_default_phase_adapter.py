@@ -28,7 +28,13 @@ def resolve_pycalphad_equilibrium_phases(database, elements, equilibrium_phases=
 
 
 def order_pycalphad_phase_universe(interface_phases, equilibrium_phases):
-    """Order an equilibrium phase universe with the interface pair first."""
+    """Return a phase-order-independent equilibrium universe for interface sampling.
+
+    The requested interface phases must be present, but they do not define the
+    order used for full-phase equilibrium. Preserving the resolved database (or
+    user-supplied) order keeps adjacent interface facades from asking pycalphad
+    slightly different equilibrium problems.
+    """
     interface = tuple(str(phase) for phase in interface_phases)
     if len(interface) != 2:
         raise ValueError("interface_phases must contain exactly two phases.")
@@ -39,7 +45,7 @@ def order_pycalphad_phase_universe(interface_phases, equilibrium_phases):
             "interface phases must be present in the pycalphad equilibrium phase universe; "
             f"missing {tuple(missing)} from {universe}."
         )
-    return tuple(dict.fromkeys((*interface, *(phase for phase in universe if phase not in interface))))
+    return universe
 
 
 def create_pycalphad_thermodynamics_source(
@@ -98,11 +104,13 @@ class PycalphadDefaultPhaseThermodynamics:
             list(self.equilibrium_phases),
             **thermodynamics_kwargs,
         )
+        self.thermodynamics.gOffset = 0.0
         self.elements = list(self.thermodynamics.elements)
         self.phases = list(self.equilibrium_phases)
         self.phase_amount_tolerance = float(phase_amount_tolerance)
         if not np.isfinite(self.phase_amount_tolerance) or self.phase_amount_tolerance < 0.0:
             raise ValueError("phase_amount_tolerance must be finite and nonnegative.")
+        print(f"Using default-phase pycalphad facade with the following phases: {self.equilibrium_phases}")
 
     def __enter__(self):
         """Return this facade for symmetry with TC-Python-backed examples."""
@@ -154,6 +162,10 @@ class PycalphadDefaultPhaseThermodynamics:
             x_alpha = endpoints_by_phase[expected[0]]
             x_beta = endpoints_by_phase[expected[1]]
         else:
+            # if expected==('LIQUID', 'BCC_A2'):
+            from examples.debugInPlace import debugInPlace
+            print(x)
+            # debugInPlace()
             x_alpha = invalid.copy()
             x_beta = invalid.copy()
         if returnMeta:

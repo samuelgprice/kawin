@@ -72,10 +72,10 @@ def test_resolve_default_phases_for_fecrni_tdb_includes_sigma():
     assert {"FCC_A1", "LIQUID", "BCC_A2"}.issubset(phases)
 
 
-def test_order_phase_universe_puts_interface_pair_first():
+def test_order_phase_universe_preserves_canonical_equilibrium_order():
     phases = order_pycalphad_phase_universe(("LIQUID", "BCC_A2"), ("BCC_A2", "FCC_A1", "LIQUID", "SIGMA"))
 
-    assert phases == ("LIQUID", "BCC_A2", "FCC_A1", "SIGMA")
+    assert phases == ("BCC_A2", "FCC_A1", "LIQUID", "SIGMA")
 
 
 def test_explicit_equilibrium_phase_override_bypasses_database_filtering():
@@ -128,7 +128,34 @@ def test_factory_selects_default_or_restricted_pycalphad_phase_universe():
     )
 
     assert isinstance(default_source, PycalphadDefaultPhaseThermodynamics)
-    assert default_source.phases[:2] == ["FCC_A1", "LIQUID"]
+    assert {"FCC_A1", "LIQUID"}.issubset(default_source.phases)
     assert "SIGMA" in default_source.phases
+    assert default_source.thermodynamics.gOffset == 0.0
     assert isinstance(restricted_source, MulticomponentThermodynamics)
     assert restricted_source.phases == ["FCC_A1", "LIQUID"]
+
+
+def test_default_phase_equilibrium_is_interface_order_independent():
+    source_ab = create_pycalphad_thermodynamics_source(
+        TDB_PATH,
+        ELEMENTS,
+        ("FCC_A1", "LIQUID"),
+        use_default_phases=True,
+    )
+    source_bc = create_pycalphad_thermodynamics_source(
+        TDB_PATH,
+        ELEMENTS,
+        ("LIQUID", "BCC_A2"),
+        use_default_phases=True,
+    )
+    composition = np.array([0.425901015263025, 0.280023740661975], dtype=np.float64)
+    temperature = 1650.0
+
+    data_ab = source_ab.getEquilibriumData(composition, temperature)
+    data_bc = source_bc.getEquilibriumData(composition, temperature)
+
+    assert source_ab.equilibrium_phases == source_bc.equilibrium_phases
+    assert set(data_ab["stable_phases"]) == {"FCC_A1", "LIQUID", "BCC_A2"}
+    assert set(data_bc["stable_phases"]) == {"FCC_A1", "LIQUID", "BCC_A2"}
+    for phase in ("FCC_A1", "LIQUID", "BCC_A2"):
+        assert_allclose(data_ab["phase_compositions"][phase], data_bc["phase_compositions"][phase], atol=1.0e-11)
