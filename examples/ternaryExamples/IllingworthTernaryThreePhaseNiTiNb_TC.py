@@ -73,7 +73,7 @@ if __name__ == "__main__":
 CASE_NI_TI_NB_TC = "ni_ti_nb_tc"
 CASE_FE_CR_NI_PYCALPHAD = "fe_cr_ni_pycalphad"
 CASE_FE_CR_NI_TC = "fe_cr_ni_tc"
-CASE_NAME =  [CASE_NI_TI_NB_TC, CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC][2]
+CASE_NAME =  [CASE_NI_TI_NB_TC, CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC][1]
 
 ELEMENTS = ("NB", "NI", "TI")
 INDEPENDENT_ELEMENTS = ("NI", "TI")

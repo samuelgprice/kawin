@@ -1382,8 +1382,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         trial_dt = float(dt)
         for retry in range(self.maxStepRetries):
             if retry==(self.maxStepRetries-1):
-                from examples.debugInPlace import debugInPlace
-                debugInPlace()
+                # from examples.debugInPlace import debugInPlace
+                # debugInPlace()
             self._currdt = trial_dt
             try:
                 candidate = self._solve_interface_planar(profiles, interfaces, etas, trial_dt)

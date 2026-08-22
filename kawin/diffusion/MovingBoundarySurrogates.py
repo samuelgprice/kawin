@@ -1396,9 +1396,9 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             tieTriangle_dict = {'BCC_A2': {'phase': 'BCC_A2', 'composition': np.array([0.49904092560662083, 0.2097436451283125])},
                                 'FCC_A1': {'phase': 'FCC_A1', 'composition': np.array([0.371954021150168, 0.323853083868459])},
                                 'LIQUID': {'phase': 'LIQUID', 'composition': np.array([0.40484402655865886, 0.3052783832559402])}}
-            tieTriangle_dict = {'BCC_B2#1': {'phase': 'BCC_B2#1', 'composition': np.array([0.4990168180776723, 0.20973601790846239])},
-                                'FCC_L12#1': {'phase': 'FCC_L12#1', 'composition': np.array([0.37193735637122444, 0.3238388788584637])},
-                                'LIQUID#1': {'phase': 'LIQUID#1', 'composition': np.array([0.4048270853062835, 0.30526507445655177])}}
+            # tieTriangle_dict = {'BCC_B2#1': {'phase': 'BCC_B2#1', 'composition': np.array([0.4990168180776723, 0.20973601790846239])},
+            #                     'FCC_L12#1': {'phase': 'FCC_L12#1', 'composition': np.array([0.37193735637122444, 0.3238388788584637])},
+            #                     'LIQUID#1': {'phase': 'LIQUID#1', 'composition': np.array([0.4048270853062835, 0.30526507445655177])}}
             terminal_artificial_sample = {}
             terminal_artificial_sample['endpoints'] = tuple([tieTriangle_dict[phase]['composition'] for phase in tieline_phases])
             terminal_artificial_sample['midpoint'] = ((terminal_artificial_sample['endpoints'][0]+terminal_artificial_sample['endpoints'][1])/2).copy()
