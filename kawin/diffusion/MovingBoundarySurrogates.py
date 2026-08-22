@@ -18,6 +18,18 @@ _DIFFUSIVITY_INTERPOLATION_NEAREST = "nearest"
 _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID = "continuous_grid"
 _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR = "simplex_linear"
 
+DIFFUSIVITY_REL_TOL = 7e-8
+def debugInPlace():
+    try:
+        import debugpy
+        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+        debugpy.listen(5678)
+        print("WAITING FOR DEBUGGER ATTACH")
+        debugpy.wait_for_client()
+        debugpy.breakpoint()
+        print('break on this line')
+    except:
+        pass
 
 def _as_path_with_npz_suffix(path):
     path = Path(path)
@@ -366,6 +378,7 @@ class _BulkDiffusivitySimplexLinear2D:
         transformed = np.asarray(self._linear(values), dtype=np.float64)
         missing = ~np.all(np.isfinite(transformed), axis=1)
         if np.any(missing):
+            debugInPlace()
             transformed[missing] = np.asarray(self._nearest(values[missing]), dtype=np.float64)
         return (transformed ** 3).reshape(values.shape[0], 2, 2)
 
@@ -490,10 +503,18 @@ def _sample_expected_tieline(
     diffusivities = tuple(
         _validate_2x2_matrix(
             thermodynamics.getInterdiffusivity(comp, temperature, phase=phase),
+            # meta['other']['phase_interdiffusivities'][phase].copy(),
             f"interface diffusivity for phase {phase} at {_sample_label(eta=eta, composition=probe)}",
         )
         for phase, comp in zip(tieline_phases, endpoints)
     )
+    if 'other' in meta:
+        for i, phase in enumerate(tieline_phases):
+            interD = meta['other']['phase_interdiffusivities'][phase].copy()
+            if np.abs((interD-diffusivities[i])/diffusivities[i]).max()>DIFFUSIVITY_REL_TOL:
+                # debugInPlace()
+                print(np.abs((interD-diffusivities[i])/diffusivities[i]))
+                # raise
     return {
         "probe": probe,
         "endpoints": endpoints,
@@ -583,6 +604,7 @@ def _find_seed_scan_extent(
     for i in range(max_search_steps):
         scan_direction = _seed_tieline_scan_direction(last_sample["endpoints"], reference_direction=scan_direction)
         probe = last_sample["midpoint"] + sign * float(search_step) * scan_direction
+        prevNumCalcs = thermodynamics._backend.totalNumCalcs
         try:
             candidate = _sample_expected_tieline(
                 thermodynamics,
@@ -594,12 +616,15 @@ def _find_seed_scan_extent(
                 min_composition,
             )
         except ValueError as exc:
+            # if thermodynamics._backend.totalNumCalcs!=(prevNumCalcs+1):
+            #     print(prevNumCalcs, thermodynamics._backend.totalNumCalcs)
             lst_ofFailedProbes.append(probe.copy())
             last_error = exc
             low = 0.0
             high = float(search_step)
-            
+            j=0
             while high - low > xtol:
+                j+=1
                 middle = 0.5 * (low + high)
                 middle_probe = last_sample["midpoint"] + sign * middle * scan_direction
                 try:
@@ -619,8 +644,13 @@ def _find_seed_scan_extent(
                     lst_ofSamples.append(middle_sample.copy())
                     low = middle
 
+            print("\n")
+            print(f"i+1: {i+1}")
+            print(f"j: {j}")
             return lst_ofSamples.copy(), lst_ofFailedProbes.copy()
         else:
+            # if thermodynamics._backend.totalNumCalcs!=(prevNumCalcs+3):
+            #     print(prevNumCalcs, thermodynamics._backend.totalNumCalcs)
             lst_ofSamples.append(candidate.copy())
             last_sample = candidate
     message = (
@@ -692,6 +722,7 @@ def _resample_seed_scan_side(
                 min_composition,
             )
         except ValueError as exc:
+            debugInPlace()
             raise ValueError(
                 "Seed-point generated probe left the expected two-phase region "
                 f"at signed scan distance {float(sign) * float(target):.8g}."
@@ -1317,6 +1348,12 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 float(min_composition),
             )
             scan_direction = _seed_tieline_scan_direction(seed_sample["endpoints"])
+            print(f"Initial scan direction: {scan_direction}")
+            print(f"Initial seed_sample: {seed_sample}")
+            if getattr(thermodynamics, "_backend", None) is None:
+                setattr(thermodynamics, "_backend", type("Backend", (), {"totalNumCalcs": -1})())
+            print(f"totalNumCalcs: {thermodynamics._backend.totalNumCalcs}")
+
             lst_ofSamples_neg, lst_ofFailedProbes_neg = _find_seed_scan_extent(
                 thermodynamics,
                 seed_sample,
@@ -1331,6 +1368,9 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 probe_boundary_xtol,
                 probe_max_search_steps,
             )
+            print(f"scan direction after neg scan: {scan_direction}")
+            print(f"seed_sample after neg scan: {seed_sample}")
+            print(f"totalNumCalcs: {thermodynamics._backend.totalNumCalcs}")
             lst_ofSamples_pos, lst_ofFailedProbes_pos = _find_seed_scan_extent(
                 thermodynamics,
                 seed_sample,
@@ -1345,6 +1385,30 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 probe_boundary_xtol,
                 probe_max_search_steps,
             )
+            print(f"scan direction after pos scan: {scan_direction}")
+            print(f"seed_sample after pos scan: {seed_sample}")
+            print(f"totalNumCalcs: {thermodynamics._backend.totalNumCalcs}")
+            
+            ## HACK: Checking to see if adding artificial terminal tielines from the tie-triangle calc solves the convergence failure issue
+            # tieTriangle_dict = {'BCC_A2': {'phase': 'BCC_A2', 'composition': np.array([0.4998178512099022, 0.2100116084513938])},
+            #                     'FCC_A1': {'phase': 'FCC_A1', 'composition': np.array([0.3724898983604264, 0.32433420579110167])},
+            #                     'LIQUID': {'phase': 'LIQUID', 'composition': np.array([0.4053952962187453, 0.3057254077434284])}}
+            tieTriangle_dict = {'BCC_A2': {'phase': 'BCC_A2', 'composition': np.array([0.49904092560662083, 0.2097436451283125])},
+                                'FCC_A1': {'phase': 'FCC_A1', 'composition': np.array([0.371954021150168, 0.323853083868459])},
+                                'LIQUID': {'phase': 'LIQUID', 'composition': np.array([0.40484402655865886, 0.3052783832559402])}}
+            tieTriangle_dict = {'BCC_B2#1': {'phase': 'BCC_B2#1', 'composition': np.array([0.4990168180776723, 0.20973601790846239])},
+                                'FCC_L12#1': {'phase': 'FCC_L12#1', 'composition': np.array([0.37193735637122444, 0.3238388788584637])},
+                                'LIQUID#1': {'phase': 'LIQUID#1', 'composition': np.array([0.4048270853062835, 0.30526507445655177])}}
+            terminal_artificial_sample = {}
+            terminal_artificial_sample['endpoints'] = tuple([tieTriangle_dict[phase]['composition'] for phase in tieline_phases])
+            terminal_artificial_sample['midpoint'] = ((terminal_artificial_sample['endpoints'][0]+terminal_artificial_sample['endpoints'][1])/2).copy()
+            midpoint_distBool = (np.linalg.norm(terminal_artificial_sample['midpoint'] - lst_ofSamples_neg[-1]['midpoint']) > 1e-10)
+            endpoints_distBool = (np.linalg.norm(terminal_artificial_sample['endpoints'][0] - lst_ofSamples_neg[-1]['endpoints'][0]) > 1e-10) or (np.linalg.norm(terminal_artificial_sample['endpoints'][1] - lst_ofSamples_neg[-1]['endpoints'][1]) > 1e-10)
+            if midpoint_distBool or endpoints_distBool:
+                debugInPlace()
+                print(midpoint_distBool, endpoints_distBool)
+                raise
+
             both_sides = _resample_seed_scan_side(
                 thermodynamics,
                 1.0,
@@ -1355,8 +1419,17 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 elements,
                 float(min_composition),
                 probe_samples_per_side,
-                lst_ofSamples_neg[::-1] + [seed_sample] + lst_ofSamples_pos,
+                [terminal_artificial_sample] + lst_ofSamples_neg[::-1] + [seed_sample] + lst_ofSamples_pos,
             )
+            midpoint_distBool = (np.linalg.norm(terminal_artificial_sample['midpoint'] - both_sides[0][1]['midpoint'])==0)
+            endpoints_distBool = (np.linalg.norm(terminal_artificial_sample['endpoints'][0] - both_sides[0][1]['endpoints'][0]) > 1e-12) or (np.linalg.norm(terminal_artificial_sample['endpoints'][1] - both_sides[0][1]['endpoints'][1]) > 1e-12)
+            if midpoint_distBool or endpoints_distBool:
+                debugInPlace()
+                print(midpoint_distBool, endpoints_distBool)
+                raise
+            # debugInPlace()
+            print(f"totalNumCalcs: {thermodynamics._backend.totalNumCalcs}")
+
             signed_samples = [(distance, sample) for distance, sample in both_sides]
             signed_distances = np.asarray([distance for distance, _ in signed_samples], dtype=np.float64)
             eta_samples = (signed_distances - signed_distances[0]) / (signed_distances[-1] - signed_distances[0])
@@ -1483,6 +1556,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 continue
             arr = np.asarray(points, dtype=np.float64)
             if arr.ndim != 2 or arr.shape[1] != 2:
+                debugInPlace()
                 raise ValueError("bulk diffusivity sample points must have shape (n_points, 2).")
             for i, point in enumerate(arr):
                 comp = _as_independent_ternary_components(point, elements, f"bulk diffusivity point {i}")
