@@ -216,6 +216,19 @@ class _TCPythonBackend:
         self._tc_python = tc_python
         self._config = config
         try:
+            print("\n")
+            print(f"Total number of calcs: {self.totalNumCalcs}")
+            print(f"Total number of caches: {self.totalNumCaches}")
+            print(f"Total number of queries: {self.totalNumQueries}")
+        except:
+            pass
+        finally:
+            self.totalNumCalcs=0
+            self.totalNumCaches=0
+            self.totalNumQueries=0
+            self.total_kind_lst=[]
+            self.total_x_lst=[]
+        try:
             self._session = TCPython()
             self._setup = self._session.__enter__()
             if config.cache_dir is not None:
@@ -231,6 +244,10 @@ class _TCPythonBackend:
         """Close the TC-Python session if it is open."""
 
         if self._session is not None:
+            print("\n")
+            print(f"Total number of calcs: {self.totalNumCalcs}")
+            print(f"Total number of caches: {self.totalNumCaches}")
+            print(f"Total number of queries: {self.totalNumQueries}")
             try:
                 self._session.__exit__(None, None, None)
             finally:
@@ -465,8 +482,12 @@ class _TCPythonBackend:
         try:
             calc.remove_all_conditions()
             self._set_conditions(calc, x, T)
+            self.totalNumCalcs += 1
+            self.total_kind_lst.append(kind)
+            self.total_x_lst.append(x.copy())
             return calc.calculate()
         except Exception as exc:
+            print(kind, phase, x, T)
             raise ThermoCalcCalculationError(f"TC-Python {kind} calculation failed: {exc}") from exc
 
     def _configure_global_minimization(self, calc: Any, config: ThermoCalcConfig):
@@ -690,6 +711,9 @@ class TCPythonThermodynamics:
                 "other":{'phase_interdiffusivities':equilibrium['phase_interdiffusivities'].copy(), 'phase_tracerdiffusivities':equilibrium['phase_tracerdiffusivities'].copy()},
             }
         else:
+            # from examples.debugInPlace import debugInPlace
+            print(x)
+            # debugInPlace()
             x_alpha = -1.0 * np.ones(len(self.independent_elements), dtype=np.float64)
             x_beta = -1.0 * np.ones(len(self.independent_elements), dtype=np.float64)
             metadata = {
@@ -729,7 +753,9 @@ class TCPythonThermodynamics:
         return self._cached_or_calculate(key, removeCache, lambda: self._backend.calculate_kinetics(x, T, phase))
 
     def _cached_or_calculate(self, key: tuple[Any, ...], removeCache: bool, callback):
+        self._backend.totalNumQueries += 1
         if not removeCache and key in self._cache:
+            self._backend.totalNumCaches += 1
             return self._cache[key]
         self._ensure_started()
         result = callback()
