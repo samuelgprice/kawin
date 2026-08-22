@@ -86,6 +86,7 @@ REFERENCE_ELEMENT = "NB"
 TDB_PATH = None
 PYCALPHAD_USE_DEFAULT_PHASES = True
 PYCALPHAD_EQUILIBRIUM_PHASES = None
+G_OFFSET = 0.0
 
 # Full mole fractions are listed in ELEMENTS order: [NB, NI, TI].
 LEFT_BCC_FULL = np.array([0.899, 0.001, 0.100], dtype=np.float64)
@@ -674,6 +675,7 @@ def build_thermodynamics():
                 list(pair_ab),
                 use_default_phases=PYCALPHAD_USE_DEFAULT_PHASES,
                 equilibrium_phases=PYCALPHAD_EQUILIBRIUM_PHASES,
+                g_offset=G_OFFSET,
             ),
             PHASE_LIQUID,
             liquid_matrix,
@@ -685,6 +687,7 @@ def build_thermodynamics():
                 list(pair_bc),
                 use_default_phases=PYCALPHAD_USE_DEFAULT_PHASES,
                 equilibrium_phases=PYCALPHAD_EQUILIBRIUM_PHASES,
+                g_offset=G_OFFSET,
             ),
             PHASE_LIQUID,
             liquid_matrix,

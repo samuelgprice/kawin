@@ -126,6 +126,13 @@ def test_factory_selects_default_or_restricted_pycalphad_phase_universe():
         ("FCC_A1", "LIQUID"),
         use_default_phases=False,
     )
+    restricted_zero_source = create_pycalphad_thermodynamics_source(
+        TDB_PATH,
+        ELEMENTS,
+        ("FCC_A1", "LIQUID"),
+        use_default_phases=False,
+        g_offset=0.0,
+    )
 
     assert isinstance(default_source, PycalphadDefaultPhaseThermodynamics)
     assert {"FCC_A1", "LIQUID"}.issubset(default_source.phases)
@@ -133,6 +140,10 @@ def test_factory_selects_default_or_restricted_pycalphad_phase_universe():
     assert default_source.thermodynamics.gOffset == 0.0
     assert isinstance(restricted_source, MulticomponentThermodynamics)
     assert restricted_source.phases == ["FCC_A1", "LIQUID"]
+    assert restricted_source.gOffset == 1
+    assert isinstance(restricted_zero_source, MulticomponentThermodynamics)
+    assert restricted_zero_source.phases == ["FCC_A1", "LIQUID"]
+    assert restricted_zero_source.gOffset == 0.0
 
 
 def test_default_phase_equilibrium_is_interface_order_independent():

@@ -48,6 +48,14 @@ def order_pycalphad_phase_universe(interface_phases, equilibrium_phases):
     return universe
 
 
+def _validate_g_offset(g_offset):
+    """Return a finite scalar Gibbs-energy offset for wrapped kawin thermodynamics."""
+    value = float(g_offset)
+    if not np.isfinite(value):
+        raise ValueError("g_offset must be finite.")
+    return value
+
+
 def create_pycalphad_thermodynamics_source(
     database,
     elements,
@@ -55,24 +63,35 @@ def create_pycalphad_thermodynamics_source(
     *,
     use_default_phases=True,
     equilibrium_phases=None,
+    g_offset=None,
     **thermodynamics_kwargs,
 ):
-    """Create either restricted or default-phase pycalphad thermodynamics."""
+    """Create either restricted or default-phase pycalphad thermodynamics.
+
+    ``g_offset`` optionally overrides the wrapped kawin thermodynamics
+    ``gOffset`` value. Restricted two-phase sources keep kawin's default (1.0) when
+    this is omitted; default-phase sources use ``0.0`` by default so full-phase
+    equilibrium sampling is independent of the selected interface pair.
+    """
     if use_default_phases:
         return PycalphadDefaultPhaseThermodynamics(
             database,
             elements,
             interface_phases,
             equilibrium_phases=equilibrium_phases,
+            g_offset=0.0 if g_offset is None else g_offset,
             **thermodynamics_kwargs,
         )
     database_source = str(database) if isinstance(database, Path) else database
-    return MulticomponentThermodynamics(
+    source = MulticomponentThermodynamics(
         database_source,
         list(elements),
         list(interface_phases),
         **thermodynamics_kwargs,
     )
+    if g_offset is not None:
+        source.gOffset = _validate_g_offset(g_offset)
+    return source
 
 
 class PycalphadDefaultPhaseThermodynamics:
@@ -92,6 +111,7 @@ class PycalphadDefaultPhaseThermodynamics:
         *,
         equilibrium_phases=None,
         phase_amount_tolerance=1.0e-12,
+        g_offset=0.0,
         **thermodynamics_kwargs,
     ):
         self.database = str(database) if isinstance(database, (str, Path)) else database
@@ -104,7 +124,7 @@ class PycalphadDefaultPhaseThermodynamics:
             list(self.equilibrium_phases),
             **thermodynamics_kwargs,
         )
-        self.thermodynamics.gOffset = 0.0
+        self.thermodynamics.gOffset = _validate_g_offset(g_offset)
         self.elements = list(self.thermodynamics.elements)
         self.phases = list(self.equilibrium_phases)
         self.phase_amount_tolerance = float(phase_amount_tolerance)
