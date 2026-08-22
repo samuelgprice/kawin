@@ -1381,6 +1381,9 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         last_error = None
         trial_dt = float(dt)
         for retry in range(self.maxStepRetries):
+            if retry==(self.maxStepRetries-1):
+                from examples.debugInPlace import debugInPlace
+                debugInPlace()
             self._currdt = trial_dt
             try:
                 candidate = self._solve_interface_planar(profiles, interfaces, etas, trial_dt)
@@ -1397,6 +1400,9 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             except (RuntimeError, ValueError, ZeroDivisionError) as exc:
                 last_error = exc
                 trial_dt *= self.retryFactor
+        print(f"t: {t}")
+        print(f"etas: {etas}")
+        print(f"interfaces: {interfaces}")
         raise RuntimeError("Three-phase Illingworth step failed after timestep retries.") from last_error
 
     def getDt(self, dXdt):
