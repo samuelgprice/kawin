@@ -290,7 +290,9 @@ class _TCPythonBackend:
         config = self._require_config()
         result = self._calculate("equilibrium", None, x, T)
         raw_stable_phases = [str(phase).upper() for phase in result.get_stable_phases()]
-        stable_phases = [base_phase_name(phase) for phase in raw_stable_phases]
+        stable_phases = [phase for phase in raw_stable_phases] # currently stable_phases is the same as raw_stable_phases but still using stable_phases as this may change in the future
+        if len(set(stable_phases))!=len(stable_phases):
+            raise ValueError("More than one phase with the same base phase name")
         stable_phase_names = list(dict.fromkeys(stable_phases))
         phase_amounts = {phase: 0.0 for phase in config.phases}
         phase_compositions = {}
@@ -302,6 +304,43 @@ class _TCPythonBackend:
                 representative_amounts[base_phase] = amount
                 phase_compositions[base_phase] = self._phase_composition(result, raw_phase)
         reported_phases = tuple(dict.fromkeys((*config.phases, *stable_phases)))
+
+        tq = self._tq()
+        independent = config.independent_elements
+        reference = tc_element_name(config.reference_element)
+        phase_interdiffs_dict = {}
+        for D_phase in stable_phases:
+            interdiffusivity = np.array(
+                        [
+                            [
+                                self._value(
+                                    result,
+                                    tq.chemical_diffusion_coefficient(
+                                        D_phase,
+                                        tc_element_name(diffusing),
+                                        tc_element_name(gradient),
+                                        reference,
+                                    ),
+                                )
+                                for gradient in independent
+                            ]
+                            for diffusing in independent
+                        ],
+                        dtype=np.float64,
+                    )
+            phase_interdiffs_dict.update({D_phase:interdiffusivity.copy()})
+
+        phase_tracerdiffs_dict = {}
+        for D_phase in stable_phases:
+            tracer = np.array(
+                        [
+                            self._value(result, tq.tracer_diffusion_coefficient(D_phase, tc_element_name(element)))
+                            for element in config.elements
+                        ],
+                        dtype=np.float64,
+                    )
+            phase_tracerdiffs_dict.update({D_phase:tracer.copy()})
+
         return {
             "stable_phases": stable_phase_names,
             "phase_amounts": {
@@ -317,6 +356,8 @@ class _TCPythonBackend:
                 element: self._value(result, self._tq().chemical_potential_of_component(tc_element_name(element)))
                 for element in config.elements
             },
+            "phase_interdiffusivities": phase_interdiffs_dict.copy(),
+            "phase_tracerdiffusivities": phase_tracerdiffs_dict.copy(),
         }
 
     def calculate_driving_force(self, x: np.ndarray, T: float, precipitate_phase: str) -> dict[str, Any]:
@@ -637,7 +678,7 @@ class TCPythonThermodynamics:
         matrix_phase = self.config.matrix_phase
         equilibrium = self.getEquilibriumData(x, T)
         phase_compositions = equilibrium["phase_compositions"]
-        if matrix_phase in phase_compositions and precPhase in phase_compositions:
+        if set([matrix_phase, precPhase])==set(phase_compositions.keys()):
             x_alpha = full_to_independent_composition(phase_compositions[matrix_phase], self.config)
             x_beta = full_to_independent_composition(phase_compositions[precPhase], self.config)
             metadata = {
@@ -646,6 +687,7 @@ class TCPythonThermodynamics:
                     {"phase": matrix_phase, "composition": x_alpha},
                     {"phase": precPhase, "composition": x_beta},
                 ),
+                "other":{'phase_interdiffusivities':equilibrium['phase_interdiffusivities'].copy(), 'phase_tracerdiffusivities':equilibrium['phase_tracerdiffusivities'].copy()},
             }
         else:
             x_alpha = -1.0 * np.ones(len(self.independent_elements), dtype=np.float64)
