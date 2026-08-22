@@ -1548,3 +1548,55 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         if self.profileData is not None:
             data["profiles"] = np.asarray([history._y for history in self.profileData], dtype=object)
         return data
+
+
+    ''' Plotting functions for diagnostics '''
+    def confirmLastRecordedIndex(self, data):
+        if not ((data._time[data.N]!=0).all() and (data._time[data.N+1]==0).all()):
+            raise ValueError(f"{data._time[data.N]}==0 or {data._time[data.N+1]}!=0")
+        if not ((data._y[data.N]!=0).all() and (data._y[data.N+1]==0).all()):
+            raise ValueError(f"{data._y[data.N]}==0 or {data._y[data.N+1]}!=0")
+
+    def plot_latestCompProfile(self):
+        import matplotlib.pyplot as plt
+        self.confirmLastRecordedIndex(self.data)
+        self.confirmLastRecordedIndex(self.interfaceData)
+        y = self.data._y[self.interfaceData.N]
+        z_um = self._z * 1.0e6
+        fig, ax = plt.subplots(figsize=(6, 4))
+        for i, element in enumerate(self.elements):
+            ax.plot(z_um, y[:, i], label=f"X({element})")
+        for position in self.interfaceData._y[self.interfaceData.N]:
+            ax.axvline(position * 1.0e6, color="0.35", linestyle="--", linewidth=1)
+        ax.set_xlabel("Distance (um)")
+        ax.set_ylabel("Mole fraction")
+        plt.show(block=False)
+        return fig, ax
+
+    def plot_phaseWidths_vs_time(self):
+        import matplotlib.pyplot as plt
+        self.confirmLastRecordedIndex(self.interfaceData)
+        y = self.interfaceData._y[:self.interfaceData.N+1]
+        widths = np.column_stack((y[:, 0], y[:, 1] - y[:, 0], self._R - y[:, 1]))
+        time=self.interfaceData._time[:self.interfaceData.N+1]
+        fig, ax = plt.subplots(figsize=(6, 4))
+        for i, phase in enumerate(self.phases):
+            ax.plot(time, widths[:, i], label=f"{phase} width")
+        ax.legend()
+        plt.show(block=False)
+        return fig, ax
+
+    def plot_etas_vs_time(self):
+        import matplotlib.pyplot as plt
+        self.confirmLastRecordedIndex(self.etaData)
+        times = self.etaData._time[: self.etaData.N + 1]
+        etas = self.etaData._y[: self.etaData.N + 1]
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.plot(times, etas[:, 0], label="A|B interface eta")
+        ax.plot(times, etas[:, 1], label="B|C interface eta")
+        ax.set_yscale("log")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Eta")
+        ax.legend()
+        plt.show(block=False)
+        return fig, ax
