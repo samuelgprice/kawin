@@ -6,7 +6,12 @@ import pytest
 from kawin.diffusion import MovingBoundaryIllingworthTernaryThreePhaseFD1DModel
 from kawin.diffusion import MovingBoundaryIllingworthTernaryFD1DModel
 from kawin.diffusion import estimate_initial_eta_from_instantaneous_balance
-from kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM import _BULK_DIFFUSIVITY_IMPLICIT, _BULK_DIFFUSIVITY_LAGGED, _BULK_DIFFUSIVITY_PHASE_UNIFORM
+from kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM import (
+    _BULK_DIFFUSIVITY_IMPLICIT,
+    _BULK_DIFFUSIVITY_LAGGED,
+    _BULK_DIFFUSIVITY_PHASE_UNIFORM,
+    _ThreePhaseCandidate,
+)
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
     integrate_planar_transformed_profile_sequence,
@@ -75,7 +80,7 @@ class _RecordingThreePhaseThermodynamics:
         return np.eye(2, dtype=np.float64)
 
 
-def _make_stationary_model(*, mode=_BULK_DIFFUSIVITY_PHASE_UNIFORM, record=True, interfaces=(0.35, 0.7)):
+def _make_stationary_model(*, mode=_BULK_DIFFUSIVITY_PHASE_UNIFORM, record=True, interfaces=(0.35, 0.7), **model_kwargs):
     phase_values = (
         np.asarray([0.20, 0.10], dtype=np.float64),
         np.asarray([0.30, 0.15], dtype=np.float64),
@@ -102,6 +107,7 @@ def _make_stationary_model(*, mode=_BULK_DIFFUSIVITY_PHASE_UNIFORM, record=True,
         record=record,
         tolerance=1e-10,
         residual_tolerance=1e-10,
+        **model_kwargs,
     ), therm
 
 
@@ -572,6 +578,109 @@ def test_three_phase_stationary_profile_stays_stationary_and_records_histories()
     assert len(profiles) == 3
     assert model.interfaceData._y[: model.interfaceData.N + 1].shape[1] == 2
     assert model.etaData._y[: model.etaData.N + 1].shape[1] == 2
+
+
+def test_three_phase_single_thin_phase_extra_retry_stops_after_converged_step(monkeypatch):
+    model, _ = _make_stationary_model(
+        record=True,
+        max_step_retries=2,
+        retry_factor=0.5,
+        terminal_thin_phase_width=1e-9,
+        terminal_thin_phase_extra_retries=3,
+        terminal_thin_phase_policy="continue",
+    )
+    model.setup()
+    x_curr = model.getCurrentX()
+    x_curr[3] = np.asarray([5e-10, 0.7], dtype=np.float64)
+    model._interfaces_curr = x_curr[3].copy()
+    calls = []
+
+    def fake_solve(profiles, interfaces, etas, dt):
+        calls.append(float(dt))
+        if len(calls) < 4:
+            raise RuntimeError("forced retry")
+        return _ThreePhaseCandidate(
+            x_hat=np.zeros(4, dtype=np.float64),
+            profiles=tuple(profile.copy() for profile in profiles),
+            interfaces=np.asarray(interfaces, dtype=np.float64).copy(),
+            etas=np.asarray(etas, dtype=np.float64).copy(),
+            interface_compositions=model._interface_compositions(etas),
+            residual=np.zeros(4, dtype=np.float64),
+            scaled_residual=np.zeros(4, dtype=np.float64),
+            scaled_norm=0.0,
+            physical_norm=0.0,
+            bulk_results=(None, None, None),
+        )
+
+    monkeypatch.setattr(model, "_solve_interface_planar", fake_solve)
+
+    with pytest.warns(RuntimeWarning, match="below terminal_thin_phase_width"):
+        dXdt = model.getdXdt(0.0, x_curr)
+
+    dt = model.getDt(dXdt)
+    x_next = [np.asarray(value) + np.asarray(derivative) * dt for value, derivative in zip(x_curr, dXdt)]
+    _, stop = model.postProcess(dt, x_next)
+
+    assert stop is True
+    assert np.allclose(calls, [1e-4, 5e-5, 2.5e-5, 1.25e-5], rtol=0.0, atol=1e-18)
+    assert model.currentTime == pytest.approx(1.25e-5)
+    assert model.finalTime == pytest.approx(1.25e-5)
+    assert model._terminalThinPhaseInfo["phase"] == "A"
+    assert model._terminalThinPhaseInfo["width"] == pytest.approx(5e-10)
+
+
+def test_three_phase_terminal_retry_requires_exactly_one_thin_phase(monkeypatch):
+    model, _ = _make_stationary_model(
+        record=False,
+        max_step_retries=2,
+        retry_factor=0.5,
+        terminal_thin_phase_width=1e-9,
+        terminal_thin_phase_extra_retries=3,
+        terminal_thin_phase_policy="continue",
+    )
+    model.setup()
+    x_curr = model.getCurrentX()
+    x_curr[3] = np.asarray([5e-10, 1.0 - 5e-10], dtype=np.float64)
+    calls = []
+
+    def fake_solve(profiles, interfaces, etas, dt):
+        calls.append(float(dt))
+        raise RuntimeError("forced retry")
+
+    monkeypatch.setattr(model, "_solve_interface_planar", fake_solve)
+
+    with pytest.raises(RuntimeError, match="Three-phase Illingworth step failed after timestep retries"):
+        model.getdXdt(0.0, x_curr)
+
+    assert np.allclose(calls, [1e-4, 5e-5], rtol=0.0, atol=1e-18)
+
+
+def test_three_phase_prompt_policy_requires_interactive_stdin(monkeypatch):
+    model, _ = _make_stationary_model(
+        record=False,
+        max_step_retries=2,
+        retry_factor=0.5,
+        terminal_thin_phase_width=1e-9,
+        terminal_thin_phase_extra_retries=3,
+        terminal_thin_phase_policy="prompt",
+    )
+    model.setup()
+    x_curr = model.getCurrentX()
+    x_curr[3] = np.asarray([5e-10, 0.7], dtype=np.float64)
+
+    class NonInteractiveStdin:
+        def isatty(self):
+            return False
+
+    def fake_solve(profiles, interfaces, etas, dt):
+        raise RuntimeError("forced retry")
+
+    monkeypatch.setattr(model, "_solve_interface_planar", fake_solve)
+    monkeypatch.setattr("sys.stdin", NonInteractiveStdin())
+
+    with pytest.warns(RuntimeWarning, match="below terminal_thin_phase_width"):
+        with pytest.raises(RuntimeError, match="stdin is not interactive"):
+            model.getdXdt(0.0, x_curr)
 
 
 def test_three_phase_initial_etas_are_estimated_from_instantaneous_balance():
