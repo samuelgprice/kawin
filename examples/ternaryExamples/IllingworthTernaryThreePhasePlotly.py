@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import numpy as np
 
 from kawin.diffusion import evaluate_tieline_diagnostics
@@ -135,6 +133,14 @@ def _phase_labels(model):
     return tuple(f"{prefix}: {phase}" for prefix, phase in zip(_PHASE_PREFIXES, phases))
 
 
+def _global_average_full(profiles, grids, boundaries, domain_length):
+    """Integrate full ternary compositions over the transformed phase intervals."""
+    average = np.zeros(3, dtype=np.float64)
+    for profile, grid, left, right in zip(profiles, grids, boundaries[:-1], boundaries[1:]):
+        average += (float(right) - float(left)) * np.trapezoid(_full_composition(profile), grid, axis=0)
+    return average / float(domain_length)
+
+
 def _frame_profile(model, time, elements, component_indices, distance_scale):
     """Build all dynamic profile arrays for one recorded time."""
     interfaces = np.asarray(model.getInterfacePositions(float(time)), dtype=np.float64).reshape(2)
@@ -171,11 +177,36 @@ def _frame_profile(model, time, elements, component_indices, distance_scale):
     return {
         "time": float(time),
         "interfaces": interfaces * distance_scale,
+        "phase_widths": np.diff(boundaries) * distance_scale,
         "phase_segments": phase_segments,
+        "global_average": _global_average_full(profiles, grids, boundaries, domain_length),
         "xy_x": np.asarray(xy_x, dtype=np.float64),
         "xy_y": {index: np.asarray(values, dtype=np.float64) for index, values in xy_y.items()},
         "elements": elements,
     }
+
+
+def _initial_phase_compositions(model, time):
+    """Return constant initial phase compositions after validating each profile."""
+    profiles = tuple(np.asarray(profile, dtype=np.float64) for profile in model.getTransformedState(float(time)))
+    if len(profiles) != 3:
+        raise ValueError("Starting phase composition markers require three transformed phase profiles.")
+    full = []
+    for phase_index, profile in enumerate(profiles):
+        if not np.allclose(profile, profile[0], rtol=1.0e-10, atol=1.0e-12):
+            raise ValueError(
+                "Cannot display starting phase compositions because transformed "
+                f"profile {phase_index} is not constant at the first plotted time."
+            )
+        full.append(_full_composition(profile[:1])[0])
+    return np.asarray(full, dtype=np.float64)
+
+
+def _interface_eta_values(model, time):
+    """Return current A|B and B|C tie-line coordinates."""
+    if not hasattr(model, "getInterfaceEtas"):
+        raise ValueError("Current eta display requires model.getInterfaceEtas(time).")
+    return np.asarray(model.getInterfaceEtas(float(time)), dtype=np.float64).reshape(2)
 
 
 def _phase_customdata(frame, phase_index, phase_label):
@@ -195,6 +226,13 @@ def _component_customdata(frame, component_index):
     x = frame["xy_x"]
     y = frame["xy_y"][component_index]
     return np.column_stack((np.full(len(x), frame["time"], dtype=np.float64), x, y))
+
+
+def _average_customdata(frame):
+    return np.asarray(
+        [[frame["time"], *frame["global_average"]]],
+        dtype=np.float64,
+    )
 
 
 def _phase_trace(go, frame, phase_index, phase_label, elements, unit_label):
@@ -218,6 +256,23 @@ def _phase_trace(go, frame, phase_index, phase_label, elements, unit_label):
     )
 
 
+def _global_average_ternary_trace(go, frame, elements):
+    return go.Scatterternary(
+        **_ternary_coordinates(frame["global_average"][None, :]),
+        mode="markers",
+        name="Global average composition",
+        legendgroup="global-average",
+        marker={"color": "black", "symbol": "diamond", "size": 10},
+        customdata=_average_customdata(frame),
+        hovertemplate=(
+            "time=%{customdata[0]:.6g} s<br>"
+            f"X({elements[0]})=%{{customdata[1]:.6g}}<br>"
+            f"X({elements[1]})=%{{customdata[2]:.6g}}<br>"
+            f"X({elements[2]})=%{{customdata[3]:.6g}}<extra>Global average</extra>"
+        ),
+    )
+
+
 def _component_trace(go, frame, component_index, elements, unit_label):
     return go.Scatter(
         x=frame["xy_x"],
@@ -236,6 +291,25 @@ def _component_trace(go, frame, component_index, elements, unit_label):
     )
 
 
+def _global_average_xy_trace(go, frame, component_index, elements):
+    finite_x = frame["xy_x"][np.isfinite(frame["xy_x"])]
+    y = float(frame["global_average"][component_index])
+    return go.Scatter(
+        x=[float(np.min(finite_x)), float(np.max(finite_x))],
+        y=[y, y],
+        mode="lines",
+        name=f"Global average X({elements[component_index]})",
+        legendgroup=f"global-average-{component_index}",
+        showlegend=False,
+        line={
+            "color": _COMPONENT_COLORS[component_index % len(_COMPONENT_COLORS)],
+            "dash": "dot",
+            "width": 1.5,
+        },
+        hovertemplate=f"X({elements[component_index]})=%{{y:.6g}}<extra>Global average</extra>",
+    )
+
+
 def _interface_trace(go, frame, interface_index, unit_label):
     x = float(frame["interfaces"][interface_index])
     return go.Scatter(
@@ -247,6 +321,50 @@ def _interface_trace(go, frame, interface_index, unit_label):
         showlegend=interface_index == 0,
         line={"color": "rgba(40,40,40,0.55)", "dash": "dash", "width": 1.5},
         hovertemplate=f"distance=%{{x:.6g}} {unit_label}<extra></extra>",
+    )
+
+
+def _starting_phase_trace(go, initial_full, phase_labels, elements):
+    customdata = np.column_stack((np.asarray(phase_labels, dtype=object), initial_full))
+    return go.Scatterternary(
+        **_ternary_coordinates(initial_full),
+        mode="markers",
+        name="Starting phase compositions",
+        legendgroup="starting-compositions",
+        marker={"color": "black", "symbol": "x", "size": 11, "line": {"width": 2}},
+        customdata=customdata,
+        hovertemplate=(
+            "phase=%{customdata[0]}<br>"
+            f"X({elements[0]})=%{{customdata[1]:.6g}}<br>"
+            f"X({elements[1]})=%{{customdata[2]:.6g}}<br>"
+            f"X({elements[2]})=%{{customdata[3]:.6g}}<extra>Starting composition</extra>"
+        ),
+    )
+
+
+def _misc_info_trace(go, frame, eta_values, phase_labels, unit_label):
+    """Build the synchronized misc-info table for etas and phase widths."""
+    labels = ["Time", "A|B eta", "B|C eta"]
+    values = [f"{frame['time']:.6g} s", f"{eta_values[0]:.6g}", f"{eta_values[1]:.6g}"]
+    for phase_label, width in zip(phase_labels, frame["phase_widths"]):
+        labels.append(f"{phase_label} width")
+        values.append(f"{float(width):.6g} {unit_label}")
+    return go.Table(
+        columnwidth=[0.58, 0.42],
+        header={
+            "values": ["Quantity", "Value"],
+            "fill_color": "rgb(235, 240, 248)",
+            "align": "left",
+            "font": {"size": 12},
+        },
+        cells={
+            "values": [labels, values],
+            "fill_color": "rgb(250, 250, 250)",
+            "align": "left",
+            "font": {"size": 12},
+            "height": 25,
+        },
+        name="Misc info",
     )
 
 
@@ -307,6 +425,9 @@ def plot_three_phase_composition_profile(
     show_tielines=True,
     tieline_eta_count=101,
     display_tieline_count=21,
+    show_global_average=True,
+    show_starting_phase_compositions=True,
+    show_interface_etas=True,
     renderer="browser",
 ):
     """
@@ -316,7 +437,10 @@ def plot_three_phase_composition_profile(
     ``IllingworthTernaryThreePhaseNiTiNb_TC.run_case`` with a solved or setup
     three-phase model stored under ``"model"``. Profiles are read from the
     recorded transformed phase histories so each moving interval is plotted in
-    its own phase color and interface discontinuities are preserved.
+    its own phase color and interface discontinuities are preserved. Global
+    average composition, constant starting phase-composition markers, and
+    current interface eta values are shown by default. Eta values and phase
+    widths are displayed in a synchronized misc-info panel.
     """
     if "model" not in result:
         raise KeyError("result must contain result['model'].")
@@ -336,26 +460,60 @@ def plot_three_phase_composition_profile(
         for index in selected_indices
     ]
     initial = frames_data[0]
-
-    fig = make_subplots(
-        rows=1,
-        cols=2,
-        specs=[[{"type": "ternary"}, {"type": "xy"}]],
-        column_widths=(0.48, 0.52),
-        horizontal_spacing=0.10,
-        subplot_titles=("Composition path", "Composition profile"),
+    initial_phase_compositions = (
+        _initial_phase_compositions(model, times[0])
+        if show_starting_phase_compositions
+        else None
     )
+    eta_data = (
+        [_interface_eta_values(model, times[index]) for index in selected_indices]
+        if show_interface_etas
+        else None
+    )
+
+    if show_interface_etas:
+        fig = make_subplots(
+            rows=2,
+            cols=2,
+            specs=[[{"type": "ternary", "rowspan": 2}, {"type": "xy"}], [None, {"type": "table"}]],
+            column_widths=(0.54, 0.46),
+            row_heights=(0.52, 0.48),
+            horizontal_spacing=0.06,
+            vertical_spacing=0.15,
+            subplot_titles=("Composition path", "Composition profile", "Misc info"),
+        )
+    else:
+        fig = make_subplots(
+            rows=1,
+            cols=2,
+            specs=[[{"type": "ternary"}, {"type": "xy"}]],
+            column_widths=(0.48, 0.52),
+            horizontal_spacing=0.10,
+            subplot_titles=("Composition path", "Composition profile"),
+        )
 
     dynamic_trace_indices = []
     for phase_index, phase_label in enumerate(phase_labels):
         dynamic_trace_indices.append(len(fig.data))
         fig.add_trace(_phase_trace(go, initial, phase_index, phase_label, elements, unit_label), row=1, col=1)
+    if show_global_average:
+        dynamic_trace_indices.append(len(fig.data))
+        fig.add_trace(_global_average_ternary_trace(go, initial, elements), row=1, col=1)
+    if show_starting_phase_compositions:
+        fig.add_trace(_starting_phase_trace(go, initial_phase_compositions, phase_labels, elements), row=1, col=1)
     for component_index in component_indices:
         dynamic_trace_indices.append(len(fig.data))
         fig.add_trace(_component_trace(go, initial, component_index, elements, unit_label), row=1, col=2)
+    if show_global_average:
+        for component_index in component_indices:
+            dynamic_trace_indices.append(len(fig.data))
+            fig.add_trace(_global_average_xy_trace(go, initial, component_index, elements), row=1, col=2)
     for interface_index in range(2):
         dynamic_trace_indices.append(len(fig.data))
         fig.add_trace(_interface_trace(go, initial, interface_index, unit_label), row=1, col=2)
+    if show_interface_etas:
+        dynamic_trace_indices.append(len(fig.data))
+        fig.add_trace(_misc_info_trace(go, initial, eta_data[0], phase_labels, unit_label), row=2, col=2)
 
     if show_tielines:
         _add_static_tielines(fig, go, result, int(tieline_eta_count), int(display_tieline_count))
@@ -366,8 +524,14 @@ def plot_three_phase_composition_profile(
             _phase_trace(go, frame, phase_index, phase_label, elements, unit_label)
             for phase_index, phase_label in enumerate(phase_labels)
         ]
+        if show_global_average:
+            traces.append(_global_average_ternary_trace(go, frame, elements))
         traces.extend(_component_trace(go, frame, component_index, elements, unit_label) for component_index in component_indices)
+        if show_global_average:
+            traces.extend(_global_average_xy_trace(go, frame, component_index, elements) for component_index in component_indices)
         traces.extend(_interface_trace(go, frame, interface_index, unit_label) for interface_index in range(2))
+        if show_interface_etas:
+            traces.append(_misc_info_trace(go, frame, eta_data[frame_number], phase_labels, unit_label))
         frames.append(
             go.Frame(
                 name=_frame_name(frame_number, frame["time"]),
@@ -390,10 +554,22 @@ def plot_three_phase_composition_profile(
     ]
     fig.update_layout(
         template="plotly_white",
-        width=1250,
+        width=1450 if show_interface_etas else 1250,
         height=700,
         title=f"Three-phase Illingworth composition profile, t={initial['time']:.6g} s",
-        margin={"t": 95, "b": 90},
+        margin={"t": 110, "b": 90},
+        legend={
+            "orientation": "v",
+            "x": -0.05,
+            "xanchor": "left",
+            "y": 0.985,
+            "yanchor": "top",
+            "font": {"size": 8},
+            "itemsizing": "constant",
+            "bgcolor": "rgba(255,255,255,0.65)",
+            "bordercolor": "rgba(160,160,160,0.35)",
+            "borderwidth": 1,
+        },
         sliders=[
             {
                 "active": 0,
