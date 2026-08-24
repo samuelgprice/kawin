@@ -1203,3 +1203,12 @@ if __name__ == "__main__":
     surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['FCC_L12#1'].show()
 
 # %%
+from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+plot_three_phase_composition_profile(
+    result,
+    show_tielines=True,
+    tieline_eta_count=41,
+    display_tieline_count=41,
+    renderer="browser",
+)
+# %%
