@@ -84,6 +84,7 @@ PHASES_FOR_MODEL = (None, None, None)
 TEMPERATURE = 1300.0
 REFERENCE_ELEMENT = "NB"
 TDB_PATH = None
+TC_USE_DEFAULT_PHASES = True
 PYCALPHAD_USE_DEFAULT_PHASES = True
 PYCALPHAD_EQUILIBRIUM_PHASES = None
 G_OFFSET = 0.0
@@ -209,7 +210,7 @@ _CASE_DEFAULTS = {
         "TEMPERATURE": 1650.0,
         "REFERENCE_ELEMENT": "FE",
         "TDB_PATH": EXAMPLES_DIR / "FeCrNi_Lee1993_L_style_ternary_checked_withMobility.tdb",
-        "PYCALPHAD_USE_DEFAULT_PHASES": True,
+        "TC_USE_DEFAULT_PHASES": False,
         "PYCALPHAD_EQUILIBRIUM_PHASES": None,
         "INITIAL_PHASE_COMPOSITIONS": (
             np.array([0.30, 0.34], dtype=np.float64),
@@ -285,6 +286,7 @@ _OVERRIDE_KEY_ALIASES = {
     "probe_max_search_steps": "PROBE_MAX_SEARCH_STEPS",
     "pycalphad_equilibrium_phases": "PYCALPHAD_EQUILIBRIUM_PHASES",
     "pycalphad_use_default_phases": "PYCALPHAD_USE_DEFAULT_PHASES",
+    "tc_use_default_phases": "TC_USE_DEFAULT_PHASES",
     "tolerance": "TOLERANCE",
     "verbose": "VERBOSE",
     "verbose_interval": "VERBOSE_INTERVAL",
@@ -509,6 +511,7 @@ def _make_tc_config(phases):
         elements=ELEMENTS,
         phases=tuple(phases),
         reference_element=REFERENCE_ELEMENT,
+        use_default_phases=TC_USE_DEFAULT_PHASES,
         global_minimization_max_grid_points=GLOBAL_MINIMIZATION_MAX_GRID_POINTS,
         cache_dir=OUTPUTS / "tc_cache",
     )
