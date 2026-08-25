@@ -1616,6 +1616,103 @@ def test_ternary_implicit_inner_failure_propagates_to_timestep_retry(monkeypatch
     assert all(np.all(np.isfinite(np.asarray(part, dtype=np.float64))) for part in dXdt)
 
 
+def test_ternary_single_thin_phase_extra_retry_stops_after_converged_step(monkeypatch):
+    model = _make_scope_validation_model()
+    model.maxStepRetries = 2
+    model.retryFactor = 0.5
+    model.terminalThinPhaseWidth = 1e-9
+    model.terminalThinPhaseExtraRetries = 3
+    model.terminalThinPhasePolicy = "continue"
+    model.setup()
+    x_curr = model.getCurrentX()
+    x_curr[2] = 5e-10
+    model._s_curr = float(x_curr[2])
+    calls = []
+
+    def fake_step(p, q, s, old_s, eta, dt):
+        calls.append(float(dt))
+        if len(calls) < 4:
+            raise RuntimeError("forced retry")
+        c_left, c_right = model._interface_compositions(eta)
+        return p.copy(), q.copy(), float(s), float(eta), c_left, c_right, np.eye(2), np.eye(2)
+
+    monkeypatch.setattr(model, "_take_implicit_step_planar", fake_step)
+
+    with pytest.warns(RuntimeWarning, match="below terminal_thin_phase_width"):
+        dXdt = model.getdXdt(0.0, x_curr)
+
+    dt = model.getDt(dXdt)
+    x_next = [
+        np.asarray(x_curr[0]) + np.asarray(dXdt[0]) * dt,
+        np.asarray(x_curr[1]) + np.asarray(dXdt[1]) * dt,
+        float(x_curr[2]) + float(dXdt[2]) * dt,
+        float(x_curr[3]) + float(dXdt[3]) * dt,
+    ]
+    _, stop = model.postProcess(dt, x_next)
+
+    assert stop is True
+    assert np.allclose(calls, [1e-4, 5e-5, 2.5e-5, 1.25e-5], rtol=0.0, atol=1e-18)
+    assert model.currentTime == pytest.approx(1.25e-5)
+    assert model.finalTime == pytest.approx(1.25e-5)
+    assert model._terminalThinPhaseInfo["phase"] == "ALPHA"
+    assert model._terminalThinPhaseInfo["width"] == pytest.approx(5e-10)
+
+
+def test_ternary_prompt_policy_reports_input_read_failure(monkeypatch):
+    model = _make_scope_validation_model()
+    model.maxStepRetries = 2
+    model.retryFactor = 0.5
+    model.terminalThinPhaseWidth = 1e-9
+    model.terminalThinPhaseExtraRetries = 3
+    model.terminalThinPhasePolicy = "prompt"
+    model.setup()
+    x_curr = model.getCurrentX()
+    x_curr[2] = 5e-10
+
+    def fake_step(p, q, s, old_s, eta, dt):
+        raise RuntimeError("forced retry")
+
+    def fake_input(prompt):
+        raise OSError("input unavailable")
+
+    monkeypatch.setattr(model, "_take_implicit_step_planar", fake_step)
+    monkeypatch.setattr("builtins.input", fake_input)
+
+    with pytest.warns(RuntimeWarning, match="below terminal_thin_phase_width"):
+        with pytest.raises(RuntimeError, match="could not read a response from stdin"):
+            model.getdXdt(0.0, x_curr)
+
+
+def test_ternary_terminal_retry_requires_exactly_one_thin_phase(monkeypatch):
+    model = _make_scope_validation_model()
+    model.maxStepRetries = 2
+    model.retryFactor = 0.5
+    model.terminalThinPhaseWidth = 0.75
+    model.terminalThinPhaseExtraRetries = 3
+    model.terminalThinPhasePolicy = "continue"
+    model.setup()
+    x_curr = model.getCurrentX()
+    x_curr[2] = 0.5
+    calls = []
+
+    def fake_step(p, q, s, old_s, eta, dt):
+        calls.append(float(dt))
+        raise RuntimeError("forced retry")
+
+    class DebugStub:
+        @staticmethod
+        def debugInPlace():
+            pass
+
+    monkeypatch.setattr(model, "_take_implicit_step_planar", fake_step)
+    monkeypatch.setitem(__import__("sys").modules, "examples.debugInPlace", DebugStub)
+
+    with pytest.raises(RuntimeError, match="Ternary Illingworth step failed after timestep retries"):
+        model.getdXdt(0.0, x_curr)
+
+    assert np.allclose(calls, [1e-4, 5e-5], rtol=0.0, atol=1e-18)
+
+
 def _interface_candidate_test_inputs(model, x_hat=None):
     p, q, s, eta = model.getCurrentX()
     dt = model._compute_dt(model.currentTime)

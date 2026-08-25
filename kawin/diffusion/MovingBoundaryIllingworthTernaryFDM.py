@@ -690,7 +690,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     a Picard iterate inside each candidate phase solve. The Picard iterate is
     initialized deterministically from the accepted old-time profile with the
     trial interface boundary imposed. The interface residual consumes the exact
-    interface-adjacent diffusive flux returned by each bulk solve.
+    interface-adjacent diffusive flux returned by each bulk solve. When exactly
+    one phase width is below ``terminal_thin_phase_width`` after the normal
+    retry budget is exhausted, an optional terminal retry path can keep
+    reducing ``dt`` until one final converged step is found and then stop the
+    solve early.
     """
 
     def __init__(
@@ -727,6 +731,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         max_iterations: int = 25,
         max_step_retries: int = 8,
         retry_factor: float = 0.5,
+        terminal_thin_phase_width: float | None = 1e-9,
+        terminal_thin_phase_extra_retries: int = 20,
+        terminal_thin_phase_policy: str = "prompt",
         constraints=None,
         record=False,
         record_pq_data: bool = True,
@@ -758,6 +765,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self.maxIterations = int(max_iterations)
         self.maxStepRetries = int(max_step_retries)
         self.retryFactor = float(retry_factor)
+        self.terminalThinPhaseWidth = None if terminal_thin_phase_width is None else float(terminal_thin_phase_width)
+        self.terminalThinPhaseExtraRetries = int(terminal_thin_phase_extra_retries)
+        self.terminalThinPhasePolicy = str(terminal_thin_phase_policy)
         self.recordPqData = bool(record_pq_data)
         self._inputUGrid = self._validate_transformed_grid(transformed_u_grid, "transformed_u_grid")
         self._inputVGrid = self._validate_transformed_grid(transformed_v_grid, "transformed_v_grid")
@@ -788,6 +798,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._reset_implicit_diagnostics()
         self._lastStepRetries = 0
         self._lastInterfaceCompositions = None
+        self._terminalThinPhaseStop = False
+        self._terminalThinPhaseInfo = None
         self.initialEtaEstimate = None
         self._initialInventory = None
 
@@ -889,6 +901,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             raise ValueError("max_step_retries must be at least 1.")
         if not (0.0 < self.retryFactor < 1.0):
             raise ValueError("retry_factor must be between 0 and 1.")
+        if self.terminalThinPhaseWidth is not None and (not np.isfinite(self.terminalThinPhaseWidth) or self.terminalThinPhaseWidth <= 0.0):
+            raise ValueError("terminal_thin_phase_width must be positive and finite when specified.")
+        if self.terminalThinPhaseExtraRetries < 0:
+            raise ValueError("terminal_thin_phase_extra_retries must be non-negative.")
+        if self.terminalThinPhasePolicy not in {"prompt", "continue", "raise"}:
+            raise ValueError("terminal_thin_phase_policy must be 'prompt', 'continue', or 'raise'.")
         if self.phaseANodes is not None and self.phaseANodes < 3:
             raise ValueError("phase_a_nodes must be at least 3 when specified.")
         if self.phaseBNodes is not None and self.phaseBNodes < 3:
@@ -964,6 +982,22 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if strict and not (lower < interface_position < upper):
             raise ValueError("Interface position must lie strictly inside the FD domain.")
         return float(np.clip(interface_position, lower, upper))
+
+    def _phase_widths(self, interface_position):
+        """Returns the physical widths of the left and right phase regions."""
+        s = float(interface_position)
+        return np.asarray([s, float(self._R) - s], dtype=np.float64)
+
+    def _single_terminal_thin_phase(self, interface_position):
+        """Returns ``(index, width)`` only when exactly one phase is below the terminal threshold."""
+        if self.terminalThinPhaseWidth is None:
+            return None
+        widths = self._phase_widths(interface_position)
+        mask = np.isfinite(widths) & (widths < self.terminalThinPhaseWidth)
+        if int(np.count_nonzero(mask)) != 1:
+            return None
+        index = int(np.flatnonzero(mask)[0])
+        return index, float(widths[index])
 
     def _getBoundaryConditions(self):
         bc = getattr(self.mesh, "boundaryConditions", None)
@@ -1113,6 +1147,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._reset_implicit_diagnostics()
         self._lastStepRetries = 0
         self._lastInterfaceCompositions = None
+        self._terminalThinPhaseStop = False
+        self._terminalThinPhaseInfo = None
         self.initialEtaEstimate = None
         self._initialInventory = None
         self._z = None
@@ -1378,6 +1414,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         super().setTimeInfo(currTime, simTime)
         self._currdt = np.inf
         self._nearFinalNoop = False
+        self._terminalThinPhaseStop = False
+        self._terminalThinPhaseInfo = None
         if self.dtMode != "semi_log" or simTime <= 0:
             self._semiLogTimes = None
             self._semiLogNextIndex = 0
@@ -2271,6 +2309,71 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             v=self._v_grid,
         )
 
+    def _accept_step_result(self, p, q, s, eta, result, trial_dt, retry):
+        """Stores diagnostics and returns derivatives for an accepted implicit trial."""
+        p_new, q_new, s_new, eta_new, c_left_new, c_right_new, D_left, D_right = result
+        self._currdt = float(trial_dt)
+        self._lastStepRetries = int(retry)
+        self._lastInterfaceCompositions = (c_left_new.copy(), c_right_new.copy())
+        self._D_left = D_left
+        self._D_right = D_right
+        return [
+            (p_new - p) / trial_dt,
+            (q_new - q) / trial_dt,
+            (s_new - s) / trial_dt,
+            (eta_new - eta) / trial_dt,
+        ]
+
+    def _try_step_retries(self, p, q, s, eta, trial_dt, retry_count, retry_offset=0):
+        """Attempts implicit solves while shrinking ``trial_dt`` after each failed trial."""
+        last_error = None
+        for retry in range(int(retry_count)):
+            try:
+                result = self._take_implicit_step_planar(
+                    p,
+                    q,
+                    s,
+                    self._s_old,
+                    eta,
+                    trial_dt,
+                )
+                return self._accept_step_result(p, q, s, eta, result, trial_dt, retry_offset + retry), trial_dt, None
+            except (RuntimeError, ValueError, ZeroDivisionError) as exc:
+                last_error = exc
+                trial_dt *= self.retryFactor
+        return None, trial_dt, last_error
+
+    def _confirm_terminal_thin_phase_retries(self, phase_index, width, t, trial_dt):
+        """
+        Warns about a near-disappearing phase and returns whether terminal retries should run.
+
+        ``terminal_thin_phase_policy='prompt'`` asks the user directly.
+        ``'continue'`` is intended for batch runs that should always try to
+        produce a final valid state, while ``'raise'`` preserves the hard-error
+        behavior.
+        """
+        phase = self.phases[int(phase_index)]
+        message = (
+            f"Ternary Illingworth phase {phase!r} width {float(width):.6g} is below "
+            f"terminal_thin_phase_width={float(self.terminalThinPhaseWidth):.6g} after normal timestep retries at t={float(t):.6g}. "
+            f"The solver can keep shrinking trial_dt from {float(trial_dt):.6g} for up to "
+            f"{self.terminalThinPhaseExtraRetries} extra retries, then stop after the next converged step."
+        )
+        warnings.warn(message, RuntimeWarning, stacklevel=3)
+        if self.terminalThinPhasePolicy == "continue":
+            return True
+        if self.terminalThinPhasePolicy == "raise":
+            return False
+        try:
+            answer = input(f"{message} Continue? [y/N] ")
+        except (EOFError, KeyboardInterrupt, OSError) as exc:
+            raise RuntimeError(
+                "terminal_thin_phase_policy='prompt' could not read a response from stdin. "
+                "Set terminal_thin_phase_policy='continue' to allow terminal thin-phase retries in non-interactive runs, "
+                "or set terminal_thin_phase_policy='raise' to keep the hard-error behavior."
+            ) from exc
+        return answer.strip().lower() in {"y", "yes"}
+
     def getdXdt(self, t, xCurr):
         p = np.asarray(xCurr[0], dtype=np.float64).reshape((-1, 2))
         q = np.asarray(xCurr[1], dtype=np.float64).reshape((-1, 2))
@@ -2285,32 +2388,45 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if self._nearFinalNoop:
             return [np.zeros_like(p), np.zeros_like(q), 0.0, 0.0]
 
-        last_error = None
         trial_dt = float(dt)
-        for retry in range(self.maxStepRetries):
-            try:
-                p_new, q_new, s_new, eta_new, c_left_new, c_right_new, D_left, D_right = self._take_implicit_step_planar(
+        dXdt, trial_dt, last_error = self._try_step_retries(p, q, s, eta, trial_dt, self.maxStepRetries)
+        if dXdt is not None:
+            return dXdt
+
+        thin_phase = self._single_terminal_thin_phase(s)
+        if thin_phase is not None:
+            phase_index, width = thin_phase
+            if self._confirm_terminal_thin_phase_retries(phase_index, width, t, trial_dt):
+                dXdt, trial_dt, extra_error = self._try_step_retries(
                     p,
                     q,
                     s,
-                    self._s_old,
                     eta,
                     trial_dt,
+                    self.terminalThinPhaseExtraRetries,
+                    retry_offset=self.maxStepRetries,
                 )
-                self._currdt = trial_dt
-                self._lastStepRetries = retry
-                self._lastInterfaceCompositions = (c_left_new.copy(), c_right_new.copy())
-                self._D_left = D_left
-                self._D_right = D_right
-                return [
-                    (p_new - p) / trial_dt,
-                    (q_new - q) / trial_dt,
-                    (s_new - s) / trial_dt,
-                    (eta_new - eta) / trial_dt,
-                ]
-            except (RuntimeError, ValueError, ZeroDivisionError) as exc:
-                last_error = exc
-                trial_dt *= self.retryFactor
+                if dXdt is not None:
+                    if self._single_terminal_thin_phase(s + dXdt[2] * trial_dt) is None:
+                        raise ValueError(f"Expecting next interface to also satisfy _single_terminal_thin_phase() but got: {s + dXdt[2] * trial_dt}")
+                    self._terminalThinPhaseStop = True
+                    self._terminalThinPhaseInfo = {
+                        "phase": self.phases[int(phase_index)],
+                        "phase_index": int(phase_index),
+                        "width": float(width),
+                        "threshold": float(self.terminalThinPhaseWidth),
+                        "time": float(t),
+                        "dt": float(self._currdt),
+                    }
+                    return dXdt
+                if extra_error is not None:
+                    last_error = extra_error
+        print(f"t: {t}")
+        print(f"eta: {eta}")
+        print(f"s: {s}")
+        print(f"R-s: {self._R-s}")
+        from examples.debugInPlace import debugInPlace
+        debugInPlace()
         raise RuntimeError("Ternary Illingworth step failed after timestep retries.") from last_error
 
     def getDt(self, dXdt):
@@ -2349,6 +2465,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._s_curr = float(s)
         self._eta_curr = float(eta)
         self.updateCoupledModels()
+        if self._terminalThinPhaseStop:
+            self.finalTime = time
+            self._terminalThinPhaseStop = False
+            return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr, self._eta_curr], True
         return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr, self._eta_curr], False
 
     def _validate_profile_compositions(self, profile, name):

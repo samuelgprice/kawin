@@ -1,4 +1,3 @@
-import sys
 import warnings
 from dataclasses import dataclass
 
@@ -1431,10 +1430,10 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         """
         Warns about a near-disappearing phase and returns whether terminal retries should run.
 
-        ``terminal_thin_phase_policy='prompt'`` asks only when stdin is
-        interactive. ``'continue'`` is intended for batch runs that should
-        always try to produce a final valid state, while ``'raise'`` preserves
-        the hard-error behavior.
+        ``terminal_thin_phase_policy='prompt'`` asks the user directly.
+        ``'continue'`` is intended for batch runs that should always try to
+        produce a final valid state, while ``'raise'`` preserves the hard-error
+        behavior.
         """
         phase = self.phases[int(phase_index)]
         message = (
@@ -1448,13 +1447,6 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             return True
         if self.terminalThinPhasePolicy == "raise":
             return False
-        is_interactive = bool(getattr(sys.stdin, "isatty", lambda: False)())
-        if not is_interactive:
-            raise RuntimeError(
-                "terminal_thin_phase_policy='prompt' cannot ask whether to continue because stdin is not interactive. "
-                "Set terminal_thin_phase_policy='continue' to allow terminal thin-phase retries in non-interactive runs, "
-                "or set terminal_thin_phase_policy='raise' to keep the hard-error behavior."
-            )
         try:
             answer = input(f"{message} Continue? [y/N] ")
         except (EOFError, KeyboardInterrupt, OSError) as exc:

@@ -647,7 +647,13 @@ def test_three_phase_terminal_retry_requires_exactly_one_thin_phase(monkeypatch)
         calls.append(float(dt))
         raise RuntimeError("forced retry")
 
+    class DebugStub:
+        @staticmethod
+        def debugInPlace():
+            pass
+
     monkeypatch.setattr(model, "_solve_interface_planar", fake_solve)
+    monkeypatch.setitem(__import__("sys").modules, "examples.debugInPlace", DebugStub)
 
     with pytest.raises(RuntimeError, match="Three-phase Illingworth step failed after timestep retries"):
         model.getdXdt(0.0, x_curr)
@@ -655,7 +661,7 @@ def test_three_phase_terminal_retry_requires_exactly_one_thin_phase(monkeypatch)
     assert np.allclose(calls, [1e-4, 5e-5], rtol=0.0, atol=1e-18)
 
 
-def test_three_phase_prompt_policy_requires_interactive_stdin(monkeypatch):
+def test_three_phase_prompt_policy_reports_input_read_failure(monkeypatch):
     model, _ = _make_stationary_model(
         record=False,
         max_step_retries=2,
@@ -668,18 +674,17 @@ def test_three_phase_prompt_policy_requires_interactive_stdin(monkeypatch):
     x_curr = model.getCurrentX()
     x_curr[3] = np.asarray([5e-10, 0.7], dtype=np.float64)
 
-    class NonInteractiveStdin:
-        def isatty(self):
-            return False
-
     def fake_solve(profiles, interfaces, etas, dt):
         raise RuntimeError("forced retry")
 
+    def fake_input(prompt):
+        raise OSError("input unavailable")
+
     monkeypatch.setattr(model, "_solve_interface_planar", fake_solve)
-    monkeypatch.setattr("sys.stdin", NonInteractiveStdin())
+    monkeypatch.setattr("builtins.input", fake_input)
 
     with pytest.warns(RuntimeWarning, match="below terminal_thin_phase_width"):
-        with pytest.raises(RuntimeError, match="stdin is not interactive"):
+        with pytest.raises(RuntimeError, match="could not read a response from stdin"):
             model.getdXdt(0.0, x_curr)
 
 
