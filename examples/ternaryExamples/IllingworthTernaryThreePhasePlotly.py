@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import numpy as np
 
 from kawin.diffusion import evaluate_tieline_diagnostics
@@ -11,6 +13,12 @@ _PHASE_PREFIXES = ("A", "B", "C")
 _PHASE_COLORS = ("#1f77b4", "#d62728", "#2ca02c")
 _COMPONENT_COLORS = ("#4c78a8", "#f58518", "#54a24b")
 _TIELINE_COLORS = ("rgba(80,80,80,0.32)", "rgba(110,110,110,0.32)")
+_DIFFUSIVITY_MODES = {
+    "phase_uniform",
+    "composition_dependent_lagged",
+    "composition_dependent_implicit",
+}
+_DIFFUSIVITY_COMPONENTS = ((0, 0), (0, 1), (1, 0), (1, 1))
 
 
 def _require_plotly(renderer="browser"):
@@ -133,6 +141,124 @@ def _phase_labels(model):
     return tuple(f"{prefix}: {phase}" for prefix, phase in zip(_PHASE_PREFIXES, phases))
 
 
+def _run_config_value(run_config, name):
+    """Return a supplied run setting, accepting its canonical or lowercase key."""
+    for key in (name, name.lower()):
+        if key in run_config and run_config[key] is not None:
+            return run_config[key]
+    return "not provided"
+
+
+def _format_run_value(value):
+    """Format scalar run metadata compactly for the figure title."""
+    if isinstance(value, (bool, np.bool_)):
+        return str(bool(value))
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        return f"{float(value):.6g}"
+    return str(value)
+
+
+def _model_temperature(model, time):
+    """Return the model's configured temperature or a displayed availability label."""
+    parameters = getattr(model, "temperatureParameters", None)
+    configured = getattr(parameters, "Tparameters", parameters)
+    if isinstance(configured, (tuple, list)) and len(configured) == 2:
+        try:
+            values = np.asarray(configured[1], dtype=np.float64).reshape(-1)
+        except (TypeError, ValueError):
+            values = np.asarray([], dtype=np.float64)
+        if values.size and np.all(np.isfinite(values)):
+            if np.allclose(values, values[0], rtol=0.0, atol=1.0e-12):
+                return float(values[0])
+            return "time-dependent"
+    elif configured is not None and not callable(configured):
+        try:
+            values = np.asarray(configured, dtype=np.float64).reshape(-1)
+        except (TypeError, ValueError):
+            values = np.asarray([], dtype=np.float64)
+        if values.size == 1 and np.isfinite(values[0]):
+            return float(values[0])
+    if callable(parameters):
+        try:
+            return float(_temperature_values(model, [0.0], time)[0])
+        except (TypeError, ValueError):
+            pass
+    return "not available"
+
+
+def _phase_node_counts(model):
+    """Return the actual recorded transformed-grid node count for each phase."""
+    grids = getattr(model, "_grids", None)
+    if grids is None:
+        return "not available"
+    try:
+        grids = tuple(grids)
+        counts = tuple(len(np.asarray(grid).reshape(-1)) for grid in grids)
+    except (TypeError, ValueError):
+        return "not available"
+    return counts if len(counts) == 3 and all(count > 0 for count in counts) else "not available"
+
+
+def _tieline_surrogate_build_mode(result):
+    """Infer the tie-line sampling mode from current surrogate metadata when present."""
+    modes = []
+    for key in ("surrogate_ab", "surrogate_bc"):
+        surrogate = result.get(key)
+        metadata = getattr(surrogate, "metadata", None)
+        source = metadata.get("source") if isinstance(metadata, Mapping) else None
+        if source == "from_database":
+            modes.append("line")
+        elif source == "from_database_seed_point":
+            modes.append("seed_point")
+    if not modes:
+        return "not available"
+    unique_modes = tuple(dict.fromkeys(modes))
+    return unique_modes[0] if len(unique_modes) == 1 else "/".join(unique_modes)
+
+
+def _plot_run_info(result, model, time, run_config):
+    """Collect title metadata from the model and the optional external run configuration."""
+    if run_config is None:
+        run_config = {}
+    elif not isinstance(run_config, Mapping):
+        raise TypeError("run_config must be a dictionary or mapping when provided.")
+    return {
+        "temperature": _model_temperature(model, time),
+        "tieline_mode": _tieline_surrogate_build_mode(result),
+        "bulk_mode": getattr(model, "bulkDiffusivityMode", "not available"),
+        "dt_mode": getattr(model, "dtMode", "not available"),
+        "tolerance": getattr(model, "tolerance", "not available"),
+        "semi_log_dt": getattr(model, "semiLog_dt", "not available"),
+        "phase_nodes": _phase_node_counts(model),
+        "therm_engine": _run_config_value(run_config, "THERM_ENGINE"),
+        "tc_default_phases": _run_config_value(run_config, "TC_USE_DEFAULT_PHASES"),
+        "pycalphad_default_phases": _run_config_value(run_config, "PYCALPHAD_USE_DEFAULT_PHASES"),
+    }
+
+
+def _plot_title(frame, run_info):
+    """Build the multi-line title containing static run settings and current time."""
+    phase_nodes = run_info["phase_nodes"]
+    if isinstance(phase_nodes, tuple):
+        phase_nodes = "(" + ", ".join(str(count) for count in phase_nodes) + ")"
+    temperature = _format_run_value(run_info["temperature"])
+    return (
+        f"Three-phase Illingworth composition profile, t={frame['time']:.6g} s"
+        f"<br>TEMPERATURE={temperature} K | "
+        f"TIELINE_SURROGATE_BUILD_MODE={_format_run_value(run_info['tieline_mode'])} | "
+        f"BULK_DIFFUSIVITY_MODE={_format_run_value(run_info['bulk_mode'])}"
+        f"<br>DT_MODE={_format_run_value(run_info['dt_mode'])} | "
+        f"SEMI_LOG_DT={_format_run_value(run_info['semi_log_dt'])} | "
+        f"TOLERANCE={_format_run_value(run_info['tolerance'])} | "
+        f"PHASE_NODES={phase_nodes}"
+        f"<br>THERM_ENGINE={_format_run_value(run_info['therm_engine'])} | "
+        f"TC_USE_DEFAULT_PHASES={_format_run_value(run_info['tc_default_phases'])} | "
+        f"PYCALPHAD_USE_DEFAULT_PHASES={_format_run_value(run_info['pycalphad_default_phases'])}"
+    )
+
+
 def _global_average_full(profiles, grids, boundaries, domain_length):
     """Integrate full ternary compositions over the transformed phase intervals."""
     average = np.zeros(3, dtype=np.float64)
@@ -141,8 +267,199 @@ def _global_average_full(profiles, grids, boundaries, domain_length):
     return average / float(domain_length)
 
 
-def _frame_profile(model, time, elements, component_indices, distance_scale):
-    """Build all dynamic profile arrays for one recorded time."""
+def _temperature_values(model, positions, time):
+    """Return finite temperatures at physical positions for one plotted time."""
+    positions = np.asarray(positions, dtype=np.float64).reshape(-1)
+    temperature_parameters = getattr(model, "temperatureParameters", None)
+    if not callable(temperature_parameters):
+        raise ValueError(
+            "Diffusivity plotting requires result['model'].temperatureParameters "
+            "to evaluate temperatures."
+        )
+    temperatures = np.asarray(
+        temperature_parameters(positions.reshape(-1, 1), float(time)),
+        dtype=np.float64,
+    ).reshape(-1)
+    if temperatures.size == 1 and positions.size != 1:
+        temperatures = np.full(positions.shape, float(temperatures[0]), dtype=np.float64)
+    if temperatures.size != positions.size or not np.all(np.isfinite(temperatures)):
+        raise ValueError("Diffusivity plotting requires finite temperatures matching face positions.")
+    return temperatures
+
+
+def _validate_diffusivity_stack(values, count, phase, context, time):
+    """Validate a provider result as ``count`` real ternary 2x2 matrices."""
+    values = np.asarray(values)
+    if np.iscomplexobj(values) and np.any(np.imag(values) != 0.0):
+        raise ValueError(
+            f"Diffusivity provider returned complex values for phase {phase} "
+            f"at t={float(time):.6g} s in {context} context."
+        )
+    values = np.asarray(values, dtype=np.float64)
+    if values.shape == (2, 2) and count == 1:
+        values = values.reshape(1, 2, 2)
+    if values.shape != (count, 2, 2):
+        raise ValueError(
+            f"Diffusivity provider returned shape {values.shape} for phase {phase} "
+            f"at t={float(time):.6g} s; expected ({count}, 2, 2)."
+        )
+    if not np.all(np.isfinite(values)):
+        raise ValueError(
+            f"Diffusivity provider returned non-finite values for phase {phase} "
+            f"at t={float(time):.6g} s in {context} context."
+        )
+    return values.copy()
+
+
+def _query_diffusivity_matrices(model, compositions, temperatures, phase, context, time):
+    """Query and validate face diffusivities with scalar-provider compatibility."""
+    provider = getattr(model, "therm", None)
+    query = getattr(provider, "getInterdiffusivity", None)
+    if not callable(query):
+        raise ValueError(
+            "Diffusivities cannot be reconstructed from result['model']; "
+            "model.therm.getInterdiffusivity(...) is unavailable."
+        )
+
+    compositions = np.asarray(compositions, dtype=np.float64)
+    temperatures = np.asarray(temperatures, dtype=np.float64).reshape(-1)
+    count = len(compositions)
+    try:
+        values = query(
+            compositions,
+            temperatures,
+            phase=phase,
+            query_context=context,
+        )
+    except (TypeError, ValueError):
+        values = None
+    else:
+        try:
+            return _validate_diffusivity_stack(values, count, phase, context, time)
+        except ValueError:
+            values = None
+
+    matrices = []
+    for composition, temperature in zip(compositions, temperatures):
+        try:
+            value = query(
+                composition,
+                float(temperature),
+                phase=phase,
+                query_context=context,
+            )
+        except TypeError:
+            value = query(composition, float(temperature), phase=phase)
+        matrices.append(
+            _validate_diffusivity_stack(value, 1, phase, context, time)[0]
+        )
+    return np.asarray(matrices, dtype=np.float64)
+
+
+def _phase_uniform_compositions(model, time, interfaces):
+    """Return the solver's representative composition and position for each phase."""
+    get_interface_compositions = getattr(model, "getInterfaceCompositions", None)
+    if not callable(get_interface_compositions):
+        raise ValueError(
+            "Phase-uniform diffusivity plotting requires "
+            "result['model'].getInterfaceCompositions(time)."
+        )
+    interface_compositions = tuple(
+        tuple(np.asarray(value, dtype=np.float64).reshape(-1) for value in pair)
+        for pair in get_interface_compositions(float(time))
+    )
+    if len(interface_compositions) != 2 or any(len(pair) != 2 for pair in interface_compositions):
+        raise ValueError("The model must return two pairs of interface compositions.")
+    compositions = (
+        interface_compositions[0][0],
+        0.5 * (interface_compositions[0][1] + interface_compositions[1][0]),
+        interface_compositions[1][1],
+    )
+    positions = (float(interfaces[0]), 0.5 * (float(interfaces[0]) + float(interfaces[1])), float(interfaces[1]))
+    if any(composition.shape != (2,) for composition in compositions):
+        raise ValueError("The model must return two-component interface compositions.")
+    return compositions, positions
+
+
+def _frame_diffusivity_segments(model, time, profiles, grids, boundaries, interfaces, distance_scale):
+    """Reconstruct solver-consistent diffusivity matrices at transformed face locations.
+
+    The phase-uniform mode uses the same interface-context representative matrices
+    that the solver broadcasts over each phase. Composition-dependent modes use
+    midpoint compositions at the recorded state's internal faces and the general
+    thermodynamic context. This reconstructs a historical state field; it does not
+    recover discarded per-iteration matrices from an implicit solve.
+    """
+    mode = str(getattr(model, "bulkDiffusivityMode", ""))
+    if mode not in _DIFFUSIVITY_MODES:
+        raise ValueError(
+            "Diffusivity plotting requires model.bulkDiffusivityMode to be one of "
+            "'phase_uniform', 'composition_dependent_lagged', or "
+            "'composition_dependent_implicit'."
+        )
+
+    if not callable(getattr(getattr(model, "therm", None), "getInterdiffusivity", None)):
+        raise ValueError(
+            "Diffusivities cannot be reconstructed from result['model']; "
+            "model.therm.getInterdiffusivity(...) is unavailable."
+        )
+
+    representative_compositions = representative_positions = None
+    if mode == "phase_uniform":
+        representative_compositions, representative_positions = _phase_uniform_compositions(
+            model,
+            time,
+            interfaces,
+        )
+
+    segments = []
+    for phase_index, (profile, grid, left, right) in enumerate(
+        zip(profiles, grids, boundaries[:-1], boundaries[1:])
+    ):
+        face_xi = 0.5 * (grid[:-1] + grid[1:])
+        if len(face_xi) == 0:
+            raise ValueError(f"Diffusivity plotting requires at least two nodes in phase interval {phase_index}.")
+        physical_face_positions = float(left) + (float(right) - float(left)) * face_xi
+        if mode == "phase_uniform":
+            temperatures = _temperature_values(
+                model,
+                [representative_positions[phase_index]],
+                time,
+            )
+            matrices = _query_diffusivity_matrices(
+                model,
+                np.asarray(representative_compositions[phase_index], dtype=np.float64).reshape(1, 2),
+                temperatures,
+                getattr(model, "phases", ())[phase_index],
+                "interface",
+                time,
+            )
+            matrices = np.broadcast_to(matrices[0], (len(face_xi), 2, 2)).copy()
+        else:
+            face_compositions = 0.5 * (
+                np.asarray(profile, dtype=np.float64)[:-1]
+                + np.asarray(profile, dtype=np.float64)[1:]
+            )
+            temperatures = _temperature_values(model, physical_face_positions, time)
+            matrices = _query_diffusivity_matrices(
+                model,
+                face_compositions,
+                temperatures,
+                getattr(model, "phases", ())[phase_index],
+                "general",
+                time,
+            )
+        segments.append(
+            {
+                "distance": physical_face_positions * distance_scale,
+                "matrices": matrices,
+            }
+        )
+    return segments
+
+
+def _frame_profile(model, time, elements, component_indices, distance_scale, include_diffusivities=False):
+    """Build all dynamic composition and optional diffusivity arrays for one time."""
     interfaces = np.asarray(model.getInterfacePositions(float(time)), dtype=np.float64).reshape(2)
     profiles = tuple(np.asarray(profile, dtype=np.float64) for profile in model.getTransformedState(float(time)))
     grids = tuple(np.asarray(grid, dtype=np.float64).reshape(-1) for grid in getattr(model, "_grids", ()))
@@ -174,7 +491,7 @@ def _frame_profile(model, time, elements, component_indices, distance_scale):
         for values in xy_y.values():
             values.pop()
 
-    return {
+    frame = {
         "time": float(time),
         "interfaces": interfaces * distance_scale,
         "phase_widths": np.diff(boundaries) * distance_scale,
@@ -184,6 +501,17 @@ def _frame_profile(model, time, elements, component_indices, distance_scale):
         "xy_y": {index: np.asarray(values, dtype=np.float64) for index, values in xy_y.items()},
         "elements": elements,
     }
+    if include_diffusivities:
+        frame["diffusivity_segments"] = _frame_diffusivity_segments(
+            model,
+            time,
+            profiles,
+            grids,
+            boundaries,
+            interfaces,
+            distance_scale,
+        )
+    return frame
 
 
 def _initial_phase_compositions(model, time):
@@ -291,6 +619,176 @@ def _component_trace(go, frame, component_index, elements, unit_label):
     )
 
 
+def _diffusivity_customdata(frame, phase_index, matrix_component):
+    """Build numeric hover data for one phase and one diffusivity entry."""
+    segment = frame["diffusivity_segments"][phase_index]
+    row, column = matrix_component
+    values = segment["matrices"][:, row, column]
+    return np.column_stack(
+        (
+            np.full(len(values), frame["time"], dtype=np.float64),
+            segment["distance"],
+            values,
+        )
+    )
+
+
+def _signed_log10(values, linthresh):
+    """Map finite signed values to a symmetric-log coordinate with a linear core."""
+    values = np.asarray(values, dtype=np.float64)
+    linthresh = float(linthresh)
+    if not np.isfinite(linthresh) or linthresh <= 0.0:
+        raise ValueError("symlog_linthresh must be a positive finite value.")
+    if not np.all(np.isfinite(values)):
+        raise ValueError("Symmetric-log diffusivity values must be finite.")
+    magnitude = np.abs(values)
+    transformed = np.empty_like(magnitude)
+    linear = magnitude <= linthresh
+    transformed[linear] = magnitude[linear] / linthresh
+    transformed[~linear] = 1.0 + np.log10(magnitude[~linear] / linthresh)
+    return np.sign(values) * transformed
+
+
+def _diffusivity_component_values(frames_data, matrix_component):
+    """Collect one diffusivity entry across all plotted times, phases, and faces."""
+    row, column = matrix_component
+    return np.concatenate(
+        [
+            segment["matrices"][:, row, column]
+            for frame in frames_data
+            for segment in frame["diffusivity_segments"]
+        ]
+    )
+
+
+def _diffusivity_aux_data(frames_data, phase_labels, unit_label):
+    """Package reconstructed face diffusivities for callers of the plot helper."""
+    return {
+        "times": np.asarray([frame["time"] for frame in frames_data], dtype=np.float64),
+        "phase_labels": tuple(phase_labels),
+        "distance_unit": unit_label,
+        "diffusivity_unit": "m^2/s",
+        "matrix_components": _DIFFUSIVITY_COMPONENTS,
+        "frames": [
+            {
+                "time": float(frame["time"]),
+                "segments": [
+                    {
+                        "phase": phase_labels[phase_index],
+                        "distance": np.asarray(segment["distance"], dtype=np.float64).copy(),
+                        "matrices": np.asarray(segment["matrices"], dtype=np.float64).copy(),
+                    }
+                    for phase_index, segment in enumerate(frame["diffusivity_segments"])
+                ],
+            }
+            for frame in frames_data
+        ],
+    }
+
+
+def _composition_aux_data(frames_data, phase_labels, elements, unit_label):
+    """Package plotted full-composition profiles for callers of the plot helper."""
+    return {
+        "times": np.asarray([frame["time"] for frame in frames_data], dtype=np.float64),
+        "elements": tuple(elements),
+        "phase_labels": tuple(phase_labels),
+        "distance_unit": unit_label,
+        "composition_unit": "mole_fraction",
+        "frames": [
+            {
+                "time": float(frame["time"]),
+                "interfaces": np.asarray(frame["interfaces"], dtype=np.float64).copy(),
+                "phase_widths": np.asarray(frame["phase_widths"], dtype=np.float64).copy(),
+                "global_average": np.asarray(frame["global_average"], dtype=np.float64).copy(),
+                "segments": [
+                    {
+                        "phase": phase_labels[phase_index],
+                        "distance": np.asarray(segment["distance"], dtype=np.float64).copy(),
+                        "compositions": np.asarray(segment["full"], dtype=np.float64).copy(),
+                    }
+                    for phase_index, segment in enumerate(frame["phase_segments"])
+                ],
+            }
+            for frame in frames_data
+        ],
+    }
+
+
+def _symlog_thresholds(diffusivity_values, use_symmetric_log, linthresh):
+    """Choose fixed symmetric-log thresholds only for entries that cross below zero."""
+    if not use_symmetric_log:
+        return {}
+    explicit_threshold = None
+    if linthresh is not None:
+        explicit_threshold = float(linthresh)
+        if not np.isfinite(explicit_threshold) or explicit_threshold <= 0.0:
+            raise ValueError("symlog_linthresh must be a positive finite value.")
+
+    thresholds = {}
+    for matrix_component, values in diffusivity_values.items():
+        if not np.any(values < 0.0):
+            continue
+        if explicit_threshold is not None:
+            thresholds[matrix_component] = explicit_threshold
+            continue
+        maximum = float(np.max(np.abs(values)))
+        exponent = np.floor(np.log10(maximum)) - 3.0
+        thresholds[matrix_component] = max(
+            float(10.0**exponent),
+            float(np.finfo(np.float64).tiny),
+        )
+    return thresholds
+
+
+def _symlog_tick_values(values, linthresh):
+    """Return symmetric original-value tick locations for a transformed axis."""
+    maximum = float(np.max(np.abs(values)))
+    if maximum == 0.0:
+        return np.asarray([0.0], dtype=np.float64)
+    ratio = maximum / float(linthresh)
+    if ratio <= 1.0:
+        magnitudes = np.asarray([maximum], dtype=np.float64)
+    else:
+        power_count = int(np.floor(np.log10(ratio))) + 1
+        powers = np.arange(power_count, dtype=np.int64)
+        if len(powers) > 5:
+            powers = powers[np.unique(np.linspace(0, len(powers) - 1, 5).round().astype(int))]
+        magnitudes = float(linthresh) * np.power(10.0, powers)
+        if magnitudes[-1] < maximum:
+            magnitudes = np.append(magnitudes, maximum)
+    return np.concatenate((-magnitudes[::-1], np.asarray([0.0]), magnitudes))
+
+
+def _format_diffusivity_tick(value):
+    """Format an original diffusivity value for a symmetric-log tick label."""
+    return "0" if value == 0.0 else f"{value:.3g}"
+
+
+def _diffusivity_trace(go, frame, phase_index, phase_label, matrix_component, unit_label, symlog_linthresh=None):
+    """Build one phase-colored solver-face diffusivity trace, optionally transformed."""
+    segment = frame["diffusivity_segments"][phase_index]
+    row, column = matrix_component
+    values = segment["matrices"][:, row, column]
+    plotted_values = values if symlog_linthresh is None else _signed_log10(values, symlog_linthresh)
+    return go.Scatter(
+        x=segment["distance"],
+        y=plotted_values,
+        mode="lines+markers",
+        name=f"{phase_label} D[{row},{column}]",
+        legendgroup=f"profile-{phase_index}",
+        showlegend=False,
+        line={"color": _PHASE_COLORS[phase_index % len(_PHASE_COLORS)], "width": 1.5},
+        marker={"color": _PHASE_COLORS[phase_index % len(_PHASE_COLORS)], "size": 3},
+        customdata=_diffusivity_customdata(frame, phase_index, matrix_component),
+        hovertemplate=(
+            "time=%{customdata[0]:.6g} s<br>"
+            f"phase={phase_label}<br>"
+            f"distance=%{{customdata[1]:.6g}} {unit_label}<br>"
+            f"D[{row},{column}]=%{{customdata[2]:.6e}} m²/s<extra></extra>"
+        ),
+    )
+
+
 def _global_average_xy_trace(go, frame, component_index, elements):
     finite_x = frame["xy_x"][np.isfinite(frame["xy_x"])]
     y = float(frame["global_average"][component_index])
@@ -382,6 +880,7 @@ def _add_static_tielines(fig, go, result, eta_count, display_count):
     for interface_index, key in enumerate(("surrogate_ab", "surrogate_bc")):
         surrogate = result.get(key)
         if surrogate is None:
+            print(f"{key} not found so it is being skipped")
             continue
         report = evaluate_tieline_diagnostics(surrogate, eta_count=eta_count)
         phases = tuple(report["phases"])
@@ -428,6 +927,10 @@ def plot_three_phase_composition_profile(
     show_global_average=True,
     show_starting_phase_compositions=True,
     show_interface_etas=True,
+    show_diffusivities=False,
+    use_symmetric_log=False,
+    symlog_linthresh=None,
+    run_config=None,
     renderer="browser",
 ):
     """
@@ -440,7 +943,37 @@ def plot_three_phase_composition_profile(
     its own phase color and interface discontinuities are preserved. Global
     average composition, constant starting phase-composition markers, and
     current interface eta values are shown by default. Eta values and phase
-    widths are displayed in a synchronized misc-info panel.
+    widths are displayed in a synchronized misc-info panel. When
+    ``show_diffusivities`` is true, a synchronized 2x2 panel displays the four
+    interdiffusivity matrix entries at the solver's transformed face locations
+    in units of m²/s. D values are reconstructed from ``model.therm``: the
+    phase-uniform mode uses the solver's interface-context representative
+    matrix, while composition-dependent modes use the recorded-state midpoint
+    face compositions and general context. This reconstruction does not retain
+    discarded per-iteration matrices from an implicit solve. If
+    ``model.therm.getInterdiffusivity`` is unavailable, a ``ValueError`` is
+    raised because diffusivities cannot be reconstructed from the result. The
+    diffusivity-panel y axes use native logarithmic scaling. The title also reports
+    the model temperature, tie-line surrogate build mode, bulk diffusivity
+    mode, timestep mode, tolerance, semi-log timestep, and the node count of
+    each phase. ``run_config`` may be a dictionary or mapping containing
+    ``THERM_ENGINE``, ``TC_USE_DEFAULT_PHASES``, and
+    ``PYCALPHAD_USE_DEFAULT_PHASES``; values not supplied there are displayed
+    as ``not provided``.
+    When ``use_symmetric_log`` is true, only diffusivity matrix entries with
+    at least one negative value across the plotted times, phases, or faces use
+    a signed-log transform on a linear Plotly axis. Other entries retain the
+    native logarithmic axis. ``symlog_linthresh`` sets the positive linear-core
+    threshold; when omitted, a fixed threshold three decades below the largest
+    absolute value is selected independently for each signed entry.
+
+    Returns a mapping with ``"fig"`` containing the Plotly figure and
+    ``"aux"`` containing auxiliary data. ``aux["compositions"]`` contains the
+    selected times, element and phase labels, global averages, interfaces,
+    phase widths, and per-phase full-composition node profiles. When
+    ``show_diffusivities`` is true, ``aux["diffusivities"]`` additionally
+    contains the reconstructed per-phase face distances and ``(2, 2)``
+    matrices used by the diffusivity traces.
     """
     if "model" not in result:
         raise KeyError("result must contain result['model'].")
@@ -456,10 +989,31 @@ def plot_three_phase_composition_profile(
     distance_scale, unit_label = _distance_scale(distance_unit)
     phase_labels = _phase_labels(model)
     frames_data = [
-        _frame_profile(model, times[index], elements, component_indices, distance_scale)
+        _frame_profile(
+            model,
+            times[index],
+            elements,
+            component_indices,
+            distance_scale,
+            include_diffusivities=show_diffusivities,
+        )
         for index in selected_indices
     ]
     initial = frames_data[0]
+    diffusivity_values = (
+        {
+            matrix_component: _diffusivity_component_values(frames_data, matrix_component)
+            for matrix_component in _DIFFUSIVITY_COMPONENTS
+        }
+        if show_diffusivities
+        else {}
+    )
+    symlog_thresholds = _symlog_thresholds(
+        diffusivity_values,
+        use_symmetric_log,
+        symlog_linthresh,
+    )
+    run_info = _plot_run_info(result, model, initial["time"], run_config)
     initial_phase_compositions = (
         _initial_phase_compositions(model, times[0])
         if show_starting_phase_compositions
@@ -471,7 +1025,55 @@ def plot_three_phase_composition_profile(
         else None
     )
 
-    if show_interface_etas:
+    if show_diffusivities:
+        if show_interface_etas:
+            specs = [
+                [
+                    {"type": "ternary", "rowspan": 2},
+                    {"type": "xy"},
+                    {"type": "xy"},
+                    {"type": "xy"},
+                ],
+                [None, {"type": "table"}, {"type": "xy"}, {"type": "xy"}],
+            ]
+            subplot_titles = (
+                "Composition path",
+                "Composition profile",
+                "D[0,0]",
+                "D[0,1]",
+                "Misc info",
+                "D[1,0]",
+                "D[1,1]",
+            )
+        else:
+            specs = [
+                [
+                    {"type": "ternary", "rowspan": 2},
+                    {"type": "xy", "rowspan": 2},
+                    {"type": "xy"},
+                    {"type": "xy"},
+                ],
+                [None, None, {"type": "xy"}, {"type": "xy"}],
+            ]
+            subplot_titles = (
+                "Composition path",
+                "Composition profile",
+                "D[0,0]",
+                "D[0,1]",
+                "D[1,0]",
+                "D[1,1]",
+            )
+        fig = make_subplots(
+            rows=2,
+            cols=4,
+            specs=specs,
+            column_widths=(0.27, 0.32, 0.205, 0.205),
+            row_heights=(0.56, 0.44),
+            horizontal_spacing=0.04,
+            vertical_spacing=0.15,
+            subplot_titles=subplot_titles,
+        )
+    elif show_interface_etas:
         fig = make_subplots(
             rows=2,
             cols=2,
@@ -514,6 +1116,25 @@ def plot_three_phase_composition_profile(
     if show_interface_etas:
         dynamic_trace_indices.append(len(fig.data))
         fig.add_trace(_misc_info_trace(go, initial, eta_data[0], phase_labels, unit_label), row=2, col=2)
+    if show_diffusivities:
+        for matrix_component in _DIFFUSIVITY_COMPONENTS:
+            row = matrix_component[0] + 1
+            col = matrix_component[1] + 3
+            for phase_index, phase_label in enumerate(phase_labels):
+                dynamic_trace_indices.append(len(fig.data))
+                fig.add_trace(
+                    _diffusivity_trace(
+                        go,
+                        initial,
+                        phase_index,
+                        phase_label,
+                        matrix_component,
+                        unit_label,
+                        symlog_linthresh=symlog_thresholds.get(matrix_component),
+                    ),
+                    row=row,
+                    col=col,
+                )
 
     if show_tielines:
         _add_static_tielines(fig, go, result, int(tieline_eta_count), int(display_tieline_count))
@@ -532,6 +1153,20 @@ def plot_three_phase_composition_profile(
         traces.extend(_interface_trace(go, frame, interface_index, unit_label) for interface_index in range(2))
         if show_interface_etas:
             traces.append(_misc_info_trace(go, frame, eta_data[frame_number], phase_labels, unit_label))
+        if show_diffusivities:
+            traces.extend(
+                _diffusivity_trace(
+                    go,
+                    frame,
+                    phase_index,
+                    phase_label,
+                    matrix_component,
+                    unit_label,
+                    symlog_linthresh=symlog_thresholds.get(matrix_component),
+                )
+                for matrix_component in _DIFFUSIVITY_COMPONENTS
+                for phase_index, phase_label in enumerate(phase_labels)
+            )
         frames.append(
             go.Frame(
                 name=_frame_name(frame_number, frame["time"]),
@@ -554,10 +1189,10 @@ def plot_three_phase_composition_profile(
     ]
     fig.update_layout(
         template="plotly_white",
-        width=1450 if show_interface_etas else 1250,
-        height=700,
-        title=f"Three-phase Illingworth composition profile, t={initial['time']:.6g} s",
-        margin={"t": 110, "b": 90},
+        width=(1900 if show_interface_etas else 1800) if show_diffusivities else (1800 if show_interface_etas else 1650),
+        height=900,
+        title={"text": _plot_title(initial, run_info), "font": {"size": 11}},
+        margin={"t": 125, "b": 70, "l": 55, "r": 45},
         legend={
             "orientation": "v",
             "x": -0.05,
@@ -608,7 +1243,50 @@ def plot_three_phase_composition_profile(
     all_x = np.concatenate([frame["xy_x"][np.isfinite(frame["xy_x"])] for frame in frames_data])
     fig.update_xaxes(title_text=f"Distance ({unit_label})", range=[float(np.min(all_x)), float(np.max(all_x))], row=1, col=2)
     fig.update_yaxes(title_text="Mole fraction", range=[0.0, 1.0], row=1, col=2)
-    return fig
+    if show_diffusivities:
+        for matrix_component in _DIFFUSIVITY_COMPONENTS:
+            row = matrix_component[0] + 1
+            col = matrix_component[1] + 3
+            fig.update_xaxes(
+                title_text=f"Distance ({unit_label})",
+                range=[float(np.min(all_x)), float(np.max(all_x))],
+                row=row,
+                col=col,
+            )
+            if matrix_component in symlog_thresholds:
+                threshold = symlog_thresholds[matrix_component]
+                values = diffusivity_values[matrix_component]
+                transformed = _signed_log10(values, threshold)
+                limit = 1.05 * float(np.max(np.abs(transformed)))
+                original_ticks = _symlog_tick_values(values, threshold)
+                yaxis_options = {
+                    "title_text": f"D[{matrix_component[0]},{matrix_component[1]}] (m²/s; symlog)",
+                    "type": "linear",
+                    "range": [-limit, limit],
+                    "tickmode": "array",
+                    "tickvals": _signed_log10(original_ticks, threshold).tolist(),
+                    "ticktext": [_format_diffusivity_tick(value) for value in original_ticks],
+                    "zeroline": True,
+                }
+            else:
+                yaxis_options = {
+                    "title_text": f"D[{matrix_component[0]},{matrix_component[1]}] (m²/s)",
+                    "type": "log",
+                    "exponentformat": "e",
+                    "showexponent": "all",
+                }
+            fig.update_yaxes(row=row, col=col, **yaxis_options)
+    aux = {
+        "compositions": _composition_aux_data(
+            frames_data,
+            phase_labels,
+            elements,
+            unit_label,
+        ),
+    }
+    if show_diffusivities:
+        aux["diffusivities"] = _diffusivity_aux_data(frames_data, phase_labels, unit_label)
+    return {"fig": fig, "aux": aux}
 
 
 __all__ = ["plot_three_phase_composition_profile"]
