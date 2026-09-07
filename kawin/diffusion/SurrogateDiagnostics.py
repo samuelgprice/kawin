@@ -17,6 +17,15 @@ from .MovingBoundarySurrogates import (
     _matrix_validity_diagnostics,
 )
 
+import importlib
+import examples.debugInPlace as debug_module
+
+importlib.invalidate_caches()
+debug_module = importlib.reload(debug_module)
+
+# Required if you previously used:
+# from examples.debugInPlace import debugInPlace
+debugInPlace = debug_module.debugInPlace
 
 _HOVER_PRESETS = {
     "tieline": {
@@ -203,7 +212,8 @@ def _truth_endpoints(result, phases, elements):
         ordered = tuple(by_phase[phase] for phase in phases)
         return ordered
     endpoint_phases = tuple(str(value) for value in metadata.get("endpoint_phases", ())) if isinstance(metadata, Mapping) else ()
-    if endpoint_phases and endpoint_phases != tuple(phases):
+    if endpoint_phases and endpoint_phases != tuple(phases): 
+        debugInPlace()
         raise ValueError(f"Ground-truth endpoint phases {endpoint_phases} do not match {tuple(phases)}.")
     return raw
 
@@ -269,6 +279,15 @@ def evaluate_tieline_diagnostics(
                 precPhase=precipitate_phase,
                 returnMeta=True,
             )
+            if result[2]['endpoint_phases'][0] is None:
+                debugInPlace()
+
+                result = thermodynamics.getInterfacialComposition(
+                                point,
+                                surrogate.temperature,
+                                precPhase=precipitate_phase,
+                                returnMeta=True,
+                            )
             ordered = _truth_endpoints(result, phases, surrogate.elements)
             for phase, composition in zip(phases, ordered):
                 truth_endpoints[phase][index] = composition

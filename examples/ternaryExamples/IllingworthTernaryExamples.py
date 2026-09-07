@@ -1349,7 +1349,7 @@ def run_diffusivity_comparison_demo(
     return results, results["summary"]
 
 
-# if __name__ == "__main__":
+if __name__ == "__main__":
 #     def debugInPlace():
 #         try:
 #             import debugpy
@@ -1362,7 +1362,7 @@ def run_diffusivity_comparison_demo(
 #         except:
 #             pass
 #     debugInPlace()
-#     run_results = run_interactive_example(timeProfiling=True)
+    run_results = run_interactive_example(timeProfiling=False)
 
 # %%
 # if __name__ == "__main__":

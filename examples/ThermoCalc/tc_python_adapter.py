@@ -16,9 +16,16 @@ import numpy as np
 
 from kawin.thermo.utils import _getMatrixPhase, _getPrecipitatePhase, _process_xT_arrays
 
+from examples.debugInPlace import debugInPlace
 
 GAS_CONSTANT = 8.31446261815324
 
+def _is_missing_diffusion_quantity_error(exc: Exception) -> bool:
+    message = str(exc).upper()
+    return (
+        "ERROR IN DCHEMD" in message
+        and (("NO SUCH GRADIENT ELEMENT" in message) or ("NO SUCH DIFFUSING ELEMENT" in message))
+    )
 
 class ThermoCalcError(RuntimeError):
     """Base class for example-local TC-Python adapter failures."""
@@ -327,24 +334,35 @@ class _TCPythonBackend:
         reference = tc_element_name(config.reference_element)
         phase_interdiffs_dict = {}
         for D_phase in stable_phases:
-            interdiffusivity = np.array(
-                        [
+            try:
+                interdiffusivity = np.array(
                             [
-                                self._value(
-                                    result,
-                                    tq.chemical_diffusion_coefficient(
-                                        D_phase,
-                                        tc_element_name(diffusing),
-                                        tc_element_name(gradient),
-                                        reference,
-                                    ),
-                                )
-                                for gradient in independent
-                            ]
-                            for diffusing in independent
-                        ],
-                        dtype=np.float64,
-                    )
+                                [
+                                    self._value(
+                                        result,
+                                        tq.chemical_diffusion_coefficient(
+                                            D_phase,
+                                            tc_element_name(diffusing),
+                                            tc_element_name(gradient),
+                                            reference,
+                                        ),
+                                    )
+                                    for gradient in independent
+                                ]
+                                for diffusing in independent
+                            ],
+                            dtype=np.float64,
+                        )
+            except Exception as exc:
+                if not _is_missing_diffusion_quantity_error(exc):
+                    from examples.debugInPlace import debugInPlace
+                    print(exc)
+                    debugInPlace()
+                    raise
+                interdiffusivity={}
+
+                
+                
             phase_interdiffs_dict.update({D_phase:interdiffusivity.copy()})
 
         phase_tracerdiffs_dict = {}
@@ -488,6 +506,7 @@ class _TCPythonBackend:
             return calc.calculate()
         except Exception as exc:
             print(kind, phase, x, T)
+            debugInPlace()
             raise ThermoCalcCalculationError(f"TC-Python {kind} calculation failed: {exc}") from exc
 
     def _configure_global_minimization(self, calc: Any, config: ThermoCalcConfig):
@@ -557,6 +576,9 @@ class _TCPythonBackend:
         try:
             return float(result.get_value_of(quantity))
         except Exception as exc:
+            # from examples.debugInPlace import debugInPlace
+            print(exc)
+            # debugInPlace()
             raise ThermoCalcCalculationError(f"Unable to query {quantity}: {exc}") from exc
 
     def _tq(self):

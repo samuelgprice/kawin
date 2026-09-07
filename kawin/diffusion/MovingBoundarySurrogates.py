@@ -19,17 +19,18 @@ _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID = "continuous_grid"
 _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR = "simplex_linear"
 
 DIFFUSIVITY_REL_TOL = 7e-8
-def debugInPlace():
-    try:
-        import debugpy
-        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-        debugpy.listen(5678)
-        print("WAITING FOR DEBUGGER ATTACH")
-        debugpy.wait_for_client()
-        debugpy.breakpoint()
-        print('break on this line')
-    except:
-        pass
+# def debugInPlace():
+#     try:
+#         import debugpy
+#         # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+#         debugpy.listen(5678)
+#         print("WAITING FOR DEBUGGER ATTACH")
+#         debugpy.wait_for_client()
+#         debugpy.breakpoint()
+#         print('break on this line')
+#     except:
+#         pass
+from examples.debugInPlace import debugInPlace
 
 def _as_path_with_npz_suffix(path):
     path = Path(path)
@@ -93,6 +94,7 @@ def _validate_positive_2x2_matrix(matrix, label):
         raise ValueError(f"{label} must have nonzero norm.")
     eigenvalues = np.linalg.eigvals(matrix / scale)
     if np.any(np.abs(np.imag(eigenvalues)) > 1e-12) or np.any(np.real(eigenvalues) <= 1e-14):
+        debugInPlace()
         raise ValueError(f"{label} must have positive real eigenvalues.")
     return matrix
 
@@ -1538,6 +1540,22 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                                 f"bulk diffusivity for phase {phase} at composition {point.tolist()}",
                             )
                         )
+            ## Useful for determine all of the points to add to "points_toSkip"
+            # errors_lst=[]
+            # if bulk_points is not None:
+            #     for phase in tieline_phases:
+            #         for point in bulk_points:
+            #             general_diff_x[phase].append(point)
+            #             try:
+            #                 res = thermodynamics.getInterdiffusivity(point, temperature, phase=phase)
+            #             except Exception as e:
+            #                 errors_lst.append((phase, point, e))
+            #             general_diff_d[phase].append(
+            #                 _validate_2x2_matrix(
+            #                     res,
+            #                     f"bulk diffusivity for phase {phase} at composition {point.tolist()}",
+            #                 )
+            #             )
         general_diff_x = {phase: np.asarray(values, dtype=np.float64) for phase, values in general_diff_x.items()}
         general_diff_d = {phase: np.asarray(values, dtype=np.float64) for phase, values in general_diff_d.items()}
 

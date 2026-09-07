@@ -29,17 +29,18 @@ _SUPPORTED_BULK_DIFFUSIVITY_MODES = {
     _BULK_DIFFUSIVITY_IMPLICIT,
 }
 
-def debugInPlace():
-    try:
-        import debugpy
-        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-        debugpy.listen(5678)
-        print("Waiting for debugger attach")
-        debugpy.wait_for_client()
-        debugpy.breakpoint()
-        print('break on this line')
-    except:
-        pass
+# def debugInPlace():
+#     try:
+#         import debugpy
+#         # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
+#         debugpy.listen(5678)
+#         print("Waiting for debugger attach")
+#         debugpy.wait_for_client()
+#         debugpy.breakpoint()
+#         print('break on this line')
+#     except:
+#         pass
+from examples.debugInPlace import debugInPlace
 
 def _loge_arange(start, stop, log_step):
     """Returns exponentially spaced target times with fixed natural-log spacing."""
@@ -2478,6 +2479,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if not np.all(np.isfinite(profile)):
             raise ValueError(f"{name} contains non-finite values.")
         if np.any(profile < min_comp) or np.any(dependent < min_comp):
+            debugInPlace()
             raise ValueError(f"{name} violates ternary composition bounds.")
 
     def postSolve(self):

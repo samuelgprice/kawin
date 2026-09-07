@@ -1398,6 +1398,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._lastImplicitPhysicalResidual = np.inf if best is None else best.physical_norm
         self._lastImplicitConverged = False
         self._lastImplicitFailureReason = failure_reason
+        self._lastBest = best
         raise RuntimeError(f"Three-phase Illingworth interface solve failed to converge; best residual was {self._lastImplicitResidual:.3e}.")
 
     def _accept_step_candidate(self, profiles, interfaces, etas, candidate, trial_dt, retry):
@@ -1417,6 +1418,10 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         """Attempts implicit solves while shrinking ``trial_dt`` after each failed trial."""
         last_error = None
         for retry in range(int(retry_count)):
+            if retry==(int(retry_count)-1):
+                # from examples.debugInPlace import debugInPlace
+                # debugInPlace()
+                print(retry)
             self._currdt = trial_dt
             try:
                 candidate = self._solve_interface_planar(profiles, interfaces, etas, trial_dt)
@@ -1504,6 +1509,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         print(f"etas: {etas}")
         print(f"interfaces: {interfaces}")
         print(f"self._lastImplicitFailureReason: {self._lastImplicitFailureReason}")
+        from examples.debugInPlace import debugInPlace
+        debugInPlace()
         raise RuntimeError("Three-phase Illingworth step failed after timestep retries.") from last_error
 
     def getDt(self, dXdt):
