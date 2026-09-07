@@ -1410,15 +1410,15 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             # tieTriangle_dict = {'BCC_B2#1': {'phase': 'BCC_B2#1', 'composition': np.array([0.4990168180776723, 0.20973601790846239])},
             #                     'FCC_L12#1': {'phase': 'FCC_L12#1', 'composition': np.array([0.37193735637122444, 0.3238388788584637])},
             #                     'LIQUID#1': {'phase': 'LIQUID#1', 'composition': np.array([0.4048270853062835, 0.30526507445655177])}}
-            terminal_artificial_sample = {}
-            terminal_artificial_sample['endpoints'] = tuple([tieTriangle_dict[phase]['composition'] for phase in tieline_phases])
-            terminal_artificial_sample['midpoint'] = ((terminal_artificial_sample['endpoints'][0]+terminal_artificial_sample['endpoints'][1])/2).copy()
-            midpoint_distBool = (np.linalg.norm(terminal_artificial_sample['midpoint'] - lst_ofSamples_neg[-1]['midpoint']) > 1e-10)
-            endpoints_distBool = (np.linalg.norm(terminal_artificial_sample['endpoints'][0] - lst_ofSamples_neg[-1]['endpoints'][0]) > 1e-10) or (np.linalg.norm(terminal_artificial_sample['endpoints'][1] - lst_ofSamples_neg[-1]['endpoints'][1]) > 1e-10)
-            if midpoint_distBool or endpoints_distBool:
-                debugInPlace()
-                print(midpoint_distBool, endpoints_distBool)
-                raise
+            # terminal_artificial_sample = {}
+            # terminal_artificial_sample['endpoints'] = tuple([tieTriangle_dict[phase]['composition'] for phase in tieline_phases])
+            # terminal_artificial_sample['midpoint'] = ((terminal_artificial_sample['endpoints'][0]+terminal_artificial_sample['endpoints'][1])/2).copy()
+            # midpoint_distBool = (np.linalg.norm(terminal_artificial_sample['midpoint'] - lst_ofSamples_neg[-1]['midpoint']) > 1e-10)
+            # endpoints_distBool = (np.linalg.norm(terminal_artificial_sample['endpoints'][0] - lst_ofSamples_neg[-1]['endpoints'][0]) > 1e-10) or (np.linalg.norm(terminal_artificial_sample['endpoints'][1] - lst_ofSamples_neg[-1]['endpoints'][1]) > 1e-10)
+            # if midpoint_distBool or endpoints_distBool:
+            #     debugInPlace()
+            #     print(midpoint_distBool, endpoints_distBool)
+            #     raise
 
             both_sides = _resample_seed_scan_side(
                 thermodynamics,
@@ -1430,14 +1430,15 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 elements,
                 float(min_composition),
                 probe_samples_per_side,
-                [terminal_artificial_sample] + lst_ofSamples_neg[::-1] + [seed_sample] + lst_ofSamples_pos,
+                lst_ofSamples_neg[::-1] + [seed_sample] + lst_ofSamples_pos,
+                # [terminal_artificial_sample] + lst_ofSamples_neg[::-1] + [seed_sample] + lst_ofSamples_pos,
             )
-            midpoint_distBool = (np.linalg.norm(terminal_artificial_sample['midpoint'] - both_sides[0][1]['midpoint'])==0)
-            endpoints_distBool = (np.linalg.norm(terminal_artificial_sample['endpoints'][0] - both_sides[0][1]['endpoints'][0]) > 1e-12) or (np.linalg.norm(terminal_artificial_sample['endpoints'][1] - both_sides[0][1]['endpoints'][1]) > 1e-12)
-            if midpoint_distBool or endpoints_distBool:
-                debugInPlace()
-                print(midpoint_distBool, endpoints_distBool)
-                raise
+            # midpoint_distBool = (np.linalg.norm(terminal_artificial_sample['midpoint'] - both_sides[0][1]['midpoint'])==0)
+            # endpoints_distBool = (np.linalg.norm(terminal_artificial_sample['endpoints'][0] - both_sides[0][1]['endpoints'][0]) > 1e-12) or (np.linalg.norm(terminal_artificial_sample['endpoints'][1] - both_sides[0][1]['endpoints'][1]) > 1e-12)
+            # if midpoint_distBool or endpoints_distBool:
+            #     debugInPlace()
+            #     print(midpoint_distBool, endpoints_distBool)
+            #     raise
             # debugInPlace()
             print(f"totalNumCalcs: {thermodynamics._backend.totalNumCalcs}")
 
