@@ -692,12 +692,23 @@ def _resample_seed_scan_side(
 
     midpoints_arr = np.array([s['midpoint'] for s in lst_ofSamples]).copy()
     diff_arr = np.diff(midpoints_arr, axis=0).copy()
-    scan_dir_arr = np.array([float(sign)*_seed_tieline_scan_direction(s["endpoints"], reference_direction=scan_direction) for s in lst_ofSamples])[:-1].copy()
+    ref_dir = (lst_ofSamples[1]['probe']-lst_ofSamples[0]['midpoint']).copy()
+    scan_dir_lst = [_seed_tieline_scan_direction(lst_ofSamples[0]["endpoints"], reference_direction=ref_dir).copy()]
+    for i in range(1, len(lst_ofSamples)):
+        ref_dir = _seed_tieline_scan_direction(lst_ofSamples[i]["endpoints"], reference_direction=ref_dir).copy()
+        scan_dir_lst.append(ref_dir.copy())
+    scan_dir_arr = np.array(scan_dir_lst[:-1]).copy()
     def norm_vect(vect):
         normed_vect = (vect / np.linalg.norm(vect)).copy()
         return normed_vect
-    dot_arr = np.array([norm_vect(diff_arr[i])*norm_vect(scan_dir_arr[i]) for i in range(len(diff_arr))]).sum(axis=1)
+    def norm_then_dot_arrs(arr1, arr2):
+        if arr1.shape!=arr2.shape:
+            raise ValueError("arr1.shape!=arr2.shape")
+        return np.array([norm_vect(arr1[i])*norm_vect(arr2[i]) for i in range(len(arr1))]).sum(axis=1)
+        
+    dot_arr = norm_then_dot_arrs(diff_arr, scan_dir_arr).copy()
     if not (dot_arr>0).all():
+        debugInPlace()
         raise ValueError("The dot product of the diff vector and scan direction vector is not positive for all samples.")
     dist_arr = np.linalg.norm(diff_arr, axis=1).copy()
     totalLength = dist_arr.sum()
