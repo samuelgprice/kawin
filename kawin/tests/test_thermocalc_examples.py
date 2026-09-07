@@ -32,6 +32,10 @@ class FakeThermoCalcBackend:
         self.restart_count = 0
         self.fail_once_group = fail_once_group
         self.failed_groups = set()
+        self.totalNumCalcs = 0
+        self.totalNumCaches = 0
+        self.totalNumQueries = 0
+        self.equilibrium_calls = 0
 
     def start(self, config):
         self.config = config
@@ -54,6 +58,7 @@ class FakeThermoCalcBackend:
         return {"ok": True, "stable_phases": ["BCC_A2"], "driving_force": 1.0}
 
     def calculate_equilibrium(self, x, T):
+        self.equilibrium_calls += 1
         self._fail_once("equilibrium")
         return {
             "stable_phases": ["BCC_A2", "FCC_A1"],
@@ -63,6 +68,14 @@ class FakeThermoCalcBackend:
                 "FCC_A1": np.array([0.8, 0.15, 0.05]),
             },
             "chemical_potentials": {"FE": -1.0, "CR": -2.0, "NI": -3.0},
+            "phase_interdiffusivities": {
+                "BCC_A2": np.array([[1.0, 0.1], [0.2, 2.0]]) * 1e-14,
+                "FCC_A1": np.array([[2.0, 0.2], [0.4, 4.0]]) * 1e-14,
+            },
+            "phase_tracerdiffusivities": {
+                "BCC_A2": np.array([3.0, 4.0, 5.0]) * 1e-14,
+                "FCC_A1": np.array([6.0, 8.0, 10.0]) * 1e-14,
+            },
         }
 
     def calculate_driving_force(self, x, T, precipitate_phase):
@@ -267,6 +280,19 @@ def test_planar_tie_line_metadata_and_gextra_rejection():
     assert metadata["endpoint_phases"] == ("BCC_A2", "FCC_A1")
     with pytest.raises(NotImplementedError):
         therm.getInterfacialComposition([0.3, 0.2], 1373.0, gExtra=1.0)
+
+
+def test_default_remove_cache_is_configurable_per_adapter():
+    backend = FakeThermoCalcBackend()
+    therm = TCPythonThermodynamics(backend=backend, default_remove_cache=False)
+
+    first = therm.getEquilibriumData([0.3, 0.2], 1373.0)
+    second = therm.getEquilibriumData([0.3, 0.2], 1373.0)
+    refreshed = therm.getEquilibriumData([0.3, 0.2], 1373.0, removeCache=True)
+
+    assert backend.equilibrium_calls == 2
+    assert first is second
+    assert refreshed is not second
 
 
 def test_checkpoint_resume_and_manifest_roundtrip():

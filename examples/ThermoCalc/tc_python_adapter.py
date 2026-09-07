@@ -593,7 +593,27 @@ class TCPythonThermodynamics:
     TC-Python server session can be reused across many points.
     """
 
-    def __init__(self, config: ThermoCalcConfig | None = None, backend: Any | None = None):
+    def __init__(
+        self,
+        config: ThermoCalcConfig | None = None,
+        backend: Any | None = None,
+        default_remove_cache: bool = True,
+    ):
+        """Create an adapter with an optional per-instance cache policy.
+
+        Parameters
+        ----------
+        config : ThermoCalcConfig, optional
+            Thermo-Calc system configuration.
+        backend : optional
+            Backend used to execute TC-Python calculations. Primarily useful
+            for testing.
+        default_remove_cache : bool, optional
+            Cache policy for public calculation calls that omit
+            ``removeCache``. ``True`` recalculates by default; ``False``
+            reuses adapter-side results for identical queries. An explicit
+            ``removeCache`` argument on an individual call takes precedence.
+        """
         self.config = ThermoCalcConfig() if config is None else config
         self.elements = list(self.config.elements)
         self.phases = list(self.config.phases)
@@ -602,6 +622,7 @@ class TCPythonThermodynamics:
         self._backend = _TCPythonBackend() if backend is None else backend
         self._started = False
         self._cache: dict[tuple[Any, ...], Any] = {}
+        self.default_remove_cache = bool(default_remove_cache)
 
     def __enter__(self):
         self._ensure_started()
@@ -639,15 +660,17 @@ class TCPythonThermodynamics:
         composition = validate_independent_composition(x, self.config)
         return self._backend.preflight(self.config, composition, float(T))
 
-    def getDrivingForce(self, x, T, precPhase=None, removeCache=True):
+    def getDrivingForce(self, x, T, precPhase=None, removeCache=None):
         """Return driving force in J/mol and precipitate composition.
 
         ``x`` uses independent mole fractions in ``independent_elements`` order.
         The precipitate composition returned to kawin also uses independent
         order.  TC-Python's dimensionless ``DGM`` is converted as
-        ``DGM * R * T``.
+        ``DGM * R * T``. When ``removeCache`` is omitted, the instance's
+        ``default_remove_cache`` policy is used.
         """
 
+        removeCache = self._resolve_remove_cache(removeCache)
         precPhase = _getPrecipitatePhase(self.phases, precPhase).upper()
         x_array, T_array = self._process_xT(x, T)
         values = [self._get_driving_force_single(xi, Ti, precPhase, removeCache) for xi, Ti in zip(x_array, T_array)]
@@ -656,40 +679,53 @@ class TCPythonThermodynamics:
             np.array(precipitate_composition, dtype=np.float64)
         )
 
-    def getInterdiffusivity(self, x, T, phase=None, removeCache=True):
+    def getInterdiffusivity(self, x, T, phase=None, removeCache=None):
         """Return the Fe-reference chemical interdiffusivity matrix.
 
         Rows and columns follow ``independent_elements`` order.  For the
         default Fe-Cr-Ni configuration, the result is a 2x2 matrix in
-        ``[CR, NI]`` order.
+        ``[CR, NI]`` order. When ``removeCache`` is omitted, the instance's
+        ``default_remove_cache`` policy is used.
         """
 
+        removeCache = self._resolve_remove_cache(removeCache)
         phase = _getMatrixPhase(self.phases, phase).upper()
         x_array, T_array = self._process_xT(x, T)
         values = [self._get_kinetics_single(xi, Ti, phase, removeCache)["interdiffusivity"] for xi, Ti in zip(x_array, T_array)]
         return np.squeeze(np.array(values, dtype=np.float64))
 
-    def getTracerDiffusivity(self, x, T, phase=None, removeCache=True):
-        """Return tracer diffusivities in full ``elements`` order."""
+    def getTracerDiffusivity(self, x, T, phase=None, removeCache=None):
+        """Return tracer diffusivities in full ``elements`` order.
 
+        When ``removeCache`` is omitted, the instance's
+        ``default_remove_cache`` policy is used.
+        """
+
+        removeCache = self._resolve_remove_cache(removeCache)
         phase = _getMatrixPhase(self.phases, phase).upper()
         x_array, T_array = self._process_xT(x, T)
         values = [self._get_kinetics_single(xi, Ti, phase, removeCache)["tracer_diffusivity"] for xi, Ti in zip(x_array, T_array)]
         return np.squeeze(np.array(values, dtype=np.float64))
 
-    def getEquilibriumData(self, x, T, removeCache=True):
-        """Return stable phases, phase amounts, compositions, and chemical potentials."""
+    def getEquilibriumData(self, x, T, removeCache=None):
+        """Return stable phases, phase amounts, compositions, and chemical potentials.
 
+        When ``removeCache`` is omitted, the instance's
+        ``default_remove_cache`` policy is used.
+        """
+
+        removeCache = self._resolve_remove_cache(removeCache)
         x_array, T_array = self._process_xT(x, T)
         values = [self._get_equilibrium_single(xi, Ti, removeCache) for xi, Ti in zip(x_array, T_array)]
         return values[0] if len(values) == 1 else values
 
-    def getInterfacialComposition(self, x, T, gExtra=0, precPhase=None, returnMeta=False):
+    def getInterfacialComposition(self, x, T, gExtra=0, precPhase=None, returnMeta=False, removeCache=None):
         """Return planar BCC/FCC tie-line endpoints from equilibrium.
 
         Nonzero ``gExtra`` is intentionally unsupported in this example because
         Gibbs-Thomson-corrected multicomponent curvature is outside the first
-        TC-Python integration scope.
+        TC-Python integration scope. When ``removeCache`` is omitted, the
+        instance's ``default_remove_cache`` policy is used.
         """
 
         if np.any(np.asarray(gExtra, dtype=np.float64) != 0):
@@ -697,7 +733,7 @@ class TCPythonThermodynamics:
 
         precPhase = _getPrecipitatePhase(self.phases, precPhase).upper()
         matrix_phase = self.config.matrix_phase
-        equilibrium = self.getEquilibriumData(x, T)
+        equilibrium = self.getEquilibriumData(x, T, removeCache=removeCache)
         phase_compositions = equilibrium["phase_compositions"]
         if set([matrix_phase, precPhase])==set(phase_compositions.keys()):
             x_alpha = full_to_independent_composition(phase_compositions[matrix_phase], self.config)
@@ -734,6 +770,13 @@ class TCPythonThermodynamics:
             if not np.isfinite(Ti) or Ti <= 0:
                 raise ThermoCalcInputError("Temperature must be a positive finite value in K.")
         return x_array.astype(np.float64), T_array.astype(np.float64)
+
+    def _resolve_remove_cache(self, removeCache: bool | None) -> bool:
+        """Return an explicit cache policy or this instance's default policy."""
+
+        if removeCache is None:
+            return self.default_remove_cache
+        return bool(removeCache)
 
     def _get_equilibrium_single(self, x: np.ndarray, T: float, removeCache: bool):
         key = ("equilibrium", tuple(np.asarray(x, dtype=float)), float(T))
