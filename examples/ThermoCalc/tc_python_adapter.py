@@ -63,12 +63,12 @@ class ThermoCalcConfig:
     TC-Python's ``SingleEquilibriumOptions`` object.
     """
 
-    thermodynamic_database: str = "TCFE9"
-    kinetic_database: str | None = "MOBFE4"
+    thermodynamic_database: str = None #"TCFE9"
+    kinetic_database: str | None = None #"MOBFE4"
     user_database_path: str | Path | None = None
-    elements: tuple[str, ...] = ("FE", "CR", "NI")
-    phases: tuple[str, ...] = ("BCC_A2", "FCC_A1")
-    reference_element: str = "FE"
+    elements: tuple[str, ...] = None #("FE", "CR", "NI")
+    phases: tuple[str, ...] = None #("BCC_A2", "FCC_A1")
+    reference_element: str = None #"FE"
     pressure: float = 101325.0
     use_default_phases: bool = True
     global_minimization_max_grid_points: int | None = None
