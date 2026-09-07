@@ -1118,10 +1118,14 @@ def _grid_customdata(bulk, fields, selected, hover_format):
 
 
 def _subplot_colorbar(fig, row, col, title):
-    """Position a compact heatmap colorbar beside its owning subplot."""
+    """Position a compact colorbar beside its owning Cartesian or ternary subplot."""
     subplot = fig.get_subplot(row, col)
-    x_domain = subplot.xaxis.domain
-    y_domain = subplot.yaxis.domain
+    if hasattr(subplot, "xaxis"):
+        x_domain = subplot.xaxis.domain
+        y_domain = subplot.yaxis.domain
+    else:
+        x_domain = subplot.domain.x
+        y_domain = subplot.domain.y
     return {
         "title": {"text": title},
         "x": x_domain[1] + 0.006,
@@ -1137,33 +1141,321 @@ def _subplot_colorbar(fig, row, col, title):
     }
 
 
+def _validate_diffusivity_color_scale(value):
+    """Validate the color transform used for diffusivity fields."""
+    mode = str(value).lower()
+    allowed = ("auto", "linear", "log", "symlog")
+    if mode not in allowed:
+        raise ValueError(
+            "diffusivity_color_scale must be one of 'auto', 'linear', 'log', or 'symlog'."
+        )
+    return mode
+
+
+def _validate_symlog_linthresh(value):
+    """Validate a positive finite signed-log linear-core threshold."""
+    if value is None:
+        return None
+    value = float(value)
+    if not np.isfinite(value) or value <= 0.0:
+        raise ValueError("symlog_linthresh must be a positive finite value.")
+    return value
+
+
+def _signed_log10_color_values(values, linthresh):
+    """Map finite signed values to a symmetric-log color coordinate."""
+    values = np.asarray(values, dtype=np.float64)
+    transformed = np.full(values.shape, np.nan, dtype=np.float64)
+    finite = np.isfinite(values)
+    magnitude = np.abs(values[finite])
+    linear = magnitude <= linthresh
+    finite_values = np.empty(magnitude.shape, dtype=np.float64)
+    finite_values[linear] = magnitude[linear] / linthresh
+    finite_values[~linear] = 1.0 + np.log10(magnitude[~linear] / linthresh)
+    transformed[finite] = np.sign(values[finite]) * finite_values
+    return transformed
+
+
+def _select_symlog_linthresh(values, explicit):
+    """Select a stable signed-log threshold from the plotted finite values."""
+    explicit = _validate_symlog_linthresh(explicit)
+    if explicit is not None:
+        return explicit
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    maximum = float(np.max(np.abs(finite))) if finite.size else 0.0
+    if maximum == 0.0:
+        return 1.0
+    exponent = np.floor(np.log10(maximum)) - 3.0
+    return max(float(10.0**exponent), float(np.finfo(np.float64).tiny))
+
+
+def _symlog_color_ticks(values, linthresh):
+    """Return symmetric original-value ticks for a signed-log colorbar."""
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    maximum = float(np.max(np.abs(finite))) if finite.size else 0.0
+    if maximum == 0.0:
+        return np.asarray([0.0], dtype=np.float64)
+    ratio = maximum / linthresh
+    if ratio <= 1.0:
+        magnitudes = np.asarray([maximum], dtype=np.float64)
+    else:
+        power_count = int(np.floor(np.log10(ratio))) + 1
+        powers = np.arange(power_count, dtype=np.int64)
+        if len(powers) > 5:
+            powers = powers[np.unique(np.linspace(0, len(powers) - 1, 5).round().astype(int))]
+        magnitudes = linthresh * np.power(10.0, powers)
+        if magnitudes[-1] < maximum:
+            magnitudes = np.append(magnitudes, maximum)
+    return np.concatenate((-magnitudes[::-1], np.asarray([0.0]), magnitudes))
+
+
+def _log_color_ticks(values):
+    """Return readable positive original-value ticks for a log colorbar."""
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite) & (finite > 0.0)]
+    if finite.size == 0:
+        return np.asarray([], dtype=np.float64)
+    lower = float(np.min(finite))
+    upper = float(np.max(finite))
+    if lower == upper:
+        return np.asarray([lower], dtype=np.float64)
+    exponents = np.arange(
+        int(np.floor(np.log10(lower))),
+        int(np.ceil(np.log10(upper))) + 1,
+        dtype=np.int64,
+    )
+    if len(exponents) > 7:
+        exponents = exponents[np.unique(np.linspace(0, len(exponents) - 1, 7).round().astype(int))]
+    ticks = np.power(10.0, exponents)
+    ticks = ticks[(ticks >= lower) & (ticks <= upper)]
+    return np.unique(np.concatenate((ticks, np.asarray([lower, upper]))))
+
+
+def _format_colorbar_tick(value):
+    """Format an original diffusivity value for a transformed colorbar."""
+    return "0" if value == 0.0 else f"{value:.3g}"
+
+
+def _diffusivity_color_mapping(values, color_scale="auto", symlog_linthresh=None):
+    """Build a per-entry color mapping while retaining original-value labels."""
+    requested = _validate_diffusivity_color_scale(color_scale)
+    symlog_linthresh = _validate_symlog_linthresh(symlog_linthresh)
+    values = np.asarray(values, dtype=np.float64)
+    finite = values[np.isfinite(values)]
+    if requested == "auto":
+        mode = "symlog" if np.any(finite < 0.0) else "log"
+    else:
+        mode = requested
+
+    if mode == "log":
+        if np.any(finite < 0.0):
+            raise ValueError(
+                "Logarithmic diffusivity coloring cannot represent negative values; "
+                "use diffusivity_color_scale='symlog' or 'auto'."
+            )
+        positive = finite[finite > 0.0]
+        if positive.size == 0:
+            if requested == "log" and finite.size:
+                floor = 1.0e-300
+                log_floor = float(np.log10(floor))
+                return {
+                    "mode": "log",
+                    "colorscale": "Viridis",
+                    "zmin": log_floor - 0.5,
+                    "zmax": log_floor + 0.5,
+                    "zmid": None,
+                    "floor": floor,
+                    "linthresh": None,
+                    "tickvals": np.asarray([log_floor], dtype=np.float64),
+                    "ticktext": ["0"],
+                }
+            return {
+                "mode": "linear",
+                "colorscale": "Viridis",
+                "zmin": None,
+                "zmax": None,
+                "zmid": None,
+                "floor": None,
+                "linthresh": None,
+                "tickvals": None,
+                "ticktext": None,
+            }
+        floor = max(float(np.min(positive)) * 1.0e-3, float(np.finfo(np.float64).tiny))
+        if np.any(finite == 0.0):
+            original_ticks = np.concatenate((np.asarray([0.0]), _log_color_ticks(positive)))
+        else:
+            original_ticks = _log_color_ticks(positive)
+        tickvals = np.log10(np.maximum(original_ticks, floor))
+        zmin = float(np.log10(floor if np.any(finite == 0.0) else np.min(positive)))
+        zmax = float(np.log10(np.max(positive)))
+        if zmin == zmax:
+            zmin -= 0.5
+            zmax += 0.5
+        return {
+            "mode": "log",
+            "colorscale": "Viridis",
+            "zmin": zmin,
+            "zmax": zmax,
+            "zmid": None,
+            "floor": floor,
+            "linthresh": None,
+            "tickvals": tickvals,
+            "ticktext": [_format_colorbar_tick(value) for value in original_ticks],
+        }
+
+    if mode == "symlog":
+        linthresh = _select_symlog_linthresh(values, symlog_linthresh)
+        transformed = _signed_log10_color_values(values, linthresh)
+        finite_transformed = transformed[np.isfinite(transformed)]
+        limit = float(np.max(np.abs(finite_transformed))) if finite_transformed.size else 1.0
+        limit = max(limit, 1.0)
+        original_ticks = _symlog_color_ticks(values, linthresh)
+        return {
+            "mode": "symlog",
+            "colorscale": "RdBu",
+            "zmin": -limit,
+            "zmax": limit,
+            "zmid": 0.0,
+            "floor": None,
+            "linthresh": linthresh,
+            "tickvals": _signed_log10_color_values(original_ticks, linthresh),
+            "ticktext": [_format_colorbar_tick(value) for value in original_ticks],
+        }
+
+    return {
+        "mode": "linear",
+        "colorscale": "RdBu",
+        "zmin": None,
+        "zmax": None,
+        "zmid": 0.0 if np.any(finite < 0.0) else None,
+        "floor": None,
+        "linthresh": None,
+        "tickvals": None,
+        "ticktext": None,
+    }
+
+
+def _transform_diffusivity_color_values(values, mapping):
+    """Apply a color transform without changing the original hover-data values."""
+    values = np.asarray(values, dtype=np.float64)
+    if mapping["mode"] == "log":
+        transformed = values.copy()
+        finite = np.isfinite(values)
+        transformed[finite] = np.log10(np.maximum(values[finite], mapping["floor"]))
+        return transformed
+    if mapping["mode"] == "symlog":
+        return _signed_log10_color_values(values, mapping["linthresh"])
+    return values
+
+
+def _diffusivity_heatmap_options(fig, row, col, mapping, colorbar_title, colorscale=None):
+    """Return Plotly heatmap options for a transformed diffusivity component."""
+    colorbar = _subplot_colorbar(fig, row, col, colorbar_title)
+    if mapping["mode"] != "linear":
+        colorbar["title"] = {"text": f"{colorbar_title} ({mapping['mode']})"}
+        colorbar["tickmode"] = "array"
+        colorbar["tickvals"] = mapping["tickvals"].tolist()
+        colorbar["ticktext"] = mapping["ticktext"]
+    options = {
+        "colorscale": mapping["colorscale"] if colorscale is None else colorscale,
+        "colorbar": colorbar,
+    }
+    if mapping["zmin"] is not None:
+        options["zmin"] = mapping["zmin"]
+    if mapping["zmax"] is not None:
+        options["zmax"] = mapping["zmax"]
+    if mapping["zmid"] is not None:
+        options["zmid"] = mapping["zmid"]
+    return options
+
+
+def _diffusivity_marker_options(fig, row, col, mapping, colorbar_title, colorscale=None, size=9):
+    """Return ternary-marker options for a transformed diffusivity component.
+
+    Plotly does not provide a native ternary heatmap trace. The bulk diagnostic
+    maps therefore use dense ``Scatterternary`` markers; the color transform
+    uses marker ``cmin``/``cmax``/``cmid`` equivalents of the heatmap limits.
+    """
+    colorbar = _subplot_colorbar(fig, row, col, colorbar_title)
+    if mapping["mode"] != "linear":
+        colorbar["title"] = {"text": f"{colorbar_title} ({mapping['mode']})"}
+        colorbar["tickmode"] = "array"
+        colorbar["tickvals"] = mapping["tickvals"].tolist()
+        colorbar["ticktext"] = mapping["ticktext"]
+    options = {
+        "size": size,
+        "colorscale": mapping["colorscale"] if colorscale is None else colorscale,
+        "colorbar": colorbar,
+        "showscale": True,
+    }
+    if mapping["zmin"] is not None:
+        options["cmin"] = mapping["zmin"]
+    if mapping["zmax"] is not None:
+        options["cmax"] = mapping["zmax"]
+    if mapping["zmid"] is not None:
+        options["cmid"] = mapping["zmid"]
+    return options
+
+
 def plot_bulk_diffusivity_diagnostics(
     report,
     phase,
     *,
     hover_fields="diagnostic",
     hover_format=".6g",
+    diffusivity_color_scale="auto",
+    symlog_linthresh=None,
     renderer="browser",
 ):
     """Create a bulk diffusivity dashboard using the browser renderer by default.
 
-    Its ternary coverage view uses the same corner ordering as
-    :func:`plot_tieline_diagnostics`. Each heatmap colorbar is sized and
-    positioned relative to its own subplot, including switchable truth and
-    error layers.
+    All composition fields are actual barycentric ternary subplots and use the
+    same corner ordering as :func:`plot_tieline_diagnostics`. Plotly has no
+    native ternary heatmap trace, so each colored field is rendered as a dense
+    ``Scatterternary`` marker field at the valid simplex sample points. This
+    preserves the triangular geometry and masked simplex boundary, but does
+    not interpolate between samples. Colorbars are sized and positioned
+    relative to their owning subplot, including switchable truth and error
+    layers. Diffusivity component fields use per-component base-10 logarithmic
+    coloring by default; components with negative finite values automatically
+    use a signed-log transform so both signs remain visible. Relative-error
+    layers use logarithmic coloring under ``"auto"``; an all-zero layer is
+    placed at a small positive transform floor and retains a ``0`` colorbar
+    label because zero itself has no logarithm. The ``Validity / truth error``
+    panel applies the same rule to its matrix-relative-error values when truth
+    data are available; without truth data it remains an invalid-matrix mask.
+    Set ``diffusivity_color_scale`` to ``"linear"``, ``"log"``, or
+    ``"symlog"`` to override the automatic choice. ``symlog_linthresh``
+    controls the linear core of the signed-log transform.
     """
     go, make_subplots = _require_plotly(renderer)
     if report.get("kind") != "diffusivity" or phase not in report["bulk"]["phases"]:
         raise ValueError(f"Bulk diffusivity report does not contain phase '{phase}'.")
     selected = _selected_hover_fields("diffusivity", hover_fields)
+    requested_color_scale = _validate_diffusivity_color_scale(diffusivity_color_scale)
     bulk = report["bulk"]
     phase_report = bulk["phases"][phase]
     fig = make_subplots(
         rows=2, cols=4,
-        specs=[[{"type": "ternary"}, {"type": "xy"}, {"type": "xy"}, {"type": "xy"}],
-               [{"type": "xy"}, {"type": "xy"}, {"type": "xy"}, {"type": "xy"}]],
+        specs=[[{"type": "ternary"}, {"type": "ternary"}, {"type": "ternary"}, {"type": "ternary"}],
+               [{"type": "ternary"}, {"type": "ternary"}, {"type": "ternary"}, {"type": "ternary"}]],
         subplot_titles=("Training coverage", "D[0,0]", "D[0,1]", "D[1,0]", "D[1,1]", "Training distance", "Validity / truth error", "Fallback mask"),
     )
+    for row in (1, 2):
+        for col in (1, 2, 3, 4):
+            fig.update_ternaries(
+                sum=1,
+                aaxis={"title": report["elements"][2]},
+                baxis={"title": report["elements"][0]},
+                caxis={"title": report["elements"][1]},
+                row=row,
+                col=col,
+            )
+    for index in range(1, 9):
+        layout_name = "ternary" if index == 1 else f"ternary{index}"
+        _leave_room_above_ternary(fig, layout_name, gap=0.04)
     points = phase_report["compositions"]
     coverage_fields = _matrix_hover_fields(phase_report)
     coverage_custom, coverage_template = _hover_payload(coverage_fields, selected, len(points), hover_format)
@@ -1224,6 +1516,14 @@ def plot_bulk_diffusivity_diagnostics(
                 "absolute_error": truth["absolute_error"][:, component[0], component[1]],
                 "relative_error": truth["relative_error"][:, component[0], component[1]],
             })
+        component_values = [layers["prediction"]]
+        if truth is not None:
+            component_values.append(layers["truth"])
+        diffusivity_mapping = _diffusivity_color_mapping(
+            np.concatenate(component_values),
+            color_scale=diffusivity_color_scale,
+            symlog_linthresh=symlog_linthresh,
+        )
         for layer, values in layers.items():
             layer_fields = _matrix_hover_fields(
                 phase_report, component, source=layer.replace("_", " ")
@@ -1234,55 +1534,122 @@ def plot_bulk_diffusivity_diagnostics(
                 layer_fields["d01"] = truth["matrices"][:, 0, 1]
                 layer_fields["d10"] = truth["matrices"][:, 1, 0]
                 layer_fields["d11"] = truth["matrices"][:, 1, 1]
-            layer_custom, layer_template = _grid_customdata(
-                bulk, layer_fields, selected, hover_format
+            layer_custom, layer_template = _hover_payload(
+                layer_fields, selected, len(points), hover_format
             )
             trace_index = len(fig.data)
             layer_indices[layer].append(trace_index)
+            mapping = diffusivity_mapping if layer in {"prediction", "truth"} else _diffusivity_color_mapping(
+                values,
+                color_scale=(
+                    "log"
+                    if layer == "relative_error" and requested_color_scale == "auto"
+                    else requested_color_scale
+                ),
+                symlog_linthresh=symlog_linthresh,
+            )
+            layer_colorscale = mapping["colorscale"]
+            if layer in {"absolute_error", "relative_error"} and mapping["mode"] == "linear":
+                layer_colorscale = "Viridis"
             fig.add_trace(
-                go.Heatmap(
-                    x=bulk["axes"][0], y=bulk["axes"][1], z=_grid_values(bulk, values),
-                    colorscale="RdBu" if layer in {"prediction", "truth"} else "Viridis",
-                    zmid=0.0 if layer in {"prediction", "truth"} else None,
-                    colorbar=_subplot_colorbar(
-                        fig, row, col, "m^2/s" if layer != "relative_error" else "relative"
-                    ),
-                    name=layer.replace("_", " ").title(), showscale=True,
-                    visible=layer == "prediction", customdata=layer_custom, hovertemplate=layer_template,
+                go.Scatterternary(
+                    **_ternary_coordinates(points),
+                    mode="markers",
+                    marker={
+                        "color": _transform_diffusivity_color_values(values, mapping),
+                        **_diffusivity_marker_options(
+                            fig,
+                            row,
+                            col,
+                            mapping,
+                            "m^2/s" if layer != "relative_error" else "relative",
+                            colorscale=layer_colorscale,
+                        ),
+                    },
+                    name=layer.replace("_", " ").title(),
+                    visible=layer == "prediction",
+                    customdata=layer_custom,
+                    hovertemplate=layer_template,
                 ), row=row, col=col,
             )
 
     distance_fields = _matrix_hover_fields(phase_report)
     distance_fields["value"] = phase_report["nearest_training_distance"]
-    distance_custom, distance_template = _grid_customdata(bulk, distance_fields, selected, hover_format)
+    distance_custom, distance_template = _hover_payload(
+        distance_fields, selected, len(points), hover_format
+    )
     fig.add_trace(
-        go.Heatmap(
-            x=bulk["axes"][0], y=bulk["axes"][1], z=_grid_values(bulk, phase_report["nearest_training_distance"]),
-            colorscale="Viridis", name="Training distance", showscale=True,
-            colorbar=_subplot_colorbar(fig, 2, 2, "distance"),
-            customdata=distance_custom, hovertemplate=distance_template,
+        go.Scatterternary(
+            **_ternary_coordinates(points),
+            mode="markers",
+            marker={
+                "color": phase_report["nearest_training_distance"],
+                "size": 9,
+                "colorscale": "Viridis",
+                "showscale": True,
+                "colorbar": _subplot_colorbar(fig, 2, 2, "distance"),
+            },
+            name="Training distance",
+            customdata=distance_custom,
+            hovertemplate=distance_template,
         ), row=2, col=2,
     )
     diagnostic = truth["matrix_relative_error"] if truth is not None else (~phase_report["valid"]).astype(float)
     diagnostic_fields = _matrix_hover_fields(phase_report)
     diagnostic_fields["value"] = diagnostic
-    diagnostic_custom, diagnostic_template = _grid_customdata(bulk, diagnostic_fields, selected, hover_format)
+    diagnostic_custom, diagnostic_template = _hover_payload(
+        diagnostic_fields, selected, len(points), hover_format
+    )
+    if truth is not None:
+        diagnostic_mapping = _diffusivity_color_mapping(
+            diagnostic,
+            color_scale="log" if requested_color_scale == "auto" else requested_color_scale,
+            symlog_linthresh=symlog_linthresh,
+        )
+        diagnostic_marker = {
+            "color": _transform_diffusivity_color_values(diagnostic, diagnostic_mapping),
+            **_diffusivity_marker_options(
+                fig, 2, 3, diagnostic_mapping, "relative", colorscale="Magma"
+            ),
+        }
+    else:
+        diagnostic_marker = {
+            "color": diagnostic,
+            "size": 9,
+            "colorscale": "Magma",
+            "showscale": True,
+            "colorbar": _subplot_colorbar(fig, 2, 3, "invalid"),
+        }
     fig.add_trace(
-        go.Heatmap(
-            x=bulk["axes"][0], y=bulk["axes"][1], z=_grid_values(bulk, diagnostic),
-            colorscale="Magma", name="Matrix relative error" if truth is not None else "Invalid matrix", showscale=True,
-            colorbar=_subplot_colorbar(fig, 2, 3, "relative" if truth is not None else "invalid"),
-            customdata=diagnostic_custom, hovertemplate=diagnostic_template,
+        go.Scatterternary(
+            **_ternary_coordinates(points),
+            mode="markers",
+            marker=diagnostic_marker,
+            name="Matrix relative error" if truth is not None else "Invalid matrix",
+            customdata=diagnostic_custom,
+            hovertemplate=diagnostic_template,
         ), row=2, col=3,
     )
     fallback_fields = _matrix_hover_fields(phase_report)
     fallback_fields["value"] = phase_report["fallback"].astype(float)
-    fallback_custom, fallback_template = _grid_customdata(bulk, fallback_fields, selected, hover_format)
+    fallback_custom, fallback_template = _hover_payload(
+        fallback_fields, selected, len(points), hover_format
+    )
     fig.add_trace(
-        go.Heatmap(
-            x=bulk["axes"][0], y=bulk["axes"][1], z=_grid_values(bulk, phase_report["fallback"].astype(float)),
-            colorscale=[[0.0, "white"], [1.0, "#ff7f0e"]], zmin=0, zmax=1,
-            name="Nearest fallback", showscale=False, customdata=fallback_custom, hovertemplate=fallback_template,
+        go.Scatterternary(
+            **_ternary_coordinates(points),
+            mode="markers",
+            marker={
+                "color": phase_report["fallback"].astype(float),
+                "size": 9,
+                "colorscale": [[0.0, "white"], [1.0, "#ff7f0e"]],
+                "cmin": 0,
+                "cmax": 1,
+                "showscale": False,
+            },
+            name="Nearest fallback",
+            customdata=fallback_custom,
+            hovertemplate=fallback_template,
         ), row=2, col=4,
     )
 
@@ -1294,16 +1661,10 @@ def plot_bulk_diffusivity_diagnostics(
             buttons.append({"label": layer.replace("_", " ").title(), "method": "update", "args": [{"visible": visible}]})
         fig.update_layout(updatemenus=[{"type": "buttons", "direction": "right", "buttons": buttons, "x": 0.42, "y": 1.10}])
 
-    x_range, y_range = _zoom_ranges([points])
-    for row, col in (*positions, (2, 2), (2, 3), (2, 4)):
-        fig.update_xaxes(title_text=f"X({report['elements'][1]})", range=x_range, row=row, col=col)
-        fig.update_yaxes(title_text=f"X({report['elements'][2]})", range=y_range, row=row, col=col)
     fig.update_layout(
         title=f"Bulk diffusivity diagnostics: {phase} at {report['temperature']:g} K",
         template="plotly_white", width=1500, height=850, margin={"t": 130}, uirevision=f"bulk-diffusivity-{phase}",
-        ternary={"sum": 1, "aaxis": {"title": report["elements"][2]}, "baxis": {"title": report["elements"][0]}, "caxis": {"title": report["elements"][1]}},
     )
-    _leave_room_above_ternary(fig)
     return fig
 
 
@@ -1327,9 +1688,21 @@ def plot_surrogate_diagnostics(
     hover_format=".6g",
     display_tieline_count=21,
     phase_region_report=None,
+    diffusivity_color_scale="auto",
+    symlog_linthresh=None,
     renderer="browser",
 ):
-    """Build all reports and figures, defaulting Plotly display to the browser."""
+    """Build all reports and figures, defaulting Plotly display to the browser.
+
+    ``diffusivity_color_scale`` is passed to the bulk diffusivity fields.
+    With the default ``"auto"`` setting, each matrix-entry panel uses base-10
+    logarithmic coloring when its finite diffusivity values are nonnegative,
+    and signed-log (symlog) coloring when any finite value is negative.
+    Relative-error layers are logarithmic even when every error is zero; zero
+    is represented at a small positive transform floor.
+    ``symlog_linthresh`` sets the positive linear-core threshold when symlog
+    coloring is used.
+    """
     figures = {}
     reports = {}
     if isinstance(surrogate, TernaryMovingBoundaryThermodynamicsSurrogate):
@@ -1371,6 +1744,8 @@ def plot_surrogate_diagnostics(
             phase,
             hover_fields=_hover_for_section(hover_fields, "bulk_diffusivity"),
             hover_format=hover_format,
+            diffusivity_color_scale=diffusivity_color_scale,
+            symlog_linthresh=symlog_linthresh,
             renderer=renderer,
         )
         for phase in diffusivity["phases"]

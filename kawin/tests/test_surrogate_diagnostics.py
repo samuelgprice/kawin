@@ -288,13 +288,28 @@ def test_plotly_figures_have_expected_subplots_hover_and_layer_buttons():
     assert len(prediction_maps) == 4
     for trace, (row, col) in zip(prediction_maps, ((1, 2), (1, 3), (1, 4), (2, 1))):
         subplot = bulk.get_subplot(row, col)
-        assert trace.showscale
-        assert trace.colorbar.x == pytest.approx(subplot.xaxis.domain[1] + 0.006)
-        assert trace.colorbar.y == pytest.approx(0.5 * sum(subplot.yaxis.domain))
-        assert trace.colorbar.len == pytest.approx(subplot.yaxis.domain[1] - subplot.yaxis.domain[0])
+        assert trace.type == "scatterternary"
+        assert np.allclose(np.asarray(trace.a) + np.asarray(trace.b) + np.asarray(trace.c), 1.0)
+        assert trace.marker.showscale
+        assert trace.marker.colorbar.x == pytest.approx(subplot.domain.x[1] + 0.006)
+        assert trace.marker.colorbar.y == pytest.approx(0.5 * sum(subplot.domain.y))
+        assert trace.marker.colorbar.len == pytest.approx(subplot.domain.y[1] - subplot.domain.y[0])
     distance_map = next(trace for trace in bulk.data if trace.name == "Training distance")
     distance_subplot = bulk.get_subplot(2, 2)
-    assert distance_map.colorbar.x == pytest.approx(distance_subplot.xaxis.domain[1] + 0.006)
+    assert distance_map.type == "scatterternary"
+    assert distance_map.marker.colorbar.x == pytest.approx(distance_subplot.domain.x[1] + 0.006)
+    relative_error_maps = [trace for trace in bulk.data if trace.name == "Relative Error"]
+    assert len(relative_error_maps) == 4
+    assert all(trace.marker.colorbar.title.text == "relative (log)" for trace in relative_error_maps)
+    assert all(np.allclose(np.asarray(trace.marker.color, dtype=np.float64), -300.0) for trace in relative_error_maps)
+    truth_error_map = next(trace for trace in bulk.data if trace.name == "Matrix relative error")
+    assert truth_error_map.marker.colorbar.title.text == "relative (log)"
+    assert np.allclose(np.asarray(truth_error_map.marker.color, dtype=np.float64), -300.0)
+    assert all(trace.type == "scatterternary" for trace in bulk.data)
+    assert all(
+        (f"ternary{index}" if index > 1 else "ternary") in bulk.layout
+        for index in range(1, 9)
+    )
     assert "data" in bulk.to_plotly_json()
     assert isinstance(bulk.to_json(), str)
 
@@ -304,6 +319,30 @@ def test_hover_fields_reject_unknown_name():
     report = evaluate_tieline_diagnostics(_surrogate(), eta_count=3)
     with pytest.raises(ValueError, match="Unsupported hover fields"):
         plot_tieline_diagnostics(report, hover_fields=("not_a_field",))
+
+
+def test_bulk_diffusivity_color_scale_is_selected_per_matrix_entry():
+    pytest.importorskip("plotly")
+    report = evaluate_diffusivity_diagnostics(
+        _surrogate(),
+        bulk_axes=(np.asarray([0.20, 0.30]), np.asarray([0.10, 0.20])),
+    )
+    phase_report = report["bulk"]["phases"][PHASES[0]]
+    phase_report["matrices"][:, 0, 1] *= -1.0
+
+    figure = plot_bulk_diffusivity_diagnostics(report, PHASES[0], renderer=None)
+    prediction_maps = [trace for trace in figure.data if trace.name == "Prediction"]
+    assert len(prediction_maps) == 4
+    d00, d01, d10, d11 = prediction_maps
+
+    assert d00.marker.colorbar.title.text == "m^2/s (log)"
+    assert d01.marker.colorbar.title.text == "m^2/s (symlog)"
+    assert d10.marker.colorbar.title.text == "m^2/s (log)"
+    assert d11.marker.colorbar.title.text == "m^2/s (log)"
+    assert np.allclose(np.asarray(d00.marker.color, dtype=np.float64), np.log10(2.0))
+    assert np.any(np.asarray(d01.marker.color, dtype=np.float64) < 0.0)
+    assert 0.0 in np.asarray(d01.marker.colorbar.tickvals, dtype=np.float64)
+    assert all(value is not None for value in d01.marker.colorbar.ticktext)
 
 
 def test_plotly_helpers_default_to_browser_renderer_and_allow_preserving_existing():
