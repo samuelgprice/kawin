@@ -2960,7 +2960,6 @@ def _build_seed_surrogate(**kwargs):
         "temperature": 1000.0,
         "probe_point": np.asarray([0.30, 0.20], dtype=np.float64),
         "probe_samples_per_side": 2,
-        "probe_boundary_margin": 0.005,
         "probe_boundary_search_step": 0.02,
         "probe_boundary_xtol": 1.0e-6,
     }
@@ -3236,7 +3235,7 @@ def test_ternary_surrogate_rejects_unexpected_tieline_phase_metadata(endpoint_mo
         _build_surrogate(thermodynamics=_TieLineSamplingThermodynamics(endpoint_mode=endpoint_mode))
 
 
-def test_ternary_surrogate_seed_point_builds_asymmetric_eta_samples():
+def test_ternary_surrogate_seed_point_builds_uniform_arclength_eta_samples():
     surrogate = _build_seed_surrogate()
 
     assert surrogate.metadata["source"] == "from_database_seed_point"
@@ -3244,14 +3243,14 @@ def test_ternary_surrogate_seed_point_builds_asymmetric_eta_samples():
     assert np.isclose(surrogate.eta_samples[0], 0.0)
     assert np.isclose(surrogate.eta_samples[-1], 1.0)
     assert np.all(np.diff(surrogate.eta_samples) > 0.0)
-    assert not np.isclose(surrogate.eta_samples[2], 0.5)
+    np.testing.assert_allclose(surrogate.eta_samples, np.linspace(0.0, 1.0, 5))
     assert np.allclose(surrogate.metadata["probe_scan_direction"], [0.0, 1.0])
     assert surrogate.metadata["probe_scan_direction_mode"] == "local_tieline_normal"
 
     generated = np.asarray(surrogate.metadata["generated_probe_points"], dtype=np.float64)
     assert generated.shape == (5, 2)
-    assert np.min(generated[:, 1]) >= 0.20 - 0.03 + 0.005 - 1.0e-6
-    assert np.max(generated[:, 1]) <= 0.20 + 0.07 - 0.005 + 1.0e-6
+    assert np.min(generated[:, 1]) >= 0.20 - 0.03 - 1.0e-6
+    assert np.max(generated[:, 1]) <= 0.20 + 0.07 + 1.0e-6
     generated_directions = np.asarray(surrogate.metadata["generated_scan_directions"], dtype=np.float64)
     assert generated_directions.shape == (5, 2)
 
@@ -3273,41 +3272,46 @@ def test_ternary_surrogate_line_mode_still_requires_line_arguments():
         _build_surrogate(probe_start=None)
 
 
-def test_ternary_surrogate_seed_point_margin_must_fit_detected_boundaries():
-    with pytest.raises(ValueError, match="probe_boundary_margin"):
-        _build_seed_surrogate(probe_boundary_margin=0.031)
+def test_ternary_surrogate_seed_point_validates_boundary_search_parameters():
+    with pytest.raises(ValueError, match="probe_boundary_search_step"):
+        _build_seed_surrogate(probe_boundary_search_step=0.0)
 
 
-def test_seed_scan_resample_rejects_generated_samples_outside_expected_region():
+def test_seed_scan_resample_uses_accepted_path_and_uniform_arclength_fractions():
     thermodynamics = _SeedScanThermodynamics()
-    seed_sample = surrogate_module._sample_expected_tieline(
-        thermodynamics,
-        [0.30, 0.20],
-        1000.0,
-        "BETA",
-        ("ALPHA", "BETA"),
-        ["Z", "X", "Y"],
-        1.0e-10,
-    )
-
-    with pytest.raises(ValueError, match="generated probe left the expected two-phase region"):
-        surrogate_module._resample_seed_scan_side(
+    samples = [
+        surrogate_module._sample_expected_tieline(
             thermodynamics,
-            seed_sample,
-            1.0,
-            np.asarray([0.0, 1.0], dtype=np.float64),
+            [0.30, y],
             1000.0,
             "BETA",
             ("ALPHA", "BETA"),
             ["Z", "X", "Y"],
             1.0e-10,
-            0.08,
-            0.0,
-            1,
         )
+        for y in (0.17, 0.20, 0.24, 0.27)
+    ]
+
+    resampled = surrogate_module._resample_seed_scan_side(
+        thermodynamics,
+        1.0,
+        np.asarray([0.0, 1.0], dtype=np.float64),
+        1000.0,
+        "BETA",
+        ("ALPHA", "BETA"),
+        ["Z", "X", "Y"],
+        1.0e-10,
+        2,
+        samples,
+    )
+
+    distances = np.asarray([distance for distance, _ in resampled], dtype=np.float64)
+    probes = np.asarray([sample["probe"] for _, sample in resampled], dtype=np.float64)
+    np.testing.assert_allclose(distances, np.linspace(0.0, 1.0, 5))
+    np.testing.assert_allclose(probes[:, 1], np.linspace(0.17, 0.27, 5))
 
 
-def test_seed_scan_resample_updates_direction_from_last_sampled_tieline():
+def test_seed_scan_resample_follows_curved_accepted_path():
     thermodynamics = _RotatingSeedScanThermodynamics()
     seed_sample = surrogate_module._sample_expected_tieline(
         thermodynamics,
@@ -3318,28 +3322,41 @@ def test_seed_scan_resample_updates_direction_from_last_sampled_tieline():
         ["Z", "X", "Y"],
         1.0e-10,
     )
-    initial_direction = surrogate_module._seed_tieline_scan_direction(seed_sample["endpoints"])
+    samples = [seed_sample]
+    scan_direction = surrogate_module._seed_tieline_scan_direction(seed_sample["endpoints"])
+    for _ in range(3):
+        scan_direction = surrogate_module._seed_tieline_scan_direction(
+            samples[-1]["endpoints"],
+            reference_direction=scan_direction,
+        )
+        samples.append(
+            surrogate_module._sample_expected_tieline(
+                thermodynamics,
+                samples[-1]["midpoint"] + 0.02 * scan_direction,
+                1000.0,
+                "BETA",
+                ("ALPHA", "BETA"),
+                ["Z", "X", "Y"],
+                1.0e-10,
+            )
+        )
 
-    samples = surrogate_module._resample_seed_scan_side(
+    resampled = surrogate_module._resample_seed_scan_side(
         thermodynamics,
-        seed_sample,
         1.0,
-        initial_direction,
+        surrogate_module._seed_tieline_scan_direction(seed_sample["endpoints"]),
         1000.0,
         "BETA",
         ("ALPHA", "BETA"),
         ["Z", "X", "Y"],
         1.0e-10,
-        0.08,
-        0.0,
-        4,
+        2,
+        samples,
     )
 
-    probes = np.asarray([sample["probe"] for _, sample in samples], dtype=np.float64)
-    scan_directions = np.asarray([sample["scan_direction"] for _, sample in samples], dtype=np.float64)
-    assert np.all(np.einsum("ij,ij->i", scan_directions[:-1], scan_directions[1:]) > 0.0)
-    assert not np.allclose(scan_directions[0], scan_directions[-1])
-    assert probes[1, 0] < probes[0, 0] - 1.0e-4
+    probes = np.asarray([sample["probe"] for _, sample in resampled], dtype=np.float64)
+    assert probes.shape == (5, 2)
+    assert probes[-1, 0] < probes[0, 0] - 1.0e-4
 
 
 @pytest.mark.parametrize("diffusivity_interpolation", ["nearest", "continuous_grid", "simplex_linear"])
