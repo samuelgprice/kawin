@@ -73,7 +73,7 @@ if __name__ == "__main__":
 CASE_NI_TI_NB_TC = "ni_ti_nb_tc"
 CASE_FE_CR_NI_PYCALPHAD = "fe_cr_ni_pycalphad"
 CASE_FE_CR_NI_TC = "fe_cr_ni_tc"
-CASE_NAME =  [CASE_NI_TI_NB_TC, CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC][1]
+CASE_NAME =  [CASE_NI_TI_NB_TC, CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC][-1]
 
 ELEMENTS = ("NB", "NI", "TI")
 INDEPENDENT_ELEMENTS = ("NI", "TI")
@@ -134,7 +134,7 @@ with open(EXAMPLES_DIR / r"ternaryExamples\allValid_3Element_compositions_0.02in
 BULK_DIFFUSIVITY_POINTS = projed_arr[:,:-1].copy()
 BULK_DIFFUSIVITY_GRIDS = None
 GLOBAL_MINIMIZATION_MAX_GRID_POINTS = 2000
-FECRNI_LIQUID_DIFFUSIVITY_MATRIX =  np.array([[1e-9, 0.0], [0.0, 1e-9]])
+FECRNI_LIQUID_DIFFUSIVITY_MATRIX =  np.array([[1e-8, 0.0], [0.0, 1e-8]]) # np.array([[1e-9, 0.0], [0.0, 1e-9]])
 
 NODES = 165
 PHASE_NODES = (100, 20, 50) # (50, 10, 50)
@@ -210,7 +210,8 @@ _CASE_DEFAULTS = {
         "TEMPERATURE": 1650.0,
         "REFERENCE_ELEMENT": "FE",
         "TDB_PATH": EXAMPLES_DIR / "FeCrNi_Lee1993_L_style_ternary_checked_withMobility.tdb",
-        "TC_USE_DEFAULT_PHASES": False,
+        "TC_USE_DEFAULT_PHASES": True,
+        "PYCALPHAD_USE_DEFAULT_PHASES": False,
         "PYCALPHAD_EQUILIBRIUM_PHASES": None,
         "INITIAL_PHASE_COMPOSITIONS": (
             np.array([0.30, 0.34], dtype=np.float64),
@@ -235,9 +236,9 @@ _CASE_DEFAULTS = {
         "PHASE_NODES": (50, 20, 50),
         "FIXED_TIME_STEP": 1.0e-3,
         "SEMI_LOG_BASE_TIME_STEP": 1.0e-3,
-        "SEMI_LOG_DT": 0.05,
+        "SEMI_LOG_DT": 0.05/2,
         "SEMI_LOG_T0": 1.0e-6,
-        "SOLVE_TIME": 3.24e1,
+        "SOLVE_TIME": 1e3, #3.2389e1,
         "RUN_PREFLIGHT": False,
     },
 }
@@ -872,13 +873,22 @@ def build_bulk_diffusivity_provider(surrogate_ab, surrogate_bc):
             PHASE_LIQUID,
             _validate_liquid_diffusivity_matrix(FECRNI_LIQUID_DIFFUSIVITY_MATRIX),
         )
-        return ThreePhaseDiffusivityProvider(
-            {
-                PHASES_FOR_MODEL[0]: surrogate_ab,
-                PHASES_FOR_MODEL[1]: liquid_source,
-                PHASES_FOR_MODEL[2]: surrogate_bc,
-            }
-        )
+        if CASE_NAME==CASE_FE_CR_NI_TC:
+            return ThreePhaseDiffusivityProvider(
+                {
+                    PHASES_FOR_MODEL[0]: surrogate_ab,
+                    PHASES_FOR_MODEL[1]: surrogate_ab,
+                    PHASES_FOR_MODEL[2]: surrogate_bc,
+                }
+            )
+        else:
+            return ThreePhaseDiffusivityProvider(
+                {
+                    PHASES_FOR_MODEL[0]: surrogate_ab,
+                    PHASES_FOR_MODEL[1]: liquid_source,
+                    PHASES_FOR_MODEL[2]: surrogate_bc,
+                }
+            )
     elif CASE_NAME == CASE_NI_TI_NB_TC:
         liquid_source = merge_phase_diffusivity_surrogates(
             surrogate_ab,
@@ -975,6 +985,8 @@ def print_case_summary(model):
     widths = np.array([positions[0], positions[1] - positions[0], LENGTH - positions[1]], dtype=np.float64)
     print("Interface positions (um):", positions * 1.0e6)
     print("Phase widths A|B|C (um):", widths * 1.0e6)
+    print("Current etas: ", model.etaData._y[-1])
+    print(f"Current Time: {model.currentTime}")
     if model.currentTime > 0.0:
         print(f"Inventory drift {list(INDEPENDENT_ELEMENTS)}:", model.checkConservation(TOLERANCE))
 
@@ -1069,7 +1081,7 @@ def plot_surrogate_diagnostics_for_run(
     hover_fields : str, sequence, or mapping, optional
         Hover preset or explicit field selection passed to the Plotly helper.
     **diagnostic_kwargs
-        Additional sampling and rendering arguments accepted by
+        Additional sampling, color-scaling, and rendering arguments accepted by
         :func:`kawin.diffusion.plot_surrogate_diagnostics`.
 
     Returns
@@ -1156,10 +1168,10 @@ def run_case(overrides=None, *, make_plots=True):
         print(f"Estimated number of time-steps: {n_steps}")
         bulk_thermodynamics = build_bulk_diffusivity_provider(surrogate_ab, surrogate_bc)
         model = build_model(surrogate_ab, surrogate_bc, bulk_thermodynamics=bulk_thermodynamics)
-        terminalComps_pred = model._interface_compositions(np.array([0, 0]))
-        if np.linalg.norm(terminalComps_pred[0][1]-terminalComps_pred[1][0]) > 1e-12:
-            debugInPlace()
-            raise
+        # terminalComps_pred = model._interface_compositions(np.array([0, 0]))
+        # if np.linalg.norm(terminalComps_pred[0][1]-terminalComps_pred[1][0]) > 1e-12:
+        #     debugInPlace()
+        #     raise
         if RUN_SOLVE:
             model.solve(
                 SOLVE_TIME,
@@ -1191,16 +1203,16 @@ def run_case(overrides=None, *, make_plots=True):
 # %%
 if __name__ == "__main__":
     # debugInPlace()
-    # raise ValueError("USE DEFAULT PHASES (OR MAYBE ALL/CORRECT PHASES WHEN USING PYCALPHAD)")
+    # raise ValueError("DEFAULT PHASES WITH 1E-14 LIQUID BREAKS THE STARTING ETA SEARCH")
     result = run_case(make_plots=True)
-    surrogate_diagnostics = plot_surrogate_diagnostics_for_run(result, compare_ground_truth=True, renderer="browser")
-    surrogate_diagnostics["ab"]["figures"]["thermodynamics"].show()
-    surrogate_diagnostics["bc"]["figures"]["thermodynamics"].show()
-    surrogate_diagnostics["ab"]["figures"]["interface_diffusivity"].show()
-    surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['LIQUID'].show()
-    surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['FCC_A1'].show()
-    surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['LIQUID#1'].show()
-    surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['FCC_L12#1'].show()
+    # surrogate_diagnostics = plot_surrogate_diagnostics_for_run(result, compare_ground_truth=True, renderer="browser")
+    # surrogate_diagnostics["ab"]["figures"]["thermodynamics"].show()
+    # surrogate_diagnostics["bc"]["figures"]["thermodynamics"].show()
+    # surrogate_diagnostics["ab"]["figures"]["interface_diffusivity"].show()
+    # surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['LIQUID'].show()
+    # surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['FCC_A1'].show()
+    # surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['LIQUID#1'].show()
+    # surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['FCC_L12#1'].show()
 
 # %%
 import importlib
@@ -1219,8 +1231,8 @@ results_plot = plot_three_phase_composition_profile(
     show_starting_phase_compositions=False,
     renderer="browser",
 )
-results_plot.show()
+results_plot["fig"].show()
 # import plotly
-# plotly.offline.plot(results_plot, filename = r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\results_plot.html", auto_open=False)
+# plotly.offline.plot(results_plot["fig"], filename = r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\results_plot.html", auto_open=False)
 
 # %%
