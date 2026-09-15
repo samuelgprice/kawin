@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from numpy.testing import assert_allclose
 
 from kawin.precipitation import PrecipitateModel, PrecipitateParameters, MatrixParameters, TemperatureParameters as PrecTemp
@@ -54,6 +55,47 @@ def test_iterators():
 
     assert_allclose(eulerX, np.sin(10), rtol=1e-2)
     assert_allclose(rkX, np.sin(10), rtol=1e-2)
+
+
+def test_final_remainder_below_minimum_is_accepted_but_ordinary_subminimum_step_is_rejected():
+    """The exact final remainder is the sole exception to the minimum timestep."""
+
+    class AdaptiveStepModel(GenericModel):
+        def __init__(self, first_dt):
+            super().__init__()
+            self.first_dt = float(first_dt)
+            self.value = 0.0
+            self.next_dt = self.first_dt
+            self.accepted_steps = []
+
+        def getCurrentX(self):
+            return [self.value]
+
+        def getdXdt(self, t, x):
+            self.next_dt = self.first_dt if t == 0.0 else self.finalTime - t
+            return [1.0]
+
+        def getDt(self, dXdt):
+            return self.next_dt
+
+        def postProcess(self, time, x):
+            self.accepted_steps.append(float(time - self.currentTime))
+            self.value = float(x[0])
+            return super().postProcess(time, x)
+
+    final_remainder_model = AdaptiveStepModel(0.8)
+    final_remainder_model.solve(1.0, iterator=explicitEulerIterator, minDtFrac=0.3)
+
+    assert_allclose(final_remainder_model.accepted_steps, [0.8, 0.2], rtol=0.0, atol=1e-15)
+    assert final_remainder_model.currentTime == pytest.approx(1.0)
+    assert final_remainder_model.value == pytest.approx(1.0)
+
+    subminimum_model = AdaptiveStepModel(0.2)
+    with pytest.raises(ValueError, match="smaller than minimum allowed dt"):
+        subminimum_model.solve(1.0, iterator=explicitEulerIterator, minDtFrac=0.3)
+
+    assert subminimum_model.currentTime == 0.0
+    assert subminimum_model.accepted_steps == []
 
 def test_coupler_shape():
     '''

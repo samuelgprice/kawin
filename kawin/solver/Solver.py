@@ -1,3 +1,4 @@
+import math
 import time
 from kawin.solver.Iterators import explicitEulerIterator, rk4Iterator
 
@@ -14,7 +15,8 @@ class DESolver:
     defaultDt : float (defaults to 0.1)
         Default time increment if no function is implement to estimate a good time increment
     minDtFrac : float (defaults to 1e-8)
-        Minimum time step as a fraction of simulation time
+        Minimum time step as a fraction of simulation time. The exact final
+        remainder may be smaller so integration can land on the requested end.
     maxDtFrac : float (defaults to 1)
         Maximum time step as a fraction of simulation time
     '''
@@ -113,9 +115,18 @@ class DESolver:
         dXdt = self._f(t, unflatX)
         if getDt:
             dt = self._getDt(dXdt)
-            if dt<self._dtmin:
+            final_remainder = bool(
+                self._remainingTime < self._dtmin
+                and math.isclose(
+                    float(dt),
+                    self._remainingTime,
+                    rel_tol=2e-13,
+                    abs_tol=64.0 * math.ulp(1.0) * max(1.0, abs(self._remainingTime)),
+                )
+            )
+            if dt<self._dtmin and not final_remainder:
                 raise ValueError(f"Calculated dt {dt} is smaller than minimum allowed dt {self._dtmin}.")
-            dt = dt if dt > self._dtmin else self._dtmin
+            dt = dt if dt > self._dtmin or final_remainder else self._dtmin
             dt = dt if dt < self._dtmax else self._dtmax
             return self._flattenX(dXdt), dt
         else:
@@ -182,9 +193,11 @@ class DESolver:
                 self.printStatus(i, currTime, timeFinish - timeStart)
 
             self.preProcess()
-            #Limit dtmax to remaining time if it's larger
-            if self._dtmax > tf - currTime:
-                self._dtmax = tf - currTime
+            # Limit dtmax to the remaining time. A final remainder may be
+            # smaller than dtmin so the solve can land exactly on tf.
+            self._remainingTime = tf - currTime
+            if self._dtmax > self._remainingTime:
+                self._dtmax = self._remainingTime
 
             #Store X0 as a reference variable for _unflattenX
             #We have to do this per iteration since the shape of X0 can change during postProcess

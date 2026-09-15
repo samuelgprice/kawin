@@ -259,8 +259,24 @@ def _plot_title(frame, run_info):
     )
 
 
-def _global_average_full(profiles, grids, boundaries, domain_length):
-    """Integrate full ternary compositions over the transformed phase intervals."""
+def _global_average_full(model, time, profiles, grids, boundaries, domain_length):
+    """Return the global mole fraction, using physical molar inventories when defined."""
+    if bool(getattr(model, "_hasExplicitPhaseMolarVolumes", False)):
+        get_component_moles = getattr(model, "getAllComponentMoles", None)
+        get_total_moles = getattr(model, "getTotalSubstitutionalMoles", None)
+        if not callable(get_component_moles) or not callable(get_total_moles):
+            raise ValueError(
+                "Models with explicit phase molar volumes must expose getAllComponentMoles(time) "
+                "and getTotalSubstitutionalMoles(time) for global-composition plotting."
+            )
+        component_moles = np.asarray(get_component_moles(float(time)), dtype=np.float64).reshape(-1)
+        total_moles = float(get_total_moles(float(time)))
+        if component_moles.shape != (3,) or not np.all(np.isfinite(component_moles)):
+            raise ValueError("getAllComponentMoles(time) must return three finite component inventories.")
+        if not np.isfinite(total_moles) or total_moles <= 0.0:
+            raise ValueError("getTotalSubstitutionalMoles(time) must return a positive finite value.")
+        return component_moles / total_moles
+
     average = np.zeros(3, dtype=np.float64)
     for profile, grid, left, right in zip(profiles, grids, boundaries[:-1], boundaries[1:]):
         average += (float(right) - float(left)) * np.trapezoid(_full_composition(profile), grid, axis=0)
@@ -459,24 +475,42 @@ def _frame_diffusivity_segments(model, time, profiles, grids, boundaries, interf
 
 
 def _frame_profile(model, time, elements, component_indices, distance_scale, include_diffusivities=False):
-    """Build all dynamic composition and optional diffusivity arrays for one time."""
+    """Build one frame from authoritative phase-wise physical profiles and historical R."""
     interfaces = np.asarray(model.getInterfacePositions(float(time)), dtype=np.float64).reshape(2)
-    profiles = tuple(np.asarray(profile, dtype=np.float64) for profile in model.getTransformedState(float(time)))
+    get_physical_profiles = getattr(model, "getPhysicalPhaseProfiles", None)
+    get_right_boundary = getattr(model, "getRightBoundary", None)
+    if not callable(get_physical_profiles) or not callable(get_right_boundary):
+        raise ValueError(
+            "The model must expose getPhysicalPhaseProfiles(time) and getRightBoundary(time) "
+            "for moving-domain plotting."
+        )
+    physical_profiles = tuple(get_physical_profiles(float(time)))
+    domain_length = float(get_right_boundary(float(time)))
     grids = tuple(np.asarray(grid, dtype=np.float64).reshape(-1) for grid in getattr(model, "_grids", ()))
-    domain_length = float(getattr(model, "_R", np.nan))
-    if len(profiles) != 3 or len(grids) != 3:
-        raise ValueError("The model must expose three transformed profiles and three grids.")
+    if len(physical_profiles) != 3 or len(grids) != 3:
+        raise ValueError("The model must expose three physical phase profiles and three transformed grids.")
     if not np.isfinite(domain_length) or domain_length <= 0.0:
-        raise ValueError("The model must expose a positive domain length as _R.")
+        raise ValueError("The model must expose a positive historical right boundary.")
 
-    boundaries = np.concatenate(([0.0], interfaces, [domain_length]))
     phase_segments = []
-    for phase_index, (profile, grid, left, right) in enumerate(zip(profiles, grids, boundaries[:-1], boundaries[1:])):
-        if len(grid) != len(profile):
+    profiles = []
+    for phase_index, ((coordinates, full), grid) in enumerate(zip(physical_profiles, grids)):
+        coordinates = np.asarray(coordinates, dtype=np.float64).reshape(-1)
+        full = np.asarray(full, dtype=np.float64)
+        if full.shape != (len(coordinates), 3):
+            raise ValueError(f"physical profile {phase_index} must have shape (n_nodes, 3).")
+        if len(grid) != len(coordinates):
             raise ValueError(f"grid/profile length mismatch for phase interval {phase_index}.")
-        distance = (float(left) + grid * (float(right) - float(left))) * distance_scale
-        full = _full_composition(profile)
-        phase_segments.append({"distance": distance, "full": full})
+        phase_segments.append({"distance": coordinates * distance_scale, "full": full})
+        profiles.append(full[:, 1:].copy())
+
+    boundaries = np.asarray(
+        [phase_segments[0]["distance"][0], *(segment["distance"][-1] for segment in phase_segments)],
+        dtype=np.float64,
+    ) / distance_scale
+    expected_boundaries = np.concatenate(([0.0], interfaces, [domain_length]))
+    if not np.allclose(boundaries, expected_boundaries, rtol=2e-13, atol=64.0 * np.finfo(float).eps):
+        raise ValueError("Physical phase-profile endpoints do not match the recorded interfaces and right boundary.")
 
     xy_x = []
     xy_y = {index: [] for index in component_indices}
@@ -494,9 +528,12 @@ def _frame_profile(model, time, elements, component_indices, distance_scale, inc
     frame = {
         "time": float(time),
         "interfaces": interfaces * distance_scale,
+        "right_boundary": domain_length * distance_scale,
         "phase_widths": np.diff(boundaries) * distance_scale,
         "phase_segments": phase_segments,
-        "global_average": _global_average_full(profiles, grids, boundaries, domain_length),
+        "global_average": _global_average_full(
+            model, time, tuple(profiles), grids, boundaries, domain_length
+        ),
         "xy_x": np.asarray(xy_x, dtype=np.float64),
         "xy_y": {index: np.asarray(values, dtype=np.float64) for index, values in xy_y.items()},
         "elements": elements,
@@ -698,6 +735,7 @@ def _composition_aux_data(frames_data, phase_labels, elements, unit_label):
             {
                 "time": float(frame["time"]),
                 "interfaces": np.asarray(frame["interfaces"], dtype=np.float64).copy(),
+                "right_boundary": float(frame["right_boundary"]),
                 "phase_widths": np.asarray(frame["phase_widths"], dtype=np.float64).copy(),
                 "global_average": np.asarray(frame["global_average"], dtype=np.float64).copy(),
                 "segments": [
@@ -941,7 +979,9 @@ def plot_three_phase_composition_profile(
     three-phase model stored under ``"model"``. Profiles are read from the
     recorded transformed phase histories so each moving interval is plotted in
     its own phase color and interface discontinuities are preserved. Global
-    average composition, constant starting phase-composition markers, and
+    average composition uses physical component moles divided by total moles
+    when explicit phase molar volumes are configured, and otherwise retains
+    legacy length weighting. Constant starting phase-composition markers and
     current interface eta values are shown by default. Eta values and phase
     widths are displayed in a synchronized misc-info panel. When
     ``show_diffusivities`` is true, a synchronized 2x2 panel displays the four

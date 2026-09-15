@@ -134,6 +134,16 @@ INTERFACE_POSITIONS_3PHASE = np.array(
     dtype=np.float64,
 )
 
+# Optional constant molar volumes [A, B, A] in m^3/mol. For example,
+# ``(7.1e-6, 7.8e-6, 7.1e-6)`` enables physical molar diagnostics and
+# stress-free motion of the three-phase right material boundary. The two
+# outer A volumes must match to preserve the intended A|B|A symmetry. ``None``
+# retains the legacy normalized equal-volume comparison.
+if systemStr =="CuVTi":
+    PHASE_MOLAR_VOLUMES = None
+elif systemStr =="NbNiTi":
+    PHASE_MOLAR_VOLUMES = None # (11.08e-6, 9.62e-6, 11.08e-6)
+
 # Initial bulk values: A on the outer regions, B in the middle.
 if systemStr =="CuVTi":
     A_BULK = np.array([0.999, 0.0001], dtype=np.float64)
@@ -713,6 +723,21 @@ def get_time_step_options():
     raise ValueError("DT_MODE must be either 'fixed' or 'semi_log'.")
 
 
+def get_three_phase_molar_volumes():
+    """Validates and returns the optional symmetric ``[VmA, VmB, VmA]`` tuple."""
+    if PHASE_MOLAR_VOLUMES is None:
+        return None
+    values = np.asarray(PHASE_MOLAR_VOLUMES, dtype=np.float64).reshape(-1)
+    if values.shape != (3,) or not np.all(np.isfinite(values)) or np.any(values <= 0.0):
+        raise ValueError("PHASE_MOLAR_VOLUMES must contain three positive finite values.")
+    if values[0] != values[2]:
+        raise ValueError(
+            "The symmetric A|B|A example requires PHASE_MOLAR_VOLUMES[0] "
+            "to equal PHASE_MOLAR_VOLUMES[2]."
+        )
+    return tuple(float(value) for value in values)
+
+
 def build_two_phase_model(tieline_surrogate, bulk_thermodynamics):
     """Builds the two-phase model with the selected bulk-diffusivity mode."""
     time_options = get_time_step_options()
@@ -745,7 +770,7 @@ def build_two_phase_model(tieline_surrogate, bulk_thermodynamics):
 
 
 def build_three_phase_model(tieline_surrogate, bulk_thermodynamics):
-    """Builds the symmetric three-phase model with the selected diffusivity mode."""
+    """Builds the symmetric model with optional constant phase molar volumes."""
     time_options = get_time_step_options()
 
     reverse_equilibrium = ReversedInterfaceEquilibrium(tieline_surrogate)
@@ -781,6 +806,7 @@ def build_three_phase_model(tieline_surrogate, bulk_thermodynamics):
         record=True,
         record_pq_data=True,
         transformed_grids=(U_A_3, U_B_3, U_C_3),
+        phase_molar_volumes=get_three_phase_molar_volumes(),
     )
 
 
@@ -821,22 +847,72 @@ def _max_relative(error, reference):
 
 
 def _final_independent_profile(model):
+    """Returns the legacy fixed-mesh independent-component profile."""
     return np.asarray(model.data.y(model.currentTime), dtype=np.float64)
 
 
 def _physical_coordinates(model):
+    """Returns the immutable coordinates paired with a legacy fixed-mesh profile."""
     return np.asarray(model.mesh.z, dtype=np.float64).reshape(-1)
 
 
+def _complete_three_phase_profile(model):
+    """Returns the complete moving profile with NaN separators at sharp interfaces."""
+    coordinates = []
+    compositions = []
+    phase_profiles = model.getPhysicalPhaseProfiles()
+    for phase_index, (phase_coordinates, phase_compositions) in enumerate(phase_profiles):
+        if phase_index:
+            coordinates.append(np.asarray([np.nan]))
+            compositions.append(np.full((1, 2), np.nan, dtype=np.float64))
+        coordinates.append(np.asarray(phase_coordinates, dtype=np.float64))
+        compositions.append(np.asarray(phase_compositions, dtype=np.float64)[:, 1:])
+    return np.concatenate(coordinates), np.concatenate(compositions), phase_profiles
+
+
+def _three_phase_profile_symmetry_error(phase_profiles):
+    """Returns phase-wise composition errors under reflection about the moving center."""
+    independent = [np.asarray(compositions, dtype=np.float64)[:, 1:] for _, compositions in phase_profiles]
+    return np.concatenate(
+        (
+            independent[0] - independent[2][::-1],
+            independent[1] - independent[1][::-1],
+            independent[2] - independent[0][::-1],
+        ),
+        axis=0,
+    )
+
+
+def _uses_physical_three_phase_moles(model):
+    """Returns whether the three-phase model has an explicit physical molar-volume scale."""
+    return bool(getattr(model, "_hasExplicitPhaseMolarVolumes", False))
+
+
+def _three_phase_reduction_is_valid(model):
+    """Returns whether the fixed-domain two-phase model remains a valid reduction reference."""
+    return not (
+        _uses_physical_three_phase_moles(model)
+        and not bool(getattr(model, "_equalPhaseMolarVolumes", False))
+    )
+
+
 def compare_models(two_phase, three_phase):
+    """Compares the models without treating a fixed-domain reference as equivalent for unequal volumes."""
     t2, s2 = _history(two_phase.interfaceData)
     t3, s3 = _history(three_phase.interfaceData)
 
     _, eta2 = _history(two_phase.etaData)
     t3_eta, eta3 = _history(three_phase.etaData)
 
-    _, inv2 = _history(two_phase.inventoryData)
-    _, inv3 = _history(three_phase.inventoryData)
+    t_inv2, inv2 = _history(two_phase.inventoryData)
+    if _uses_physical_three_phase_moles(three_phase):
+        t_inv3, inv3_all = _history(three_phase.molarInventoryData)
+        inv3 = inv3_all[:, 1:]
+        three_phase_inventory_kind = "physical_moles_per_area"
+    else:
+        t_inv3, inv3 = _history(three_phase.inventoryData)
+        inv3_all = inv3
+        three_phase_inventory_kind = "legacy_composition_length"
 
     # Restrict to times represented by both histories, then interpolate the
     # three-phase solution to two-phase record times.
@@ -847,88 +923,106 @@ def compare_models(two_phase, three_phase):
 
     s3c = _interp_columns(tc, t3, s3)
     eta3c = _interp_columns(tc, t3_eta, eta3)
+    t3_right, right3 = _history(three_phase.rightBoundaryData)
+    right3c = _interp_columns(tc, t3_right, right3)
 
     s3_left = s3c[:, 0]
-    s3_right_equivalent = 2.0 * HALF_LENGTH - s3c[:, 1]
+    s3_right_equivalent = right3c - s3c[:, 1]
 
     b_half_2 = HALF_LENGTH - s2c
     b_half_3 = 0.5 * (s3c[:, 1] - s3c[:, 0])
 
-    interface_left_error = s3_left - s2c
-    interface_right_error = s3_right_equivalent - s2c
-    interface_symmetry_error = s3c[:, 0] + s3c[:, 1] - THREE_PHASE_LENGTH
-    b_width_error = b_half_3 - b_half_2
+    reduction_valid = _three_phase_reduction_is_valid(three_phase)
+    interface_symmetry_error = s3c[:, 0] + s3c[:, 1] - right3c
+    if reduction_valid:
+        interface_left_error = s3_left - s2c
+        interface_right_error = s3_right_equivalent - s2c
+        b_width_error = b_half_3 - b_half_2
+    else:
+        interface_left_error = np.full_like(s2c, np.nan)
+        interface_right_error = np.full_like(s2c, np.nan)
+        b_width_error = np.full_like(s2c, np.nan)
 
-    eta_left_error = eta3c[:, 0] - eta2c
-    eta_right_error = eta3c[:, 1] - eta2c
     eta_symmetry_error = eta3c[:, 0] - eta3c[:, 1]
+    if reduction_valid:
+        eta_left_error = eta3c[:, 0] - eta2c
+        eta_right_error = eta3c[:, 1] - eta2c
+    else:
+        eta_left_error = np.full_like(eta2c, np.nan)
+        eta_right_error = np.full_like(eta2c, np.nan)
 
-    # Final physical profiles.  The physical meshes were constructed with the
-    # same dx, but interpolate anyway so this remains robust to future edits.
+    # The complete three-phase profile must use its authoritative moving
+    # coordinates. Fixed-mesh reduction comparisons remain valid only when R
+    # is fixed by equal phase molar volumes.
     x2 = _physical_coordinates(two_phase)
     c2 = _final_independent_profile(two_phase)
-
-    x3 = _physical_coordinates(three_phase)
-    c3 = _final_independent_profile(three_phase)
-
-    c3_on_x2 = np.column_stack(
-        [np.interp(x2, x3, c3[:, j]) for j in range(c3.shape[1])]
+    x3, c3, phase_profiles = _complete_three_phase_profile(three_phase)
+    profile_symmetry_error = _three_phase_profile_symmetry_error(phase_profiles)
+    symmetry_reference = np.concatenate(
+        [np.asarray(compositions, dtype=np.float64)[:, 1:] for _, compositions in phase_profiles],
+        axis=0,
     )
-    profile_reduction_error = c3_on_x2 - c2
 
-    # Mirror the full three-phase profile around x=HALF_LENGTH.
-    x3_mirror = THREE_PHASE_LENGTH - x3
-    c3_mirror = np.column_stack(
-        [
-            np.interp(x3, x3_mirror[::-1], c3[::-1, j])
-            for j in range(c3.shape[1])
-        ]
-    )
-    profile_symmetry_error = c3 - c3_mirror
+    if reduction_valid:
+        x3_fixed = _physical_coordinates(three_phase)
+        c3_fixed = _final_independent_profile(three_phase)
+        c3_on_x2 = np.column_stack(
+            [np.interp(x2, x3_fixed, c3_fixed[:, j]) for j in range(c3_fixed.shape[1])]
+        )
+        profile_reduction_error = c3_on_x2 - c2
+    else:
+        c3_on_x2 = np.full_like(c2, np.nan)
+        profile_reduction_error = np.full_like(c2, np.nan)
 
     inv2_drift = inv2 - inv2[0]
     inv3_drift = inv3 - inv3[0]
+    inv3_all_drift = inv3_all - inv3_all[0]
+    inv2_relative_drift = inv2_drift / np.maximum(np.abs(inv2[0]), 1.0e-300)
+    inv3_relative_drift = inv3_drift / np.maximum(np.abs(inv3[0]), 1.0e-300)
+    inv3_all_relative_drift = inv3_all_drift / np.maximum(np.abs(inv3_all[0]), 1.0e-300)
+
+    reduction_metric = lambda values: float(np.max(np.abs(values))) if reduction_valid else np.nan
 
     metrics = {
-        "max_abs_left_interface_error_m": float(
-            np.max(np.abs(interface_left_error))
-        ),
-        "max_abs_right_mirrored_interface_error_m": float(
-            np.max(np.abs(interface_right_error))
-        ),
+        "reduction_comparison_valid": reduction_valid,
+        "three_phase_inventory_kind": three_phase_inventory_kind,
+        "max_abs_left_interface_error_m": reduction_metric(interface_left_error),
+        "max_abs_right_mirrored_interface_error_m": reduction_metric(interface_right_error),
         "max_abs_three_phase_interface_symmetry_error_m": float(
             np.max(np.abs(interface_symmetry_error))
         ),
-        "max_abs_half_B_width_error_m": float(
-            np.max(np.abs(b_width_error))
-        ),
-        "max_abs_left_eta_error": float(np.max(np.abs(eta_left_error))),
-        "max_abs_right_eta_error": float(np.max(np.abs(eta_right_error))),
+        "max_abs_half_B_width_error_m": reduction_metric(b_width_error),
+        "max_abs_left_eta_error": reduction_metric(eta_left_error),
+        "max_abs_right_eta_error": reduction_metric(eta_right_error),
         "max_abs_three_phase_eta_symmetry_error": float(
             np.max(np.abs(eta_symmetry_error))
         ),
-        "final_profile_relative_L2_error": _relative_l2(
-            profile_reduction_error, c2
+        "final_profile_relative_L2_error": (
+            _relative_l2(profile_reduction_error, c2) if reduction_valid else np.nan
         ),
-        "final_profile_max_relative_error": _max_relative(
-            profile_reduction_error, c2
+        "final_profile_max_relative_error": (
+            _max_relative(profile_reduction_error, c2) if reduction_valid else np.nan
         ),
         "final_three_phase_profile_symmetry_relative_L2_error": _relative_l2(
-            profile_symmetry_error, c3
+            profile_symmetry_error, symmetry_reference
         ),
         "max_abs_two_phase_inventory_drift": float(
             np.max(np.abs(inv2_drift))
         ),
         "max_abs_three_phase_inventory_drift": float(
-            np.max(np.abs(inv3_drift))
+            np.max(np.abs(inv3_all_drift))
         ),
+        "max_abs_two_phase_relative_inventory_drift": float(np.max(np.abs(inv2_relative_drift))),
+        "max_abs_three_phase_relative_inventory_drift": float(np.max(np.abs(inv3_all_relative_drift))),
     }
 
     arrays = {
         "time": tc,
         "s2": s2c,
         "s3": s3c,
+        "right3": right3c,
         "s3_right_equivalent": s3_right_equivalent,
+        "reduction_comparison_valid": reduction_valid,
         "interface_left_error": interface_left_error,
         "interface_right_error": interface_right_error,
         "interface_symmetry_error": interface_symmetry_error,
@@ -947,61 +1041,88 @@ def compare_models(two_phase, three_phase):
         "c3_on_x2": c3_on_x2,
         "profile_reduction_error": profile_reduction_error,
         "profile_symmetry_error": profile_symmetry_error,
-        "t_inv2": _history(two_phase.inventoryData)[0],
+        "t_inv2": t_inv2,
         "inv2_drift": inv2_drift,
-        "t_inv3": _history(three_phase.inventoryData)[0],
+        "inv2_relative_drift": inv2_relative_drift,
+        "t_inv3": t_inv3,
         "inv3_drift": inv3_drift,
+        "inv3_all_drift": inv3_all_drift,
+        "inv3_relative_drift": inv3_relative_drift,
+        "inv3_all_relative_drift": inv3_all_relative_drift,
+        "three_phase_inventory_kind": three_phase_inventory_kind,
+        "three_phase_center": 0.5 * float(three_phase.getRightBoundary()),
     }
 
     return metrics, arrays
 
 
 def print_metrics(metrics):
+    """Prints valid reduction, symmetry, and conservation metrics with their units."""
     print("\n" + "=" * 78)
     print("TWO-PHASE / THREE-PHASE SYMMETRY COMPARISON")
     print("=" * 78)
 
-    interface_metrics = [
+    reduction_metrics = [
         "max_abs_left_interface_error_m",
         "max_abs_right_mirrored_interface_error_m",
-        "max_abs_three_phase_interface_symmetry_error_m",
         "max_abs_half_B_width_error_m",
-    ]
-    eta_metrics = [
         "max_abs_left_eta_error",
         "max_abs_right_eta_error",
-        "max_abs_three_phase_eta_symmetry_error",
-    ]
-    profile_metrics = [
         "final_profile_relative_L2_error",
         "final_profile_max_relative_error",
+    ]
+    symmetry_metrics = [
+        "max_abs_three_phase_interface_symmetry_error_m",
+        "max_abs_three_phase_eta_symmetry_error",
         "final_three_phase_profile_symmetry_relative_L2_error",
     ]
-    conservation_metrics = [
-        "max_abs_two_phase_inventory_drift",
-        "max_abs_three_phase_inventory_drift",
-    ]
 
-    for title, names in (
-        ("Interface/width metrics", interface_metrics),
-        ("Eta metrics", eta_metrics),
-        ("Final profile metrics", profile_metrics),
-        ("Inventory metrics", conservation_metrics),
-    ):
+    if metrics["reduction_comparison_valid"]:
+        print("\nTwo-phase reduction metrics")
+        for name in reduction_metrics:
+            print(f"  {name:52s} = {metrics[name]:.6e}")
+    else:
+        print(
+            "\nTwo-phase reduction metrics are not reported: the two-phase solver "
+            "has a fixed outer boundary and is not a physical unequal-volume reference."
+        )
+
+    for title, names in (("Three-phase internal symmetry metrics", symmetry_metrics),):
         print(f"\n{title}")
         for name in names:
             print(f"  {name:52s} = {metrics[name]:.6e}")
 
+    print("\nConservation metrics")
+    print(
+        f"  {'max_abs_two_phase_inventory_drift':52s} = "
+        f"{metrics['max_abs_two_phase_inventory_drift']:.6e} (legacy composition-length)"
+    )
+    three_phase_units = (
+        "mol/m^2"
+        if metrics["three_phase_inventory_kind"] == "physical_moles_per_area"
+        else "legacy composition-length"
+    )
+    print(
+        f"  {'max_abs_three_phase_inventory_drift':52s} = "
+        f"{metrics['max_abs_three_phase_inventory_drift']:.6e} ({three_phase_units})"
+    )
+    print(
+        f"  {'max_abs_two_phase_relative_inventory_drift':52s} = "
+        f"{metrics['max_abs_two_phase_relative_inventory_drift']:.6e}"
+    )
+    print(
+        f"  {'max_abs_three_phase_relative_inventory_drift':52s} = "
+        f"{metrics['max_abs_three_phase_relative_inventory_drift']:.6e}"
+    )
+
     print(
         "\nInterpretation:\n"
-        "  - Left-interface, mirrored-right-interface, B-half-width, and eta\n"
-        "    errors test reduction of A|B|A to the two-phase A|B problem.\n"
-        "  - Three-phase symmetry errors test mirror symmetry independently\n"
-        "    of the two-phase implementation.\n"
-        "  - Profile errors compare the left half of the final A|B|A profile\n"
-        "    with the final A|B profile.\n"
-        "  - Inventory drift tests conservation, but is not itself a\n"
-        "    two-vs-three reduction metric.\n"
+        "  - Two-vs-three reduction metrics are meaningful only when the\n"
+        "    three-phase domain remains fixed (legacy or equal Vm).\n"
+        "  - Three-phase symmetry uses the moving center R(t)/2 and remains\n"
+        "    meaningful for symmetric unequal volumes [VmA, VmB, VmA].\n"
+        "  - Relative inventory drift allows comparison across legacy\n"
+        "    composition-length and physical mol/m^2 quantities.\n"
     )
 
 
@@ -1023,11 +1144,14 @@ def _save_or_show(fig, filename):
 
 
 def plot_interface_comparison(arrays):
+    """Plots interfaces, labeling the two-phase curve as a legacy reference when needed."""
     t = arrays["time"] / TIME_SCALE
     mask = _positive_time_mask(t)
+    reduction_valid = arrays["reduction_comparison_valid"]
 
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
-    ax.plot(t[mask], 1.0e6 * arrays["s2"][mask], label="2-phase A|B")
+    two_phase_label = "2-phase A|B" if reduction_valid else "2-phase A|B (fixed-domain reference)"
+    ax.plot(t[mask], 1.0e6 * arrays["s2"][mask], label=two_phase_label)
     ax.plot(
         t[mask],
         1.0e6 * arrays["s3"][mask, 0],
@@ -1043,20 +1167,26 @@ def plot_interface_comparison(arrays):
     ax.set_xscale("log")
     ax.set_xlabel(f"time / {TIME_LABEL}")
     ax.set_ylabel("left-equivalent interface position / µm")
-    ax.set_title("Interface-position reduction check")
+    ax.set_title("Interface-position reduction check" if reduction_valid else "Moving-domain interface comparison")
     ax.legend()
     return _save_or_show(fig, "interface_comparison.png")
 
 
 def plot_middle_width_comparison(arrays):
+    """Plots middle-phase widths without claiming unequal-volume reduction equivalence."""
     t = arrays["time"] / TIME_SCALE
     mask = _positive_time_mask(t)
+    reduction_valid = arrays["reduction_comparison_valid"]
 
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
     ax.plot(
         t[mask],
         1.0e6 * arrays["b_half_2"][mask],
-        label=f"2-phase {PHASE_B} width",
+        label=(
+            f"2-phase {PHASE_B} width"
+            if reduction_valid
+            else f"2-phase {PHASE_B} width (fixed-domain reference)"
+        ),
     )
     ax.plot(
         t[mask],
@@ -1067,17 +1197,23 @@ def plot_middle_width_comparison(arrays):
     ax.set_xscale("log")
     ax.set_xlabel(f"time / {TIME_LABEL}")
     ax.set_ylabel(f"{PHASE_B} half-width / µm")
-    ax.set_title("Middle-phase width reduction check")
+    ax.set_title("Middle-phase width reduction check" if reduction_valid else "Middle-phase width comparison")
     ax.legend()
     return _save_or_show(fig, "middle_width_comparison.png")
 
 
 def plot_eta_comparison(arrays):
+    """Plots interface etas and distinguishes a legacy unequal-volume reference."""
     t = arrays["time"] / TIME_SCALE
     mask = _positive_time_mask(t)
+    reduction_valid = arrays["reduction_comparison_valid"]
 
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
-    ax.plot(t[mask], arrays["eta2"][mask], label="2-phase eta")
+    ax.plot(
+        t[mask],
+        arrays["eta2"][mask],
+        label="2-phase eta" if reduction_valid else "2-phase eta (fixed-domain reference)",
+    )
     ax.plot(
         t[mask],
         arrays["eta3"][mask, 0],
@@ -1093,12 +1229,13 @@ def plot_eta_comparison(arrays):
     ax.set_xscale("log")
     ax.set_xlabel(f"time / {TIME_LABEL}")
     ax.set_ylabel("tie-line parameter eta")
-    ax.set_title("Interface tie-line reduction check")
+    ax.set_title("Interface tie-line reduction check" if reduction_valid else "Interface tie-line comparison")
     ax.legend()
     return _save_or_show(fig, "eta_comparison.png")
 
 
 def plot_final_profiles(arrays):
+    """Plots complete physical profiles and only overlays a valid reduction profile."""
     x2_um = 1.0e6 * arrays["x2"]
     x3_um = 1.0e6 * arrays["x3"]
     c2 = arrays["c2"]
@@ -1120,14 +1257,15 @@ def plot_final_profiles(arrays):
             linewidth=2.0,
             label="2-phase A|B",
         )
-        ax.plot(
-            x2_um,
-            arrays["c3_on_x2"][:, j],
-            "--",
-            linewidth=1.5,
-            label="3-phase left half",
-        )
-        ax.axvline(1.0e6 * HALF_LENGTH, linestyle=":", linewidth=1.0)
+        if arrays["reduction_comparison_valid"]:
+            ax.plot(
+                x2_um,
+                arrays["c3_on_x2"][:, j],
+                "--",
+                linewidth=1.5,
+                label="3-phase left half",
+            )
+        ax.axvline(1.0e6 * arrays["three_phase_center"], linestyle=":", linewidth=1.0)
         ax.set_xlabel("position / µm")
         ax.set_ylabel(f"X({element})")
         ax.set_title(element)
@@ -1138,22 +1276,25 @@ def plot_final_profiles(arrays):
 
 
 def plot_discrepancies(arrays):
+    """Plots valid reduction errors plus internal moving-center symmetry errors."""
     t = arrays["time"] / TIME_SCALE
     mask = _positive_time_mask(t)
+    reduction_valid = arrays["reduction_comparison_valid"]
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.25))
 
     ax = axes[0]
-    ax.plot(
-        t[mask],
-        1.0e6 * np.abs(arrays["interface_left_error"][mask]),
-        label="left vs 2-phase",
-    )
-    ax.plot(
-        t[mask],
-        1.0e6 * np.abs(arrays["interface_right_error"][mask]),
-        label="mirrored right vs 2-phase",
-    )
+    if reduction_valid:
+        ax.plot(
+            t[mask],
+            1.0e6 * np.abs(arrays["interface_left_error"][mask]),
+            label="left vs 2-phase",
+        )
+        ax.plot(
+            t[mask],
+            1.0e6 * np.abs(arrays["interface_right_error"][mask]),
+            label="mirrored right vs 2-phase",
+        )
     ax.plot(
         t[mask],
         1.0e6 * np.abs(arrays["interface_symmetry_error"][mask]),
@@ -1167,16 +1308,17 @@ def plot_discrepancies(arrays):
     ax.legend()
 
     ax = axes[1]
-    ax.plot(
-        t[mask],
-        np.abs(arrays["eta_left_error"][mask]),
-        label="left eta vs 2-phase",
-    )
-    ax.plot(
-        t[mask],
-        np.abs(arrays["eta_right_error"][mask]),
-        label="right eta vs 2-phase",
-    )
+    if reduction_valid:
+        ax.plot(
+            t[mask],
+            np.abs(arrays["eta_left_error"][mask]),
+            label="left eta vs 2-phase",
+        )
+        ax.plot(
+            t[mask],
+            np.abs(arrays["eta_right_error"][mask]),
+            label="right eta vs 2-phase",
+        )
     ax.plot(
         t[mask],
         np.abs(arrays["eta_symmetry_error"][mask]),
@@ -1193,6 +1335,27 @@ def plot_discrepancies(arrays):
 
 
 def plot_inventory_drift(arrays):
+    """Plots legacy or physical three-phase conservation without mixing units."""
+    if arrays["three_phase_inventory_kind"] == "physical_moles_per_area":
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4.25))
+        t2 = arrays["t_inv2"] / TIME_SCALE
+        t3 = arrays["t_inv3"] / TIME_SCALE
+        for j, element in enumerate(INDEPENDENT_ELEMENTS):
+            axes[0].plot(t2, arrays["inv2_drift"][:, j], label=element)
+        for j, element in enumerate(ELEMENTS):
+            axes[1].plot(t3, arrays["inv3_all_drift"][:, j], label=element)
+        axes[0].set_title("Two-phase fixed-domain reference")
+        axes[0].set_ylabel("Legacy composition-length inventory drift")
+        axes[1].set_title("Three-phase moving domain")
+        axes[1].set_ylabel("Physical molar inventory drift (mol/m^2)")
+        for ax in axes:
+            ax.set_xlabel(f"time / {TIME_LABEL}")
+            ax.axhline(0.0, color="0.35", linestyle="--", linewidth=1)
+            ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
+            ax.legend()
+        fig.suptitle("Conservation diagnostics (separate physical units)")
+        return _save_or_show(fig, "inventory_drift.png")
+
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.25))
 
     for j, (element, ax) in enumerate(zip(INDEPENDENT_ELEMENTS, axes)):
@@ -1227,6 +1390,14 @@ def plot_inventory_drift(arrays):
 
 # Build the shared thermodynamic data
 
+
+validated_phase_molar_volumes = get_three_phase_molar_volumes()
+if validated_phase_molar_volumes is not None and len(set(validated_phase_molar_volumes)) > 1:
+    print(
+        "Unequal PHASE_MOLAR_VOLUMES enabled. The three-phase model will use "
+        "physical molar conservation and moving R(t); the fixed-domain two-phase "
+        "model will be shown only as a legacy reference."
+    )
 
 source_thermodynamics = build_source_thermodynamics()
 tieline_surrogate = build_tieline_surrogate(source_thermodynamics)
@@ -1272,6 +1443,10 @@ print(
 print("\nThree-phase geometry:")
 print(f"  domain = [0, {THREE_PHASE_LENGTH:.8e}] m")
 print(f"  initial interfaces = {INTERFACE_POSITIONS_3PHASE} m")
+if PHASE_MOLAR_VOLUMES is None:
+    print("  phase molar volumes = legacy normalized equal-volume mode")
+else:
+    print(f"  phase molar volumes [A, B, A] = {get_three_phase_molar_volumes()} m^3/mol")
 print(
     f"  initial {PHASE_B} width = "
     f"{INTERFACE_POSITIONS_3PHASE[1] - INTERFACE_POSITIONS_3PHASE[0]:.8e} m"
@@ -1328,6 +1503,19 @@ print(
 print(
     f"  three-phase final time = {three_phase_model.currentTime:.12g} s"
 )
+print(
+    f"  three-phase final right material boundary = "
+    f"{three_phase_model.getRightBoundary():.12g} m"
+)
+if _uses_physical_three_phase_moles(three_phase_model):
+    print("  three-phase physical molar conservation:")
+    for name, value in three_phase_model.getMolarConservationDiagnostics().items():
+        print(f"    {name}: {value}")
+if not _three_phase_reduction_is_valid(three_phase_model):
+    print(
+        "  note: unequal Vm makes the fixed-domain two-phase solver a legacy "
+        "reference, not an exact physical reduction of the moving A|B|A domain."
+    )
 
 
 # %%
@@ -1363,6 +1551,7 @@ result = {
     "model": three_phase_model,
     "surrogate_ab": tieline_surrogate,
     "therm_ab": source_thermodynamics,
+    "phase_molar_volumes": get_three_phase_molar_volumes(),
 }
 import importlib
 

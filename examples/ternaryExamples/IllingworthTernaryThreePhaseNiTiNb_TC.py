@@ -81,6 +81,11 @@ PHASE_BCC = "BCC_B2"
 PHASE_FCC = None
 PHASE_LIQUID = "LIQUID"
 PHASES_FOR_MODEL = (None, None, None)
+# Optional constant phase molar volumes [A, B, C] in m^3/mol. For example,
+# set ``(7.1e-6, 7.8e-6, 7.3e-6)`` to enable physical molar diagnostics and
+# stress-free motion of the right material boundary. ``None`` preserves the
+# legacy normalized equal-volume model.
+PHASE_MOLAR_VOLUMES = None
 TEMPERATURE = 1300.0
 REFERENCE_ELEMENT = "NB"
 TDB_PATH = None
@@ -271,6 +276,7 @@ _OVERRIDE_KEY_ALIASES = {
     "min_dt_frac": "MIN_DT_FRAC",
     "nodes": "NODES",
     "phase_nodes": "PHASE_NODES",
+    "phase_molar_volumes": "PHASE_MOLAR_VOLUMES",
     "run_preflight": "RUN_PREFLIGHT",
     "run_solve": "RUN_SOLVE",
     "semi_log_base_time_step": "SEMI_LOG_BASE_TIME_STEP",
@@ -954,7 +960,7 @@ def get_time_step_options():
 
 
 def build_model(surrogate_ab, surrogate_bc, bulk_thermodynamics=None):
-    """Constructs the three-phase Illingworth model without starting the solve."""
+    """Constructs the model, optionally with constant phase-dependent molar volumes."""
     time_step_options = get_time_step_options()
     return MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(
         mesh=make_mesh(),
@@ -971,6 +977,7 @@ def build_model(surrogate_ab, surrogate_bc, bulk_thermodynamics=None):
         semiLog_dt=time_step_options["semiLog_dt"],
         semiLogT0=time_step_options["semiLogT0"],
         phase_nodes=PHASE_NODES,
+        phase_molar_volumes=PHASE_MOLAR_VOLUMES,
         tolerance=TOLERANCE,
         residual_tolerance=TOLERANCE,
         max_iterations=MAX_ITERATIONS,
@@ -980,44 +987,54 @@ def build_model(surrogate_ab, surrogate_bc, bulk_thermodynamics=None):
 
 
 def print_case_summary(model):
-    """Prints initial/final widths and inventory drift for a solved model."""
+    """Prints moving geometry and legacy or physical conservation diagnostics."""
     positions = model.getInterfacePositions()
-    widths = np.array([positions[0], positions[1] - positions[0], LENGTH - positions[1]], dtype=np.float64)
+    right_boundary = LENGTH if model._R is None else model.getRightBoundary()
+    widths = np.array([positions[0], positions[1] - positions[0], right_boundary - positions[1]], dtype=np.float64)
     print("Interface positions (um):", positions * 1.0e6)
+    print("Right material boundary R(t) (um):", right_boundary * 1.0e6)
     print("Phase widths A|B|C (um):", widths * 1.0e6)
-    print("Current etas: ", model.etaData._y[-1])
+    print("Current etas: ", model.getInterfaceEtas())
     print(f"Current Time: {model.currentTime}")
     if model.currentTime > 0.0:
-        print(f"Inventory drift {list(INDEPENDENT_ELEMENTS)}:", model.checkConservation(TOLERANCE))
+        if model._hasExplicitPhaseMolarVolumes:
+            print("Physical molar conservation:", model.getMolarConservationDiagnostics())
+        else:
+            print(f"Legacy inventory drift {list(INDEPENDENT_ELEMENTS)}:", model.checkConservation(TOLERANCE))
 
 
 def plot_phase_widths(model):
-    """Plots selected phase widths over time."""
+    """Plots phase widths using the accepted historical right boundary."""
     times = model.interfaceData._time[: model.interfaceData.N + 1]
     positions = model.interfaceData._y[: model.interfaceData.N + 1]
-    widths = np.column_stack((positions[:, 0], positions[:, 1] - positions[:, 0], LENGTH - positions[:, 1]))
+    right_boundary = model.rightBoundaryData._y[: model.rightBoundaryData.N + 1]
+    widths = np.column_stack((positions[:, 0], positions[:, 1] - positions[:, 0], right_boundary - positions[:, 1]))
     fig, ax = plt.subplots(figsize=(6, 4))
     for i, label in enumerate(PHASES_FOR_MODEL):
         ax.plot(times, widths[:, i] * 1.0e6, label=label)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Width (um)")
-    ax.set_ylim(0, 60)
     ax.legend()
     fig.tight_layout()
     return fig, ax
 
 
 def plot_independent_profiles(model, time=None):
-    """Plots selected independent-component profiles on the physical mesh."""
-    z_um = model._z * 1.0e6
-    y = model.data.y(time)
+    """Plots complete phase-wise profiles on authoritative moving coordinates."""
+    phase_profiles = model.getPhysicalPhaseProfiles(time)
     fig, ax = plt.subplots(figsize=(6, 4))
     for i, element in enumerate(INDEPENDENT_ELEMENTS):
-        ax.plot(z_um, y[:, i], label=f"X({element})")
+        for phase_index, (coordinates, compositions) in enumerate(phase_profiles):
+            ax.plot(
+                coordinates * 1.0e6,
+                compositions[:, i + 1],
+                label=f"X({element})" if phase_index == 0 else None,
+            )
     for position in model.getInterfacePositions(time):
         ax.axvline(position * 1.0e6, color="0.35", linestyle="--", linewidth=1)
     ax.set_xlabel("Distance (um)")
     ax.set_ylabel("Mole fraction")
+    y = np.concatenate([compositions[:, 1:] for _, compositions in phase_profiles], axis=0)
     possibleBounds = [(0.15, 0.55), (0, 0.55)]
     for possibleBound in possibleBounds:
         if (y.ravel().min() > possibleBound[0]) and (y.ravel().max() < possibleBound[1]):
@@ -1028,16 +1045,24 @@ def plot_independent_profiles(model, time=None):
 
 
 def plot_inventory_drift(model):
-    """Plots componentwise total-inventory drift from the initial state."""
-    times = model.inventoryData._time[: model.inventoryData.N + 1]
-    inventory = model.inventoryData._y[: model.inventoryData.N + 1]
+    """Plots physical molar drift when available, otherwise the legacy inventory drift."""
+    if model._hasExplicitPhaseMolarVolumes:
+        times = model.molarInventoryData._time[: model.molarInventoryData.N + 1]
+        inventory = model.molarInventoryData._y[: model.molarInventoryData.N + 1]
+        labels = ELEMENTS
+        ylabel = "Molar inventory drift (mol/m^2)"
+    else:
+        times = model.inventoryData._time[: model.inventoryData.N + 1]
+        inventory = model.inventoryData._y[: model.inventoryData.N + 1]
+        labels = INDEPENDENT_ELEMENTS
+        ylabel = "Legacy composition-length inventory drift"
     drift = inventory - inventory[0]
     fig, ax = plt.subplots(figsize=(6, 4))
-    for i, element in enumerate(INDEPENDENT_ELEMENTS):
+    for i, element in enumerate(labels):
         ax.plot(times, drift[:, i], label=f"{element}")
     ax.axhline(0.0, color="0.35", linestyle="--", linewidth=1)
     ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Inventory drift")
+    ax.set_ylabel(ylabel)
     ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
     ax.legend()
     fig.tight_layout()

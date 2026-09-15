@@ -38,6 +38,7 @@ def test_fecrni_pycalphad_case_builds_with_fixed_liquid_diffusivity():
             "bulk_diffusivity_points": np.empty((0, 2), dtype=np.float64),
             "nodes": 31,
             "phase_nodes": (5, 5, 5),
+            "phase_molar_volumes": (7.1e-6, 7.8e-6, 7.3e-6),
             "verbose": False,
         },
         make_plots=False,
@@ -51,6 +52,8 @@ def test_fecrni_pycalphad_case_builds_with_fixed_liquid_diffusivity():
     )
 
     assert model.phases == ("FCC_A1", "LIQUID", "BCC_A2")
+    assert np.array_equal(model._phaseMolarVolumes, [7.1e-6, 7.8e-6, 7.3e-6])
+    assert model._hasExplicitPhaseMolarVolumes
     assert np.allclose(model.getInterfacePositions(), [50.0e-6, 60.0e-6])
     assert result["surrogate_ab"].tieline_phases == ("FCC_A1", "LIQUID")
     assert result["surrogate_bc"].tieline_phases == ("LIQUID", "BCC_A2")

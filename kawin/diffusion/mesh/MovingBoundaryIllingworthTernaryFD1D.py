@@ -147,6 +147,29 @@ def integrate_planar_transformed_profile_sequence(profiles, interfaces, domain_l
     return inventory
 
 
+def integrate_planar_transformed_molar_inventories(profiles, interfaces, domain_length: float, grids, phase_molar_volumes):
+    """
+    Directly integrates all ternary component moles per unit planar area.
+
+    ``phase_molar_volumes`` must supply one positive physical molar volume per
+    phase. The dependent fraction is integrated directly as
+    ``x0 = 1 - x1 - x2``; it is not obtained by inventory closure.
+    """
+    profiles, interfaces, domain_length, grids = _validate_transformed_sequence(profiles, interfaces, domain_length, grids)
+    molar_volumes = np.asarray(phase_molar_volumes, dtype=np.float64).reshape(-1)
+    if molar_volumes.shape != (len(profiles),):
+        raise ValueError("phase_molar_volumes must contain one value per phase.")
+    if not np.all(np.isfinite(molar_volumes)) or np.any(molar_volumes <= 0.0):
+        raise ValueError("phase_molar_volumes must contain positive finite values.")
+    boundaries = np.concatenate(([0.0], interfaces, [domain_length]))
+    inventory = np.zeros(3, dtype=np.float64)
+    for profile, grid, left, right, molar_volume in zip(profiles, grids, boundaries[:-1], boundaries[1:], molar_volumes):
+        dependent = 1.0 - np.sum(profile, axis=1)
+        full_profile = np.column_stack((dependent, profile))
+        inventory += (float(right) - float(left)) * np.trapezoid(full_profile, grid, axis=0) / float(molar_volume)
+    return inventory
+
+
 def reconstruct_planar_transformed_profile_sequence(z, profiles, interfaces, domain_length: float, grids):
     """
     Maps sequential transformed ternary profiles onto physical mesh nodes.

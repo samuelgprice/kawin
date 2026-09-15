@@ -555,6 +555,8 @@ class MeshData:
 
         self.batchSize = 1000
         self.yShape = mesh.flattenResponse(mesh.y).shape
+        self._timeInterpolationEnabled = True
+        self._timeInterpolationError = None
         self.reset()
 
     def reset(self):
@@ -635,7 +637,9 @@ class MeshData:
         '''
         Returns reponse variable at time
 
-        If recording is disabled, then this will return the current state
+        If recording is disabled, then this will return the current state.
+        Models with topology-changing fixed-mesh snapshots may disable time
+        interpolation and require exact recorded times.
         '''
         # If time is not supplied, then return current state of response
         if time is None:
@@ -643,14 +647,23 @@ class MeshData:
         
         # If time is supplied, then interpolate if recording, else return current state
         if self.recordInterval > 0:
-            if time < self._time[0]:
-                print('Input time is lower than smallest recorded time, returning data at t = {:.3e}'.format(self._time[0]))
+            recorded_time = self._time[: self.N + 1]
+            if not self._timeInterpolationEnabled:
+                matches = np.flatnonzero(np.isclose(recorded_time, float(time), rtol=0.0, atol=1e-14))
+                if len(matches) == 0:
+                    message = self._timeInterpolationError or "Time interpolation is disabled; request an exact recorded time."
+                    raise ValueError(message)
+                return self._y[matches[-1]].copy()
+            if time <= recorded_time[0]:
+                if time < recorded_time[0]:
+                    print('Input time is lower than smallest recorded time, returning data at t = {:.3e}'.format(self._time[0]))
                 return self._y[0]
-            elif time > self._time[-1]:
-                print('Input time is larger than longest recorded time, return data at t = {:.3e}'.format(self._time[-1]))
-                return self._y[-1]
+            elif time >= recorded_time[-1]:
+                if time > recorded_time[-1]:
+                    print('Input time is larger than longest recorded time, return data at t = {:.3e}'.format(recorded_time[-1]))
+                return self._y[self.N]
             else:
-                uind = np.argmax(self._time > time)
+                uind = int(np.searchsorted(recorded_time, float(time), side="right"))
                 lind = uind - 1
 
                 ux, utime = self._y[uind], self._time[uind]

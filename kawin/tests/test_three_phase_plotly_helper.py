@@ -45,7 +45,7 @@ class _History:
 
 
 class _SyntheticThreePhaseModel:
-    def __init__(self, *, constant_profiles=False):
+    def __init__(self, *, constant_profiles=False, phase_molar_volumes=None):
         self.allElements = ELEMENTS
         self.phases = ("BCC", "LIQUID", "BCC")
         self.bulkDiffusivityMode = "phase_uniform"
@@ -55,8 +55,15 @@ class _SyntheticThreePhaseModel:
         self.temperatureParameters = lambda positions, time: np.full(len(np.asarray(positions)), 1000.0)
         self.therm = None
         self._R = 1.0
+        self._hasExplicitPhaseMolarVolumes = phase_molar_volumes is not None
+        self._phaseMolarVolumes = (
+            None
+            if phase_molar_volumes is None
+            else np.asarray(phase_molar_volumes, dtype=np.float64)
+        )
         self._grids = tuple(np.asarray([0.0, 0.5, 1.0], dtype=np.float64) for _ in range(3))
         self.interfaceData = _History([0.0, 1.0], [[0.30, 0.70], [0.40, 0.65]])
+        self.rightBoundaryData = _History([0.0, 1.0], [1.0, 1.1])
         self.etaData = _History([0.0, 1.0], [[0.25, 0.75], [0.50, 0.30]])
         self.profileData = object()
         if constant_profiles:
@@ -92,6 +99,51 @@ class _SyntheticThreePhaseModel:
 
     def getTransformedState(self, time=None):
         return tuple(profile.copy() for profile in self._profiles[float(time)])
+
+    def getRightBoundary(self, time=None):
+        index = 0 if float(time) == 0.0 else 1
+        return float(self.rightBoundaryData._y[index])
+
+    def getPhysicalPhaseProfiles(self, time=None):
+        interfaces = self.getInterfacePositions(time)
+        right_boundary = self.getRightBoundary(time)
+        boundaries = np.concatenate(([0.0], interfaces, [right_boundary]))
+        return tuple(
+            (
+                left + (right - left) * grid,
+                np.column_stack((1.0 - np.sum(profile, axis=1), profile)),
+            )
+            for profile, grid, left, right in zip(
+                self.getTransformedState(time), self._grids, boundaries[:-1], boundaries[1:]
+            )
+        )
+
+    def getAllComponentMoles(self, time=None):
+        if not self._hasExplicitPhaseMolarVolumes:
+            raise ValueError("physical molar volumes were not supplied")
+        profiles = self.getPhysicalPhaseProfiles(time)
+        return np.sum(
+            [
+                (coordinates[-1] - coordinates[0])
+                * np.trapezoid(compositions, self._grids[index], axis=0)
+                / self._phaseMolarVolumes[index]
+                for index, (coordinates, compositions) in enumerate(profiles)
+            ],
+            axis=0,
+        )
+
+    def getTotalSubstitutionalMoles(self, time=None):
+        if not self._hasExplicitPhaseMolarVolumes:
+            raise ValueError("physical molar volumes were not supplied")
+        profiles = self.getPhysicalPhaseProfiles(time)
+        return float(
+            np.sum(
+                [
+                    (coordinates[-1] - coordinates[0]) / self._phaseMolarVolumes[index]
+                    for index, (coordinates, _) in enumerate(profiles)
+                ]
+            )
+        )
 
     def getInterfaceEtas(self, time=None):
         index = 0 if float(time) == 0.0 else 1
@@ -139,11 +191,14 @@ def _surrogate(phases, left, right):
     )
 
 
-def _result(*, constant_profiles=False, diffusivity_mode=None, therm=None):
+def _result(*, constant_profiles=False, diffusivity_mode=None, therm=None, phase_molar_volumes=None):
     eta_left = np.asarray([[0.10, 0.20], [0.12, 0.22], [0.14, 0.24]], dtype=np.float64)
     eta_right = np.asarray([[0.20, 0.30], [0.22, 0.32], [0.24, 0.34]], dtype=np.float64)
     bc_right = np.asarray([[0.30, 0.20], [0.32, 0.22], [0.34, 0.24]], dtype=np.float64)
-    model = _SyntheticThreePhaseModel(constant_profiles=constant_profiles)
+    model = _SyntheticThreePhaseModel(
+        constant_profiles=constant_profiles,
+        phase_molar_volumes=phase_molar_volumes,
+    )
     if diffusivity_mode is not None:
         model.bulkDiffusivityMode = diffusivity_mode
     model.therm = therm
@@ -295,7 +350,54 @@ def test_three_phase_plotly_helper_default_overlays_show_average_starting_compos
     assert second_values[1] == "0.5"
     assert second_values[2] == "0.3"
     assert list(second_labels) == list(first_labels)
-    assert list(second_values[3:]) == ["400000 um", "250000 um", "350000 um"]
+    assert list(second_values[3:]) == ["400000 um", "250000 um", "450000 um"]
+
+
+def test_three_phase_plotly_helper_unequal_volume_global_average_uses_physical_moles():
+    pytest.importorskip("plotly")
+    result = _result(constant_profiles=True, phase_molar_volumes=(2.0, 3.0, 1.5))
+
+    output = _plot_output(result, renderer=None, show_tielines=False)
+    frame = output["aux"]["compositions"]["frames"][0]
+    model = result["model"]
+    expected = model.getAllComponentMoles(0.0) / model.getTotalSubstitutionalMoles(0.0)
+    phase_profiles = model.getPhysicalPhaseProfiles(0.0)
+    naive = np.sum(
+        [
+            (coordinates[-1] - coordinates[0])
+            * np.trapezoid(compositions, model._grids[index], axis=0)
+            for index, (coordinates, compositions) in enumerate(phase_profiles)
+        ],
+        axis=0,
+    ) / model.getRightBoundary(0.0)
+
+    assert np.allclose(frame["global_average"], expected, rtol=0.0, atol=2e-16)
+    assert not np.allclose(frame["global_average"], naive, rtol=0.0, atol=1e-4)
+
+
+def test_three_phase_plotly_helper_equal_volume_global_average_matches_legacy_average():
+    pytest.importorskip("plotly")
+    legacy = _plot_output(_result(constant_profiles=True), renderer=None, show_tielines=False)
+    equal = _plot_output(
+        _result(constant_profiles=True, phase_molar_volumes=(2.0, 2.0, 2.0)),
+        renderer=None,
+        show_tielines=False,
+    )
+
+    legacy_average = legacy["aux"]["compositions"]["frames"][0]["global_average"]
+    equal_average = equal["aux"]["compositions"]["frames"][0]["global_average"]
+    assert np.allclose(equal_average, legacy_average, rtol=0.0, atol=2e-16)
+
+
+def test_three_phase_plotly_helper_uses_historical_moving_right_boundary():
+    pytest.importorskip("plotly")
+    output = _plot_output(_result(), **_base_options())
+
+    second_frame = output["aux"]["compositions"]["frames"][1]
+
+    assert second_frame["phase_widths"][-1] == pytest.approx(450000.0)
+    assert second_frame["right_boundary"] == pytest.approx(1100000.0)
+    assert second_frame["segments"][-1]["distance"][-1] == pytest.approx(1100000.0)
 
 
 def test_three_phase_plotly_helper_rejects_nonconstant_starting_phase_marker():
@@ -386,6 +488,7 @@ def test_three_phase_plotly_helper_returns_diffusivities_in_aux_data():
     assert compositions["composition_unit"] == "mole_fraction"
     assert len(compositions["frames"]) == 2
     assert compositions["frames"][0]["interfaces"].shape == (2,)
+    assert compositions["frames"][0]["right_boundary"] == pytest.approx(1000000.0)
     assert compositions["frames"][0]["phase_widths"].shape == (3,)
     assert compositions["frames"][0]["global_average"].shape == (3,)
     assert compositions["frames"][0]["segments"][0]["compositions"].shape == (3, 3)

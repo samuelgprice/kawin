@@ -307,7 +307,8 @@ class GenericModel:
         vIt : integer (defaults to 10)
             Number of iterations before printing status
         minDtFrac : float (defaults to 1e-8)
-            Minimum dt as fraction of simulation time
+            Minimum dt as fraction of simulation time. The exact final
+            remainder may be smaller than this limit.
         maxDtFrac : float (defaults to 1)
             Maximum dt as fraction of simulation time
         '''

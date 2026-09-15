@@ -2,12 +2,11 @@ import warnings
 from dataclasses import dataclass
 
 import numpy as np
-
-from kawin.GenericModel import GenericModel
 from kawin.diffusion.Diffusion import DiffusionModel
 from kawin.diffusion.MovingBoundaryEquilibrium import CallableTernaryInterfaceEquilibrium
 from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import (
     _ArrayHistory,
+    _ScalarHistory,
     _BULK_DIFFUSIVITY_IMPLICIT,
     _BULK_DIFFUSIVITY_LAGGED,
     _BULK_DIFFUSIVITY_PHASE_UNIFORM,
@@ -21,6 +20,7 @@ from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import (
 from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
     flatten_1d_coordinates,
+    integrate_planar_transformed_molar_inventories,
     integrate_planar_transformed_profile_sequence,
     reconstruct_planar_transformed_profile_sequence,
     solve_illingworth_block_tridiagonal,
@@ -51,8 +51,18 @@ class _ThreePhaseBulkResult:
 
 
 @dataclass(frozen=True, slots=True)
+class _ThreePhaseStepKinematics:
+    """Pure old-to-trial geometry and phase-frame displacements for one step."""
+
+    old_right_boundary: float
+    new_right_boundary: float
+    interface_displacements: np.ndarray
+    phase_displacements: np.ndarray
+
+
+@dataclass(frozen=True, slots=True)
 class _ThreePhaseCandidate:
-    """Mutually consistent profiles, interfaces, etas, and residuals for one trial."""
+    """Mutually consistent profiles, geometry, etas, and residuals for one trial."""
 
     x_hat: np.ndarray
     profiles: tuple[np.ndarray, np.ndarray, np.ndarray]
@@ -64,6 +74,35 @@ class _ThreePhaseCandidate:
     scaled_norm: float
     physical_norm: float
     bulk_results: tuple[_ThreePhaseBulkResult, _ThreePhaseBulkResult, _ThreePhaseBulkResult]
+    kinematics: _ThreePhaseStepKinematics | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ThreePhaseAcceptedState:
+    """Fully validated outputs prepared before an atomic accepted-state commit."""
+
+    profiles: tuple[np.ndarray, np.ndarray, np.ndarray]
+    interfaces: np.ndarray
+    etas: np.ndarray
+    right_boundary: float
+    interface_compositions: tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]
+    fixed_mesh_profile: np.ndarray
+    legacy_inventory: np.ndarray
+    molar_inventories: np.ndarray
+    total_moles: float
+    dependent_closure_error: float
+
+
+@dataclass(frozen=True, slots=True)
+class _ThreePhasePendingState:
+    """Exact converged candidate awaiting verification and accepted-state commit."""
+
+    profiles: tuple[np.ndarray, np.ndarray, np.ndarray]
+    interfaces: np.ndarray
+    etas: np.ndarray
+    right_boundary: float
+    start_time: float
+    dt: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +143,25 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     ``terminal_thin_phase_width`` after the normal retry budget is exhausted,
     an optional terminal retry path can keep reducing ``dt`` until one final
     converged step is found and then stop the solve early.
+
+    The geometry is planar, the left boundary is fixed, and the right boundary
+    is a stress-free material boundary. ``phase_molar_volumes=(VmA, VmB, VmC)``
+    supplies constant phase molar volumes in m^3/mol when the length coordinate
+    is in metres; differing phase values may produce one-dimensional expansion
+    or contraction, and physical inventory APIs then return mol/m^2. The right
+    position is algebraically dependent on the two interfaces. The model is an
+    all-substitutional ternary formulation and treats each supplied chemical/
+    interdiffusion matrix as phase-local and volume-fixed. It does not transform
+    or rescale that matrix for differing molar volumes and does not model
+    composition-dependent or species-dependent partial molar volumes,
+    Kirkendall markers, vacancies, lattice drift, or mechanics.
+
+    Trial geometry remains candidate-local and the accepted boundary advances
+    atomically with the corresponding profiles, interface state, diagnostics,
+    and histories. Legacy ``data``/``getTotalInventory`` output remains fixed-
+    mesh and length-weighted. Physical conservation uses the explicit molar
+    APIs, while ``getPhysicalPhaseProfiles`` is authoritative for the complete
+    moving specimen and preserves both sides of interface discontinuities.
     """
 
     def __init__(
@@ -145,6 +203,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         record=False,
         record_pq_data: bool = True,
         transformed_grids=None,
+        phase_molar_volumes=None,
     ):
         self.initialInterfacePositions = np.asarray(interfacePositions, dtype=np.float64).reshape(-1)
         self.timeStep = float(time_step)
@@ -165,6 +224,22 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self.semiLog_dt = None if semiLog_dt is None else float(semiLog_dt)
         self.semiLogT0 = None if semiLogT0 is None else float(semiLogT0)
         self.geometry = str(geometry)
+        self._hasExplicitPhaseMolarVolumes = phase_molar_volumes is not None
+        molar_volumes = np.ones(3, dtype=np.float64) if phase_molar_volumes is None else np.asarray(phase_molar_volumes, dtype=np.float64).reshape(-1)
+        if molar_volumes.shape != (3,) or not np.all(np.isfinite(molar_volumes)) or np.any(molar_volumes <= 0.0):
+            raise ValueError("phase_molar_volumes must contain three positive finite values.")
+        self._phaseMolarVolumes = molar_volumes.copy()
+        self._phaseMolarVolumes.setflags(write=False)
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            molar_densities = 1.0 / molar_volumes
+            normalized_densities = molar_densities / molar_densities[0]
+        if not np.all(np.isfinite(molar_densities)) or not np.all(np.isfinite(normalized_densities)):
+            raise ValueError("phase_molar_volumes produce non-finite molar densities.")
+        self._phaseMolarDensities = molar_densities.copy()
+        self._phaseMolarDensities.setflags(write=False)
+        self._normalizedPhaseMolarDensities = normalized_densities.copy()
+        self._normalizedPhaseMolarDensities.setflags(write=False)
+        self._equalPhaseMolarVolumes = bool(np.all(molar_volumes == molar_volumes[0]))
         self.phaseNodes = None if phase_nodes is None else tuple(int(v) for v in np.asarray(phase_nodes, dtype=np.int64).reshape(-1))
         self.tolerance = float(tolerance)
         self.residualTolerance = float(tolerance if residual_tolerance is None else residual_tolerance)
@@ -187,12 +262,20 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self.interfaceData = _ArrayHistory((2,), record)
         self.etaData = _ArrayHistory((2,), record)
         self.inventoryData = _ArrayHistory((2,), record)
+        self.rightBoundaryData = _ScalarHistory(record)
+        self.molarInventoryData = _ArrayHistory((3,), record)
+        self.totalMolesData = _ScalarHistory(record)
+        self.dependentMoleClosureErrorData = _ScalarHistory(record)
         self.profileData = None
 
         self._currdt = np.inf
+        self._outerMinTimeStep = 0.0
+        self._outerMaxTimeStep = np.inf
+        self._solveMinDtFrac = 1e-8
+        self._solveMaxDtFrac = 1.0
+        self._pendingCandidate = None
         self._semiLogTimes = None
         self._semiLogNextIndex = 0
-        self._nearFinalNoop = False
         self._lastStepRetries = 0
         self._lastImplicitIterations = 0
         self._lastImplicitResidual = np.nan
@@ -203,9 +286,13 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._terminalThinPhaseStop = False
         self._terminalThinPhaseInfo = None
         self._initialInventory = None
+        self._initialMolarInventories = None
+        self._initialTotalMoles = None
 
         self._z = None
         self._R = None
+        self._R0 = None
+        self._initialTotalAmount = None
         self._grids = None
         self._profiles_curr = None
         self._interfaces_curr = None
@@ -221,6 +308,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             constraints=constraints,
             record=record,
         )
+        if not self._equalPhaseMolarVolumes:
+            self.data._timeInterpolationEnabled = False
+            self.data._timeInterpolationError = (
+                "Fixed-mesh interpolation is unavailable for a moving unequal-volume domain; "
+                "request an exact recorded time or use getPhysicalPhaseProfiles()."
+            )
         self._validateModelConfiguration()
         self.interfaceData.currentY = self.initialInterfacePositions.copy()
         self.interfaceData._y[0] = self.initialInterfacePositions.copy()
@@ -353,37 +446,47 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             self.mesh.boundaryConditions = bc
         return bc
 
-    def _minimum_middle_width(self):
-        return max(float(self._R) * self.minMiddleWidthFraction, 1e-14)
+    def _minimum_middle_width(self, right_boundary=None):
+        domain_length = float(self._R if right_boundary is None else right_boundary)
+        return max(domain_length * self.minMiddleWidthFraction, 1e-14)
 
-    def _phase_widths(self, interfaces):
+    def _phase_widths(self, interfaces, right_boundary=None):
         """Returns the physical widths of the ``A``, ``B``, and ``C`` regions."""
         s_ab, s_bc = np.asarray(interfaces, dtype=np.float64).reshape(2)
-        return np.asarray([s_ab, s_bc - s_ab, float(self._R) - s_bc], dtype=np.float64)
+        domain_length = float(self._R if right_boundary is None else right_boundary)
+        return np.asarray([s_ab, s_bc - s_ab, domain_length - s_bc], dtype=np.float64)
 
-    def _single_terminal_thin_phase(self, interfaces):
+    def _single_terminal_thin_phase(self, interfaces, right_boundary=None):
         """Returns ``(index, width)`` only when exactly one phase is below the terminal threshold."""
         if self.terminalThinPhaseWidth is None:
             return None
-        widths = self._phase_widths(interfaces)
+        widths = self._phase_widths(interfaces, right_boundary=right_boundary)
         mask = np.isfinite(widths) & (widths < self.terminalThinPhaseWidth)
         if int(np.count_nonzero(mask)) != 1:
             return None
         index = int(np.flatnonzero(mask)[0])
         return index, float(widths[index])
 
-    def _validate_interfaces(self, interfaces, strict=True):
+    def _validate_interfaces(self, interfaces, strict=True, right_boundary=None):
+        """Validates interfaces against an explicit accepted or trial boundary."""
         values = np.asarray(interfaces, dtype=np.float64).reshape(2)
-        if self._R is None:
+        if right_boundary is not None:
+            domain_length = float(right_boundary)
+        elif self._R is None:
             z = flatten_1d_coordinates(self.mesh.z)
             domain_length = float(z[-1] - z[0])
         else:
             domain_length = float(self._R)
+        if not np.isfinite(domain_length) or domain_length <= 0.0:
+            if strict:
+                raise ValueError("Three-phase trial geometry requires a positive finite right boundary.")
+            return values
         eps = max(domain_length * 1e-14, 1e-14)
         min_width = max(domain_length * self.minMiddleWidthFraction, eps)
-        valid = eps < values[0] and values[0] + min_width < values[1] and values[1] < domain_length - eps
+        widths = np.asarray([values[0], values[1] - values[0], domain_length - values[1]], dtype=np.float64)
+        valid = np.all(np.isfinite(widths)) and np.all(widths > eps) and widths[1] > min_width
         if strict and not valid:
-            raise ValueError("Three-phase interface positions must satisfy 0 < s_AB < s_BC < R with a nonzero middle phase.")
+            raise ValueError("Three-phase trial geometry must satisfy 0 < s_AB < s_BC < R_trial with a nonzero middle phase and valid phase widths.")
         values[0] = np.clip(values[0], eps, domain_length - eps)
         values[1] = np.clip(values[1], eps, domain_length - eps)
         if values[1] - values[0] < min_width:
@@ -391,6 +494,70 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             values[0] = center - 0.5 * min_width
             values[1] = center + 0.5 * min_width
         return values
+
+    def _right_boundary_from_interfaces(self, interfaces):
+        """
+        Returns the algebraic right boundary required by total-mole conservation.
+
+        The result is trial-local and this helper never mutates accepted state.
+        Equal phase molar volumes take an exact shortcut to ``_R0``.
+        """
+        if self._R0 is None or self._initialTotalAmount is None:
+            raise ValueError("Model must be setup before evaluating trial right-boundary kinematics.")
+        values = np.asarray(interfaces, dtype=np.float64).reshape(2)
+        if not np.all(np.isfinite(values)):
+            raise ValueError("Trial interfaces must contain finite values.")
+        if self._equalPhaseMolarVolumes:
+            return float(self._R0)
+        s_ab, s_bc = values
+        rho_a, rho_b, rho_c = self._phaseMolarDensities
+        return float(s_bc + (self._initialTotalAmount - rho_a * s_ab - rho_b * (s_bc - s_ab)) / rho_c)
+
+    def _phase_frame_displacements(self, old_interfaces, new_interfaces, old_right_boundary, new_right_boundary):
+        """
+        Returns finite phase-frame displacements ``[DeltaU_A, DeltaU_B, DeltaU_C]``.
+
+        The local interface kinematics are algebraically equivalent to the
+        total-mole boundary relation. Phase C is anchored to the moving right
+        material boundary, so ``DeltaU_C`` is exactly ``DeltaR``.
+        """
+        if self._equalPhaseMolarVolumes:
+            return np.zeros(3, dtype=np.float64)
+        old_interfaces = np.asarray(old_interfaces, dtype=np.float64).reshape(2)
+        new_interfaces = np.asarray(new_interfaces, dtype=np.float64).reshape(2)
+        delta_s_ab, delta_s_bc = new_interfaces - old_interfaces
+        vm_a, vm_b, vm_c = self._phaseMolarVolumes
+        delta_u_b = (1.0 - vm_b / vm_a) * delta_s_ab
+        local_delta_u_c = (vm_c / vm_b) * delta_u_b + (1.0 - vm_c / vm_b) * delta_s_bc
+        delta_r = float(new_right_boundary) - float(old_right_boundary)
+        scale = max(abs(delta_r), abs(local_delta_u_c), abs(float(self._R0)), 1.0)
+        if not np.isclose(local_delta_u_c, delta_r, rtol=5e-13, atol=5e-15 * scale):
+            raise RuntimeError("Algebraic total-mole boundary motion disagrees with local interface kinematics.")
+        return np.asarray([0.0, delta_u_b, delta_r], dtype=np.float64)
+
+    def _phase_frame_velocities(self, interface_velocities):
+        """Returns the differential limit of the finite phase-frame displacements."""
+        if self._equalPhaseMolarVolumes:
+            return np.zeros(3, dtype=np.float64)
+        v_ab, v_bc = np.asarray(interface_velocities, dtype=np.float64).reshape(2)
+        vm_a, vm_b, vm_c = self._phaseMolarVolumes
+        velocity_b = (1.0 - vm_b / vm_a) * v_ab
+        velocity_c = (vm_c / vm_b) * velocity_b + (1.0 - vm_c / vm_b) * v_bc
+        return np.asarray([0.0, velocity_b, velocity_c], dtype=np.float64)
+
+    def _step_kinematics(self, old_interfaces, new_interfaces):
+        """Builds and validates immutable old-to-trial kinematics without state mutation."""
+        old_interfaces = np.asarray(old_interfaces, dtype=np.float64).reshape(2)
+        new_interfaces = np.asarray(new_interfaces, dtype=np.float64).reshape(2)
+        old_right = self._right_boundary_from_interfaces(old_interfaces)
+        new_right = self._right_boundary_from_interfaces(new_interfaces)
+        self._validate_interfaces(old_interfaces, strict=True, right_boundary=old_right)
+        self._validate_interfaces(new_interfaces, strict=True, right_boundary=new_right)
+        interface_displacements = (new_interfaces - old_interfaces).copy()
+        phase_displacements = self._phase_frame_displacements(old_interfaces, new_interfaces, old_right, new_right)
+        interface_displacements.setflags(write=False)
+        phase_displacements.setflags(write=False)
+        return _ThreePhaseStepKinematics(old_right, new_right, interface_displacements, phase_displacements)
 
     def _eta_bounds(self):
         return tuple(_validate_eta_bounds(closure) for closure in self.interfaceEquilibria)
@@ -482,21 +649,21 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             D_c = self._interface_face_diffusivity(0.5 * (c_c_bc + p_c), 2, s_bc, "initial-eta bulk")
         return D_a, D_b_left, D_b_right, D_c
 
-    def _initial_face_transfer_rate(self, face_velocity, D_face, length, dxi, left_value, right_value):
+    def _initial_face_transfer_rate(self, relative_face_velocity, D_face, length, dxi, left_value, right_value):
         """
         Returns the instantaneous conservative ALE plus diffusive face transfer.
 
         The sign convention matches the transient interval transfer ``H``:
-        positive physical face velocity uses the right transformed node as the
-        ALE donor because the transformed advection velocity has the opposite
-        sign.
+        Positive grid velocity relative to the phase frame uses the right
+        transformed node as the ALE donor because transformed advection has
+        the opposite sign.
         """
         diffusive = np.matmul(np.asarray(D_face, dtype=np.float64), (np.asarray(right_value, dtype=np.float64) - np.asarray(left_value, dtype=np.float64)) / (float(length) * float(dxi)))
-        face_velocity = float(face_velocity)
-        if face_velocity > 0.0:
-            return face_velocity * np.asarray(right_value, dtype=np.float64) + diffusive
-        if face_velocity < 0.0:
-            return face_velocity * np.asarray(left_value, dtype=np.float64) + diffusive
+        relative_face_velocity = float(relative_face_velocity)
+        if relative_face_velocity > 0.0:
+            return relative_face_velocity * np.asarray(right_value, dtype=np.float64) + diffusive
+        if relative_face_velocity < 0.0:
+            return relative_face_velocity * np.asarray(left_value, dtype=np.float64) + diffusive
         return diffusive
 
     def _initial_discrete_interface_terms(self, interfaces, interface_compositions, adjacent, velocities, *, return_zero_velocity=False):
@@ -512,12 +679,14 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         """
         s_ab, s_bc = np.asarray(interfaces, dtype=np.float64).reshape(2)
         v_ab, v_bc = np.asarray(velocities, dtype=np.float64).reshape(2)
+        phase_velocities = self._phase_frame_velocities(velocities)
+        _, velocity_b, velocity_c = phase_velocities
         p_a, p_b_left, p_b_right, p_c = adjacent
         c_a_ab, c_b_ab = interface_compositions[0]
         c_b_bc, c_c_bc = interface_compositions[1]
         length_a = s_ab
         length_b = s_bc - s_ab
-        length_c = self._R - s_bc
+        length_c = self._R0 - s_bc
         u_a = self._grids[0]
         u_b = self._grids[1]
         u_c = self._grids[2]
@@ -528,9 +697,9 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         xi_b_right = 0.5 * (u_b[-2] + 1.0)
         xi_c_left = 0.5 * u_c[1]
         w_a_right = xi_a_right * v_ab
-        w_b_left = (1.0 - xi_b_left) * v_ab + xi_b_left * v_bc
-        w_b_right = (1.0 - xi_b_right) * v_ab + xi_b_right * v_bc
-        w_c_left = (1.0 - xi_c_left) * v_bc
+        w_b_left = (1.0 - xi_b_left) * v_ab + xi_b_left * v_bc - velocity_b
+        w_b_right = (1.0 - xi_b_right) * v_ab + xi_b_right * v_bc - velocity_b
+        w_c_left = (1.0 - xi_c_left) * v_bc + xi_c_left * velocity_c - velocity_c
 
         transfer_a_right = self._initial_face_transfer_rate(w_a_right, D_a, length_a, 1.0 - u_a[-2], p_a, c_a_ab)
         transfer_b_left = self._initial_face_transfer_rate(w_b_left, D_b_left, length_b, u_b[1], c_b_ab, p_b_left)
@@ -539,14 +708,17 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
 
         length_rate_a = v_ab
         length_rate_b = v_bc - v_ab
-        length_rate_c = -v_bc
+        length_rate_c = velocity_c - v_bc
         dm_a_right = 0.5 * (1.0 - u_a[-2]) * length_rate_a * c_a_ab
         dm_b_left = 0.5 * u_b[1] * length_rate_b * c_b_ab
         dm_b_right = 0.5 * (1.0 - u_b[-2]) * length_rate_b * c_b_bc
         dm_c_left = 0.5 * u_c[1] * length_rate_c * c_c_bc
 
-        residual_ab = dm_a_right + dm_b_left + transfer_a_right - transfer_b_left
-        residual_bc = dm_b_right + dm_c_left + transfer_b_right - transfer_c_left
+        density_a, density_b, density_c = self._normalizedPhaseMolarDensities
+        residual_ab = density_a * (dm_a_right + transfer_a_right)
+        residual_ab += density_b * (dm_b_left - transfer_b_left)
+        residual_bc = density_b * (dm_b_right + transfer_b_right)
+        residual_bc += density_c * (dm_c_left - transfer_c_left)
         residual = np.concatenate((residual_ab, residual_bc))
         if not return_zero_velocity:
             return residual, None
@@ -555,7 +727,9 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         zero_b_left = self._initial_face_transfer_rate(0.0, D_b_left, length_b, u_b[1], c_b_ab, p_b_left)
         zero_b_right = self._initial_face_transfer_rate(0.0, D_b_right, length_b, 1.0 - u_b[-2], p_b_right, c_b_bc)
         zero_c_left = self._initial_face_transfer_rate(0.0, D_c, length_c, u_c[1], c_c_bc, p_c)
-        zero_velocity_residual = np.concatenate((zero_a_right - zero_b_left, zero_b_right - zero_c_left))
+        zero_ab = density_a * zero_a_right - density_b * zero_b_left
+        zero_bc = density_b * zero_b_right - density_c * zero_c_left
+        zero_velocity_residual = np.concatenate((zero_ab, zero_bc))
         return residual, zero_velocity_residual
 
     def _initial_discrete_interface_residuals(self, interfaces, interface_compositions, adjacent, velocities):
@@ -743,23 +917,30 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                 raise ValueError(f"candidate transformed profile {i} violates ternary composition bounds: {violation}.")
 
     def _is_infeasible_candidate_error(self, exc):
-        """Returns True for candidate states rejected by admissible-composition bounds."""
+        """Returns True for candidates rejected by geometry or composition bounds."""
         message = str(exc)
         return isinstance(exc, ValueError) and (
             "candidate transformed profile" in message
             or "violates ternary composition bounds" in message
+            or "Three-phase trial geometry" in message
         )
 
     def setup(self):
+        """Initializes the three-phase state once and preserves accepted state on continuation."""
+        if self.isSetup:
+            return
         super().setup()
+        self._pendingCandidate = None
         self._validateModelConfiguration()
         self._getBoundaryConditions()
         self._z = flatten_1d_coordinates(self.mesh.z).astype(np.float64)
         if not np.isclose(self._z[0], 0.0):
             raise ValueError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel expects a 1D domain starting at 0.")
         self._R = float(self._z[-1] - self._z[0])
-        interfaces0 = self._validate_interfaces(self.initialInterfacePositions, strict=True)
+        self._R0 = float(self._R)
+        interfaces0 = self._validate_interfaces(self.initialInterfacePositions, strict=True, right_boundary=self._R0)
         self.initialInterfacePositions = interfaces0.copy()
+        self._initialTotalAmount = float(np.dot(self._phaseMolarDensities, self._phase_widths(interfaces0, self._R0)))
         self._grids = self._build_transformed_grids(interfaces0)
         self.profileData = [_ArrayHistory((len(grid), 2), self.interfaceData.recordInterval) for grid in self._grids] if self.recordPqData else None
 
@@ -776,16 +957,38 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self.interfaceData.record(0, interfaces0)
         self.etaData.reset()
         self.etaData.record(0, etas0)
+        self.rightBoundaryData.reset()
+        self.rightBoundaryData.record(0, self._R0)
         if self.recordPqData:
             for history, profile in zip(self.profileData, self._profiles_curr):
                 history.record(0, profile)
 
-        physical = self._reconstruct_physical_profile(self._profiles_curr, interfaces0)
+        physical = self._reconstruct_physical_profile(self._profiles_curr, interfaces0, right_boundary=self._R0)
         self.data.currentY = physical
         self.data._y[0] = physical
-        self._initialInventory = self.getTotalInventoryFromState(self._profiles_curr, interfaces0)
+        self._initialInventory = self.getTotalInventoryFromState(self._profiles_curr, interfaces0, right_boundary=self._R0)
         self.inventoryData.reset()
         self.inventoryData.record(0, self._initialInventory)
+        self.molarInventoryData.reset()
+        self.totalMolesData.reset()
+        self.dependentMoleClosureErrorData.reset()
+        if self._hasExplicitPhaseMolarVolumes:
+            self._initialMolarInventories = self._get_all_component_moles_from_state(
+                self._profiles_curr, interfaces0, self._R0
+            )
+            self._initialTotalMoles = self._get_total_substitutional_moles_from_geometry(interfaces0, self._R0)
+            closure_error = self._dependent_mole_closure_error(
+                self._initialMolarInventories, self._initialTotalMoles
+            )
+        else:
+            self._initialMolarInventories = None
+            self._initialTotalMoles = None
+            closure_error = np.nan
+        self.molarInventoryData.record(
+            0, np.full(3, np.nan) if self._initialMolarInventories is None else self._initialMolarInventories
+        )
+        self.totalMolesData.record(0, np.nan if self._initialTotalMoles is None else self._initialTotalMoles)
+        self.dependentMoleClosureErrorData.record(0, closure_error)
 
     def _build_transformed_grids(self, interfaces):
         if self._inputGrids is not None:
@@ -824,20 +1027,35 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         profiles[2][0] = comps[1][1]
         return tuple(profiles)
 
-    def _reconstruct_physical_profile(self, profiles, interfaces):
-        return reconstruct_planar_transformed_profile_sequence(
-            z=self._z,
-            profiles=profiles,
-            interfaces=interfaces,
-            domain_length=self._R,
-            grids=self._grids,
-        )
+    def _reconstruct_physical_profile(self, profiles, interfaces, right_boundary=None):
+        """
+        Reconstructs on the immutable fixed mesh for an explicit geometry.
+
+        Fixed nodes beyond a contracted right boundary are returned as NaN.
+        Expanded material beyond ``_R0`` is intentionally absent here and is
+        available from :meth:`getPhysicalPhaseProfiles`.
+        """
+        domain_length = float(self._R if right_boundary is None else right_boundary)
+        self._validate_interfaces(interfaces, strict=True, right_boundary=domain_length)
+        inside = self._z <= domain_length
+        physical = np.full((len(self._z), 2), np.nan, dtype=np.float64)
+        if np.any(inside):
+            physical[inside] = reconstruct_planar_transformed_profile_sequence(
+                z=self._z[inside],
+                profiles=profiles,
+                interfaces=interfaces,
+                domain_length=domain_length,
+                grids=self._grids,
+            )
+        return physical
 
     def setTimeInfo(self, currTime, simTime):
-        """Stores solve-time bounds and prepares optional semi-log target times."""
+        """Stores solve bounds, including the outer wrapper's maximum timestep."""
         super().setTimeInfo(currTime, simTime)
         self._currdt = np.inf
-        self._nearFinalNoop = False
+        self._outerMinTimeStep = float(self._solveMinDtFrac) * float(simTime)
+        self._outerMaxTimeStep = float(self._solveMaxDtFrac) * float(simTime)
+        self._pendingCandidate = None
         self._terminalThinPhaseStop = False
         self._terminalThinPhaseInfo = None
         if self.dtMode != "semi_log" or simTime <= 0:
@@ -873,27 +1091,46 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
 
     def _compute_dt(self, t):
         remaining = getattr(self, "finalTime", np.inf) - float(t)
-        step_scale = self.timeStep
         if self.dtMode == "semi_log":
             scheduled_dt = self._computeSemiLogDt(t)
-            if np.isfinite(scheduled_dt) and scheduled_dt > 0:
-                step_scale = scheduled_dt
-            dt = min(scheduled_dt, remaining)
+            dt = min(scheduled_dt, remaining, self._outerMaxTimeStep)
         else:
-            dt = min(self.timeStep, remaining)
-        self._nearFinalNoop = bool(np.isfinite(remaining) and 0 < remaining <= max(step_scale, 1e-15) * 1e-10)
-        if self._nearFinalNoop:
-            self._currdt = max(step_scale, 1e-15)
-            return self._currdt
+            dt = min(self.timeStep, remaining, self._outerMaxTimeStep)
         if not np.isfinite(dt) or dt <= 0:
             dt = self.timeStep
         self._currdt = float(dt)
         return float(dt)
 
+    def _is_final_remainder_below_outer_minimum(self, t, trial_dt):
+        """Returns whether ``trial_dt`` is the exact final remainder allowed by the outer solver."""
+        remaining = float(getattr(self, "finalTime", np.inf)) - float(t)
+        if not np.isfinite(remaining) or remaining <= 0.0 or remaining >= self._outerMinTimeStep:
+            return False
+        scale = max(1.0, abs(float(t)), abs(float(trial_dt)), abs(remaining))
+        atol = 64.0 * np.finfo(float).eps * scale
+        return bool(np.isclose(float(trial_dt), remaining, rtol=2e-13, atol=atol))
+
+    def _validate_pending_timestep_against_outer_minimum(self, t, trial_dt):
+        """Rejects a subminimum retry only when the outer wrapper would enlarge its timestep."""
+        if trial_dt < self._outerMinTimeStep and not self._is_final_remainder_below_outer_minimum(t, trial_dt):
+            self._pendingCandidate = None
+            raise ValueError(
+                f"Converged nonlinear timestep {trial_dt} is smaller than the outer solver minimum "
+                f"{self._outerMinTimeStep}; reduce minDtFrac."
+            )
+
     def solve(self, simTime, iterator=explicitEulerIterator, verbose=False, vIt=10, minDtFrac=1e-8, maxDtFrac=1):
-        """Solves the implicit three-phase recurrence through an Euler wrapper."""
+        """Advances by ``simTime`` through an Euler wrapper without reinitializing accepted state."""
         if iterator is not explicitEulerIterator:
             raise ValueError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel supports only explicitEulerIterator.")
+        if not np.isfinite(simTime) or simTime <= 0.0:
+            raise ValueError("simTime must be positive and finite.")
+        if not np.isfinite(minDtFrac) or not np.isfinite(maxDtFrac) or minDtFrac < 0.0 or maxDtFrac <= 0.0:
+            raise ValueError("minDtFrac must be nonnegative and maxDtFrac must be positive and finite.")
+        if minDtFrac > maxDtFrac:
+            raise ValueError("minDtFrac cannot exceed maxDtFrac for the implicit three-phase solver.")
+        self._solveMinDtFrac = float(minDtFrac)
+        self._solveMaxDtFrac = float(maxDtFrac)
         return super().solve(simTime, iterator=iterator, verbose=verbose, vIt=vIt, minDtFrac=minDtFrac, maxDtFrac=maxDtFrac)
 
     def getCurrentX(self):
@@ -1010,13 +1247,14 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             self._face_positions(grid, new_bounds),
         )
 
-    def _internal_face_displacements(self, grid, old_bounds, new_bounds):
-        """Returns physical displacement of each internal transformed face."""
+    def _internal_face_displacements(self, grid, old_bounds, new_bounds, phase_frame_displacement=0.0):
+        """Returns each internal grid-face displacement relative to its phase frame."""
         grid = np.asarray(grid, dtype=np.float64).reshape(-1)
         face_xi = 0.5 * (grid[:-1] + grid[1:])
         old_left, old_right = float(old_bounds[0]), float(old_bounds[1])
         new_left, new_right = float(new_bounds[0]), float(new_bounds[1])
-        return (1.0 - face_xi) * (new_left - old_left) + face_xi * (new_right - old_right)
+        grid_displacement = (1.0 - face_xi) * (new_left - old_left) + face_xi * (new_right - old_right)
+        return grid_displacement - float(phase_frame_displacement)
 
     def _face_transfer_coefficients(self, delta_x, D_face, dt, length, dxi):
         """
@@ -1043,16 +1281,29 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         """Evaluates a preassembled total face transfer from its node coefficients."""
         return np.matmul(left_coeff, np.asarray(left_value, dtype=np.float64)) + np.matmul(right_coeff, np.asarray(right_value, dtype=np.float64))
 
-    def _solve_interval_planar(self, profile, grid, old_bounds, new_bounds, phase_index, left_value, right_value, D_faces, validate_diffusivity=True):
+    def _solve_interval_planar(
+        self,
+        profile,
+        grid,
+        old_bounds,
+        new_bounds,
+        phase_index,
+        left_value,
+        right_value,
+        D_faces,
+        validate_diffusivity=True,
+        phase_frame_displacement=0.0,
+    ):
         """
         Solves one transformed planar interval on a moving Landau grid.
 
         The finite-volume equation is assembled face by face as
         ``L_new*DeltaXi*C_new - L_old*DeltaXi*C_old = H_right - H_left``.
-        ``H`` contains both the face-local upwind ALE transfer and the implicit
-        diffusive transfer. Endpoint values are exact Dirichlet constraints when
-        supplied; ``None`` means the fixed external boundary has homogeneous
-        zero transfer.
+        ``H`` contains both the face-local upwind ALE transfer, based on grid
+        displacement relative to the phase frame, and the implicit diffusive
+        transfer. Endpoint values are exact Dirichlet constraints when supplied;
+        ``None`` means the material external boundary has homogeneous zero
+        relative transfer.
         """
         profile = validate_ternary_profile(profile, "interval profile")
         grid = np.asarray(grid, dtype=np.float64).reshape(-1)
@@ -1094,7 +1345,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             diagonal[i] = new_widths[i] * I
             rhs[i] = old_widths[i] * profile[i]
 
-        face_displacements = self._internal_face_displacements(grid, old_bounds, new_bounds)
+        face_displacements = self._internal_face_displacements(
+            grid,
+            old_bounds,
+            new_bounds,
+            phase_frame_displacement=phase_frame_displacement,
+        )
         face_coefficients = []
         for face in range(n - 1):
             left_coeff, right_coeff = self._face_transfer_coefficients(
@@ -1128,7 +1384,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             right_transfer = self._evaluate_face_transfer(*face_coefficients[-1], solved[-2], solved[-1])
         return _ThreePhaseBulkResult(solved, left_transfer, right_transfer, left_matrix, right_matrix)
 
-    def _solve_interval_picard(self, profile, grid, old_bounds, new_bounds, phase_index, left_value, right_value):
+    def _solve_interval_picard(self, profile, grid, old_bounds, new_bounds, phase_index, left_value, right_value, phase_frame_displacement=0.0):
         """Solves one interval with composition-dependent Picard face matrices."""
         iterate = np.asarray(profile, dtype=np.float64).copy()
         if left_value is not None:
@@ -1138,7 +1394,18 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         update_norm = np.inf
         for iteration in range(1, self.bulkPicardMaxIterations + 1):
             D_faces = self._interval_face_diffusivity(iterate, grid, phase_index, new_bounds)
-            linear = self._solve_interval_planar(profile, grid, old_bounds, new_bounds, phase_index, left_value, right_value, D_faces, validate_diffusivity=False)
+            linear = self._solve_interval_planar(
+                profile,
+                grid,
+                old_bounds,
+                new_bounds,
+                phase_index,
+                left_value,
+                right_value,
+                D_faces,
+                validate_diffusivity=False,
+                phase_frame_displacement=phase_frame_displacement,
+            )
             update = linear.profile - iterate
             update_norm = float(np.max(np.abs(update)))
             scale = max(1e-12, float(np.max(np.abs(linear.profile))))
@@ -1157,9 +1424,19 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             iterate = iterate + self.bulkPicardRelaxation * update
         raise RuntimeError(f"bulk Picard solve failed to converge for phase {self.phases[phase_index]} after {self.bulkPicardMaxIterations} iterations")
 
-    def _solve_bulk_profiles(self, profiles, old_interfaces, new_interfaces, interface_compositions):
-        old_bounds = np.asarray([[0.0, old_interfaces[0]], [old_interfaces[0], old_interfaces[1]], [old_interfaces[1], self._R]], dtype=np.float64)
-        new_bounds = np.asarray([[0.0, new_interfaces[0]], [new_interfaces[0], new_interfaces[1]], [new_interfaces[1], self._R]], dtype=np.float64)
+    def _solve_bulk_profiles(self, profiles, old_interfaces, new_interfaces, interface_compositions, kinematics=None):
+        """Solves all phases after validating complete old and trial geometries."""
+        kinematics = self._step_kinematics(old_interfaces, new_interfaces) if kinematics is None else kinematics
+        self._validate_interfaces(old_interfaces, strict=True, right_boundary=kinematics.old_right_boundary)
+        self._validate_interfaces(new_interfaces, strict=True, right_boundary=kinematics.new_right_boundary)
+        old_bounds = np.asarray(
+            [[0.0, old_interfaces[0]], [old_interfaces[0], old_interfaces[1]], [old_interfaces[1], kinematics.old_right_boundary]],
+            dtype=np.float64,
+        )
+        new_bounds = np.asarray(
+            [[0.0, new_interfaces[0]], [new_interfaces[0], new_interfaces[1]], [new_interfaces[1], kinematics.new_right_boundary]],
+            dtype=np.float64,
+        )
         boundary_values = (
             (None, interface_compositions[0][0]),
             (interface_compositions[0][1], interface_compositions[1][0]),
@@ -1168,35 +1445,48 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         results = []
         for phase_index in range(3):
             left_value, right_value = boundary_values[phase_index]
+            phase_displacement = kinematics.phase_displacements[phase_index]
             if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
                 D = self._phase_uniform_diffusivity(phase_index, interface_compositions, new_interfaces)
-                result = self._solve_interval_planar(profiles[phase_index], self._grids[phase_index], old_bounds[phase_index], new_bounds[phase_index], phase_index, left_value, right_value, D)
+                result = self._solve_interval_planar(
+                    profiles[phase_index], self._grids[phase_index], old_bounds[phase_index], new_bounds[phase_index],
+                    phase_index, left_value, right_value, D, phase_frame_displacement=phase_displacement,
+                )
             elif self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_LAGGED:
                 D = self._interval_face_diffusivity(profiles[phase_index], self._grids[phase_index], phase_index, new_bounds[phase_index])
-                result = self._solve_interval_planar(profiles[phase_index], self._grids[phase_index], old_bounds[phase_index], new_bounds[phase_index], phase_index, left_value, right_value, D, validate_diffusivity=False)
+                result = self._solve_interval_planar(
+                    profiles[phase_index], self._grids[phase_index], old_bounds[phase_index], new_bounds[phase_index],
+                    phase_index, left_value, right_value, D, validate_diffusivity=False,
+                    phase_frame_displacement=phase_displacement,
+                )
             elif self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_IMPLICIT:
-                result = self._solve_interval_picard(profiles[phase_index], self._grids[phase_index], old_bounds[phase_index], new_bounds[phase_index], phase_index, left_value, right_value)
+                result = self._solve_interval_picard(
+                    profiles[phase_index], self._grids[phase_index], old_bounds[phase_index], new_bounds[phase_index],
+                    phase_index, left_value, right_value, phase_frame_displacement=phase_displacement,
+                )
             else:
                 raise ValueError(f"Unsupported bulk diffusivity mode {self.bulkDiffusivityMode}.")
             results.append(result)
         return tuple(results)
 
-    def _interface_residuals(self, old_profiles, old_interfaces, new_interfaces, interface_compositions, bulk_results):
+    def _interface_residuals(self, old_profiles, old_interfaces, new_interfaces, interface_compositions, bulk_results, kinematics=None):
         """
         Returns interface residuals from the same discrete transfers as the bulk.
 
         Endpoint inventory is represented by the trapezoidal endpoint half-cell
-        weights. Combining those endpoint inventory changes with the
-        interface-adjacent total face transfers makes the residual telescope
-        exactly with the conservative bulk cell equations.
+        weights. Each phase block is weighted by ``rho_alpha / rho_A`` before
+        combining the exact interface-adjacent transfers returned by the bulk
+        solve. Thus the two residual blocks telescope exactly with the
+        density-weighted conservative bulk cell equations.
         """
+        kinematics = self._step_kinematics(old_interfaces, new_interfaces) if kinematics is None else kinematics
         c_a_ab, c_b_ab = interface_compositions[0]
         c_b_bc, c_c_bc = interface_compositions[1]
         old_lengths = np.asarray(
             [
                 float(old_interfaces[0]),
                 float(old_interfaces[1] - old_interfaces[0]),
-                float(self._R - old_interfaces[1]),
+                float(kinematics.old_right_boundary - old_interfaces[1]),
             ],
             dtype=np.float64,
         )
@@ -1204,16 +1494,19 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             [
                 float(new_interfaces[0]),
                 float(new_interfaces[1] - new_interfaces[0]),
-                float(self._R - new_interfaces[1]),
+                float(kinematics.new_right_boundary - new_interfaces[1]),
             ],
             dtype=np.float64,
         )
-        endpoint_ab = self._endpoint_inventory_change(self._grids[0], old_profiles[0], c_a_ab, old_lengths[0], new_lengths[0], "right")
-        endpoint_ab += self._endpoint_inventory_change(self._grids[1], old_profiles[1], c_b_ab, old_lengths[1], new_lengths[1], "left")
-        endpoint_bc = self._endpoint_inventory_change(self._grids[1], old_profiles[1], c_b_bc, old_lengths[1], new_lengths[1], "right")
-        endpoint_bc += self._endpoint_inventory_change(self._grids[2], old_profiles[2], c_c_bc, old_lengths[2], new_lengths[2], "left")
-        residual_ab = endpoint_ab + bulk_results[0].right_transfer - bulk_results[1].left_transfer
-        residual_bc = endpoint_bc + bulk_results[1].right_transfer - bulk_results[2].left_transfer
+        endpoint_a_right = self._endpoint_inventory_change(self._grids[0], old_profiles[0], c_a_ab, old_lengths[0], new_lengths[0], "right")
+        endpoint_b_left = self._endpoint_inventory_change(self._grids[1], old_profiles[1], c_b_ab, old_lengths[1], new_lengths[1], "left")
+        endpoint_b_right = self._endpoint_inventory_change(self._grids[1], old_profiles[1], c_b_bc, old_lengths[1], new_lengths[1], "right")
+        endpoint_c_left = self._endpoint_inventory_change(self._grids[2], old_profiles[2], c_c_bc, old_lengths[2], new_lengths[2], "left")
+        density_a, density_b, density_c = self._normalizedPhaseMolarDensities
+        residual_ab = density_a * (endpoint_a_right + bulk_results[0].right_transfer)
+        residual_ab += density_b * (endpoint_b_left - bulk_results[1].left_transfer)
+        residual_bc = density_b * (endpoint_b_right + bulk_results[1].right_transfer)
+        residual_bc += density_c * (endpoint_c_left - bulk_results[2].left_transfer)
         return np.concatenate((residual_ab, residual_bc))
 
     def _endpoint_inventory_change(self, grid, old_profile, new_value, old_length, new_length, side):
@@ -1230,19 +1523,24 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return weight * (float(new_length) * np.asarray(new_value, dtype=np.float64) - float(old_length) * old_value)
 
     def _residual_scale(self, profiles, interfaces):
-        inventory = self.getTotalInventoryFromState(profiles, interfaces)
-        return np.maximum(np.maximum(np.repeat(np.maximum(np.abs(inventory), self._R), 2), 1e-300), 1e-300)
+        normalized_total = float(self._R0) if self._equalPhaseMolarVolumes else float(self._initialTotalAmount / self._phaseMolarDensities[0])
+        return np.full(4, max(normalized_total, 1e-300), dtype=np.float64)
 
     def _scaled_bounds(self):
         eps = 1e-14
-        return np.asarray([eps, eps, 0.0, 0.0], dtype=np.float64), np.asarray([1.0 - eps, 1.0 - eps, 1.0, 1.0], dtype=np.float64)
+        if self._equalPhaseMolarVolumes:
+            position_upper = 1.0 - eps
+        else:
+            maximum_length = float(self._initialTotalAmount / np.min(self._phaseMolarDensities))
+            position_upper = maximum_length / float(self._R0) - eps
+        return np.asarray([eps, eps, 0.0, 0.0], dtype=np.float64), np.asarray([position_upper, position_upper, 1.0, 1.0], dtype=np.float64)
 
     def _physical_to_scaled(self, interfaces, etas):
         bounds = self._eta_bounds()
         return np.asarray(
             [
-                interfaces[0] / self._R,
-                interfaces[1] / self._R,
+                interfaces[0] / self._R0,
+                interfaces[1] / self._R0,
                 (etas[0] - bounds[0][0]) / (bounds[0][1] - bounds[0][0]),
                 (etas[1] - bounds[1][0]) / (bounds[1][1] - bounds[1][0]),
             ],
@@ -1252,7 +1550,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     def _scaled_to_physical(self, x_hat):
         x_hat = np.asarray(x_hat, dtype=np.float64).reshape(4)
         bounds = self._eta_bounds()
-        interfaces = np.asarray([x_hat[0] * self._R, x_hat[1] * self._R], dtype=np.float64)
+        interfaces = np.asarray([x_hat[0] * self._R0, x_hat[1] * self._R0], dtype=np.float64)
         etas = np.asarray(
             [
                 bounds[0][0] + x_hat[2] * (bounds[0][1] - bounds[0][0]),
@@ -1266,7 +1564,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         if np.any(np.asarray(x_hat) < lower) or np.any(np.asarray(x_hat) > upper):
             return False
         interfaces, _ = self._scaled_to_physical(x_hat)
-        return interfaces[1] - interfaces[0] >= self._minimum_middle_width()
+        try:
+            right_boundary = self._right_boundary_from_interfaces(interfaces)
+            self._validate_interfaces(interfaces, strict=True, right_boundary=right_boundary)
+        except ValueError:
+            return False
+        return True
 
     def _bounded_newton_step(self, x_hat, step, lower, upper):
         step = np.asarray(step, dtype=np.float64).copy()
@@ -1285,18 +1588,26 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             elif step[i] < 0.0:
                 alpha_max = min(alpha_max, float((lower[i] - x_hat[i]) / step[i]))
         if step[0] - step[1] > 0.0:
-            gap_hat = (x_hat[1] - x_hat[0]) - self._minimum_middle_width() / self._R
+            gap_hat = (x_hat[1] - x_hat[0]) - self._minimum_middle_width(self._R0) / self._R0
             alpha_max = min(alpha_max, max(0.0, float(gap_hat / (step[0] - step[1]))))
         return step, max(0.0, alpha_max * (1.0 - 1e-12))
 
     def _evaluate_interface_candidate(self, profiles, old_interfaces, x_hat, residual_scale, dt):
         interfaces, etas = self._scaled_to_physical(x_hat)
-        interfaces = self._validate_interfaces(interfaces, strict=True)
+        kinematics = self._step_kinematics(old_interfaces, interfaces)
+        interfaces = self._validate_interfaces(interfaces, strict=True, right_boundary=kinematics.new_right_boundary)
         interface_compositions = self._interface_compositions(etas)
-        bulk_results = self._solve_bulk_profiles(profiles, old_interfaces, interfaces, interface_compositions)
+        bulk_results = self._solve_bulk_profiles(profiles, old_interfaces, interfaces, interface_compositions, kinematics=kinematics)
         candidate_profiles = tuple(result.profile for result in bulk_results)
         self._validate_candidate_profiles(candidate_profiles)
-        residual = self._interface_residuals(profiles, old_interfaces, interfaces, interface_compositions, bulk_results)
+        residual = self._interface_residuals(
+            profiles,
+            old_interfaces,
+            interfaces,
+            interface_compositions,
+            bulk_results,
+            kinematics=kinematics,
+        )
         scaled = residual / residual_scale
         return _ThreePhaseCandidate(
             x_hat=np.asarray(x_hat, dtype=np.float64).copy(),
@@ -1309,6 +1620,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             scaled_norm=float(np.max(np.abs(scaled))),
             physical_norm=float(np.max(np.abs(residual))),
             bulk_results=bulk_results,
+            kinematics=kinematics,
         )
 
     def _solve_interface_planar(self, profiles, interfaces, etas, dt):
@@ -1401,11 +1713,31 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._lastBest = best
         raise RuntimeError(f"Three-phase Illingworth interface solve failed to converge; best residual was {self._lastImplicitResidual:.3e}.")
 
-    def _accept_step_candidate(self, profiles, interfaces, etas, candidate, trial_dt, retry):
-        """Stores diagnostics and returns derivatives for an accepted implicit trial."""
+    def _store_pending_candidate(self, candidate, start_time, trial_dt):
+        """Stores an immutable-by-convention copy of a converged nonlinear candidate."""
+        right_boundary = (
+            candidate.kinematics.new_right_boundary
+            if candidate.kinematics is not None
+            else self._right_boundary_from_interfaces(candidate.interfaces)
+        )
+        self._pendingCandidate = _ThreePhasePendingState(
+            profiles=tuple(profile.copy() for profile in candidate.profiles),
+            interfaces=candidate.interfaces.copy(),
+            etas=candidate.etas.copy(),
+            right_boundary=float(right_boundary),
+            start_time=float(start_time),
+            dt=float(trial_dt),
+        )
+
+    def _accept_step_candidate(self, profiles, interfaces, etas, candidate, trial_dt, retry, start_time=None):
+        """Stores the exact pending root and returns its Euler-wrapper derivatives."""
         self._currdt = float(trial_dt)
         self._lastStepRetries = int(retry)
-        self._lastInterfaceCompositions = candidate.interface_compositions
+        self._store_pending_candidate(
+            candidate,
+            self.currentTime if start_time is None else start_time,
+            trial_dt,
+        )
         return [
             (candidate.profiles[0] - profiles[0]) / trial_dt,
             (candidate.profiles[1] - profiles[1]) / trial_dt,
@@ -1414,7 +1746,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             (candidate.etas - etas) / trial_dt,
         ]
 
-    def _try_step_retries(self, profiles, interfaces, etas, trial_dt, retry_count, retry_offset=0):
+    def _try_step_retries(self, profiles, interfaces, etas, trial_dt, retry_count, retry_offset=0, start_time=None):
         """Attempts implicit solves while shrinking ``trial_dt`` after each failed trial."""
         last_error = None
         for retry in range(int(retry_count)):
@@ -1425,7 +1757,15 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             self._currdt = trial_dt
             try:
                 candidate = self._solve_interface_planar(profiles, interfaces, etas, trial_dt)
-                return self._accept_step_candidate(profiles, interfaces, etas, candidate, trial_dt, retry_offset + retry), trial_dt, None
+                return self._accept_step_candidate(
+                    profiles,
+                    interfaces,
+                    etas,
+                    candidate,
+                    trial_dt,
+                    retry_offset + retry,
+                    start_time=start_time,
+                ), trial_dt, None
             except (RuntimeError, ValueError, ZeroDivisionError) as exc:
                 last_error = exc
                 trial_dt *= self.retryFactor
@@ -1463,6 +1803,9 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return answer.strip().lower() in {"y", "yes"}
 
     def getdXdt(self, t, xCurr):
+        self._pendingCandidate = None
+        self._terminalThinPhaseStop = False
+        self._terminalThinPhaseInfo = None
         profiles = tuple(np.asarray(xCurr[i], dtype=np.float64).reshape((-1, 2)).copy() for i in range(3))
         interfaces = self._validate_interfaces(np.asarray(xCurr[3], dtype=np.float64), strict=True)
         etas = np.asarray(xCurr[4], dtype=np.float64).reshape(2)
@@ -1472,11 +1815,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         profiles[1][-1] = interface_compositions[1][0]
         profiles[2][0] = interface_compositions[1][1]
         dt = self._compute_dt(t)
-        if self._nearFinalNoop:
-            return [np.zeros_like(profiles[0]), np.zeros_like(profiles[1]), np.zeros_like(profiles[2]), np.zeros(2), np.zeros(2)]
         trial_dt = float(dt)
-        dXdt, trial_dt, last_error = self._try_step_retries(profiles, interfaces, etas, trial_dt, self.maxStepRetries)
+        dXdt, trial_dt, last_error = self._try_step_retries(
+            profiles, interfaces, etas, trial_dt, self.maxStepRetries, start_time=t
+        )
         if dXdt is not None:
+            self._validate_pending_timestep_against_outer_minimum(t, trial_dt)
             return dXdt
         thin_phase = self._single_terminal_thin_phase(interfaces.copy())
         if thin_phase is not None:
@@ -1489,9 +1833,18 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                     trial_dt,
                     self.terminalThinPhaseExtraRetries,
                     retry_offset=self.maxStepRetries,
+                    start_time=t,
                 )
                 if dXdt is not None:
-                    if not( self._single_terminal_thin_phase(xCurr[3]+dXdt[3]*trial_dt) is not None):
+                    try:
+                        self._validate_pending_timestep_against_outer_minimum(t, trial_dt)
+                    except ValueError:
+                        self._terminalThinPhaseStop = False
+                        self._terminalThinPhaseInfo = None
+                        raise
+                    future_interfaces = xCurr[3] + dXdt[3] * trial_dt
+                    future_right = self._right_boundary_from_interfaces(future_interfaces)
+                    if not (self._single_terminal_thin_phase(future_interfaces, right_boundary=future_right) is not None):
                         raise ValueError(f"Expecting next interfaces to also satisify _single_terminal_thin_phase() but got: {(xCurr[3]+dXdt[3]*trial_dt).tolist()}")
                     self._terminalThinPhaseStop = True
                     self._terminalThinPhaseInfo = {
@@ -1518,15 +1871,13 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             return self._currdt
         return self.timeStep
 
-    def postProcess(self, time, x):
-        if self._nearFinalNoop:
-            self.currentTime = time
-            self._nearFinalNoop = False
-            return self.getCurrentX(), True
-        GenericModel.postProcess(self, time, x)
+    def _prepare_accepted_state(self, x):
+        """Constructs and validates every derived output before accepted-state mutation."""
         profiles = tuple(np.asarray(x[i], dtype=np.float64).reshape((-1, 2)).copy() for i in range(3))
-        interfaces = self._validate_interfaces(np.asarray(x[3], dtype=np.float64), strict=True)
-        etas = np.asarray(x[4], dtype=np.float64).reshape(2)
+        interfaces = np.asarray(x[3], dtype=np.float64).reshape(2).copy()
+        right_boundary = self._right_boundary_from_interfaces(interfaces)
+        interfaces = self._validate_interfaces(interfaces, strict=True, right_boundary=right_boundary)
+        etas = np.asarray(x[4], dtype=np.float64).reshape(2).copy()
         interface_compositions = self._interface_compositions(etas)
         profiles[0][-1] = interface_compositions[0][0]
         profiles[1][0] = interface_compositions[0][1]
@@ -1534,20 +1885,227 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         profiles[2][0] = interface_compositions[1][1]
         for i, profile in enumerate(profiles):
             self._validate_profile_compositions(profile, f"transformed profile {i}")
-        physical = self._reconstruct_physical_profile(profiles, interfaces)
-        self.data.record(time, physical)
-        self.interfaceData.record(time, interfaces)
-        self.etaData.record(time, etas)
-        if self.recordPqData:
-            for history, profile in zip(self.profileData, profiles):
-                history.record(time, profile)
-        self.inventoryData.record(time, self.getTotalInventoryFromState(profiles, interfaces))
+        fixed_mesh_profile = self._reconstruct_physical_profile(
+            profiles, interfaces, right_boundary=right_boundary
+        )
+        legacy_inventory = self.getTotalInventoryFromState(
+            profiles, interfaces, right_boundary=right_boundary
+        )
+        if self._hasExplicitPhaseMolarVolumes:
+            molar_inventories = self._get_all_component_moles_from_state(
+                profiles, interfaces, right_boundary
+            )
+            total_moles = self._get_total_substitutional_moles_from_geometry(
+                interfaces, right_boundary
+            )
+            dependent_closure_error = self._dependent_mole_closure_error(
+                molar_inventories, total_moles
+            )
+            scale = max(abs(total_moles), 1.0)
+            if not np.isclose(np.sum(molar_inventories), total_moles, rtol=5e-13, atol=5e-15 * scale):
+                raise RuntimeError("Direct component moles do not sum to the geometric substitutional total.")
+        else:
+            molar_inventories = np.full(3, np.nan, dtype=np.float64)
+            total_moles = np.nan
+            dependent_closure_error = np.nan
+        return _ThreePhaseAcceptedState(
+            profiles=profiles,
+            interfaces=interfaces,
+            etas=etas,
+            right_boundary=right_boundary,
+            interface_compositions=interface_compositions,
+            fixed_mesh_profile=fixed_mesh_profile,
+            legacy_inventory=legacy_inventory,
+            molar_inventories=molar_inventories,
+            total_moles=total_moles,
+            dependent_closure_error=dependent_closure_error,
+        )
 
-        self._interfaces_old = self._interfaces_curr.copy()
-        self._profiles_curr = tuple(profile.copy() for profile in profiles)
-        self._interfaces_curr = interfaces.copy()
-        self._etas_curr = etas.copy()
-        self.updateCoupledModels()
+    def _history_record_target(self, history):
+        """Returns the row a normal history record will overwrite, or ``None``."""
+        if history.recordInterval > 0:
+            if history.currentIndex % history.recordInterval != 0:
+                return None
+            return int(history.currentIndex / history.recordInterval)
+        return int(history.N)
+
+    def _ensure_history_record_capacity(self, history, target):
+        """Ensures one history target row exists before an atomic record sequence."""
+        if target is None or target < history._time.shape[0]:
+            return
+        growth = max(int(getattr(history, "batchSize", 1000)), target + 1 - history._time.shape[0])
+        history._time = np.pad(history._time, (0, growth))
+        history._y = np.pad(history._y, ((0, growth), *[(0, 0) for _ in range(history._y.ndim - 1)]))
+
+    def _record_histories_atomically(self, time, records):
+        """Records synchronized histories and restores rows and capacity on failure."""
+        prepared = []
+        for history, value in records:
+            values = np.asarray(value, dtype=np.float64)
+            expected_shape = getattr(history, "shape", getattr(history, "yShape", ()))
+            if values.shape != tuple(expected_shape):
+                raise ValueError(f"Expected history value with shape {tuple(expected_shape)}, got {values.shape}.")
+            target = self._history_record_target(history)
+            prepared.append((history, value, target))
+
+        snapshots = []
+        for history, _, target in prepared:
+            old_capacity = int(history._time.shape[0])
+            row = None if target is None or target >= old_capacity else history._y[target].copy()
+            row_time = None if target is None or target >= old_capacity else float(history._time[target])
+            current_y = np.asarray(history.currentY).copy() if np.ndim(history.currentY) else float(history.currentY)
+            snapshots.append(
+                (
+                    history,
+                    target,
+                    row,
+                    row_time,
+                    history.currentIndex,
+                    history.N,
+                    current_y,
+                    history.currentTime,
+                    old_capacity,
+                )
+            )
+        try:
+            for history, _, target in prepared:
+                self._ensure_history_record_capacity(history, target)
+            for history, value, _ in prepared:
+                history.record(time, value)
+        except Exception:
+            self._restore_history_snapshots(snapshots)
+            raise
+        return snapshots
+
+    def _restore_history_snapshots(self, snapshots):
+        """Restores metadata, overwritten rows, and pretransaction capacity."""
+        for history, target, row, row_time, current_index, index, current_y, current_time, old_capacity in snapshots:
+            if target is not None and target < old_capacity:
+                history._y[target] = row
+                history._time[target] = row_time
+            if history._time.shape[0] != old_capacity:
+                history._time = history._time[:old_capacity].copy()
+                history._y = history._y[:old_capacity].copy()
+            history.currentIndex = current_index
+            history.N = index
+            history.currentY = current_y
+            history.currentTime = current_time
+
+    def _commit_accepted_state(self, time, accepted):
+        """Commits one prepared state and all synchronized histories as one transaction."""
+        records = [
+            (self.data, accepted.fixed_mesh_profile),
+            (self.interfaceData, accepted.interfaces),
+            (self.etaData, accepted.etas),
+            (self.rightBoundaryData, accepted.right_boundary),
+            (self.inventoryData, accepted.legacy_inventory),
+            (self.molarInventoryData, accepted.molar_inventories),
+            (self.totalMolesData, accepted.total_moles),
+            (self.dependentMoleClosureErrorData, accepted.dependent_closure_error),
+        ]
+        if self.recordPqData:
+            records.extend(zip(self.profileData, accepted.profiles))
+        previous_state = (
+            self._profiles_curr,
+            self._interfaces_old,
+            self._interfaces_curr,
+            self._etas_curr,
+            self._R,
+            self._lastInterfaceCompositions,
+            self.currentTime,
+        )
+        snapshots = self._record_histories_atomically(time, records)
+        try:
+            previous_interfaces = self._interfaces_curr.copy()
+            self._profiles_curr = tuple(profile.copy() for profile in accepted.profiles)
+            self._interfaces_old = previous_interfaces
+            self._interfaces_curr = accepted.interfaces.copy()
+            self._etas_curr = accepted.etas.copy()
+            self._R = float(accepted.right_boundary)
+            self._lastInterfaceCompositions = accepted.interface_compositions
+            self.currentTime = float(time)
+            self.updateCoupledModels()
+        except Exception:
+            self._restore_history_snapshots(snapshots)
+            (
+                self._profiles_curr,
+                self._interfaces_old,
+                self._interfaces_curr,
+                self._etas_curr,
+                self._R,
+                self._lastInterfaceCompositions,
+                self.currentTime,
+            ) = previous_state
+            raise
+
+    def _verify_pending_candidate(self, time, x):
+        """
+        Verifies that the outer Euler update reproduces the exact pending root.
+
+        The nonlinear candidate remains separate from accepted model state until
+        this check succeeds. This prevents an outer timestep clamp or correction
+        from committing a state for which the interface equations were not solved.
+        """
+        pending = self._pendingCandidate
+        if pending is None:
+            raise RuntimeError(
+                "Cannot commit a three-phase state without a pending converged nonlinear candidate."
+            )
+        expected_time = pending.start_time + pending.dt
+        time_scale = max(1.0, abs(float(time)), abs(expected_time), abs(pending.start_time))
+        time_atol = 64.0 * np.finfo(float).eps * time_scale
+        mismatches = []
+        if not np.isclose(self.currentTime, pending.start_time, rtol=2e-13, atol=time_atol):
+            mismatches.append("accepted start time")
+        if not np.isclose(float(time), expected_time, rtol=2e-13, atol=time_atol):
+            mismatches.append("timestep")
+
+        try:
+            profiles = tuple(np.asarray(x[i], dtype=np.float64).reshape((-1, 2)) for i in range(3))
+            interfaces = np.asarray(x[3], dtype=np.float64).reshape(2)
+            etas = np.asarray(x[4], dtype=np.float64).reshape(2)
+        except (IndexError, TypeError, ValueError) as exc:
+            self._pendingCandidate = None
+            self._terminalThinPhaseStop = False
+            self._terminalThinPhaseInfo = None
+            raise RuntimeError(
+                "Outer solver state does not have the shape of the pending three-phase nonlinear candidate."
+            ) from exc
+
+        state_atol = 64.0 * np.finfo(float).eps
+        for phase, actual, expected in zip(self.phases, profiles, pending.profiles):
+            if actual.shape != expected.shape or not np.allclose(
+                actual, expected, rtol=2e-13, atol=state_atol
+            ):
+                mismatches.append(f"{phase} profile")
+        if not np.allclose(interfaces, pending.interfaces, rtol=2e-13, atol=state_atol):
+            mismatches.append("interfaces")
+        if not np.allclose(etas, pending.etas, rtol=2e-13, atol=state_atol):
+            mismatches.append("etas")
+        wrapper_right = self._right_boundary_from_interfaces(interfaces)
+        if not np.isclose(wrapper_right, pending.right_boundary, rtol=2e-13, atol=state_atol):
+            mismatches.append("right boundary")
+        if mismatches:
+            self._pendingCandidate = None
+            self._terminalThinPhaseStop = False
+            self._terminalThinPhaseInfo = None
+            raise RuntimeError(
+                "Outer solver update does not match the pending converged three-phase candidate "
+                f"({', '.join(mismatches)}); accepted state was not advanced."
+            )
+        return pending
+
+    def postProcess(self, time, x):
+        self._verify_pending_candidate(time, x)
+        try:
+            accepted = self._prepare_accepted_state(x)
+            self._commit_accepted_state(time, accepted)
+        except Exception:
+            self._terminalThinPhaseStop = False
+            self._terminalThinPhaseInfo = None
+            raise
+        finally:
+            self._pendingCandidate = None
         if self._terminalThinPhaseStop:
             self.finalTime = time
             self._terminalThinPhaseStop = False
@@ -1555,12 +2113,25 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return self.getCurrentX(), False
 
     def postSolve(self):
-        self.data.finalize()
-        self.interfaceData.finalize()
-        self.etaData.finalize()
-        self.inventoryData.finalize()
+        histories = [
+            self.data,
+            self.interfaceData,
+            self.etaData,
+            self.rightBoundaryData,
+            self.inventoryData,
+            self.molarInventoryData,
+            self.totalMolesData,
+            self.dependentMoleClosureErrorData,
+        ]
         if self.profileData is not None:
-            for history in self.profileData:
+            histories.extend(self.profileData)
+        for history in histories:
+            if history.recordInterval > 0 and np.isclose(
+                history._time[history.N], history.currentTime, rtol=0.0, atol=1e-14
+            ):
+                history._y = history._y[: history.N + 1]
+                history._time = history._time[: history.N + 1]
+            else:
                 history.finalize()
 
     def reset(self):
@@ -1569,11 +2140,19 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self.interfaceData.record(0, self.initialInterfacePositions)
         self.etaData.reset()
         self.inventoryData.reset()
+        self.rightBoundaryData.reset()
+        self.molarInventoryData.reset()
+        self.totalMolesData.reset()
+        self.dependentMoleClosureErrorData.reset()
         self.profileData = None
         self._currdt = np.inf
+        self._outerMinTimeStep = 0.0
+        self._outerMaxTimeStep = np.inf
+        self._solveMinDtFrac = 1e-8
+        self._solveMaxDtFrac = 1.0
+        self._pendingCandidate = None
         self._semiLogTimes = None
         self._semiLogNextIndex = 0
-        self._nearFinalNoop = False
         self._lastStepRetries = 0
         self._lastImplicitIterations = 0
         self._lastImplicitResidual = np.nan
@@ -1584,8 +2163,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._terminalThinPhaseStop = False
         self._terminalThinPhaseInfo = None
         self._initialInventory = None
+        self._initialMolarInventories = None
+        self._initialTotalMoles = None
         self._z = None
         self._R = None
+        self._R0 = None
+        self._initialTotalAmount = None
         self._grids = None
         self._profiles_curr = None
         self._interfaces_curr = None
@@ -1606,41 +2189,221 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
 
     def getTransformedState(self, time=None):
         """Returns the three recorded transformed phase profiles."""
+        if time is None and self._profiles_curr is not None:
+            return tuple(profile.copy() for profile in self._profiles_curr)
         if self.profileData is None:
             raise ValueError("Transformed profile history is not available; set record_pq_data=True.")
         return tuple(history.y(time) for history in self.profileData)
 
-    def getTotalInventoryFromState(self, profiles, interfaces):
-        """Returns componentwise inventory for the three transformed intervals."""
-        return integrate_planar_transformed_profile_sequence(profiles, interfaces, self._R, self._grids)
+    def getRightBoundary(self, time=None):
+        """Returns the accepted right material-boundary position."""
+        if time is None:
+            return float(self._R)
+        return self.rightBoundaryData.y(time)
+
+    def getTotalInventoryFromState(self, profiles, interfaces, right_boundary=None):
+        """
+        Returns the legacy length-weighted independent-component inventory.
+
+        ``right_boundary`` permits pure candidate evaluation without changing
+        the accepted ``_R``. No phase molar-density weighting is applied.
+        """
+        domain_length = float(self._R if right_boundary is None else right_boundary)
+        return integrate_planar_transformed_profile_sequence(profiles, interfaces, domain_length, self._grids)
 
     def getTotalInventory(self, time=None):
+        """Returns the legacy inventory without applying phase molar densities."""
         if time is None:
             return self.getTotalInventoryFromState(self._profiles_curr, self._interfaces_curr)
         return self.inventoryData.y(time)
 
     def getTotalMass(self, time=None):
+        """Returns the legacy composition-length inventory."""
         return self.getTotalInventory(time=time)
+
+    def _require_explicit_phase_molar_volumes(self):
+        """Rejects physical-mole queries when the molar-volume scale is arbitrary."""
+        if not self._hasExplicitPhaseMolarVolumes:
+            raise ValueError("Physical mole APIs require explicit phase_molar_volumes.")
+
+    def _get_all_component_moles_from_state(self, profiles, interfaces, right_boundary):
+        """Directly integrates dependent and independent component moles for explicit geometry."""
+        self._require_explicit_phase_molar_volumes()
+        return integrate_planar_transformed_molar_inventories(
+            profiles,
+            interfaces,
+            float(right_boundary),
+            self._grids,
+            self._phaseMolarVolumes,
+        )
+
+    def _get_total_substitutional_moles_from_geometry(self, interfaces, right_boundary):
+        """Returns total substitutional moles per unit area from phase widths and densities."""
+        self._require_explicit_phase_molar_volumes()
+        widths = self._phase_widths(interfaces, right_boundary=right_boundary)
+        return float(np.dot(self._phaseMolarDensities, widths))
+
+    def _dependent_mole_closure_error(self, molar_inventories, total_moles):
+        """Returns direct dependent moles minus ``Ntot - N1 - N2``."""
+        values = np.asarray(molar_inventories, dtype=np.float64).reshape(3)
+        return float(values[0] - (float(total_moles) - values[1] - values[2]))
+
+    def getAllComponentMoles(self, time=None):
+        """Returns directly integrated ``[N0, N1, N2]`` in mol/m^2."""
+        self._require_explicit_phase_molar_volumes()
+        if time is None:
+            return self._get_all_component_moles_from_state(
+                self._profiles_curr, self._interfaces_curr, self._R
+            )
+        return self.molarInventoryData.y(time)
+
+    def getMolarInventories(self, time=None):
+        """Returns all directly integrated component inventories in mol/m^2."""
+        return self.getAllComponentMoles(time=time)
+
+    def getIndependentComponentMoles(self, time=None):
+        """Returns directly integrated ``[N1, N2]`` in mol/m^2."""
+        return self.getAllComponentMoles(time=time)[1:]
+
+    def getTotalSubstitutionalMoles(self, time=None):
+        """Returns geometric total substitutional inventory in mol/m^2."""
+        self._require_explicit_phase_molar_volumes()
+        if time is None:
+            return self._get_total_substitutional_moles_from_geometry(
+                self._interfaces_curr, self._R
+            )
+        return self.totalMolesData.y(time)
+
+    def getDependentMoleClosureError(self, time=None):
+        """Returns ``N0_direct - (Ntot - N1 - N2)`` in mol/m^2."""
+        self._require_explicit_phase_molar_volumes()
+        if time is None:
+            return self._dependent_mole_closure_error(
+                self.getAllComponentMoles(), self.getTotalSubstitutionalMoles()
+            )
+        return self.dependentMoleClosureErrorData.y(time)
+
+    def getMolarConservationDiagnostics(self, time=None):
+        """
+        Returns signed and absolute physical-mole conservation diagnostics.
+
+        The three component inventories are independently integrated from
+        their mole-fraction fields. Physical units are available only when
+        ``phase_molar_volumes`` was explicitly supplied.
+        """
+        self._require_explicit_phase_molar_volumes()
+        if self._initialMolarInventories is None or self._initialTotalMoles is None:
+            raise ValueError("Model must be setup before molar conservation diagnostics.")
+        component_moles = self.getAllComponentMoles(time=time)
+        component_drift = component_moles - self._initialMolarInventories
+        total_moles = self.getTotalSubstitutionalMoles(time=time)
+        total_drift = float(total_moles - self._initialTotalMoles)
+        closure_error = float(self.getDependentMoleClosureError(time=time))
+        diagnostic_time = float(self.currentTime if time is None else time)
+        return {
+            "time": diagnostic_time,
+            "component_moles": component_moles.copy(),
+            "initial_component_moles": self._initialMolarInventories.copy(),
+            "component_drift": component_drift.copy(),
+            "absolute_component_drift": np.abs(component_drift),
+            "N0_drift": float(component_drift[0]),
+            "N1_drift": float(component_drift[1]),
+            "N2_drift": float(component_drift[2]),
+            "absolute_N0_drift": float(abs(component_drift[0])),
+            "absolute_N1_drift": float(abs(component_drift[1])),
+            "absolute_N2_drift": float(abs(component_drift[2])),
+            "total_substitutional_moles": float(total_moles),
+            "initial_total_substitutional_moles": float(self._initialTotalMoles),
+            "total_substitutional_mole_drift": total_drift,
+            "absolute_total_substitutional_mole_drift": abs(total_drift),
+            "dependent_component_closure_error": closure_error,
+            "absolute_dependent_component_closure_error": abs(closure_error),
+        }
+
+    def getPhysicalCoordinates(self, time=None):
+        """Returns authoritative phase-wise physical coordinates spanning ``[0, R(t)]``."""
+        if time is None:
+            interfaces = self._interfaces_curr
+            right_boundary = self._R
+        else:
+            interfaces = self.getInterfacePositions(time)
+            right_boundary = self.getRightBoundary(time)
+        boundaries = np.concatenate(([0.0], np.asarray(interfaces, dtype=np.float64), [right_boundary]))
+        return tuple(
+            float(left) + (float(right) - float(left)) * grid
+            for grid, left, right in zip(self._grids, boundaries[:-1], boundaries[1:])
+        )
+
+    def getPhysicalPhaseProfiles(self, time=None):
+        """
+        Returns ``(coordinates, compositions)`` for each complete moving phase.
+
+        Each phase retains its own interface endpoint, so discontinuous left
+        and right equilibrium compositions are not averaged together.
+        Historical requests require an exactly recorded transformed state.
+        """
+        coordinates = self.getPhysicalCoordinates(time=time)
+        profiles = self.getTransformedState(time=time)
+        out = []
+        for phase_coordinates, independent in zip(coordinates, profiles):
+            dependent = 1.0 - np.sum(independent, axis=1)
+            out.append((phase_coordinates.copy(), np.column_stack((dependent, independent))))
+        return tuple(out)
+
+    def getFixedPhysicalCoordinates(self):
+        """Returns the immutable coordinates paired with the legacy fixed-mesh data snapshots."""
+        return self._z.copy()
+
+    def _fixed_mesh_profile(self, time=None):
+        """Returns a safe fixed-mesh snapshot, guarding NaN interpolation after contraction."""
+        if time is None:
+            return np.asarray(self.data.currentY, dtype=np.float64).copy()
+        recorded_time = self.data._time[: self.data.N + 1]
+        matches = np.flatnonzero(np.isclose(recorded_time, float(time), rtol=0.0, atol=1e-14))
+        if len(matches):
+            return np.asarray(self.data._y[matches[-1]], dtype=np.float64).copy()
+        if not self._equalPhaseMolarVolumes:
+            raise ValueError(
+                "Fixed-mesh interpolation is unavailable for a moving unequal-volume domain; "
+                "request an exact recorded time or use getPhysicalPhaseProfiles()."
+            )
+        if float(time) <= recorded_time[0] or self.data.N == 0:
+            return np.asarray(self.data._y[0], dtype=np.float64).copy()
+        if float(time) >= recorded_time[-1]:
+            return np.asarray(self.data._y[self.data.N], dtype=np.float64).copy()
+        upper = int(np.searchsorted(recorded_time, float(time), side="right"))
+        lower = upper - 1
+        fraction = (float(time) - recorded_time[lower]) / (recorded_time[upper] - recorded_time[lower])
+        return self.data._y[lower] + fraction * (self.data._y[upper] - self.data._y[lower])
 
     def getCompositions(self, time=None):
         """
-        Returns full ternary mole fractions on the physical mesh.
+        Returns full ternary mole fractions paired with the immutable fixed mesh.
 
         The stored response profile contains the two independent substitutional
-        components; the dependent component is reconstructed from the simplex
-        constraint.
+        components. Contracted-out nodes are NaN. For moving unequal-volume
+        domains, non-recorded-time interpolation is rejected because a later
+        NaN snapshot cannot be safely interpolated at a formerly valid node.
         """
-        independent = np.asarray(self.data.y(time), dtype=np.float64)
+        independent = self._fixed_mesh_profile(time=time)
         dependent = 1.0 - np.sum(independent, axis=1)
         return np.column_stack((dependent, independent))
 
+    def getFluxes(self, t=None, xCurr=None):
+        """Rejects the inherited fixed-mesh flux API for the transformed ALE formulation."""
+        raise NotImplementedError(
+            "getFluxes is not defined for the transformed three-phase ALE solver; "
+            "the conservative face transfers are candidate-local numerical quantities."
+        )
+
     def checkConservation(self, tolerance: float, time=None):
         """
-        Checks componentwise transformed-inventory drift from the initial value.
+        Checks legacy componentwise composition-length drift from the initial value.
 
         The return value is the absolute drift vector for the two independent
         components. A warning is emitted when any component exceeds
-        ``tolerance``.
+        ``tolerance``. This legacy quantity is not the physical conservation
+        diagnostic for unequal phase molar volumes.
         """
         if self._initialInventory is None:
             raise ValueError("Model must be setup before conservation checks.")
@@ -1653,8 +2416,28 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             )
         return drift
 
+    def checkMolarConservation(self, tolerance: float, time=None):
+        """Checks direct all-component physical-mole drift from the initial state."""
+        diagnostics = self.getMolarConservationDiagnostics(time=time)
+        drift = diagnostics["absolute_component_drift"]
+        total_drift = diagnostics["absolute_total_substitutional_mole_drift"]
+        closure_error = diagnostics["absolute_dependent_component_closure_error"]
+        if np.any(drift > float(tolerance)) or total_drift > float(tolerance) or closure_error > float(tolerance):
+            warnings.warn(
+                "Three-phase physical molar conservation tolerance was exceeded: "
+                f"component drift={drift}, total drift={total_drift:.3e}, closure error={closure_error:.3e}.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return drift
+
     def toDict(self):
-        """Converts solved three-phase Illingworth histories to a restart dictionary."""
+        """
+        Converts solved histories to an output dictionary with moving-domain metadata.
+
+        The dictionary is sufficient to interpret recorded geometry and molar
+        diagnostics, but it is not a complete restart representation.
+        """
         data = super().toDict()
         data.update(
             {
@@ -1663,11 +2446,37 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                 "inventory": self.inventoryData._y,
                 "interface_interval": self.interfaceData.recordInterval,
                 "interface_index": self.interfaceData.N,
+                "moving_domain_output_version": np.asarray(1, dtype=np.int64),
+                "moving_domain_restart_supported": np.asarray(False),
+                "phase_molar_volumes": self._phaseMolarVolumes.copy(),
+                "phase_molar_volumes_explicit": np.asarray(self._hasExplicitPhaseMolarVolumes),
+                "initial_right_boundary": np.asarray(self._R0, dtype=np.float64),
+                "right_boundary_history": self.rightBoundaryData._y[: self.rightBoundaryData.N + 1].copy(),
+                "right_boundary_time": self.rightBoundaryData._time[: self.rightBoundaryData.N + 1].copy(),
+                "molar_inventory_history": self.molarInventoryData._y[: self.molarInventoryData.N + 1].copy(),
+                "molar_inventory_time": self.molarInventoryData._time[: self.molarInventoryData.N + 1].copy(),
+                "total_substitutional_moles_history": self.totalMolesData._y[: self.totalMolesData.N + 1].copy(),
+                "dependent_mole_closure_error_history": self.dependentMoleClosureErrorData._y[
+                    : self.dependentMoleClosureErrorData.N + 1
+                ].copy(),
+                "fixed_mesh_coordinate_semantics": np.asarray("laboratory_sampling_coordinates"),
+                "moving_profile_coordinate_semantics": np.asarray("phasewise_physical_coordinates"),
             }
         )
+        if self._grids is not None:
+            for phase_index, grid in enumerate(self._grids):
+                data[f"transformed_grid_{phase_index}"] = np.asarray(grid, dtype=np.float64).copy()
         if self.profileData is not None:
             data["profiles"] = np.asarray([history._y for history in self.profileData], dtype=object)
         return data
+
+    @classmethod
+    def fromDict(cls, data):
+        """Rejects restart because output dictionaries do not restore the full accepted state."""
+        raise NotImplementedError(
+            "Three-phase Illingworth output files cannot be restarted because deserialization "
+            "does not reconstruct the complete nonlinear accepted state."
+        )
 
 
     ''' Plotting functions for diagnostics '''
@@ -1678,27 +2487,38 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             raise ValueError(f"{data._y[data.N]}==0 or {data._y[data.N+1]}!=0")
 
     def plot_latestCompProfile(self):
+        """Plots independent components on complete phase-wise physical coordinates."""
         import matplotlib.pyplot as plt
-        self.confirmLastRecordedIndex(self.data)
-        self.confirmLastRecordedIndex(self.interfaceData)
-        y = self.data._y[self.interfaceData.N]
-        z_um = self._z * 1.0e6
+        phase_profiles = self.getPhysicalPhaseProfiles()
         fig, ax = plt.subplots(figsize=(6, 4))
         for i, element in enumerate(self.elements):
-            ax.plot(z_um, y[:, i], label=f"X({element})")
-        for position in self.interfaceData._y[self.interfaceData.N]:
+            for phase_index, (coordinates, compositions) in enumerate(phase_profiles):
+                ax.plot(
+                    coordinates * 1.0e6,
+                    compositions[:, i + 1],
+                    label=f"X({element})" if phase_index == 0 else None,
+                )
+        for position in self.getInterfacePositions():
             ax.axvline(position * 1.0e6, color="0.35", linestyle="--", linewidth=1)
         ax.set_xlabel("Distance (um)")
         ax.set_ylabel("Mole fraction")
+        ax.legend()
+        fig.tight_layout()
         plt.show(block=False)
         return fig, ax
 
     def plot_phaseWidths_vs_time(self):
+        """Plots recorded phase widths using the historical moving right boundary."""
         import matplotlib.pyplot as plt
-        self.confirmLastRecordedIndex(self.interfaceData)
-        y = self.interfaceData._y[:self.interfaceData.N+1]
-        widths = np.column_stack((y[:, 0], y[:, 1] - y[:, 0], self._R - y[:, 1]))
-        time=self.interfaceData._time[:self.interfaceData.N+1]
+        count = self.interfaceData.N + 1
+        y = self.interfaceData._y[:count]
+        right = self.rightBoundaryData._y[:count]
+        time = self.interfaceData._time[:count]
+        if self.rightBoundaryData.N + 1 != count or not np.array_equal(
+            self.rightBoundaryData._time[:count], time
+        ):
+            raise RuntimeError("Interface and right-boundary histories are not synchronized.")
+        widths = np.column_stack((y[:, 0], y[:, 1] - y[:, 0], right - y[:, 1]))
         fig, ax = plt.subplots(figsize=(6, 4))
         for i, phase in enumerate(self.phases):
             ax.plot(time, widths[:, i], label=f"{phase} width")
