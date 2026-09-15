@@ -25,6 +25,19 @@ from examples.ThermoCalc.training_data import (
 )
 
 
+def _fecrni_config(**overrides):
+    """Builds the explicit Fe-Cr-Ni configuration exercised by adapter tests."""
+    values = {
+        "thermodynamic_database": "TCFE9",
+        "kinetic_database": "MOBFE4",
+        "elements": ("FE", "CR", "NI"),
+        "phases": ("BCC_A2", "FCC_A1"),
+        "reference_element": "FE",
+    }
+    values.update(overrides)
+    return ThermoCalcConfig(**values)
+
+
 class FakeThermoCalcBackend:
     def __init__(self, fail_once_group=None):
         self.config = None
@@ -188,7 +201,7 @@ class FakeTCPythonSetup:
 
 
 def test_composition_closure_and_validation():
-    config = ThermoCalcConfig()
+    config = _fecrni_config()
 
     assert_allclose(validate_independent_composition([0.3, 0.2], config), [0.3, 0.2])
     assert_allclose(independent_to_full_composition([0.3, 0.2], config), [0.5, 0.3, 0.2])
@@ -202,7 +215,7 @@ def test_composition_closure_and_validation():
 
 
 def test_phase_selection_defaults_to_thermocalc_default_phases():
-    config = ThermoCalcConfig()
+    config = _fecrni_config()
     backend = _TCPythonBackend()
     backend._setup = FakeTCPythonSetup()
     backend._config = config
@@ -219,7 +232,7 @@ def test_phase_selection_defaults_to_thermocalc_default_phases():
 
 
 def test_phase_selection_can_restrict_to_configured_phases():
-    config = ThermoCalcConfig(use_default_phases=False)
+    config = _fecrni_config(use_default_phases=False)
     backend = _TCPythonBackend()
     backend._setup = FakeTCPythonSetup()
     backend._config = config
@@ -231,7 +244,7 @@ def test_phase_selection_can_restrict_to_configured_phases():
 
 
 def test_global_minimization_grid_points_are_applied_to_calculations():
-    config = ThermoCalcConfig(global_minimization_max_grid_points=2500)
+    config = _fecrni_config(global_minimization_max_grid_points=2500)
     backend = _TCPythonBackend()
     backend._setup = FakeTCPythonSetup()
     backend._config = config
@@ -246,11 +259,11 @@ def test_global_minimization_grid_points_are_applied_to_calculations():
 
 def test_global_minimization_grid_points_must_be_positive():
     with pytest.raises(ThermoCalcInputError, match="global_minimization_max_grid_points"):
-        ThermoCalcConfig(global_minimization_max_grid_points=0)
+        _fecrni_config(global_minimization_max_grid_points=0)
 
 
 def test_driving_force_conversion_and_default_phase():
-    therm = TCPythonThermodynamics(backend=FakeThermoCalcBackend())
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=FakeThermoCalcBackend())
 
     dg, xp = therm.getDrivingForce([0.3, 0.2], 1000.0)
 
@@ -259,7 +272,7 @@ def test_driving_force_conversion_and_default_phase():
 
 
 def test_diffusion_shapes_and_element_ordering():
-    therm = TCPythonThermodynamics(backend=FakeThermoCalcBackend())
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=FakeThermoCalcBackend())
 
     dnkj = therm.getInterdiffusivity([[0.3, 0.2], [0.35, 0.1]], 1373.0, phase="BCC_A2")
     tracer = therm.getTracerDiffusivity([0.3, 0.2], 1373.0, phase="BCC_A2")
@@ -271,7 +284,7 @@ def test_diffusion_shapes_and_element_ordering():
 
 
 def test_planar_tie_line_metadata_and_gextra_rejection():
-    therm = TCPythonThermodynamics(backend=FakeThermoCalcBackend())
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=FakeThermoCalcBackend())
 
     x_alpha, x_beta, metadata = therm.getInterfacialComposition([0.3, 0.2], 1373.0, returnMeta=True)
 
@@ -284,7 +297,7 @@ def test_planar_tie_line_metadata_and_gextra_rejection():
 
 def test_default_remove_cache_is_configurable_per_adapter():
     backend = FakeThermoCalcBackend()
-    therm = TCPythonThermodynamics(backend=backend, default_remove_cache=False)
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=backend, default_remove_cache=False)
 
     first = therm.getEquilibriumData([0.3, 0.2], 1373.0)
     second = therm.getEquilibriumData([0.3, 0.2], 1373.0)
@@ -297,7 +310,7 @@ def test_default_remove_cache_is_configurable_per_adapter():
 
 def test_checkpoint_resume_and_manifest_roundtrip():
     backend = FakeThermoCalcBackend(fail_once_group="equilibrium")
-    therm = TCPythonThermodynamics(backend=backend)
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=backend)
     prefix = Path("examples") / "ThermoCalc" / "outputs" / "test_tc_dataset"
 
     dataset = sample_training_data(
@@ -322,7 +335,7 @@ def test_checkpoint_resume_and_manifest_roundtrip():
 
 
 def test_demo_grid_size_and_order():
-    grid = make_fecrni_demo_grid()
+    grid = make_fecrni_demo_grid(config=_fecrni_config())
 
     assert grid.shape == (25, 2)
     assert np.all(grid[:, 0] >= 0.05)
@@ -330,7 +343,7 @@ def test_demo_grid_size_and_order():
 
 
 def test_build_moving_boundary_surrogate_from_adapter():
-    therm = TCPythonThermodynamics(backend=FakeThermoCalcBackend())
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=FakeThermoCalcBackend())
     path = Path("examples") / "ThermoCalc" / "outputs" / "test_mb_surrogate.npz"
 
     surrogate = build_moving_boundary_surrogate(
@@ -358,7 +371,7 @@ def test_live_tc_python_one_point():
     if not bool(int(__import__("os").environ.get("KAWIN_TC_PYTHON_LIVE", "0"))):
         pytest.skip("Set KAWIN_TC_PYTHON_LIVE=1 to run Thermo-Calc license/database tests.")
 
-    therm = TCPythonThermodynamics()
+    therm = TCPythonThermodynamics(config=_fecrni_config())
     with therm:
         dg, xp = therm.getDrivingForce([0.38, 0.001], 1373.0)
         dnkj = therm.getInterdiffusivity([0.38, 0.001], 1373.0, phase="BCC_A2")
