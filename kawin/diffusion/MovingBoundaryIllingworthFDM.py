@@ -19,17 +19,7 @@ def _loge_arange(start, stop, log_step):
     logs = np.arange(np.log(start), np.log(stop), log_step)
     return np.exp(logs)
 
-def debugInPlace():
-    try:
-        import debugpy
-        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-        debugpy.listen(5678)
-        print("Waiting for debugger attach")
-        debugpy.wait_for_client()
-        debugpy.breakpoint()
-        print('break on this line')
-    except:
-        pass
+from examples.debugInPlace import debugInPlace
 
 class _ScalarHistory:
     def __init__(self, record: bool | int = False):

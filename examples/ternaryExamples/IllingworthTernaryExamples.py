@@ -1350,18 +1350,8 @@ def run_diffusivity_comparison_demo(
 
 
 if __name__ == "__main__":
-#     def debugInPlace():
-#         try:
-#             import debugpy
-#             # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-#             debugpy.listen(5678)
-#             print("Waiting for debugger attach")
-#             debugpy.wait_for_client()
-#             debugpy.breakpoint()
-#             print('break on this line')
-#         except:
-#             pass
-#     debugInPlace()
+    # from examples.debugInPlace import debugInPlace
+    # debugInPlace()
     run_results = run_interactive_example(timeProfiling=False)
 
 # %%

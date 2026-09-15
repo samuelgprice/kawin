@@ -13,17 +13,7 @@ from kawin.diffusion.mesh.MovingBoundaryOlayeFD1D import (
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
 
-def debugInPlace():
-    try:
-        import debugpy
-        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-        debugpy.listen(5678)
-        print("Waiting for debugger attach")
-        debugpy.wait_for_client()
-        debugpy.breakpoint()
-        print('break on this line')
-    except:
-        pass
+from examples.debugInPlace import debugInPlace
 def loge_arange(start, stop, log_step):
     logs = np.arange(np.log(start),
                     np.log(stop),
