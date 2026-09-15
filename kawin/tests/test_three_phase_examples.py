@@ -1,19 +1,39 @@
 import numpy as np
 import pytest
 
-from examples.ternaryExamples import IllingworthTernaryThreePhaseNiTiNb_TC as three_phase_example
+from examples.ternaryExamples import IllingworthTernaryThreePhaseStable as three_phase_example
 
 
-def test_three_phase_example_defaults_to_ni_ti_nb_tc_case():
-    assert three_phase_example.CASE_NAME == three_phase_example.CASE_NI_TI_NB_TC
-    assert three_phase_example.PHASES_FOR_MODEL == ("BCC_B2", "LIQUID", "BCC_B2")
+def _baseline_config():
+    """Returns mutable-safe values that must survive one temporary run override."""
+    return {
+        "case_name": three_phase_example.CASE_NAME,
+        "liquid_diffusivity": three_phase_example.FECRNI_LIQUID_DIFFUSIVITY_MATRIX.copy(),
+        "eta_samples": three_phase_example.ETA_SAMPLES.copy(),
+        "phase_molar_volumes": three_phase_example.PHASE_MOLAR_VOLUMES,
+    }
+
+
+def _assert_baseline_config(baseline):
+    """Checks that ``run_case`` did not leak temporary configuration changes."""
+    assert three_phase_example.CASE_NAME == baseline["case_name"]
+    assert np.array_equal(three_phase_example.FECRNI_LIQUID_DIFFUSIVITY_MATRIX, baseline["liquid_diffusivity"])
+    assert np.array_equal(three_phase_example.ETA_SAMPLES, baseline["eta_samples"])
+    assert three_phase_example.PHASE_MOLAR_VOLUMES == baseline["phase_molar_volumes"]
+
+
+def test_stable_three_phase_fixture_has_frozen_fecrni_baseline():
+    assert three_phase_example.CASE_NAME == three_phase_example.CASE_FE_CR_NI_PYCALPHAD
+    assert three_phase_example.PHASES_FOR_MODEL == ("FCC_A1", "LIQUID", "BCC_A2")
 
 
 def test_fecrni_pycalphad_case_requires_explicit_liquid_diffusivity():
+    baseline = _baseline_config()
     with pytest.raises(ValueError, match="FECRNI_LIQUID_DIFFUSIVITY_MATRIX"):
         three_phase_example.run_case(
             {
                 "case_name": "fe_cr_ni_pycalphad",
+                "fecrni_liquid_diffusivity_matrix": None,
                 "run_preflight": False,
                 "run_solve": False,
                 "eta_samples": np.linspace(0.0, 1.0, 3),
@@ -21,10 +41,11 @@ def test_fecrni_pycalphad_case_requires_explicit_liquid_diffusivity():
             make_plots=False,
         )
 
-    assert three_phase_example.CASE_NAME == three_phase_example.CASE_NI_TI_NB_TC
+    _assert_baseline_config(baseline)
 
 
 def test_fecrni_pycalphad_case_builds_with_fixed_liquid_diffusivity():
+    baseline = _baseline_config()
     liquid_matrix = np.asarray([[1.0e-9, 0.0], [0.0, 1.0e-9]], dtype=np.float64)
 
     result = three_phase_example.run_case(
@@ -59,4 +80,4 @@ def test_fecrni_pycalphad_case_builds_with_fixed_liquid_diffusivity():
     assert result["surrogate_bc"].tieline_phases == ("LIQUID", "BCC_A2")
     assert liquid_diffusivity.shape == (2, 2, 2)
     assert np.allclose(liquid_diffusivity, np.broadcast_to(liquid_matrix, (2, 2, 2)))
-    assert three_phase_example.CASE_NAME == three_phase_example.CASE_NI_TI_NB_TC
+    _assert_baseline_config(baseline)

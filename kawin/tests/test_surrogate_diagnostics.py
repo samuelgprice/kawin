@@ -395,7 +395,7 @@ def test_high_level_plot_returns_reports_and_merged_bulk_only():
 
 
 def test_three_phase_example_helper_routes_interfaces_truth_and_merged(monkeypatch):
-    from examples.ternaryExamples import IllingworthTernaryThreePhaseNiTiNb_TC as example
+    from examples.ternaryExamples import IllingworthTernaryThreePhaseStable as example
 
     surrogate_ab = _surrogate()
     surrogate_bc = _surrogate()
