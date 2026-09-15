@@ -1240,23 +1240,24 @@ if __name__ == "__main__":
     # surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"]['FCC_L12#1'].show()
 
 # %%
-import importlib
+if __name__ == "__main__":
+    import importlib
 
-importlib.reload(importlib.import_module(
-    "examples.ternaryExamples.IllingworthTernaryThreePhasePlotly"
-))
+    importlib.reload(importlib.import_module(
+        "examples.ternaryExamples.IllingworthTernaryThreePhasePlotly"
+    ))
 
-from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
-results_plot = plot_three_phase_composition_profile(
-    result,
-    show_tielines=True,
-    tieline_eta_count=41,
-    display_tieline_count=41,
-    show_global_average=True,
-    show_starting_phase_compositions=False,
-    renderer="browser",
-)
-results_plot["fig"].show()
+    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    results_plot = plot_three_phase_composition_profile(
+        result,
+        show_tielines=True,
+        tieline_eta_count=41,
+        display_tieline_count=41,
+        show_global_average=True,
+        show_starting_phase_compositions=False,
+        renderer="browser",
+    )
+    results_plot["fig"].show()
 # import plotly
 # plotly.offline.plot(results_plot["fig"], filename = r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\results_plot.html", auto_open=False)
 
