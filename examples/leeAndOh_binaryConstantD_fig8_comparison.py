@@ -43,7 +43,7 @@ class ConstantBinaryThermodynamics:
     def clearCache(self):
         return
 
-    def getInterdiffusivity(self, x, T, removeCache=True, phase=None):
+    def getInterdiffusivity(self, x, T, removeCache=True, phase=None, query_context=None):
         values = np.atleast_1d(T).astype(np.float64)
         return np.squeeze(np.ones(values.shape, dtype=np.float64) * self.diffusivities[phase])
 
@@ -134,49 +134,81 @@ def equation_a11(beta, c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b):
         + ((np.sqrt(d_b) * (c_b_eq - c_b0)) / (1 - math.erf(beta / np.sqrt(d_b)))) * np.exp(-(beta**2) / d_b)
     )
 
-def solve_beta(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b):
-    grid = np.linspace(-10.0, 10.0, 4001)
+# Old Beta
+# def solve_beta(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b):
+#     grid = np.linspace(-10.0, 10.0, 4001)
+#     values = np.array([equation_a11(x, c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b) for x in grid], dtype=np.float64)
+#     for x_left, x_right, y_left, y_right in zip(grid[:-1], grid[1:], values[:-1], values[1:]):
+#         if not (np.isfinite(y_left) and np.isfinite(y_right)):
+#             continue
+#         if y_left == 0:
+#             return float(x_left)
+#         if np.sign(y_left) != np.sign(y_right):
+#             sol = optimize.root_scalar(
+#                 equation_a11,
+#                 bracket=[float(x_left), float(x_right)],
+#                 method='brentq',
+#                 args=(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b),
+#                 rtol=1e-14,
+#                 xtol=1e-14,
+#             )
+#             return float(sol.root)
+#     raise ValueError("Could not bracket an analytic moving-boundary root.")
+
+def solve_beta(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b, left=-100, right=100):
+    assert c_b0 < c_b_eq < c_a_eq < c_a0, "Expected: c_b0 < c_b_eq < c_a_eq < c_a0"
+    if left<0 and right>0:
+        grid = np.concatenate((-np.geomspace(1e-15, -left, 200)[::-1], np.geomspace(1e-15, right, 200)))
+    else:
+        grid = np.linspace(left, right, 4001)
     values = np.array([equation_a11(x, c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b) for x in grid], dtype=np.float64)
-    for x_left, x_right, y_left, y_right in zip(grid[:-1], grid[1:], values[:-1], values[1:]):
-        if not (np.isfinite(y_left) and np.isfinite(y_right)):
-            continue
-        if y_left == 0:
-            return float(x_left)
-        if np.sign(y_left) != np.sign(y_right):
-            sol = optimize.root_scalar(
-                equation_a11,
-                bracket=[float(x_left), float(x_right)],
-                method='brentq',
-                args=(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b),
-                rtol=1e-14,
-                xtol=1e-14,
-            )
+    indicesOfSignFlip = np.where(np.logical_and((np.diff(np.sign(values))!=0), ~np.isnan(np.diff(np.sign(values)))))[0]
+    if indicesOfSignFlip.size != 1:
+        raise ValueError("Could not bracket an analytic moving-boundary root.")
+    else:
+        x_left = grid[indicesOfSignFlip[0]]
+        x_right = grid[indicesOfSignFlip[0]+1]
+                        
+
+        sol = optimize.root_scalar(
+            equation_a11,
+            bracket=[float(x_left), float(x_right)],
+            method='brentq',
+            args=(c_a0, c_b0, c_a_eq, c_b_eq, d_a, d_b),
+            maxiter=100,
+            rtol=1e-14,
+            xtol=1e-14,
+        )
+        if sol.converged:
             return float(sol.root)
-    raise ValueError("Could not bracket an analytic moving-boundary root.")
+        else:
+            raise ValueError("Root finding did not converge.")   
 
-# L=1
-# N=100
-# interface_position = 0.5125
-# c_a_eq = 0.35
-# c_b_eq = 0.65
-# c_a0 = 0.1
-# c_b0 = 0.8
-# d_a = 1.0
-# d_b = 10.0
-# t_end = 0.002
-
-l_a = 374.5
-l_b = 190.5
+l_a = 12.5
+l_b = 3000
 L= l_a + l_b
-N=100
+N=3013
 interface_position = l_a
-c_a_eq = 0.325
-c_b_eq = 0.369
-c_a0 = 0.291
-c_b0 = 0.394
-d_a = 5.0
-d_b = 100.0
-t_end = 1.2e5 #1e4
+c_a_eq = 0.10223
+c_b_eq = 0.00166
+c_a0 = 0.19
+c_b0 = 0.0
+d_a = 500.0
+d_b = 18.0
+t_end = 1e2 #1e4
+
+# l_a = 374.5
+# l_b = 190.5
+# L= l_a + l_b
+# N=100
+# interface_position = l_a
+# c_a_eq = 0.325
+# c_b_eq = 0.369
+# c_a0 = 0.291
+# c_b0 = 0.394
+# d_a = 5.0
+# d_b = 100.0
+# t_end = 1.2e5 #1e4
 
 average_comp = ( (l_a*c_a0)+(l_b*c_b0) ) / (l_a + l_b)
 print(f"average_comp: {average_comp}")
@@ -190,6 +222,8 @@ final_l_b = final_b_fraction * L
 print(f"final_l_a: {final_l_a}")
 print(f"final_l_b: {final_l_b}")
 
+print(f"final_l_b/l_b: {final_l_b/l_b}")
+
 z = np.linspace(0.0, L, N + 1)
 print(f"(z>final_l_a).sum(): {(z>final_l_a).sum()}")
 dz = float(z[1] - z[0])
@@ -200,9 +234,12 @@ print(f"pfrac_final: {pfrac_final}")
 record_input=1
 vIt_input=5000
 verbose_input = False if record_input == False else True
-bulkUpdateScheme_input= ['legacy', 'flux_form'][0]
+bulkUpdateScheme_input= ['legacy', 'flux_form'][-1]
 integrationMode_input = 'weighted'
-initialInventoryMode_input = ['integrated', 'phase_length_idealized'][1]
+ignoredNodeReconstructionMode_input='lagrange'
+ignoredNodeRule_input='lee_oh_1996_three_region'
+denom_type_input='eqn22'
+initialInventoryMode_input = ['integrated', 'phase_length_idealized'][-1]
 modelsToUse = ['post_corr'] #, 'pre_basic', 'post_corr', 'pre_corr']
 valid_models = {'post_basic', 'pre_basic', 'post_corr', 'pre_corr', 'post_my'}
 unknown_models = sorted(set(modelsToUse) - valid_models)
@@ -282,6 +319,9 @@ common_cache_params = {
     'record': record_input,
     'iterator': 'explicitEulerIterator',
     'integrationMode': integrationMode_input,
+    'ignoredNodeReconstructionMode':ignoredNodeReconstructionMode_input,
+    'ignoredNodeRule':ignoredNodeRule_input,
+    'denom_type':denom_type_input,
     'initialInventoryMode': initialInventoryMode_input,
     't_end': t_end,
     'L': L,
@@ -330,6 +370,9 @@ def _get_default_case_config():
         'record': record_input,
         'bulkUpdateScheme': bulkUpdateScheme_input,
         'integrationMode': integrationMode_input,
+        "ignoredNodeReconstructionMode": ignoredNodeReconstructionMode_input,
+        "ignoredNodeRule": ignoredNodeRule_input,
+        "denom_type": denom_type_input,
         'pstar': 0.5,
         'constraints': diffusion_constraints_to_cache_dict(constraints),
         'color': None,
@@ -349,6 +392,9 @@ def build_case_config(case_overrides=None):
         'fluxGradientMode',
         'interfaceUpdate',
         'initialInventoryMode',
+        'ignoredNodeReconstructionMode',
+        'ignoredNodeRule',
+        'denom_type',
         'plot_label',
     }
     allowed_override_keys = set(config.keys()) | {
@@ -438,6 +484,9 @@ def run_cached_case(case_overrides=None):
         'iterator': 'explicitEulerIterator',
         'integrationMode': config['integrationMode'],
         'initialInventoryMode': config['initialInventoryMode'],
+        'ignoredNodeReconstructionMode': config['ignoredNodeReconstructionMode'],
+        'ignoredNodeRule': config['ignoredNodeRule'],
+        'denom_type': config['denom_type'],
         't_end': config['t_end'],
         'L': config['L'],
         'N': config['N'],
@@ -462,6 +511,9 @@ def run_cached_case(case_overrides=None):
         bulkUpdateScheme=config['bulkUpdateScheme'],
         integrationMode=config['integrationMode'],
         initialInventoryMode=config['initialInventoryMode'],
+        ignoredNodeReconstructionMode=config['ignoredNodeReconstructionMode'],
+        ignoredNodeRule=config['ignoredNodeRule'],
+        denom_type=config['denom_type'],
         fluxGradientMode=config['fluxGradientMode'],
         interfaceUpdate=config['interfaceUpdate'],
         pstar=config['pstar'],
@@ -549,12 +601,31 @@ def run_cached_case(case_overrides=None):
 # subprocess.run("& 'C:\ProgramData\anaconda3\envs\kawin\python.exe' -m gprof2dot -f pstats mbfdm_profile.pstats -o mbfdm_profile.dot", shell=True, check=True)
 # subprocess.run("gprof2dot -f pstats mbfdm_profile.pstats | dot -Tpng -o output.png", shell=True, check=True)
 
+#%%
+%config InlineBackend.figure_format = 'png'
+model = parameter_sweep_results[0]['results']['']['model']
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots()
+# y_arr = (model.interfaceData._y[:model.interfaceData.currentIndex]-model.interfaceData._y[0])
+y_arr = (model.interfaceData._y[:model.interfaceData.currentIndex])
+x_arr = np.sqrt(model.interfaceData._time[:model.interfaceData.currentIndex])
+indexToPlotTo=-1
+ax.plot(x_arr[:indexToPlotTo], y_arr[:indexToPlotTo], 'o')
+beta = 7.207320366333016
+indexToPlotTo_beta=1000
+ax.plot(x_arr[:indexToPlotTo_beta], 2*beta*x_arr[:indexToPlotTo_beta] + model.interfaceData._y[0], label=f'Analytic Solution, beta={beta}')
+print(f"max liquid width in sim:      {np.max(model.interfaceData._y)}")
+print(f"theoretical max liquid width: {(c_a0/c_a_eq) * l_a}")   ## (0.19/0.10223) * 12.5
+
+np.diff(model.interfaceData._y[np.argmax(model.interfaceData._y)-1:np.argmax(model.interfaceData._y)+2])
+
+plt.show(block=True)
 
 #%%
 parm_dict = {}
 parameterSweepCommonParams = {
     't_end': 1e2,
-    'N': 200,
+    'N': 4500, #3013, #200,
 }
 parameterSweepConfigs = [
     {
@@ -563,14 +634,17 @@ parameterSweepConfigs = [
         'fluxGradientMode': flux_gradient_mode,
         'interfaceUpdate': interface_update,
         'initialInventoryMode': initialInventory_mode,
+        'ignoredNodeReconstructionMode':ignoredNodeReconstructionMode,
+        'ignoredNodeRule':ignoredNodeRule,
+        'denom_type':denom_type,
         'cache_label': cache_label,
         'plot_label': plot_label,
     }
-    for integration_mode in ['weighted', 'ignore', 'noIgnore']
-    for interface_update, flux_gradient_mode, initialInventory_mode, cache_label, plot_label in [
+    for integration_mode in ['weighted'] #['weighted', 'ignore', 'noIgnore']
+    for interface_update, flux_gradient_mode, initialInventory_mode, ignoredNodeReconstructionMode, ignoredNodeRule, denom_type, cache_label, plot_label in [
         # ('basic', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion Basic'),
-        ('lee_oh_corrected', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion Corrected'),
-        ('my_corrected', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion My Corrected'),
+        ('lee_oh_corrected', 'post_diffusion', initialInventoryMode_input, ignoredNodeReconstructionMode_input, ignoredNodeRule_input, denom_type_input, '', 'Post-Diffusion Corrected'),
+        # ('my_corrected', 'post_diffusion', initialInventoryMode_input, ignoredNodeReconstructionMode_input, ignoredNodeRule_input, denom_type_input, '', 'Post-Diffusion My Corrected'),
     ]
 ]
 parameter_sweep_results = [run_cached_case(case_config) for case_config in parameterSweepConfigs]
@@ -729,6 +803,7 @@ def plot_comparisonToAnalyticSolution(
     if parameter_sweep_results:
         for case_result in parameter_sweep_results:
             case_label = case_result['label']
+            print(list(case_result['results'].keys()))
             [uniqueKey] = list(case_result['results'].keys())
             case_model = case_result['results'][uniqueKey]['model']
             for result_key, series in case_result['results'].items():
@@ -771,9 +846,12 @@ SEMIINFINITE_ASSUMPTION_VIOLATED = plot_comparisonToAnalyticSolution(
 #%%
 parm_dict = {}
 parameterSweepCommonParams = {
-    't_end': 3e5,
-    'N': 100,
-    'record':100,
+    # 't_end': 3e5,
+    # 'N': 100,
+    # 'record':100,
+    't_end': 1e2,
+    'N': 3013,
+    
 }
 parameterSweepConfigs = [
     {
@@ -782,14 +860,17 @@ parameterSweepConfigs = [
         'fluxGradientMode': flux_gradient_mode,
         'interfaceUpdate': interface_update,
         'initialInventoryMode': initialInventory_mode,
+        'ignoredNodeReconstructionMode':ignoredNodeReconstructionMode,
+        'ignoredNodeRule':ignoredNodeRule,
+        'denom_type':denom_type,
         'cache_label': cache_label,
         'plot_label': plot_label,
     }
     for integration_mode in ['weighted']#, 'ignore', 'noIgnore']
-    for interface_update, flux_gradient_mode, initialInventory_mode, cache_label, plot_label in [
+    for interface_update, flux_gradient_mode, initialInventory_mode, ignoredNodeReconstructionMode, ignoredNodeRule, denom_type, cache_label, plot_label in [
         # ('basic', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion Basic'),
-        ('lee_oh_corrected', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion Corrected'),
-        ('my_corrected', 'post_diffusion', initialInventoryMode_input, '', 'Post-Diffusion My Corrected'),
+        ('lee_oh_corrected', 'post_diffusion', initialInventoryMode_input, ignoredNodeReconstructionMode_input, ignoredNodeRule_input, denom_type_input, '', 'Post-Diffusion Corrected'),
+        # ('my_corrected', 'post_diffusion', initialInventoryMode_input, ignoredNodeReconstructionMode_input, ignoredNodeRule_input, denom_type_input, '', 'Post-Diffusion My Corrected'),
     ]
 ]
 parameter_sweep_results = [run_cached_case(case_config) for case_config in parameterSweepConfigs]
@@ -1033,7 +1114,7 @@ fig4, ax4, fig4_sweep, ax4_sweep = plot_comparisonToFig8PresentMethod(
     fig4_save_path=rf"C:\Users\samth\Downloads\fdm_mb_npz_saves\replicationOfFig8_downSampled.svg",
     fig4_sweep_save_path=rf"C:\Users\samth\Downloads\fdm_mb_npz_saves\replicationOfFig8_parameterSweep_downSampled.svg",
     # fig4_save_path=rf"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\replicationOfFig8_downSampled.svg",
-    # fig4_sweep_save_path=rf"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\replicationOfFig8_parameterSweep_downSampled.svg",
+    # fig4_sweep_save_path=rf"Cl_b:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\replicationOfFig8_parameterSweep_downSampled.svg",
     downSample_fig8Rep=True,
     markersize=3,
 )
@@ -1050,6 +1131,7 @@ if use_post_basic:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
+        ignoredNodeReconstructionMode=ignoredNodeReconstructionMode_input,
         initialInventoryMode=initialInventoryMode_input,
         fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
@@ -1062,6 +1144,7 @@ if use_post_basic:
         'cache_label': 'post_model_basic',
         'bulkUpdateScheme': bulkUpdateScheme_input,
         'integrationMode': integrationMode_input,
+        'ignoredNodeReconstructionMode':ignoredNodeReconstructionMode_input,
         'fluxGradientMode': 'post_diffusion',
         'interfaceUpdate': 'basic',
     }
@@ -1086,6 +1169,7 @@ if use_pre_basic:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
+        ignoredNodeReconstructionMode=ignoredNodeReconstructionMode_input,
         initialInventoryMode=initialInventoryMode_input,
         fluxGradientMode='pre_diffusion',
         interfaceUpdate='basic',
@@ -1098,6 +1182,7 @@ if use_pre_basic:
         'cache_label': 'pre_model_basic',
         'bulkUpdateScheme': bulkUpdateScheme_input,
         'integrationMode': integrationMode_input,
+        'ignoredNodeReconstructionMode': ignoredNodeReconstructionMode_input,
         'fluxGradientMode': 'pre_diffusion',
         'interfaceUpdate': 'basic',
     }
@@ -1120,6 +1205,7 @@ if use_post_corr:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
+        ignoredNodeReconstructionMode=ignoredNodeReconstructionMode_input,
         initialInventoryMode=initialInventoryMode_input,
         fluxGradientMode='post_diffusion',
         interfaceUpdate='lee_oh_corrected',
@@ -1132,6 +1218,7 @@ if use_post_corr:
         'cache_label': 'post_model_corr',
         'bulkUpdateScheme': bulkUpdateScheme_input,
         'integrationMode': integrationMode_input,
+        'ignoredNodeReconstructionMode': ignoredNodeReconstructionMode_input,
         'fluxGradientMode': 'post_diffusion',
         'interfaceUpdate': 'lee_oh_corrected',
     }
@@ -1156,6 +1243,7 @@ if use_pre_corr:
         interfacePosition=interface_position,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
+        ignoredNodeReconstructionMode=ignoredNodeReconstructionMode_input,
         initialInventoryMode=initialInventoryMode_input,
         fluxGradientMode='pre_diffusion',
         interfaceUpdate='lee_oh_corrected',
@@ -1168,6 +1256,7 @@ if use_pre_corr:
         'cache_label': 'pre_model_corr',
         'bulkUpdateScheme': bulkUpdateScheme_input,
         'integrationMode': integrationMode_input,
+        'ignoredNodeReconstructionMode': ignoredNodeReconstructionMode_input,
         'fluxGradientMode': 'pre_diffusion',
         'interfaceUpdate': 'lee_oh_corrected',
     }
@@ -1366,6 +1455,7 @@ def initial_mass_funcOfStartingInterfacePosition(startingInterfacePosition):
         interfacePosition=startingInterfacePosition,
         bulkUpdateScheme=bulkUpdateScheme_input,
         integrationMode=integrationMode_input,
+        ignoredNodeReconstructionMode=ignoredNodeReconstructionMode_input,
         initialInventoryMode='integrated',
         fluxGradientMode='post_diffusion',
         interfaceUpdate='basic',
@@ -1428,6 +1518,7 @@ parameterSweepConfigs = [
 figure8_presentMethod_oldExtract_df = pd.read_csv(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\finiteDifference\LeeAndOh_figure8_presentMethod.csv", low_memory=False, names=['t', 'normalized_thickness'])
 figure8_presentMethod_oldExtract_df = figure8_presentMethod_oldExtract_df.sort_values(by=['t'])
 parameter_sweep_results = [run_cached_case(case_config) for case_config in parameterSweepConfigs]
+raise
 fig4, ax4, fig4_sweep, ax4_sweep = plot_comparisonToFig8PresentMethod(
     parameter_sweep_results=parameter_sweep_results,
     fig8_presentMethod_df=fig8_presentMethod_df,
@@ -1506,3 +1597,4 @@ assert np.all(np.isfinite(analytic_sub_lookup[reference_model_name]))
 
 
 # %%
+

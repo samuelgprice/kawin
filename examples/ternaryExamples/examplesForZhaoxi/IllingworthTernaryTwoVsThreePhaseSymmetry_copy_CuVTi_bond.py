@@ -64,7 +64,7 @@ OUTPUTS.mkdir(parents=True, exist_ok=True)
 # Fe-Cr-Ni case configuration adapted from IllingworthTernaryExamples.py
 THERM_ENGINE = ["PYCALPAHD", "TC"][-1]
 
-TC_USE_DEFAULT_PHASES = True
+TC_USE_DEFAULT_PHASES = False #True
 DEFAULT_REMOVE_CACHE=False
 GLOBAL_MINIMIZATION_MAX_GRID_POINTS = 2000
 PYCALPHAD_USE_DEFAULT_PHASES = True
@@ -87,7 +87,7 @@ if systemStr =="CuVTi":
     PHASE_A = "BCC_B2#1"
     PHASE_B = "LIQUID#1"
 elif systemStr =="NbNiTi":
-    PHASE_A = "BCC_B2#2"
+    PHASE_A = "BCC_B2#1" #"BCC_B2#2"
     PHASE_B = "LIQUID#1"
 
 TIELINE_PHASES = (PHASE_A, PHASE_B)
@@ -105,7 +105,7 @@ ETA_SAMPLES = np.linspace(0.0, 1.0, 21)
 if systemStr =="CuVTi":
     PROBE_POINT = np.array([0.33, 0.37], dtype=np.float64)
 elif systemStr =="NbNiTi":
-    PROBE_POINT = np.array([0.45, 0.40], dtype=np.float64)
+    PROBE_POINT = np.array([0.16, 0.55], dtype=np.float64) #np.array([0.45, 0.40], dtype=np.float64)
 PROBE_SAMPLES_PER_SIDE = 50
 PROBE_BOUNDARY_MARGIN = 1.0e-3
 PROBE_BOUNDARY_SEARCH_STEP = 1.0e-2
@@ -114,16 +114,18 @@ PROBE_MAX_SEARCH_STEPS = 200
 
 INITIAL_ETA_BRACKET = (1.0e-3, 1.0 - 1.0e-3)
 INITIAL_ETA_GUESS = None
+if systemStr =="NbNiTi":
+    INITIAL_ETA_GUESS = 0.95
 INITIAL_VELOCITY_GUESS_2PHASE = None
 INITIAL_VELOCITY_GUESS_3PHASE = None
 
 # Two-phase geometry: [0, HALF_LENGTH].
-HALF_LENGTH = 1000.0e-6
-TWO_PHASE_NODES = 1001
+HALF_LENGTH = 200.0e-6
+TWO_PHASE_NODES = 201
 if systemStr =="CuVTi":
     INTERFACE_POSITION = HALF_LENGTH-(21.4e-6/2) + 1.0e-12
 elif systemStr =="NbNiTi":
-    INTERFACE_POSITION = HALF_LENGTH-(12.8e-6/2) + 1.0e-12
+    INTERFACE_POSITION = HALF_LENGTH-(4e-6/2) + 1.0e-12 # HALF_LENGTH-(12.8e-6/2) + 1.0e-12
 
 
 # The symmetric three-phase geometry is [0, 2*HALF_LENGTH].
@@ -146,11 +148,11 @@ elif systemStr =="NbNiTi":
 
 # Initial bulk values: A on the outer regions, B in the middle.
 if systemStr =="CuVTi":
-    A_BULK = np.array([0.999, 0.0001], dtype=np.float64)
-    B_BULK = np.array([0.0001, 0.43], dtype=np.float64) # np.array([0.001, 0.625], dtype=np.float64) #np.array([0.001, 0.6], dtype=np.float64)
+    A_BULK = np.array([0.99978, 0.00011], dtype=np.float64)
+    B_BULK = np.array([0.00011, 0.43], dtype=np.float64) # np.array([0.001, 0.625], dtype=np.float64) #np.array([0.001, 0.6], dtype=np.float64)
 elif systemStr =="NbNiTi":
-    A_BULK = np.array([0.4999, 0.4999], dtype=np.float64)
-    B_BULK = np.array([0.43, 0.41], dtype=np.float64)
+    A_BULK = np.array([0.001, 0.998], dtype=np.float64) # np.array([0.00011, 0.99978], dtype=np.float64) # np.array([0.04, 0.90], dtype=np.float64) # np.array([0.03, 0.50], dtype=np.float64) #np.array([0.4999, 0.4999], dtype=np.float64)
+    B_BULK = np.array([0.43, 0.41], dtype=np.float64) # np.array([0.24, 0.66], dtype=np.float64)
 
 
 # ``phase_uniform`` freezes one matrix per phase at the sampled tie line.
@@ -165,6 +167,7 @@ if systemStr =="CuVTi":
     CUVTI_BCC_DIFFUSIVITY_MATRIX = np.array([[4.07763e-16, -3.70765e-16], [2.80824e-19, 7.78993e-16]]) # np.array([[4e-16, 0.0], [0.0, 8e-16]])
 elif systemStr =="NbNiTi":
     CUVTI_BCC_DIFFUSIVITY_MATRIX = None
+    NBNITI_BCC_DIFFUSIVITY_MATRIX = None # np.array([[4.712e-11, 1.221e-13], [-4.592e-11, 1.0747e-12]])
 
 
 # The default simplex-valid ternary compositions avoid sampling invalid
@@ -183,14 +186,22 @@ DIFFUSIVITY_SAMPLE_ETA = 0.5
 DT_MODE = "semi_log"
 FIXED_TIME_STEP = 1.0
 SEMI_LOG_BASE_TIME_STEP = 1.0
-SEMI_LOG_DT = 0.25 / 20.0 # 0.25 / 10.0
-SEMI_LOG_T0 = 1.0e-6
-# SOLVE_TIME = 3600.0*1e3
-SOLVE_TIME = 400 # 1e6 #6.92
 
-TOLERANCE = 1.0e-12
+SEMI_LOG_T0 = 1.0e-6
+if systemStr =="CuVTi":
+    SEMI_LOG_DT = 0.25 / 10.0 # 0.25 / 10.0
+    SOLVE_TIME = 1e6
+elif systemStr =="NbNiTi":
+    SEMI_LOG_DT = 0.25 / 20.0 # 0.25 / 10.0
+    SOLVE_TIME = 400
+
+TOLERANCE = 1.0e-12 #1.0e-12
 RESIDUAL_TOLERANCE = None
 MAX_ITERATIONS = 25
+if systemStr =="CuVTi":
+    MAX_STEP_RETRIES = 8
+elif systemStr =="NbNiTi":
+    MAX_STEP_RETRIES = 10
 VERBOSE = True
 VERBOSE_INTERVAL = 10
 MIN_DT_FRAC = 1.0e-16
@@ -441,6 +452,12 @@ def build_source_thermodynamics():
                         "BCC_B2#1",
                         CUVTI_BCC_DIFFUSIVITY_MATRIX,
                 )
+        elif NBNITI_BCC_DIFFUSIVITY_MATRIX is not None:
+            therm_ab = FixedPhaseDiffusivityThermodynamics(
+                                    TCPythonThermodynamics(_make_tc_config(TIELINE_PHASES), default_remove_cache=DEFAULT_REMOVE_CACHE),
+                                    "BCC_B2#1",
+                                    NBNITI_BCC_DIFFUSIVITY_MATRIX,
+                            )
         else:
             therm_ab = TCPythonThermodynamics(_make_tc_config(TIELINE_PHASES), default_remove_cache=DEFAULT_REMOVE_CACHE)
     
@@ -704,6 +721,7 @@ def make_three_phase_mesh():
 
 
 def get_time_step_options():
+    """Returns constructor options for the selected timestep schedule."""
     if DT_MODE == "fixed":
         return {
             "time_step": float(FIXED_TIME_STEP),
@@ -761,6 +779,7 @@ def build_two_phase_model(tieline_surrogate, bulk_thermodynamics):
         tolerance=TOLERANCE,
         residual_tolerance=RESIDUAL_TOLERANCE,
         max_iterations=MAX_ITERATIONS,
+        max_step_retries=MAX_STEP_RETRIES,
         terminal_thin_phase_policy=TERMINAL_THIN_PHASE_POLICY,
         record=True,
         record_pq_data=True,
@@ -802,6 +821,7 @@ def build_three_phase_model(tieline_surrogate, bulk_thermodynamics):
         tolerance=TOLERANCE,
         residual_tolerance=RESIDUAL_TOLERANCE,
         max_iterations=MAX_ITERATIONS,
+        max_step_retries=MAX_STEP_RETRIES,
         terminal_thin_phase_policy=TERMINAL_THIN_PHASE_POLICY,
         record=True,
         record_pq_data=True,
@@ -1465,6 +1485,17 @@ print(
 
 # %%
 # Solve both cases
+import importlib
+import examples.debugInPlace as debug_module
+
+importlib.invalidate_caches()
+debug_module = importlib.reload(debug_module)
+
+# Required if you previously used:
+# from examples.debugInPlace import debugInPlace
+debugInPlace = debug_module.debugInPlace
+
+# debugInPlace()
 if DT_MODE == "fixed":
     n_steps = int(np.ceil(SOLVE_TIME / FIXED_TIME_STEP))
 elif DT_MODE == "semi_log":
@@ -1518,7 +1549,7 @@ if not _three_phase_reduction_is_valid(three_phase_model):
     )
 
 
-# %%
+ # %%
 # Quantitative comparison
 
 metrics, comparison = compare_models(two_phase_model, three_phase_model)
@@ -1564,6 +1595,12 @@ importlib.invalidate_caches()
 importlib.reload(ternaryPlotly_module)
 plot_three_phase_composition_profile = ternaryPlotly_module.plot_three_phase_composition_profile
 
+from pathlib import Path
+
+plot_three_phase_composition_profile = (
+    ternaryPlotly_module.plot_three_phase_composition_profile
+)
+
 results_plot = plot_three_phase_composition_profile(
     result,
     show_tielines=True,
@@ -1571,7 +1608,7 @@ results_plot = plot_three_phase_composition_profile(
     display_tieline_count=41,
     show_global_average=True,
     show_starting_phase_compositions=False,
-    show_diffusivities=True,
+    show_diffusivities=False,
     use_symmetric_log=True,
     renderer="browser",
     run_config={ "THERM_ENGINE": THERM_ENGINE,
@@ -1580,7 +1617,9 @@ results_plot = plot_three_phase_composition_profile(
 )
 results_plot["fig"].show()
 # import plotly
-# plotly.offline.plot(results_plot["fig"], filename = fr"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\{''.join([el.capitalize() for el in ELEMENTS])}_{TEMPERATURE}Kresults_plot.html", auto_open=False)
+# plotly.offline.plot(results_plot["fig"], filename = fr"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\examplesForZhaoxi\{''.join([el.capitalize() for el in ELEMENTS])}_{TEMPERATURE}K_200um_varSolidDiff_noDiffRes_results_plot.html", auto_open=False)
+#%%
+
 
 # %%
 import importlib
@@ -1667,7 +1706,7 @@ def plot_surrogate_diagnostics_for_run(
 
     return {
         "ab": plot_surrogate_diagnostics(
-            result["surrogate_ab"],
+            result["surrogate_ab"],result['model']._initialInventory / 
             thermodynamics=thermodynamics,
             hover_fields=hover_fields,
             **diagnostic_kwargs,
