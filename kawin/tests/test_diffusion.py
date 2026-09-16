@@ -940,12 +940,15 @@ def test_diffusion_interstitial():
     This follows the diffusivity model and diffusion simulaton from
     J. Agren, Scripta Metallugrica 20 (1996) 1507
     '''
+    from kawin.diffusion.DiffusionParameters import DiffusionConstraints
+    constraints = DiffusionConstraints()
+    constraints.minComposition = 1e-8
     mesh = Cartesian1D(['C'], [-2e-2, 2e-2], 100)
     profile = ProfileBuilder()
     profile.addBuildStep(StepProfile1D(0, 0.0775, 0), 'C')
     mesh.setResponseProfile(profile)
 
-    model = SinglePhaseModel(mesh, ['FE', 'C'], ['FCC_A1'], FeCTherm, 1127+273.15)
+    model = SinglePhaseModel(mesh, ['FE', 'C'], ['FCC_A1'], FeCTherm, 1127+273.15, constraints=constraints)
 
     # Assert that mesh is converted to u-fraction
     #assert_allclose(mesh.y[0], 0.0775/(1-0.0775), rtol=1e-3)
@@ -958,7 +961,7 @@ def test_diffusion_interstitial():
     assert_allclose(comps[60,1], 0.014441, rtol=1e-3)
 
     # Repeat for homogenization
-    model = HomogenizationModel(mesh, ['FE', 'C'], ['FCC_A1'], FeCTherm, 1127+273.15)
+    model = HomogenizationModel(mesh, ['FE', 'C'], ['FCC_A1'], FeCTherm, 1127+273.15, constraints=constraints)
     model.homogenizationParameters.eps = 0
     # Set low max composition change constraint since this affects the time step
     # The homogenization model does not have a clear way to defining a time step
@@ -2484,7 +2487,8 @@ def test_moving_boundary_fdm_ternary_interface_state_matches_component_velocitie
 
     state = model._solveMulticomponentInterfaceState(model.currentTime, composition, interface_position, denom_type=model.denom_type)
     dXdt = model.getdXdt(model.currentTime, x_curr)
-    fluxes = model.getFluxes(model.currentTime, x_curr)
+    # fluxes = model.getFluxes(model.currentTime, x_curr)
+    fluxes = model._lastFluxes
 
     assert state["interface_compositions"][0].shape == (2,)
     assert state["interface_compositions"][1].shape == (2,)
