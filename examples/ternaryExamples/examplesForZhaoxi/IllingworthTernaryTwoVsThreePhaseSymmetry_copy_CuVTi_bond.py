@@ -1706,7 +1706,7 @@ def plot_surrogate_diagnostics_for_run(
 
     return {
         "ab": plot_surrogate_diagnostics(
-            result["surrogate_ab"],result['model']._initialInventory / 
+            result["surrogate_ab"],
             thermodynamics=thermodynamics,
             hover_fields=hover_fields,
             **diagnostic_kwargs,
