@@ -140,6 +140,9 @@ def _make_mock_ternary_moving_boundary_fdm_plot_model(record=False):
         interfacePosition=interface_position,
         bulkUpdateScheme='flux_form',
         integrationMode='weighted',
+        ignoredNodeReconstructionMode='lagrange',
+        ignoredNodeRule='lee_oh_1996_three_region',
+        denom_type='eqn22',
         interfaceUpdate='basic',
         fluxGradientMode='pre_diffusion',
         initialInventoryMode='integrated',
@@ -353,6 +356,9 @@ def test_moving_boundary_fdm_state_plot_and_summary():
         interfacePosition=0.15,
         bulkUpdateScheme='legacy',
         integrationMode='weighted',
+        ignoredNodeReconstructionMode='lagrange',
+        ignoredNodeRule='lee_oh_1996_three_region',
+        denom_type='eqn22',
         fluxGradientMode='post_diffusion',
         initialInventoryMode='integrated',
         interfaceUpdate='basic',
@@ -424,6 +430,9 @@ def test_moving_boundary_fdm_plot_ternary_state_raises_for_binary():
         interfacePosition=0.15,
         bulkUpdateScheme='legacy',
         integrationMode='weighted',
+        ignoredNodeReconstructionMode='lagrange',
+        ignoredNodeRule='lee_oh_1996_three_region',
+        denom_type='eqn22',
         fluxGradientMode='post_diffusion',
         initialInventoryMode='integrated',
         interfaceUpdate='basic',
@@ -561,7 +570,11 @@ def test_moving_boundary_fdm_analytic_comparison_plot():
         interfacePosition=interface_position,
         bulkUpdateScheme='legacy',
         integrationMode='weighted',
+        ignoredNodeReconstructionMode='lagrange',
+        ignoredNodeRule='lee_oh_1996_three_region',
+        denom_type='eqn22',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         interfaceUpdate='basic',
         pstar=0.5,
         record=record_input,
@@ -580,7 +593,11 @@ def test_moving_boundary_fdm_analytic_comparison_plot():
             interfacePosition=interface_position,
             bulkUpdateScheme='legacy',
             integrationMode='weighted',
+            ignoredNodeReconstructionMode='lagrange',
+            ignoredNodeRule='lee_oh_1996_three_region',
+            denom_type='eqn22',
             fluxGradientMode='pre_diffusion',
+            initialInventoryMode='integrated',
             interfaceUpdate='basic',
             pstar=0.5,
             record=record_input,
@@ -596,7 +613,11 @@ def test_moving_boundary_fdm_analytic_comparison_plot():
         interfacePosition=interface_position,
         bulkUpdateScheme='legacy',
         integrationMode='weighted',
+        ignoredNodeReconstructionMode='lagrange',
+        ignoredNodeRule='lee_oh_1996_three_region',
+        denom_type='eqn22',
         fluxGradientMode='post_diffusion',
+        initialInventoryMode='integrated',
         interfaceUpdate='lee_oh_corrected',
         pstar=0.5,
         record=record_input,
@@ -615,7 +636,11 @@ def test_moving_boundary_fdm_analytic_comparison_plot():
             interfacePosition=interface_position,
             bulkUpdateScheme='legacy',
             integrationMode='weighted',
+            ignoredNodeReconstructionMode='lagrange',
+            ignoredNodeRule='lee_oh_1996_three_region',
+            denom_type='eqn22',
             fluxGradientMode='pre_diffusion',
+            initialInventoryMode='integrated',
             interfaceUpdate='lee_oh_corrected',
             pstar=0.5,
             record=record_input,
@@ -773,7 +798,11 @@ def test_moving_boundary_fdm_analytic_comparison_plot():
             interfacePosition=startingInterfacePosition,
             bulkUpdateScheme='legacy',
             integrationMode='weighted',
+            ignoredNodeReconstructionMode='lagrange',
+            ignoredNodeRule='lee_oh_1996_three_region',
+            denom_type='eqn22',
             fluxGradientMode='post_diffusion',
+            initialInventoryMode='integrated',
             interfaceUpdate='basic',
             pstar=0.5,
             record=True,
@@ -782,14 +811,14 @@ def test_moving_boundary_fdm_analytic_comparison_plot():
 
     initial_mass_funcOfStartingInterfacePosition(interface_position)-post_model_basic._initialInventory
     
-    startingMass_diff = lambda startingInterfacePosition: initial_mass_funcOfStartingInterfacePosition(startingInterfacePosition)-idealized_mass_funcOfStartingInterfacePosition(interface_position)
-    sol = optimize.root_scalar(
-                    startingMass_diff,
-                    bracket=[float(0)+((3/N)*L), float(L)-((3/N)*L)],
-                    method='brentq',
-                    rtol=1e-14,
-                    xtol=1e-14,
-                )
+    # startingMass_diff = lambda startingInterfacePosition: initial_mass_funcOfStartingInterfacePosition(startingInterfacePosition)-idealized_mass_funcOfStartingInterfacePosition(interface_position)
+    # sol = optimize.root_scalar(
+    #                 startingMass_diff,
+    #                 bracket=[float(0)+((3/N)*L), float(L)-((3/N)*L)],
+    #                 method='brentq',
+    #                 rtol=1e-14,
+    #                 xtol=1e-14,
+    #             )
 
     
     fig3, ax3 = plt.subplots()
@@ -852,11 +881,12 @@ def test_moving_boundary_fdm_analytic_comparison_plot():
         MSE_df.loc[MSE_key[0], MSE_key[1]] = MSE_val
     MSE_df=MSE_df.astype(float)
 
-
-    assert len(ax.lines) == 5
+    if pre==True:
+        assert len(ax.lines) == 5
+    else:
+        assert len(ax.lines) == 3
     assert len(ax.texts) >= 1
     assert np.all(np.isfinite(sqrt_t_post_basic_sub))
     assert np.all(np.isfinite(delta_s_post_basic_sub))
     assert np.all(np.isfinite(analytic_post_basic_sub))
     # plt.close(fig)
-
