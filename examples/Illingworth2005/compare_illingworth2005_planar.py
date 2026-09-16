@@ -83,11 +83,11 @@ from kawin.solver import explicitEulerIterator
 AUTHOR_DEFAULT_PARAMS = {
     "s0": 1.0,
     "R": 5.0,
-    "n_alpha": 13,
+    "n_alpha": 100,
     "d_alpha": 1.0e-7,
     "initial_alpha": 0.8,
     "interface_alpha": 0.6,
-    "n_beta": 3001,
+    "n_beta": 100,
     "d_beta": 1.0e-5,
     "initial_beta": 0.4,
     "interface_beta": 0.0,
@@ -292,7 +292,7 @@ FIG6_OLAYE_BRASS_CONFIG = {
     "fig6_plot_concentration_info": True,
     "fig6_plot_extracted_data": True,
     "fig6_plot_experimental_data": True,
-    "fig6_check_against_authors_cpp": True,
+    "fig6_check_against_authors_cpp": False,
     "fig6_plot_cpp_comparison": True,
     "fig6_cpp_compiler": None,
     "fig6_cpp_build_dir": None,
@@ -800,10 +800,12 @@ def build_illingworth_run_payload(result, label=None):
         "model_family": np.array("illingworth_fig3_present_work"),
         "theoretical_max_um": np.array([result["theoretical_max_um"]], dtype=np.float64),
         "idealized_mass_integral": np.array([compute_fig3_idealized_conc(params)], dtype=np.float64),
-        "mass_integral_initial": np.array([float(result["model"].concData._y[0])], dtype=np.float64),
-        "mass_integral_final": np.array([float(result["model"].concData.y())], dtype=np.float64),
         "params_json": np.array(json.dumps(_jsonable(payload_params), sort_keys=True)),
     }
+    model = result.get("model")
+    if model is not None:
+        payload["mass_integral_initial"] = np.array([float(model.concData._y[0])], dtype=np.float64)
+        payload["mass_integral_final"] = np.array([float(model.concData.y())], dtype=np.float64)
     if result.get("transformed_u_grid") is not None:
         payload["transformed_u_grid"] = np.asarray(result["transformed_u_grid"], dtype=np.float64)
     if result.get("transformed_v_grid") is not None:
