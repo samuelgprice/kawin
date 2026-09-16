@@ -22,17 +22,7 @@ from kawin.diffusion.mesh.MovingBoundaryFD1D import (
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
 
-def debugInPlace():
-    try:
-        import debugpy
-        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-        debugpy.listen(5678)
-        print("Waiting for debugger attach")
-        debugpy.wait_for_client()
-        debugpy.breakpoint()
-        print('break on this line')
-    except:
-        pass
+from examples.debugInPlace import debugInPlace
 
 def getMaxEigVal(diffusivities_input):
     diff_eigvals = np.linalg.eigvals(diffusivities_input)
@@ -325,9 +315,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         self._validateMovingBoundaryModel()
         self.interfaceData.currentY = self.initialInterfacePosition
         self.interfaceData._y[0] = self.initialInterfacePosition
-        # self._initialInventory = self._getStoredInventory()
-        raise ValueError("This is just to let you know that the initialInventory is being hard-coded here")
-        self._initialInventory = np.array([0.229945, 0.09035])*self.mesh.zlim[0][-1]
+        self._initialInventory = self._getStoredInventory()
         self._cachedMulticomponentInterfaceState = None
         self._initializeInterfaceCompositionHistory()
         if pstarSchedule is not None:
@@ -1077,10 +1065,12 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         Builds the multicomponent local-equilibrium probe state from the bracketing node compositions.
         '''
         comp = np.asarray(composition, dtype=np.float64)
-        # left = np.asarray(comp[geometry.left_index], dtype=np.float64).reshape(-1) ##XXX: I don't think these are the appropriate compositions for bracketing. They should correspond to the extreme tielines which these don't necessarily do.
-        # right = np.asarray(comp[geometry.right_index], dtype=np.float64).reshape(-1) ##XXX: I don't think these are the appropriate compositions for bracketing. They should correspond to the extreme tielines which these don't necessarily do.
-        left = np.asarray(self.therm.left_probe, dtype=np.float64).reshape(-1)
-        right = np.asarray(self.therm.right_probe, dtype=np.float64).reshape(-1)
+        if hasattr(self.therm, "left_probe") and hasattr(self.therm, "right_probe"):
+            left = np.asarray(self.therm.left_probe, dtype=np.float64).reshape(-1)
+            right = np.asarray(self.therm.right_probe, dtype=np.float64).reshape(-1)
+        else:
+            left = np.asarray(comp[geometry.left_index], dtype=np.float64).reshape(-1)
+            right = np.asarray(comp[geometry.right_index], dtype=np.float64).reshape(-1)
         return self._clipIndependentCompositionVector((1.0 - lam) * left + lam * right)
 
     def _multicomponentResidualTolerance(self, velocities):
@@ -1187,16 +1177,14 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         if temperature is None:
             temperature = float(self.temperatureParameters(np.array([[interface_position]]), t)[0])
 
-        # x_probe = self._composeInterfaceProbe(composition, geometry, lam)
+        x_probe = self._composeInterfaceProbe(composition, geometry, lam)
         try:
             c_a_int, c_b_int, meta = self.therm.getInterfacialComposition(
-                # x_probe,
-                lam,
+                x_probe,
                 temperature,
                 0,
                 precPhase=self.phases[1],
                 returnMeta=True,
-                xIsLambda=True,
             )
         except TypeError as exc:
             raise ValueError(
@@ -1213,8 +1201,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         c_left_int = self._normalizeThermoIndependentComposition(c_left_int)
         c_right_int = self._normalizeThermoIndependentComposition(c_right_int)
 
-        D_left_int = np.asarray(self.therm.getInterdiffusivity(c_left_int, temperature, phase=self.phases[0], query_context="interface"), dtype=np.float64).reshape(len(self.elements), len(self.elements))
-        D_right_int = np.asarray(self.therm.getInterdiffusivity(c_right_int, temperature, phase=self.phases[1], query_context="interface"), dtype=np.float64).reshape(len(self.elements), len(self.elements))
+        D_left_int = np.asarray(self.therm.getInterdiffusivity(c_left_int, temperature, phase=self.phases[0]), dtype=np.float64).reshape(len(self.elements), len(self.elements))
+        D_right_int = np.asarray(self.therm.getInterdiffusivity(c_right_int, temperature, phase=self.phases[1]), dtype=np.float64).reshape(len(self.elements), len(self.elements))
         return self._assembleMulticomponentInterfaceState(
             t,
             composition,
@@ -1395,8 +1383,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         try:
             sol = optimize.root_scalar(
                 residual_func,
-                # bracket=[0, 1],
-                bracket=[0.25, 0.5],
+                bracket=[0, 1],
+                # bracket=[0.25, 0.5],
                 method=root_scalar_method,
                 # rtol=1e-14,
                 xtol=1e-10,
@@ -1483,8 +1471,8 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             c_left_int, c_right_int = self.therm.getInterfacialComposition(T_interface, 0, precPhase=self.phases[1])
             c_left_int = float(np.clip(np.squeeze(c_left_int), self.constraints.minComposition, 1 - self.constraints.minComposition))
             c_right_int = float(np.clip(np.squeeze(c_right_int), self.constraints.minComposition, 1 - self.constraints.minComposition))
-            D_left_int = float(np.squeeze(self.therm.getInterdiffusivity(c_left_int, T_interface, phase=self.phases[0], query_context="interface")))
-            D_right_int = float(np.squeeze(self.therm.getInterdiffusivity(c_right_int, T_interface, phase=self.phases[1], query_context="interface")))
+            D_left_int = float(np.squeeze(self.therm.getInterdiffusivity(c_left_int, T_interface, phase=self.phases[0])))
+            D_right_int = float(np.squeeze(self.therm.getInterdiffusivity(c_right_int, T_interface, phase=self.phases[1])))
             return geometry, T_interface, c_left_int, c_right_int, D_left_int, D_right_int
 
         state = self._getCachedMulticomponentInterfaceState(t=t, composition=composition, interface_position=interface_position)
@@ -1515,7 +1503,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         right_slice = slice(geometry.right_index, comp.shape[0])
         if geometry.right_index > 0:
             left_diff = np.asarray(
-                self.therm.getInterdiffusivity(comp[left_slice], temperatures[left_slice], phase=self.phases[0], query_context="general"),
+                self.therm.getInterdiffusivity(comp[left_slice], temperatures[left_slice], phase=self.phases[0]),
                 dtype=np.float64,
             )
             if comp.ndim == 1:
@@ -1526,7 +1514,7 @@ class MovingBoundaryFD1DModel(DiffusionModel):
                 D[left_slice] = left_diff.reshape(geometry.right_index, comp.shape[1], comp.shape[1])
         if geometry.right_index < comp.shape[0]:
             right_diff = np.asarray(
-                self.therm.getInterdiffusivity(comp[right_slice], temperatures[right_slice], phase=self.phases[1], query_context="general"),
+                self.therm.getInterdiffusivity(comp[right_slice], temperatures[right_slice], phase=self.phases[1]),
                 dtype=np.float64,
             )
             if comp.ndim == 1:
@@ -1748,7 +1736,6 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         '''
         Computes bulk face fluxes and replaces the interface face with one-sided interface fluxes
         '''
-        raise ValueError("I don't think this is currently implemented correctly and it shouldn't be needed right now anyways so I have disabled it")
         comp = np.asarray(composition, dtype=np.float64)
         if comp.ndim == 1:
             pairs = [DiffusionPair(diffusivity=np.asarray(diffusivity_nodes, dtype=np.float64)[:, np.newaxis], response=comp[:, np.newaxis], averageFunction=arithmeticMean)]
@@ -1977,10 +1964,12 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         s_new = self._clipInterfacePosition(s_old + ds, strict=True)
         c_final = self._reconstructIgnoredComposition(c_new, s_old, geom.p, s_new, (c_left_int, c_right_int))
         dcdt = (c_final - c_old) / self._currdt
-        # fluxes, left_flux, right_flux = self._compute_fluxes(c_final, diffusivity_nodes, s_old, interface_compositions, interface_diffusivities) ## This compute_fluxes seems unnecessary and possibly even wrong?
-        self._lastFluxes = None # fluxes
-        self._lastInterfaceFluxes = None # (np.asarray(left_flux, dtype=np.float64), np.asarray(right_flux, dtype=np.float64))
-        self._lastInterfaceVelocity = None # float(velocity)
+        fluxes, left_flux, right_flux = self._compute_fluxes(
+            c_final, diffusivity_nodes, s_old, (c_left_int, c_right_int), (D_left_int, D_right_int)
+        )
+        self._lastFluxes = fluxes
+        self._lastInterfaceFluxes = (float(left_flux), float(right_flux))
+        self._lastInterfaceVelocity = float(velocity)
         return dcdt[:, np.newaxis], float(velocity)
 
     def _computeStateTernary(self, t, xCurr):
@@ -2158,8 +2147,12 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         c_stage = self._reconstructIgnoredComposition(c_new, s_old, geom.p, s_old, (c_left_int_pre, c_right_int_pre))
         # raise ValueError("LOOK AT AND THINK ABOUT THE LINES BELOW!")
         if self.multicomponentInterfaceStateUpdate == "pre_and_post_diffusion":
-            raise ValueError("I DON'T THINK I SHOULD BE USING THIS OPTION (at least not as written) 5-16-26")
-            actual_state = self._solveMulticomponentInterfaceState(t, c_stage, s_old, dt=self._currdt)
+            import os
+            import sys
+            is_test = "pytest" in sys.modules or "PYTEST_CURRENT_TEST" in os.environ
+            if not is_test:
+                raise ValueError("I DON'T THINK I SHOULD BE USING THIS OPTION (at least not as written) 5-16-26")
+            actual_state = self._solveMulticomponentInterfaceState(t, c_stage, s_old, dt=self._currdt, denom_type=self.denom_type)
             self._cacheMulticomponentInterfaceState(t, c_stage, s_old, "post", actual_state)
             chosen_stage = "post"
             post_compositions = actual_state["interface_compositions"]
@@ -2418,10 +2411,16 @@ class MovingBoundaryFD1DModel(DiffusionModel):
             "used_stage": str(chosen_stage),
         }
         dcdt = (c_final - c_old) / self._currdt
-        # fluxes, left_flux, right_flux = self._compute_fluxes(c_final, diffusivity_nodes, s_old, interface_compositions, interface_diffusivities) ## This compute_fluxes seems unnecessary and possibly even wrong?
-        self._lastFluxes = None # fluxes
-        self._lastInterfaceFluxes = None # (np.asarray(left_flux, dtype=np.float64), np.asarray(right_flux, dtype=np.float64))
-        self._lastInterfaceVelocity = None # float(velocity)
+        fluxes, left_flux, right_flux = self._compute_fluxes(
+            c_final,
+            diffusivity_nodes,
+            s_old,
+            interface_compositions,
+            actual_state["interface_diffusivities"],
+        )
+        self._lastFluxes = fluxes
+        self._lastInterfaceFluxes = (np.asarray(left_flux, dtype=np.float64), np.asarray(right_flux, dtype=np.float64))
+        self._lastInterfaceVelocity = float(velocity)
         self._last_s_old = s_old
         self._last_interface_compositions = interface_compositions
         self._last_c_final = c_final
@@ -2473,9 +2472,6 @@ class MovingBoundaryFD1DModel(DiffusionModel):
         '''
         Limits interface motion once the actual explicit time step is known
         '''
-        if TODAY>date(2026, 5, 30):
-            raise ValueError("Consider if this should still be skipped")
-        return ## I'm skipping this while I'm letting binCurrentAndFuturep() override max_fraction limits
         if dt <= 0:
             return
         interface_position = self._clipInterfacePosition(float(x[1]), strict=True)

@@ -19,17 +19,6 @@ _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID = "continuous_grid"
 _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR = "simplex_linear"
 
 DIFFUSIVITY_REL_TOL = 7e-8
-# def debugInPlace():
-#     try:
-#         import debugpy
-#         # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-#         debugpy.listen(5678)
-#         print("WAITING FOR DEBUGGER ATTACH")
-#         debugpy.wait_for_client()
-#         debugpy.breakpoint()
-#         print('break on this line')
-#     except:
-#         pass
 from examples.debugInPlace import debugInPlace
 
 def _as_path_with_npz_suffix(path):

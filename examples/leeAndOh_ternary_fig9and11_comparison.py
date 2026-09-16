@@ -24,17 +24,7 @@ from kawin.thermo import MulticomponentThermodynamics
 from pycalphad import Database, ternplot
 from pycalphad import variables as v
 
-def debugInPlace():
-    try:
-        import debugpy
-        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-        debugpy.listen(5678)
-        print("Waiting for debugger attach")
-        debugpy.wait_for_client()
-        debugpy.breakpoint()
-        print('break on this line')
-    except:
-        pass
+from examples.debugInPlace import debugInPlace
 
 EXAMPLES_DIR = pathlib.Path(__file__).resolve().parent if "__file__" in globals() else pathlib.Path.cwd()
 # EXAMPLES_DIR = pathlib.Path(r"c:/Users/samth/OneDrive - Northwestern University/WS_DL/Lab Data/Price/code/kawin/examples")

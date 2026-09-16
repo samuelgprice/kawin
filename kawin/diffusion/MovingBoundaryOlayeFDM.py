@@ -13,17 +13,7 @@ from kawin.diffusion.mesh.MovingBoundaryOlayeFD1D import (
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials
 
-def debugInPlace():
-    try:
-        import debugpy
-        # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-        debugpy.listen(5678)
-        print("Waiting for debugger attach")
-        debugpy.wait_for_client()
-        debugpy.breakpoint()
-        print('break on this line')
-    except:
-        pass
+from examples.debugInPlace import debugInPlace
 def loge_arange(start, stop, log_step):
     logs = np.arange(np.log(start),
                     np.log(stop),
@@ -311,7 +301,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
                 f"geometry='{self.geometry}' is documented but not implemented yet for "
                 "MovingBoundaryOlayeFD1DModel."
             )
-        if not (0 < self.semiLogT0):
+        if self.dtMode == "semi_log_optional" and not (0 < self.semiLogT0):
             raise ValueError("semiLogT0 must be positive.")
         if self.phaseANodes is not None and self.phaseANodes < 3:
             raise ValueError("phase_a_nodes must be at least 3 when specified.")
@@ -509,8 +499,11 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         right_span = max(self._R - interface_position, 1e-15)
         z_right = interface_position + right_span * self._v_grid
 
-        left_mask = self._z <= interface_position
-        right_mask = self._z >= interface_position
+        # A mesh node exactly at the interface belongs to neither bulk source;
+        # the prescribed interface values are appended below.  Including it in
+        # both masks spuriously makes a valid step profile appear nonuniform.
+        left_mask = self._z < interface_position
+        right_mask = self._z > interface_position
 
         z_left_source = self._z[left_mask].copy() ## old way np.concatenate((self._z[left_mask], [interface_position]))
         c_left_source = c[left_mask].copy() ## old way np.concatenate((c[left_mask], [c_ab]))
@@ -815,7 +808,7 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
         return self._clipInterfacePosition(float(s_new), strict=True)
 
     def _computeDt(self, t, s, D_p, D_q, velocity):
-        if self._stepIndex == 0 or self.mainStepMode == "classical_explicit":
+        if self._stepIndex == 0 or self.mainStepMode == "classical_explicit" or self.dtMode == "cfl":
             left_len = max(s, 1e-15)
             right_len = max(self._R - s, 1e-15)
             left_dx = left_len * self._du
@@ -861,7 +854,6 @@ class MovingBoundaryOlayeFD1DModel(DiffusionModel):
             else:
                 dt_raw = dt_semi
         else:
-            raise ValueError("I don't think this should be used. I would to need to verify it is done correctly")
             dt_raw = min(dt_diff, dt_move, getattr(self, "deltaTime", np.inf))
         
         
