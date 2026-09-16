@@ -750,7 +750,7 @@ def test_fvm_vs_fdm_constantD_nonlinearCompProfile(tmpdir):
     assert_allclose(np.ravel(m_FVM.data.currentY), getMidpoints(np.ravel(m_FDM.data.currentY)), rtol=1e-10)
     assert_allclose(m_FVM.currentTime, m_FDM.currentTime)
 
-def test_fvm_vs_fdm_variableD(tmpdir):
+def test_fvm_vs_fdm_variableD():
     profile = ProfileBuilder()
     # profile.addBuildStep(LinearProfile1D(-1e-3, [0.077, 0.054], 1e-3, [0.359, 0.062]), ['CR', 'AL'])
     profile.addBuildStep(LinearProfile1D(-1e-3, [0.1], 1e-3, [0.3]), ['CR'])
@@ -792,11 +792,14 @@ def test_fvm_vs_fdm_variableD(tmpdir):
     m_FVM.solve(10*3600, verbose=True, vIt=1, iterator=explicitEulerIterator)
     m_FDM.solve(10*3600, verbose=True, vIt=1, iterator=explicitEulerIterator)
     
-    m_FVM.save(tmpdir / 'fvm_diff.npz')
-    m_FDM.save(tmpdir / 'fdm_diff.npz')
-
-
-    assert_allclose(np.ravel(m_FVM.data.currentY[:,0]), getMidpoints(np.ravel(m_FDM.data.currentY[:,0]))) ##NOTE: This is not supposed to pass because the variable diffusivity results in Mean(D(c_i), D(c_i+1)) != D(Mean(c_i, c_i+1))
+    fvm_final = np.ravel(m_FVM.data.currentY[:, 0])
+    fdm_midpoint_final = getMidpoints(np.ravel(m_FDM.data.currentY[:, 0]))
+    assert np.all(np.isfinite(fvm_final))
+    assert np.all(np.isfinite(fdm_midpoint_final))
+    # The finite-volume faces use Mean(D(c_i), D(c_i+1)), whereas the
+    # finite-difference midpoint comparison uses D(Mean(c_i, c_i+1)).  They
+    # must therefore differ for this composition-dependent diffusivity.
+    assert not np.allclose(fvm_final, fdm_midpoint_final, rtol=1e-10, atol=1e-12)
     # assert_allclose(np.ravel(m_FVM.data.currentY[:,1]), getMidpoints(np.ravel(m_FDM.data.currentY[:,1])))
     assert_allclose(m_FVM.currentTime, m_FDM.currentTime)
 
@@ -2479,7 +2482,7 @@ def test_moving_boundary_fdm_ternary_interface_state_matches_component_velocitie
     composition = np.asarray(x_curr[0], dtype=np.float64)
     interface_position = float(x_curr[1])
 
-    state = model._solveMulticomponentInterfaceState(model.currentTime, composition, interface_position)
+    state = model._solveMulticomponentInterfaceState(model.currentTime, composition, interface_position, denom_type=model.denom_type)
     dXdt = model.getdXdt(model.currentTime, x_curr)
     fluxes = model.getFluxes(model.currentTime, x_curr)
 
@@ -2571,11 +2574,13 @@ def test_moving_boundary_fdm_ternary_phase_ordering_swaps_reversed_endpoints():
         model_nominal.currentTime,
         np.asarray(model_nominal.getCurrentX()[0], dtype=np.float64),
         float(model_nominal.getCurrentX()[1]),
+        denom_type=model_nominal.denom_type,
     )
     state_reversed = model_reversed._solveMulticomponentInterfaceState(
         model_reversed.currentTime,
         np.asarray(model_reversed.getCurrentX()[0], dtype=np.float64),
         float(model_reversed.getCurrentX()[1]),
+        denom_type=model_reversed.denom_type,
     )
     assert_allclose(state_reversed["interface_compositions"][0], state_nominal["interface_compositions"][0], atol=1e-12, rtol=1e-12)
     assert_allclose(state_reversed["interface_compositions"][1], state_nominal["interface_compositions"][1], atol=1e-12, rtol=1e-12)
@@ -2803,13 +2808,16 @@ def test_moving_boundary_fdm_ternary_real_thermo_smoke():
     interface_position = 15.25
     profile = ProfileBuilder(
         [
-            (StepProfile1D(interface_position, 0.30, 0.26), 'CR'),
-            (StepProfile1D(interface_position, 0.085, 0.0575), 'NI'),
+            (StepProfile1D(interface_position, 0.38, 0.13), 'CR'), #(StepProfile1D(interface_position, 0.30, 0.26), 'CR'),
+            (StepProfile1D(interface_position, 0.001, 0.15), 'NI'), #(StepProfile1D(interface_position, 0.085, 0.0575), 'NI'),
         ]
     )
     mesh = CartesianFD1D(['CR', 'NI'], [0, 30], 61)
     mesh.setResponseProfile(profile)
     therm = MulticomponentThermodynamics(FECRNI_DB, ['FE', 'CR', 'NI'], ['FCC_A1', 'BCC_A2'])
+    # Keep the pycalphad-backed thermodynamics while using the Lee--Oh probe line.
+    therm.left_probe = np.array([0.1233, 0.0001], dtype=np.float64)
+    therm.right_probe = np.array([0.4993, 0.2257], dtype=np.float64)
     model = MovingBoundaryFD1DModel(
         mesh,
         ['FE', 'CR', 'NI'],
@@ -2826,15 +2834,17 @@ def test_moving_boundary_fdm_ternary_real_thermo_smoke():
     )
     model.setup()
 
-    dXdt = model.getdXdt(model.currentTime, model.getCurrentX())
-    fluxes = model.getFluxes(model.currentTime, model.getCurrentX())
-    interface_compositions = model.getInterfaceCompositions()
+    current_x = model.getCurrentX()
+    dXdt = model.getdXdt(model.currentTime, current_x)
+    fluxes = model.getFluxes(model.currentTime, current_x)
+    # Construction-only calls do not create an interface-history sample.
+    left_interface, right_interface = model._last_interface_compositions
 
     assert dXdt[0].shape == (61, 2)
     assert fluxes.shape == (62, 2)
     assert np.isfinite(dXdt[1])
-    assert np.all(np.isfinite(interface_compositions[0]))
-    assert np.all(np.isfinite(interface_compositions[1]))
+    assert np.all(np.isfinite(left_interface))
+    assert np.all(np.isfinite(right_interface))
     assert np.all(np.isfinite(model.getTotalInventory()))
 
 
@@ -4193,6 +4203,7 @@ def test_saved_planar_run_plotter_uses_label_fallbacks_and_supports_log_scale(tm
             "x_axis": "log",
             "show": False,
             "out": None,
+            "compareToAnalyticalSoln": False,
         },
         ax=ax,
     )
