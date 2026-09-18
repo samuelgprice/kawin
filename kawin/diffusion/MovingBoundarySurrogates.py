@@ -12,7 +12,7 @@ except ImportError:  # pragma: no cover - SciPy is a package dependency.
     RectBivariateSpline = None
 
 from kawin.thermo import MulticomponentThermodynamics
-
+import tqdm
 
 _DIFFUSIVITY_INTERPOLATION_NEAREST = "nearest"
 _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID = "continuous_grid"
@@ -712,7 +712,7 @@ def _resample_seed_scan_side(
     midPts_toSample = tielineMidpoint_interp(relativeDist_toSample)
 
     samples = []
-    for relativeDist, target in zip(relativeDist_toSample, midPts_toSample):
+    for relativeDist, target in tqdm.tqdm(zip(relativeDist_toSample, midPts_toSample), desc=f"Resampling tieline diffusivities", total=len(midPts_toSample)):
         try:
             sample = _sample_expected_tieline(
                 thermodynamics,
@@ -1469,7 +1469,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 "probe_start": probe_start.tolist(),
                 "probe_end": probe_end.tolist(),
             }
-            for eta in eta_samples:
+            for eta in tqdm.tqdm(eta_samples, desc=f"Sampling tieline diffusivities", total=len(eta_samples)):
                 fraction = (float(eta) - float(eta_samples[0])) / (float(eta_samples[-1]) - float(eta_samples[0]))
                 probe = probe_start + fraction * (probe_end - probe_start)
                 sample = _sample_expected_tieline(
@@ -1496,7 +1496,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             general_diff_x = {phase: [] for phase in tieline_phases}
             general_diff_d = {phase: [] for phase in tieline_phases}
             for phase in tieline_phases:
-                for point in bulk_points:
+                for point in tqdm.tqdm(bulk_points, desc=f"Sampling bulk diffusivity for phase {phase}", total=len(bulk_points)):
                     general_diff_x[phase].append(point)
                     general_diff_d[phase].append(
                         _validate_2x2_matrix(
@@ -1521,7 +1521,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             general_diff_d = {phase: [*interface_diff_d[phase]] for phase in tieline_phases}
             if bulk_points is not None:
                 for phase in tieline_phases:
-                    for point in bulk_points:
+                    for point in tqdm.tqdm(bulk_points, desc=f"Sampling bulk diffusivity for phase {phase}", total=len(bulk_points)):
                         general_diff_x[phase].append(point)
                         general_diff_d[phase].append(
                             _validate_2x2_matrix(
