@@ -2643,6 +2643,27 @@ def test_ternary_illingworth_setup_estimates_and_records_initial_eta():
     assert model.initialEtaEstimate is not None
 
 
+def test_ternary_illingworth_exposes_normalized_phase_profiles_for_plotting():
+    model = _make_scope_validation_model()
+    model.setup()
+
+    positions = model.getInterfacePositions()
+    etas = model.getInterfaceEtas()
+    profiles = model.getPhysicalPhaseProfiles()
+
+    assert np.allclose(positions, [model.getInterfacePosition()])
+    assert np.allclose(etas, [model.getInterfaceEta()])
+    assert model.getRightBoundary() == pytest.approx(model._R)
+    assert len(profiles) == 2
+    assert profiles[0][0][0] == pytest.approx(0.0)
+    assert profiles[0][0][-1] == pytest.approx(positions[0])
+    assert profiles[1][0][0] == pytest.approx(positions[0])
+    assert profiles[1][0][-1] == pytest.approx(model._R)
+    for _, composition in profiles:
+        assert composition.shape[1] == 3
+        assert np.allclose(np.sum(composition, axis=1), 1.0)
+
+
 def test_ternary_illingworth_can_use_instantaneous_initial_eta_method():
     eta_true = 0.25
     left, right = _LinearInterfaceEquilibrium().interface_compositions(eta_true)

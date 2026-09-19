@@ -220,7 +220,7 @@ def _base_options():
 
 
 def _plot_output(*args, **kwargs):
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     return plot_three_phase_composition_profile(*args, **kwargs)
 
@@ -231,7 +231,7 @@ def _figure(*args, **kwargs):
 
 def test_three_phase_plotly_helper_builds_combined_slider_figure():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     output = _plot_output(_result(), **_base_options())
     fig = output["fig"]
@@ -253,7 +253,7 @@ def test_three_phase_plotly_helper_builds_combined_slider_figure():
 
 def test_three_phase_plotly_helper_uses_diagnostic_ternary_coordinates_and_distinct_phase_labels():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     fig = _figure(_result(), **_base_options())
     first_phase = _result()["model"].getTransformedState(0.0)[0]
@@ -267,7 +267,7 @@ def test_three_phase_plotly_helper_uses_diagnostic_ternary_coordinates_and_disti
 
 def test_three_phase_plotly_helper_tieline_overlay_can_be_enabled_or_disabled():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     with_tielines = _figure(
         _result(),
@@ -288,7 +288,7 @@ def test_three_phase_plotly_helper_tieline_overlay_can_be_enabled_or_disabled():
 
 def test_three_phase_plotly_helper_frames_sync_interface_markers():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     fig = _figure(_result(), **_base_options())
 
@@ -304,7 +304,7 @@ def test_three_phase_plotly_helper_frames_sync_interface_markers():
 
 def test_three_phase_plotly_helper_default_overlays_show_average_starting_compositions_and_etas():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     fig = _figure(
         _result(constant_profiles=True),
@@ -402,7 +402,7 @@ def test_three_phase_plotly_helper_uses_historical_moving_right_boundary():
 
 def test_three_phase_plotly_helper_rejects_nonconstant_starting_phase_marker():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     with pytest.raises(ValueError, match="not constant"):
         _figure(
@@ -417,7 +417,7 @@ def test_three_phase_plotly_helper_rejects_nonconstant_starting_phase_marker():
 
 def test_three_phase_plotly_helper_plots_phase_uniform_face_diffusivities():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     provider = _RecordingDiffusivityProvider()
     fig = _figure(
@@ -454,7 +454,7 @@ def test_three_phase_plotly_helper_plots_phase_uniform_face_diffusivities():
 
 def test_three_phase_plotly_helper_returns_diffusivities_in_aux_data():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     provider = _RecordingDiffusivityProvider()
     output = _plot_output(
@@ -500,7 +500,7 @@ def test_three_phase_plotly_helper_returns_diffusivities_in_aux_data():
 
 def test_three_phase_plotly_helper_displays_run_metadata_in_title():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     result = _result()
     result["surrogate_ab"].metadata["source"] = "from_database_seed_point"
@@ -534,7 +534,7 @@ def test_three_phase_plotly_helper_displays_run_metadata_in_title():
 
 def test_three_phase_plotly_helper_uses_symmetric_log_only_for_signed_entries():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     provider = _RecordingDiffusivityProvider(negative_components=((0, 1), (1, 0)))
     fig = _figure(
@@ -565,7 +565,7 @@ def test_three_phase_plotly_helper_uses_symmetric_log_only_for_signed_entries():
 @pytest.mark.parametrize("mode", ["composition_dependent_lagged", "composition_dependent_implicit"])
 def test_three_phase_plotly_helper_reconstructs_composition_dependent_face_diffusivities(mode):
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     provider = _RecordingDiffusivityProvider()
     fig = _figure(
@@ -596,7 +596,7 @@ def test_three_phase_plotly_helper_reconstructs_composition_dependent_face_diffu
 
 def test_three_phase_plotly_helper_supports_scalar_only_diffusivity_providers():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     provider = _RecordingDiffusivityProvider(scalar_only=True)
     fig = _figure(
@@ -618,7 +618,7 @@ def test_three_phase_plotly_helper_supports_scalar_only_diffusivity_providers():
 
 def test_three_phase_plotly_helper_reports_missing_diffusivity_provider():
     pytest.importorskip("plotly")
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 
     with pytest.raises(ValueError, match="getInterdiffusivity"):
         _figure(
@@ -630,3 +630,140 @@ def test_three_phase_plotly_helper_reports_missing_diffusivity_provider():
             show_interface_etas=False,
             show_diffusivities=True,
         )
+
+
+class _SyntheticTwoPhaseModel:
+    """Minimal normalized two-phase history provider for Plotly-helper tests."""
+
+    def __init__(self, *, diffusivity_mode="phase_uniform", therm=None):
+        self.allElements = ELEMENTS
+        self.phases = ("BCC", "LIQUID")
+        self.bulkDiffusivityMode = diffusivity_mode
+        self.dtMode = "semi_log"
+        self.semiLog_dt = 0.05
+        self.tolerance = 1.0e-10
+        self.temperatureParameters = lambda positions, time: np.full(len(np.asarray(positions)), 1000.0)
+        self.therm = therm
+        self._R = 1.0
+        self._u_grid = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+        self._v_grid = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+        self.interfaceData = _History([0.0, 1.0], [0.30, 0.40])
+        self.etaData = _History([0.0, 1.0], [0.25, 0.50])
+        self._profiles = {
+            0.0: (
+                np.asarray([[0.10, 0.20], [0.12, 0.22], [0.14, 0.24]], dtype=np.float64),
+                np.asarray([[0.20, 0.30], [0.22, 0.32], [0.24, 0.34]], dtype=np.float64),
+            ),
+            1.0: (
+                np.asarray([[0.11, 0.19], [0.13, 0.21], [0.15, 0.23]], dtype=np.float64),
+                np.asarray([[0.21, 0.29], [0.23, 0.31], [0.25, 0.33]], dtype=np.float64),
+            ),
+        }
+
+    def getInterfacePositions(self, time=None):
+        index = 0 if float(time) == 0.0 else 1
+        return np.asarray([self.interfaceData._y[index]], dtype=np.float64)
+
+    def getInterfaceEtas(self, time=None):
+        index = 0 if float(time) == 0.0 else 1
+        return np.asarray([self.etaData._y[index]], dtype=np.float64)
+
+    def getInterfaceCompositions(self, time=None):
+        return (
+            np.asarray([0.10, 0.20], dtype=np.float64),
+            np.asarray([0.20, 0.30], dtype=np.float64),
+        )
+
+    def getRightBoundary(self, time=None):
+        return self._R
+
+    def getTransformedState(self, time=None):
+        return tuple(profile.copy() for profile in self._profiles[float(time)])
+
+    def getPhysicalPhaseProfiles(self, time=None):
+        interface = float(self.getInterfacePositions(time)[0])
+        profiles = self.getTransformedState(time)
+        return (
+            (
+                interface * self._u_grid,
+                np.column_stack((1.0 - np.sum(profiles[0], axis=1), profiles[0])),
+            ),
+            (
+                interface + (self._R - interface) * self._v_grid,
+                np.column_stack((1.0 - np.sum(profiles[1], axis=1), profiles[1])),
+            ),
+        )
+
+
+def _two_phase_result(*, diffusivity_mode="phase_uniform", therm=None):
+    return {
+        "model": _SyntheticTwoPhaseModel(diffusivity_mode=diffusivity_mode, therm=therm),
+        "surrogate": _surrogate(
+            ("BCC", "LIQUID"),
+            [[0.10, 0.20], [0.12, 0.22], [0.14, 0.24]],
+            [[0.20, 0.30], [0.22, 0.32], [0.24, 0.34]],
+        ),
+    }
+
+
+def test_two_phase_plotly_helper_builds_synced_profiles_and_eta_table():
+    pytest.importorskip("plotly")
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_two_phase_composition_profile
+
+    output = plot_two_phase_composition_profile(
+        _two_phase_result(),
+        renderer=None,
+        show_tielines=True,
+        tieline_eta_count=3,
+        display_tieline_count=2,
+        show_global_average=False,
+        show_starting_phase_compositions=False,
+    )
+    fig = output["fig"]
+
+    assert len(fig.frames) == 2
+    assert [trace.name for trace in fig.data[:2]] == ["A: BCC", "B: LIQUID"]
+    assert len([trace for trace in fig.data if "surrogate tie-lines" in trace.name]) == 2
+    table = next(trace for trace in fig.frames[0].data if trace.name == "Misc info")
+    assert list(table.cells.values[0]) == ["Time", "A|B eta", "A: BCC width", "B: LIQUID width"]
+    assert next(trace for trace in fig.frames[1].data if trace.name == "A|B interface").x == (400000.0, 400000.0)
+    assert output["aux"]["compositions"]["frames"][1]["phase_widths"].tolist() == pytest.approx([400000.0, 600000.0])
+
+
+def test_two_phase_plotly_helper_requires_surrogate_only_for_tielines():
+    pytest.importorskip("plotly")
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_two_phase_composition_profile
+
+    result = _two_phase_result()
+    result.pop("surrogate")
+    plot_two_phase_composition_profile(result, renderer=None, show_tielines=False, show_global_average=False,
+                                       show_starting_phase_compositions=False, show_interface_etas=False)
+    with pytest.raises(KeyError, match=r"result\['surrogate'\]"):
+        plot_two_phase_composition_profile(
+            result,
+            renderer=None,
+            show_tielines=True,
+            show_global_average=False,
+            show_starting_phase_compositions=False,
+            show_interface_etas=False,
+        )
+
+
+@pytest.mark.parametrize("mode", ["phase_uniform", "composition_dependent_lagged"])
+def test_two_phase_plotly_helper_plots_diffusivities_for_supported_modes(mode):
+    pytest.importorskip("plotly")
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_two_phase_composition_profile
+
+    provider = _RecordingDiffusivityProvider(scalar_only=mode != "phase_uniform")
+    fig = plot_two_phase_composition_profile(
+        _two_phase_result(diffusivity_mode=mode, therm=provider),
+        renderer=None,
+        show_tielines=False,
+        show_global_average=False,
+        show_starting_phase_compositions=False,
+        show_interface_etas=False,
+        show_diffusivities=True,
+    )["fig"]
+
+    assert len([trace for trace in fig.data if "D[" in trace.name]) == 8
+    assert any(call["composition"].ndim == 1 for call in provider.calls) == (mode != "phase_uniform")

@@ -2484,9 +2484,26 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     def getInterfacePosition(self, time=None):
         return self.interfaceData.y(time)
 
+    def getInterfacePositions(self, time=None):
+        """Returns the scalar interface position as a one-element array.
+
+        This normalized form matches the multi-interface three-phase solver and
+        is intended for phase-count-generic diagnostics and plotting. The
+        existing :meth:`getInterfacePosition` scalar API is unchanged.
+        """
+        return np.asarray([self.getInterfacePosition(time)], dtype=np.float64)
+
     def getInterfaceEta(self, time=None):
         """Returns the recorded scalar tie-line coordinate."""
         return self.etaData.y(time)
+
+    def getInterfaceEtas(self, time=None):
+        """Returns the scalar tie-line coordinate as a one-element array.
+
+        This normalized form matches the multi-interface three-phase solver;
+        :meth:`getInterfaceEta` remains the scalar convenience API.
+        """
+        return np.asarray([self.getInterfaceEta(time)], dtype=np.float64)
 
     def getInterfaceCompositions(self, time=None):
         """Returns the interface composition vectors at the current or recorded eta."""
@@ -2507,6 +2524,37 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if self.qData is None:
             raise ValueError("Transformed right-state history is not available; set record_pq_data=True.")
         return self.qData.y(time)
+
+    def getRightBoundary(self, time=None):
+        """Returns the fixed physical right boundary of the two-phase domain.
+
+        The planar two-phase Illingworth formulation uses a fixed domain, so
+        the value is independent of ``time``. The optional argument is accepted
+        for compatibility with the moving-domain three-phase plotting API.
+        """
+        return float(self._R)
+
+    def getPhysicalPhaseProfiles(self, time=None):
+        """Returns phase-wise physical coordinates and full ternary profiles.
+
+        The returned ``((x_left, c_left), (x_right, c_right))`` preserves the
+        sharp interface: both coordinate arrays include the interface endpoint,
+        while each composition array has columns ordered as the dependent
+        component followed by the two stored independent mole fractions.
+        Historical queries require ``record_pq_data=True`` because they are
+        reconstructed from the recorded transformed ``p`` and ``q`` profiles.
+        """
+        p, q = self.getTransformedState(time)
+        interface = float(self.getInterfacePosition(time))
+        right_boundary = self.getRightBoundary(time)
+        left_coordinates = interface * np.asarray(self._u_grid, dtype=np.float64)
+        right_coordinates = interface + (right_boundary - interface) * np.asarray(
+            self._v_grid, dtype=np.float64
+        )
+        return (
+            (left_coordinates, np.column_stack((1.0 - np.sum(p, axis=1), p))),
+            (right_coordinates, np.column_stack((1.0 - np.sum(q, axis=1), q))),
+        )
 
     def getTotalInventoryFromState(self, p, q, s):
         return integrate_planar_transformed_profile_components(

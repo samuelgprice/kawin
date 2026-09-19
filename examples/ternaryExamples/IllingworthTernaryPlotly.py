@@ -1,4 +1,4 @@
-"""Plotly helpers for three-phase Illingworth ternary example results."""
+"""Plotly helpers for two- and three-phase Illingworth ternary example results."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _require_plotly(renderer="browser"):
         from plotly.subplots import make_subplots
     except ImportError as exc:
         raise ImportError(
-            "Plotly three-phase Illingworth helpers require the optional dependency; "
+            "Plotly Illingworth ternary helpers require the optional dependency; "
             "install 'kawin[diagnostics]'."
         ) from exc
     if renderer is not None:
@@ -76,7 +76,7 @@ def _elements(model):
         values = getattr(model, "elements", None)
     values = tuple(str(value) for value in values)
     if len(values) != 3:
-        raise ValueError("Three-phase ternary plotting requires exactly three elements.")
+        raise ValueError("Illingworth ternary plotting requires exactly three elements.")
     return values
 
 
@@ -136,8 +136,8 @@ def _ternary_coordinates(full_composition):
 
 def _phase_labels(model):
     phases = tuple(str(phase) for phase in getattr(model, "phases", ()))
-    if len(phases) != 3:
-        raise ValueError("Three-phase plotting requires exactly three model phases.")
+    if len(phases) not in (2, 3):
+        raise ValueError("Illingworth ternary plotting requires either two or three model phases.")
     return tuple(f"{prefix}: {phase}" for prefix, phase in zip(_PHASE_PREFIXES, phases))
 
 
@@ -188,7 +188,7 @@ def _model_temperature(model, time):
     return "not available"
 
 
-def _phase_node_counts(model):
+def _phase_node_counts(model, phase_count):
     """Return the actual recorded transformed-grid node count for each phase."""
     grids = getattr(model, "_grids", None)
     if grids is None:
@@ -198,13 +198,13 @@ def _phase_node_counts(model):
         counts = tuple(len(np.asarray(grid).reshape(-1)) for grid in grids)
     except (TypeError, ValueError):
         return "not available"
-    return counts if len(counts) == 3 and all(count > 0 for count in counts) else "not available"
+    return counts if len(counts) == phase_count and all(count > 0 for count in counts) else "not available"
 
 
-def _tieline_surrogate_build_mode(result):
+def _tieline_surrogate_build_mode(result, surrogate_keys):
     """Infer the tie-line sampling mode from current surrogate metadata when present."""
     modes = []
-    for key in ("surrogate_ab", "surrogate_bc"):
+    for key in surrogate_keys:
         surrogate = result.get(key)
         metadata = getattr(surrogate, "metadata", None)
         source = metadata.get("source") if isinstance(metadata, Mapping) else None
@@ -218,7 +218,7 @@ def _tieline_surrogate_build_mode(result):
     return unique_modes[0] if len(unique_modes) == 1 else "/".join(unique_modes)
 
 
-def _plot_run_info(result, model, time, run_config):
+def _plot_run_info(result, model, time, run_config, phase_count, surrogate_keys):
     """Collect title metadata from the model and the optional external run configuration."""
     if run_config is None:
         run_config = {}
@@ -226,26 +226,26 @@ def _plot_run_info(result, model, time, run_config):
         raise TypeError("run_config must be a dictionary or mapping when provided.")
     return {
         "temperature": _model_temperature(model, time),
-        "tieline_mode": _tieline_surrogate_build_mode(result),
+        "tieline_mode": _tieline_surrogate_build_mode(result, surrogate_keys),
         "bulk_mode": getattr(model, "bulkDiffusivityMode", "not available"),
         "dt_mode": getattr(model, "dtMode", "not available"),
         "tolerance": getattr(model, "tolerance", "not available"),
         "semi_log_dt": getattr(model, "semiLog_dt", "not available"),
-        "phase_nodes": _phase_node_counts(model),
+        "phase_nodes": _phase_node_counts(model, phase_count),
         "therm_engine": _run_config_value(run_config, "THERM_ENGINE"),
         "tc_default_phases": _run_config_value(run_config, "TC_USE_DEFAULT_PHASES"),
         "pycalphad_default_phases": _run_config_value(run_config, "PYCALPHAD_USE_DEFAULT_PHASES"),
     }
 
 
-def _plot_title(frame, run_info):
+def _plot_title(frame, run_info, phase_count):
     """Build the multi-line title containing static run settings and current time."""
     phase_nodes = run_info["phase_nodes"]
     if isinstance(phase_nodes, tuple):
         phase_nodes = "(" + ", ".join(str(count) for count in phase_nodes) + ")"
     temperature = _format_run_value(run_info["temperature"])
     return (
-        f"Three-phase Illingworth composition profile, t={frame['time']:.6g} s"
+        f"{phase_count}-phase Illingworth composition profile, t={frame['time']:.6g} s"
         f"<br>TEMPERATURE={temperature} K | "
         f"TIELINE_SURROGATE_BUILD_MODE={_format_run_value(run_info['tieline_mode'])} | "
         f"BULK_DIFFUSIVITY_MODE={_format_run_value(run_info['bulk_mode'])}"
@@ -380,21 +380,30 @@ def _phase_uniform_compositions(model, time, interfaces):
             "Phase-uniform diffusivity plotting requires "
             "result['model'].getInterfaceCompositions(time)."
         )
-    interface_compositions = tuple(
-        tuple(np.asarray(value, dtype=np.float64).reshape(-1) for value in pair)
-        for pair in get_interface_compositions(float(time))
+    raw_compositions = tuple(get_interface_compositions(float(time)))
+    if len(interfaces) == 1 and len(raw_compositions) == 2:
+        interface_compositions = (
+            tuple(np.asarray(value, dtype=np.float64).reshape(-1) for value in raw_compositions),
+        )
+    else:
+        interface_compositions = tuple(
+            tuple(np.asarray(value, dtype=np.float64).reshape(-1) for value in pair)
+            for pair in raw_compositions
+        )
+    if len(interface_compositions) != len(interfaces) or any(len(pair) != 2 for pair in interface_compositions):
+        raise ValueError("The model must return one pair of interface compositions per interface.")
+    compositions = [interface_compositions[0][0]]
+    compositions.extend(
+        0.5 * (left[1] + right[0])
+        for left, right in zip(interface_compositions[:-1], interface_compositions[1:])
     )
-    if len(interface_compositions) != 2 or any(len(pair) != 2 for pair in interface_compositions):
-        raise ValueError("The model must return two pairs of interface compositions.")
-    compositions = (
-        interface_compositions[0][0],
-        0.5 * (interface_compositions[0][1] + interface_compositions[1][0]),
-        interface_compositions[1][1],
-    )
-    positions = (float(interfaces[0]), 0.5 * (float(interfaces[0]) + float(interfaces[1])), float(interfaces[1]))
+    compositions.append(interface_compositions[-1][1])
+    positions = [float(interfaces[0])]
+    positions.extend(0.5 * (float(left) + float(right)) for left, right in zip(interfaces[:-1], interfaces[1:]))
+    positions.append(float(interfaces[-1]))
     if any(composition.shape != (2,) for composition in compositions):
         raise ValueError("The model must return two-component interface compositions.")
-    return compositions, positions
+    return tuple(compositions), tuple(positions)
 
 
 def _frame_diffusivity_segments(model, time, profiles, grids, boundaries, interfaces, distance_scale):
@@ -474,9 +483,9 @@ def _frame_diffusivity_segments(model, time, profiles, grids, boundaries, interf
     return segments
 
 
-def _frame_profile(model, time, elements, component_indices, distance_scale, include_diffusivities=False):
+def _frame_profile(model, time, elements, component_indices, distance_scale, phase_count, include_diffusivities=False):
     """Build one frame from authoritative phase-wise physical profiles and historical R."""
-    interfaces = np.asarray(model.getInterfacePositions(float(time)), dtype=np.float64).reshape(2)
+    interfaces = np.asarray(model.getInterfacePositions(float(time)), dtype=np.float64).reshape(-1)
     get_physical_profiles = getattr(model, "getPhysicalPhaseProfiles", None)
     get_right_boundary = getattr(model, "getRightBoundary", None)
     if not callable(get_physical_profiles) or not callable(get_right_boundary):
@@ -487,22 +496,30 @@ def _frame_profile(model, time, elements, component_indices, distance_scale, inc
     physical_profiles = tuple(get_physical_profiles(float(time)))
     domain_length = float(get_right_boundary(float(time)))
     grids = tuple(np.asarray(grid, dtype=np.float64).reshape(-1) for grid in getattr(model, "_grids", ()))
-    if len(physical_profiles) != 3 or len(grids) != 3:
-        raise ValueError("The model must expose three physical phase profiles and three transformed grids.")
+    if len(interfaces) != phase_count - 1 or len(physical_profiles) != phase_count:
+        raise ValueError("The model must expose phase-wise profiles and interfaces matching its phase count.")
     if not np.isfinite(domain_length) or domain_length <= 0.0:
         raise ValueError("The model must expose a positive historical right boundary.")
 
     phase_segments = []
     profiles = []
-    for phase_index, ((coordinates, full), grid) in enumerate(zip(physical_profiles, grids)):
+    derived_grids = []
+    for phase_index, (coordinates, full) in enumerate(physical_profiles):
         coordinates = np.asarray(coordinates, dtype=np.float64).reshape(-1)
         full = np.asarray(full, dtype=np.float64)
         if full.shape != (len(coordinates), 3):
             raise ValueError(f"physical profile {phase_index} must have shape (n_nodes, 3).")
-        if len(grid) != len(coordinates):
+        if len(grids) == phase_count and len(grids[phase_index]) != len(coordinates):
             raise ValueError(f"grid/profile length mismatch for phase interval {phase_index}.")
+        width = float(coordinates[-1] - coordinates[0])
+        if not np.isfinite(width) or width <= 0.0:
+            raise ValueError(f"physical phase interval {phase_index} must have positive width.")
         phase_segments.append({"distance": coordinates * distance_scale, "full": full})
         profiles.append(full[:, 1:].copy())
+        derived_grids.append((coordinates - coordinates[0]) / width)
+
+    if len(grids) != phase_count:
+        grids = tuple(derived_grids)
 
     boundaries = np.asarray(
         [phase_segments[0]["distance"][0], *(segment["distance"][-1] for segment in phase_segments)],
@@ -554,8 +571,8 @@ def _frame_profile(model, time, elements, component_indices, distance_scale, inc
 def _initial_phase_compositions(model, time):
     """Return constant initial phase compositions after validating each profile."""
     profiles = tuple(np.asarray(profile, dtype=np.float64) for profile in model.getTransformedState(float(time)))
-    if len(profiles) != 3:
-        raise ValueError("Starting phase composition markers require three transformed phase profiles.")
+    if len(profiles) not in (2, 3):
+        raise ValueError("Starting phase composition markers require two or three transformed phase profiles.")
     full = []
     for phase_index, profile in enumerate(profiles):
         if not np.allclose(profile, profile[0], rtol=1.0e-10, atol=1.0e-12):
@@ -567,11 +584,11 @@ def _initial_phase_compositions(model, time):
     return np.asarray(full, dtype=np.float64)
 
 
-def _interface_eta_values(model, time):
-    """Return current A|B and B|C tie-line coordinates."""
+def _interface_eta_values(model, time, interface_count):
+    """Return one recorded tie-line coordinate for each plotted interface."""
     if not hasattr(model, "getInterfaceEtas"):
         raise ValueError("Current eta display requires model.getInterfaceEtas(time).")
-    return np.asarray(model.getInterfaceEtas(float(time)), dtype=np.float64).reshape(2)
+    return np.asarray(model.getInterfaceEtas(float(time)), dtype=np.float64).reshape(interface_count)
 
 
 def _phase_customdata(frame, phase_index, phase_label):
@@ -852,7 +869,7 @@ def _interface_trace(go, frame, interface_index, unit_label):
         x=[x, x],
         y=[0.0, 1.0],
         mode="lines",
-        name=("A|B interface" if interface_index == 0 else "B|C interface"),
+        name=f"{_PHASE_PREFIXES[interface_index]}|{_PHASE_PREFIXES[interface_index + 1]} interface",
         legendgroup="interfaces",
         showlegend=interface_index == 0,
         line={"color": "rgba(40,40,40,0.55)", "dash": "dash", "width": 1.5},
@@ -880,8 +897,11 @@ def _starting_phase_trace(go, initial_full, phase_labels, elements):
 
 def _misc_info_trace(go, frame, eta_values, phase_labels, unit_label):
     """Build the synchronized misc-info table for etas and phase widths."""
-    labels = ["Time", "A|B eta", "B|C eta"]
-    values = [f"{frame['time']:.6g} s", f"{eta_values[0]:.6g}", f"{eta_values[1]:.6g}"]
+    labels = ["Time"] + [
+        f"{_PHASE_PREFIXES[index]}|{_PHASE_PREFIXES[index + 1]} eta"
+        for index in range(len(eta_values))
+    ]
+    values = [f"{frame['time']:.6g} s"] + [f"{eta:.6g}" for eta in eta_values]
     for phase_label, width in zip(phase_labels, frame["phase_widths"]):
         labels.append(f"{phase_label} width")
         values.append(f"{float(width):.6g} {unit_label}")
@@ -913,13 +933,12 @@ def _sample_indices(count, display_count):
     return np.unique(np.linspace(0, count - 1, display_count).round().astype(int))
 
 
-def _add_static_tielines(fig, go, result, eta_count, display_count):
-    """Overlay sampled A|B and B|C surrogate tie-lines on the ternary subplot."""
-    for interface_index, key in enumerate(("surrogate_ab", "surrogate_bc")):
+def _add_static_tielines(fig, go, result, surrogate_keys, eta_count, display_count):
+    """Overlay sampled interface-surrogate tie-lines on the ternary subplot."""
+    for interface_index, key in enumerate(surrogate_keys):
         surrogate = result.get(key)
         if surrogate is None:
-            print(f"{key} not found so it is being skipped")
-            continue
+            raise KeyError(f"show_tielines=True requires result['{key}'].")
         report = evaluate_tieline_diagnostics(surrogate, eta_count=eta_count)
         phases = tuple(report["phases"])
         endpoints = report["endpoint_compositions"]
@@ -952,9 +971,11 @@ def _frame_name(index, time):
     return f"t{index}_{float(time):.12g}"
 
 
-def plot_three_phase_composition_profile(
+def _plot_composition_profile(
     result,
     *,
+    phase_count,
+    surrogate_keys,
     time_indices=None,
     max_frames=None,
     components=None,
@@ -972,11 +993,10 @@ def plot_three_phase_composition_profile(
     renderer="browser",
 ):
     """
-    Build a Plotly ternary-plus-xy profile figure for a three-phase run result.
+    Build a Plotly ternary-plus-xy profile figure for an Illingworth run result.
 
-    The input must be a mapping returned by
-    ``IllingworthTernaryThreePhaseNiTiNb_TC.run_case`` with a solved or setup
-    three-phase model stored under ``"model"``. Profiles are read from the
+    The input must be a mapping with a solved or setup two- or three-phase
+    model stored under ``"model"``. Profiles are read from the
     recorded transformed phase histories so each moving interval is plotted in
     its own phase color and interface discontinuities are preserved. Global
     average composition uses physical component moles divided by total moles
@@ -1018,9 +1038,6 @@ def plot_three_phase_composition_profile(
     if "model" not in result:
         raise KeyError("result must contain result['model'].")
     model = result["model"]
-    if getattr(model, "profileData", None) is None:
-        raise ValueError("Transformed profile history is required; build the model with record_pq_data=True.")
-
     go, make_subplots = _require_plotly(renderer)
     times = _history_times(model)
     selected_indices = _selected_time_indices(times, time_indices, max_frames)
@@ -1028,6 +1045,8 @@ def plot_three_phase_composition_profile(
     component_indices = _component_indices(elements, components)
     distance_scale, unit_label = _distance_scale(distance_unit)
     phase_labels = _phase_labels(model)
+    if len(phase_labels) != phase_count:
+        raise ValueError(f"Expected a {phase_count}-phase model, got {len(phase_labels)} phases.")
     frames_data = [
         _frame_profile(
             model,
@@ -1035,6 +1054,7 @@ def plot_three_phase_composition_profile(
             elements,
             component_indices,
             distance_scale,
+            phase_count,
             include_diffusivities=show_diffusivities,
         )
         for index in selected_indices
@@ -1053,14 +1073,14 @@ def plot_three_phase_composition_profile(
         use_symmetric_log,
         symlog_linthresh,
     )
-    run_info = _plot_run_info(result, model, initial["time"], run_config)
+    run_info = _plot_run_info(result, model, initial["time"], run_config, phase_count, surrogate_keys)
     initial_phase_compositions = (
         _initial_phase_compositions(model, times[0])
         if show_starting_phase_compositions
         else None
     )
     eta_data = (
-        [_interface_eta_values(model, times[index]) for index in selected_indices]
+        [_interface_eta_values(model, times[index], phase_count - 1) for index in selected_indices]
         if show_interface_etas
         else None
     )
@@ -1150,7 +1170,7 @@ def plot_three_phase_composition_profile(
         for component_index in component_indices:
             dynamic_trace_indices.append(len(fig.data))
             fig.add_trace(_global_average_xy_trace(go, initial, component_index, elements), row=1, col=2)
-    for interface_index in range(2):
+    for interface_index in range(phase_count - 1):
         dynamic_trace_indices.append(len(fig.data))
         fig.add_trace(_interface_trace(go, initial, interface_index, unit_label), row=1, col=2)
     if show_interface_etas:
@@ -1177,7 +1197,9 @@ def plot_three_phase_composition_profile(
                 )
 
     if show_tielines:
-        _add_static_tielines(fig, go, result, int(tieline_eta_count), int(display_tieline_count))
+        _add_static_tielines(
+            fig, go, result, surrogate_keys, int(tieline_eta_count), int(display_tieline_count)
+        )
 
     frames = []
     for frame_number, frame in enumerate(frames_data):
@@ -1190,7 +1212,10 @@ def plot_three_phase_composition_profile(
         traces.extend(_component_trace(go, frame, component_index, elements, unit_label) for component_index in component_indices)
         if show_global_average:
             traces.extend(_global_average_xy_trace(go, frame, component_index, elements) for component_index in component_indices)
-        traces.extend(_interface_trace(go, frame, interface_index, unit_label) for interface_index in range(2))
+        traces.extend(
+            _interface_trace(go, frame, interface_index, unit_label)
+            for interface_index in range(phase_count - 1)
+        )
         if show_interface_etas:
             traces.append(_misc_info_trace(go, frame, eta_data[frame_number], phase_labels, unit_label))
         if show_diffusivities:
@@ -1231,7 +1256,7 @@ def plot_three_phase_composition_profile(
         template="plotly_white",
         width=(1900 if show_interface_etas else 1800) if show_diffusivities else (1800 if show_interface_etas else 1650),
         height=900,
-        title={"text": _plot_title(initial, run_info), "font": {"size": 11}},
+        title={"text": _plot_title(initial, run_info, phase_count), "font": {"size": 11}},
         margin={"t": 125, "b": 70, "l": 55, "r": 45},
         legend={
             "orientation": "v",
@@ -1329,4 +1354,103 @@ def plot_three_phase_composition_profile(
     return {"fig": fig, "aux": aux}
 
 
-__all__ = ["plot_three_phase_composition_profile"]
+def plot_two_phase_composition_profile(
+    result,
+    *,
+    time_indices=None,
+    max_frames=None,
+    components=None,
+    distance_unit="um",
+    show_tielines=True,
+    tieline_eta_count=101,
+    display_tieline_count=21,
+    show_global_average=True,
+    show_starting_phase_compositions=True,
+    show_interface_etas=True,
+    show_diffusivities=False,
+    use_symmetric_log=False,
+    symlog_linthresh=None,
+    run_config=None,
+    renderer="browser",
+):
+    """Build a Plotly ternary-plus-xy profile figure for a two-phase run result.
+
+    ``result`` must contain ``"model"`` with a
+    :class:`~kawin.diffusion.MovingBoundaryIllingworthTernaryFD1DModel` that
+    recorded transformed profiles via ``record_pq_data=True``. When
+    ``show_tielines=True`` (the default), it must also contain the single
+    two-phase interface surrogate under ``"surrogate"``. All other keyword
+    options are shared with :func:`plot_three_phase_composition_profile`.
+    """
+    return _plot_composition_profile(
+        result,
+        phase_count=2,
+        surrogate_keys=("surrogate",),
+        time_indices=time_indices,
+        max_frames=max_frames,
+        components=components,
+        distance_unit=distance_unit,
+        show_tielines=show_tielines,
+        tieline_eta_count=tieline_eta_count,
+        display_tieline_count=display_tieline_count,
+        show_global_average=show_global_average,
+        show_starting_phase_compositions=show_starting_phase_compositions,
+        show_interface_etas=show_interface_etas,
+        show_diffusivities=show_diffusivities,
+        use_symmetric_log=use_symmetric_log,
+        symlog_linthresh=symlog_linthresh,
+        run_config=run_config,
+        renderer=renderer,
+    )
+
+
+def plot_three_phase_composition_profile(
+    result,
+    *,
+    time_indices=None,
+    max_frames=None,
+    components=None,
+    distance_unit="um",
+    show_tielines=True,
+    tieline_eta_count=101,
+    display_tieline_count=21,
+    show_global_average=True,
+    show_starting_phase_compositions=True,
+    show_interface_etas=True,
+    show_diffusivities=False,
+    use_symmetric_log=False,
+    symlog_linthresh=None,
+    run_config=None,
+    renderer="browser",
+):
+    """Build a Plotly ternary-plus-xy profile figure for a three-phase run result.
+
+    ``result`` must contain ``"model"`` with a
+    :class:`~kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel`.
+    When ``show_tielines=True`` (the default), it must additionally contain
+    ``"surrogate_ab"`` and ``"surrogate_bc"``. All profiles must have been
+    recorded with ``record_pq_data=True``.
+    """
+    return _plot_composition_profile(
+        result,
+        phase_count=3,
+        surrogate_keys=("surrogate_ab", "surrogate_bc"),
+        time_indices=time_indices,
+        max_frames=max_frames,
+        components=components,
+        distance_unit=distance_unit,
+        show_tielines=show_tielines,
+        tieline_eta_count=tieline_eta_count,
+        display_tieline_count=display_tieline_count,
+        show_global_average=show_global_average,
+        show_starting_phase_compositions=show_starting_phase_compositions,
+        show_interface_etas=show_interface_etas,
+        show_diffusivities=show_diffusivities,
+        use_symmetric_log=use_symmetric_log,
+        symlog_linthresh=symlog_linthresh,
+        run_config=run_config,
+        renderer=renderer,
+    )
+
+
+__all__ = ["plot_two_phase_composition_profile", "plot_three_phase_composition_profile"]

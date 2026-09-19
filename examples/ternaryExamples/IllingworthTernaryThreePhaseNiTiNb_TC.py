@@ -1234,10 +1234,10 @@ if __name__ == "__main__":
     import importlib
 
     importlib.reload(importlib.import_module(
-        "examples.ternaryExamples.IllingworthTernaryThreePhasePlotly"
+        "examples.ternaryExamples.IllingworthTernaryPlotly"
     ))
 
-    from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+    from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
     results_plot = plot_three_phase_composition_profile(
         result,
         show_tielines=True,

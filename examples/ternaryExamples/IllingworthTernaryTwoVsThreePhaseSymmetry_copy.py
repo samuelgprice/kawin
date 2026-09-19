@@ -1308,7 +1308,7 @@ result = {
     "surrogate_ab": tieline_surrogate,
     "therm_ab": source_thermodynamics,
 }
-from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 results_plot = plot_three_phase_composition_profile(
     result,
     show_tielines=True,

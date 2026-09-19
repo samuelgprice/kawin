@@ -1586,9 +1586,9 @@ result = {
 }
 import importlib
 
-from examples.ternaryExamples.IllingworthTernaryThreePhasePlotly import plot_three_phase_composition_profile
+from examples.ternaryExamples.IllingworthTernaryPlotly import plot_three_phase_composition_profile
 ternaryPlotly_module = importlib.import_module(
-    "examples.ternaryExamples.IllingworthTernaryThreePhasePlotly"
+    "examples.ternaryExamples.IllingworthTernaryPlotly"
 )
 
 importlib.invalidate_caches()
