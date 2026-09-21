@@ -397,6 +397,10 @@ def _sample_label(eta=None, composition=None):
     return ", ".join(pieces) if pieces else "sample"
 
 
+class _ExpectedTielineRegionError(ValueError):
+    """A seed-scan probe has invalid composition or the wrong equilibrium phases."""
+
+
 def _extract_expected_tieline(meta, tieline_phases, elements, min_composition, eta=None, composition=None):
     """
     Extracts a phase-ordered tie-line from equilibrium metadata.
@@ -422,13 +426,14 @@ def _extract_expected_tieline(meta, tieline_phases, elements, min_composition, e
             raise ValueError(f"Unlabeled tie-line endpoint for {label}; expected phases {expected}.")
         phase = endpoint["phase"]
         observed.append(phase)
-        if phase in by_phase:
+        if phase is not None and phase in by_phase:
             raise ValueError(f"Duplicate tie-line phase for {label}; expected phases {expected}, observed {observed}.")
         by_phase[phase] = endpoint["composition"]
 
     observed_set = set(observed)
     if observed_set != expected_set:
-        raise ValueError(f"Unexpected tie-line phases for {label}; expected {expected}, observed {observed}.")
+        stable = f", stable phases {meta['stable_phases']}" if "stable_phases" in meta else ""
+        raise ValueError(f"Unexpected tie-line phases for {label}; expected {expected}, observed {observed}{stable}.")
 
     out = []
     for phase in expected:
@@ -478,19 +483,27 @@ def _sample_expected_tieline(
     The probe must be an independent ternary composition inside the simplex and
     the returned metadata must contain exactly the requested two phases. The
     returned midpoint is the phase-endpoint average used by seed-point scans to
-    adapt the next probe location along a fixed normal direction.
+    adapt the next probe location along a fixed normal direction. Invalid probes
+    and phase sets raise ``_ExpectedTielineRegionError``; diffusivity errors
+    retain their original exception type.
     """
-    probe = _as_independent_ternary_components(composition, elements, "probe composition")
-    probe = _validate_independent_composition(probe, float(min_composition), "probe composition")
+    try:
+        probe = _as_independent_ternary_components(composition, elements, "probe composition")
+        probe = _validate_independent_composition(probe, float(min_composition), "probe composition")
+    except ValueError as exc:
+        raise _ExpectedTielineRegionError(str(exc)) from exc
     _, _, meta = _call_interfacial_composition(thermodynamics, probe, temperature, precipitate_phase, eta)
-    endpoints = _extract_expected_tieline(
-        meta,
-        tieline_phases,
-        elements,
-        float(min_composition),
-        eta=eta,
-        composition=probe,
-    )
+    try:
+        endpoints = _extract_expected_tieline(
+            meta,
+            tieline_phases,
+            elements,
+            float(min_composition),
+            eta=eta,
+            composition=probe,
+        )
+    except ValueError as exc:
+        raise _ExpectedTielineRegionError(str(exc)) from exc
     diffusivities = tuple(
         _validate_2x2_matrix(
             thermodynamics.getInterdiffusivity(comp, temperature, phase=phase),
@@ -584,8 +597,9 @@ def _find_seed_scan_extent(
     -------
     tuple[list[dict], list[np.ndarray]]
         Accepted tie-line samples along this scan side, followed by probe
-        compositions that failed the expected two-phase-region check. The seed
-        sample itself is not included in the accepted list.
+        compositions that failed the expected two-phase-region check. A kinetics
+        failure propagates rather than being treated as a phase boundary. The
+        seed sample itself is not included in the accepted list.
     """
     sign = float(sign)
     last_sample = seed_sample
@@ -606,7 +620,7 @@ def _find_seed_scan_extent(
                 elements,
                 min_composition,
             )
-        except ValueError as exc:
+        except _ExpectedTielineRegionError as exc:
             # if thermodynamics._backend.totalNumCalcs!=(prevNumCalcs+1):
             #     print(prevNumCalcs, thermodynamics._backend.totalNumCalcs)
             lst_ofFailedProbes.append(probe.copy())
@@ -628,7 +642,7 @@ def _find_seed_scan_extent(
                         elements,
                         min_composition,
                     )
-                except ValueError:
+                except _ExpectedTielineRegionError:
                     lst_ofFailedProbes.append(middle_probe.copy())
                     high = middle
                 else:
@@ -677,8 +691,9 @@ def _resample_seed_scan_side(
     evenly spaced relative positions from 0 to 1.
 
     Returned distances are relative arclength fractions, not physical
-    composition-space distances. A generated probe that leaves the expected
-    two-phase region is treated as a sampling/topology failure.
+    composition-space distances. A failed generated probe reports its
+    composition and original error, which may come from equilibrium metadata
+    or a phase diffusivity query.
     """
 
     midpoints_arr = np.array([s['midpoint'] for s in lst_ofSamples]).copy()
@@ -724,10 +739,9 @@ def _resample_seed_scan_side(
                 min_composition,
             )
         except ValueError as exc:
-            debugInPlace()
             raise ValueError(
-                "Seed-point generated probe left the expected two-phase region "
-                f"at signed scan distance {float(sign) * float(target):.8g}."
+                "Seed-point resampling failed at relative arclength "
+                f"{float(relativeDist):.8g}, composition {np.asarray(target).tolist()}: {exc}"
             ) from exc
         sample = dict(sample)
         sample["scan_direction"] = scan_direction

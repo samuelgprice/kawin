@@ -747,7 +747,8 @@ class TCPythonThermodynamics:
         Nonzero ``gExtra`` is intentionally unsupported in this example because
         Gibbs-Thomson-corrected multicomponent curvature is outside the first
         TC-Python integration scope. When ``removeCache`` is omitted, the
-        instance's ``default_remove_cache`` policy is used.
+        instance's ``default_remove_cache`` policy is used. If the expected
+        phases are absent, metadata includes the actual stable-phase names.
         """
 
         if np.any(np.asarray(gExtra, dtype=np.float64) != 0):
@@ -776,6 +777,7 @@ class TCPythonThermodynamics:
             x_beta = -1.0 * np.ones(len(self.independent_elements), dtype=np.float64)
             metadata = {
                 "endpoint_phases": (None, None),
+                "stable_phases": tuple(equilibrium["stable_phases"]),
                 "endpoints": (
                     {"phase": None, "composition": x_alpha},
                     {"phase": None, "composition": x_beta},

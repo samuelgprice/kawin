@@ -3281,6 +3281,20 @@ def test_ternary_surrogate_seed_point_rejects_invalid_seed_metadata():
         _build_seed_surrogate(thermodynamics=_SeedScanThermodynamics(endpoint_mode="extra"))
 
 
+def test_missing_tie_line_endpoints_report_actual_stable_phases():
+    metadata = {
+        "stable_phases": ("LIQUID#1",),
+        "endpoints": (
+            {"phase": None, "composition": [-1.0, -1.0]},
+            {"phase": None, "composition": [-1.0, -1.0]},
+        ),
+    }
+    with pytest.raises(ValueError, match="stable phases \\('LIQUID#1',\\)"):
+        surrogate_module._extract_expected_tieline(
+            metadata, ("BCC_B2#1", "LIQUID#1"), ("W", "TI", "FE"), 1.0e-10
+        )
+
+
 def test_ternary_surrogate_seed_point_rejects_mixed_line_arguments():
     with pytest.raises(ValueError, match="probe_point seed mode cannot be combined"):
         _build_seed_surrogate(probe_start=np.asarray([0.20, 0.10], dtype=np.float64))
@@ -3296,6 +3310,35 @@ def test_ternary_surrogate_line_mode_still_requires_line_arguments():
 def test_ternary_surrogate_seed_point_validates_boundary_search_parameters():
     with pytest.raises(ValueError, match="probe_boundary_search_step"):
         _build_seed_surrogate(probe_boundary_search_step=0.0)
+
+
+def test_seed_scan_does_not_treat_invalid_kinetics_matrix_as_phase_boundary():
+    class FailingKinetics(_SeedScanThermodynamics):
+        def getInterdiffusivity(self, composition, temperature, phase=None, **kwargs):
+            if np.asarray(composition)[1] > self.seed_y + 0.005:
+                return np.full((2, 2), np.nan)
+            return super().getInterdiffusivity(composition, temperature, phase=phase, **kwargs)
+
+    thermodynamics = FailingKinetics()
+    thermodynamics._backend = type("Backend", (), {"totalNumCalcs": 0})()
+    seed = surrogate_module._sample_expected_tieline(
+        thermodynamics, [0.30, 0.20], 1000.0, "BETA", ("ALPHA", "BETA"), ["Z", "X", "Y"], 1.0e-10
+    )
+    with pytest.raises(ValueError, match="interface diffusivity.*finite 2x2 matrix"):
+        surrogate_module._find_seed_scan_extent(
+            thermodynamics,
+            seed,
+            1.0,
+            surrogate_module._seed_tieline_scan_direction(seed["endpoints"]),
+            1000.0,
+            "BETA",
+            ("ALPHA", "BETA"),
+            ["Z", "X", "Y"],
+            1.0e-10,
+            0.01,
+            1.0e-6,
+            3,
+        )
 
 
 def test_seed_scan_resample_uses_accepted_path_and_uniform_arclength_fractions():
@@ -3330,6 +3373,36 @@ def test_seed_scan_resample_uses_accepted_path_and_uniform_arclength_fractions()
     probes = np.asarray([sample["probe"] for _, sample in resampled], dtype=np.float64)
     np.testing.assert_allclose(distances, np.linspace(0.0, 1.0, 5))
     np.testing.assert_allclose(probes[:, 1], np.linspace(0.17, 0.27, 5))
+
+
+def test_seed_scan_resample_reports_diffusivity_failure_without_calling_it_a_phase_change():
+    thermodynamics = _SeedScanThermodynamics()
+    samples = [
+        surrogate_module._sample_expected_tieline(
+            thermodynamics, [0.30, y], 1000.0, "BETA", ("ALPHA", "BETA"), ["Z", "X", "Y"], 1.0e-10
+        )
+        for y in (0.17, 0.20, 0.24, 0.27)
+    ]
+
+    def fail_diffusivity(composition, temperature, phase=None, **kwargs):
+        raise ValueError("kinetics matrix unavailable")
+
+    thermodynamics.getInterdiffusivity = fail_diffusivity
+    with pytest.raises(ValueError, match="Seed-point resampling failed at relative arclength 0") as exc_info:
+        surrogate_module._resample_seed_scan_side(
+            thermodynamics,
+            1.0,
+            np.asarray([0.0, 1.0]),
+            1000.0,
+            "BETA",
+            ("ALPHA", "BETA"),
+            ["Z", "X", "Y"],
+            1.0e-10,
+            2,
+            samples,
+        )
+    assert "composition [0.3, 0.17]" in str(exc_info.value)
+    assert "kinetics matrix unavailable" in str(exc_info.value)
 
 
 def test_seed_scan_resample_follows_curved_accepted_path():

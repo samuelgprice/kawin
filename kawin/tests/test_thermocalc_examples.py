@@ -295,6 +295,19 @@ def test_planar_tie_line_metadata_and_gextra_rejection():
         therm.getInterfacialComposition([0.3, 0.2], 1373.0, gExtra=1.0)
 
 
+def test_missing_tie_line_metadata_reports_actual_stable_phases():
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=FakeThermoCalcBackend())
+    therm.getEquilibriumData = lambda *args, **kwargs: {
+        "stable_phases": ["BCC_A2#2"],
+        "phase_compositions": {"BCC_A2#2": np.array([0.5, 0.3, 0.2])},
+    }
+
+    _, _, metadata = therm.getInterfacialComposition([0.3, 0.2], 1373.0, returnMeta=True)
+
+    assert metadata["endpoint_phases"] == (None, None)
+    assert metadata["stable_phases"] == ("BCC_A2#2",)
+
+
 def test_default_remove_cache_is_configurable_per_adapter():
     backend = FakeThermoCalcBackend()
     therm = TCPythonThermodynamics(config=_fecrni_config(), backend=backend, default_remove_cache=False)
