@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -19,6 +20,13 @@ from kawin.thermo.utils import _getMatrixPhase, _getPrecipitatePhase, _process_x
 from examples.debugInPlace import debugInPlace
 
 GAS_CONSTANT = 8.31446261815324
+
+def _is_qthiss_iteration_error(exc: Exception) -> bool:
+    """Match only TC's QTHISS iteration-limit failure, allowing whitespace variation."""
+
+    pattern = r"\bERROR\s+IN\s+QTHISS\s*:\s*TOO\s+MANY\s+ITERATIONS\b"
+    return re.search(pattern, str(exc), re.IGNORECASE) is not None
+
 
 def _is_missing_diffusion_quantity_error(exc: Exception) -> bool:
     message = str(exc).upper()
@@ -43,6 +51,15 @@ class ThermoCalcCalculationError(ThermoCalcError):
     """Raised when a TC-Python calculation fails after the input is accepted."""
 
 
+class ThermoCalcSolveError(ThermoCalcCalculationError):
+    """Raised specifically when ``calculate()`` fails, including exhausted retries.
+
+    Bulk sampling may drop this error without hiding failed quantity queries.
+    """
+
+    failed_during_calculate = True
+
+
 class ThermoCalcDatabaseError(ThermoCalcError):
     """Raised when a database cannot support the requested TC-Python workflow."""
 
@@ -60,7 +77,9 @@ class ThermoCalcConfig:
     ``use_default_phases=False`` to reproduce the older behavior where only
     ``phases`` are selected in the Thermo-Calc system. The optional
     ``global_minimization_max_grid_points`` value is applied through
-    TC-Python's ``SingleEquilibriumOptions`` object.
+    TC-Python's ``SingleEquilibriumOptions`` object. Kinetics controls apply only to kinetics;
+    QTHISS retries use larger grids only when global minimization is active.
+    Subsequent calculations restore the configured grid.
     """
 
     thermodynamic_database: str = None #"TCFE9"
@@ -72,6 +91,9 @@ class ThermoCalcConfig:
     pressure: float = 101325.0
     use_default_phases: bool = True
     global_minimization_max_grid_points: int | None = None
+    equilibrium_qthiss_retry_grid_points: tuple[int, ...] = ()
+    kinetics_disable_global_minimization: bool = False
+    kinetics_disable_positive_definite_hessian: bool = False
     cache_dir: str | Path | None = Path("examples") / "ThermoCalc" / "outputs" / "tc_cache"
     timeout_seconds: float | None = 300.0
     calculation_version: int = 1
@@ -100,6 +122,20 @@ class ThermoCalcConfig:
             if value < 1:
                 raise ThermoCalcInputError("global_minimization_max_grid_points must be a positive integer when set.")
             object.__setattr__(self, "global_minimization_max_grid_points", value)
+        try:
+            retry_points = tuple(self.equilibrium_qthiss_retry_grid_points)
+        except TypeError as exc:
+            raise ThermoCalcInputError("equilibrium_qthiss_retry_grid_points must be a sequence of positive integers.") from exc
+        if any(not isinstance(value, (int, np.integer)) or isinstance(value, (bool, np.bool_)) or value < 1 for value in retry_points):
+            raise ThermoCalcInputError("equilibrium_qthiss_retry_grid_points must contain positive integers.")
+        if any(later <= earlier for earlier, later in zip(retry_points, retry_points[1:])):
+            raise ThermoCalcInputError("equilibrium_qthiss_retry_grid_points must increase strictly.")
+        if self.global_minimization_max_grid_points is not None and retry_points:
+            if retry_points[0] <= self.global_minimization_max_grid_points:
+                raise ThermoCalcInputError(
+                    "equilibrium_qthiss_retry_grid_points must exceed global_minimization_max_grid_points."
+                )
+        object.__setattr__(self, "equilibrium_qthiss_retry_grid_points", tuple(int(value) for value in retry_points))
 
     @property
     def independent_elements(self) -> tuple[str, ...]:
@@ -192,9 +228,11 @@ class _TCPythonBackend:
     """Thin wrapper around the installed TC-Python API.
 
     The backend keeps one TC-Python server session and a small set of reusable
-    single-equilibrium calculations.  TC-Python itself does not expose a Python
-    timeout per calculation here; ``timeout_seconds`` is recorded in metadata so
-    callers can enforce process-level limits around long runs if needed.
+    single-equilibrium calculations. Minimization settings are reasserted when
+    switching between kinetics and unrestricted calculations because the shared
+    engine can retain them across calculation objects. TC-Python itself does not
+    expose a Python timeout per calculation here; ``timeout_seconds`` is recorded
+    in metadata so callers can enforce process-level limits around long runs.
     """
 
     def __init__(self):
@@ -205,6 +243,9 @@ class _TCPythonBackend:
         self._systems: dict[bool, Any] = {}
         self._config: ThermoCalcConfig | None = None
         self._calculations: dict[tuple[str, str | None, bool], Any] = {}
+        self._last_calculation_kind: str | None = None
+        self._retry_calculation: Any | None = None
+        self._retry_settings_dirty = False
 
     def start(self, config: ThermoCalcConfig):
         """Start TC-Python and build the selected system."""
@@ -235,6 +276,9 @@ class _TCPythonBackend:
             self.totalNumQueries=0
             self.total_kind_lst=[]
             self.total_x_lst=[]
+            self._last_calculation_kind = None
+            self._retry_calculation = None
+            self._retry_settings_dirty = False
         try:
             self._session = TCPython()
             self._setup = self._session.__enter__()
@@ -263,6 +307,9 @@ class _TCPythonBackend:
                 self._system = None
                 self._systems = {}
                 self._calculations = {}
+                self._last_calculation_kind = None
+                self._retry_calculation = None
+                self._retry_settings_dirty = False
 
     def restart(self):
         """Restart the TC-Python session using the current configuration."""
@@ -483,36 +530,143 @@ class _TCPythonBackend:
 
         system = self._get_system(include_default_phases)
         calc = system.with_single_equilibrium_calculation()
-        calc = self._configure_global_minimization(calc, config)
+        calc = self._configure_global_minimization(calc, config, kind)
         if kind == "driving_force":
             calc.set_phase_to_dormant(phase)
         elif kind == "kinetics":
-            for candidate in config.phases:
-                if candidate == phase:
-                    calc.set_phase_to_entered(candidate)
-                else:
-                    calc.set_phase_to_suspended(candidate)
+            self._force_kinetics_phase(calc, phase)
         self._calculations[key] = calc
         return calc
 
+    def _force_kinetics_phase(self, calc: Any, phase: str):
+        """Enter the requested kinetics phase and suspend other selected phases."""
+        for candidate in self._require_config().phases:
+            if candidate == phase:
+                calc.set_phase_to_entered(candidate)
+            else:
+                calc.set_phase_to_suspended(candidate)
+
     def _calculate(self, kind: str, phase: str | None, x: np.ndarray, T: float):
+        """Calculate with kind-specific settings and retry global QTHISS failures.
+
+        Thermo-Calc may retain minimization settings across calculation objects.
+        Higher-grid retries use fresh calculators; later queries regain the
+        configured grid and kinetics-only settings do not leak to equilibrium.
+        """
         calc = self._get_calculation(kind, phase)
+        config = self._require_config()
+        mode_switch = (
+            self._last_calculation_kind is not None
+            and (kind == "kinetics") != (self._last_calculation_kind == "kinetics")
+            and (config.kinetics_disable_global_minimization or config.kinetics_disable_positive_definite_hessian)
+        )
+        if mode_switch or self._retry_settings_dirty:
+            calc = self._configure_global_minimization(
+                calc, config, kind,
+                restore_shared_settings=kind != "kinetics" or self._retry_settings_dirty,
+            )
+            include_default_phases = config.use_default_phases if kind != "kinetics" else False
+            self._calculations[(kind, phase, include_default_phases)] = calc
+            self._retry_settings_dirty = False
         try:
+            self._retry_calculation = None
             calc.remove_all_conditions()
             self._set_conditions(calc, x, T)
             self.totalNumCalcs += 1
             self.total_kind_lst.append(kind)
             self.total_x_lst.append(x.copy())
-            return calc.calculate()
+            try:
+                return calc.calculate()
+            except Exception as exc:
+                uses_global = kind != "kinetics" or not config.kinetics_disable_global_minimization
+                if (uses_global and config.equilibrium_qthiss_retry_grid_points
+                        and _is_qthiss_iteration_error(exc)):
+                    return self._retry_after_qthiss(
+                        kind, phase, x, T, exc, config.equilibrium_qthiss_retry_grid_points,
+                    )
+                raise ThermoCalcSolveError(f"TC-Python {kind} calculation failed: {exc}") from exc
+        except ThermoCalcSolveError:
+            raise
         except Exception as exc:
             print(kind, phase, x, T)
-            debugInPlace()
+            if not _is_qthiss_iteration_error(exc):
+                debugInPlace()
             raise ThermoCalcCalculationError(f"TC-Python {kind} calculation failed: {exc}") from exc
+        finally:
+            self._last_calculation_kind = kind
 
-    def _configure_global_minimization(self, calc: Any, config: ThermoCalcConfig):
-        """Apply optional global-minimization options to a single-equilibrium calculation."""
-        max_grid_points = config.global_minimization_max_grid_points
-        if max_grid_points is None:
+    def _retry_after_qthiss(
+        self, kind: str, phase: str | None, x: np.ndarray, T: float,
+        initial_error: Exception, retry_points: tuple[int, ...],
+    ):
+        """Retry QTHISS failures with larger grids, restoring normal settings later."""
+        config = self._require_config()
+        include_default_phases = config.use_default_phases if kind != "kinetics" else False
+        key = (kind, phase, include_default_phases)
+        last_error = initial_error
+        try:
+            system = self._get_system(include_default_phases)
+            for grid_points in retry_points:
+                print(f"Retrying {kind} {phase} at {(x, T)} with {grid_points} grid points", flush=True)
+                calc = system.with_single_equilibrium_calculation()
+                calc = self._configure_global_minimization(
+                    calc, config, kind, restore_shared_settings=True,
+                    grid_points_override=grid_points,
+                )
+                if kind == "kinetics":
+                    self._force_kinetics_phase(calc, phase)
+                elif kind == "driving_force":
+                    calc.set_phase_to_dormant(phase)
+                calc.remove_all_conditions()
+                self._set_conditions(calc, x, T)
+                self.totalNumCalcs += 1
+                self.total_kind_lst.append(kind)
+                self.total_x_lst.append(x.copy())
+                try:
+                    result = calc.calculate()
+                except Exception as exc:
+                    if not _is_qthiss_iteration_error(exc):
+                        raise ThermoCalcSolveError(f"TC-Python {kind} calculation failed: {exc}") from exc
+                    last_error = exc
+                else:
+                    self._retry_calculation = calc
+                    return result
+            raise ThermoCalcSolveError(f"TC-Python {kind} calculation failed: {last_error}") from last_error
+        finally:
+            self._calculations.pop(key, None)
+            self._retry_settings_dirty = True
+
+    def _configure_global_minimization(
+        self,
+        calc: Any,
+        config: ThermoCalcConfig,
+        kind: str,
+        *,
+        restore_shared_settings: bool = False,
+        grid_points_override: int | None = None,
+    ):
+        """Apply minimization settings, restoring defaults after shared-state changes.
+
+        A forced local solve or high-grid retry can change the shared Thermo-Calc
+        core state even when calculation objects differ. Reasserting settings
+        applies normal defaults before kinetics-specific overrides. The grid
+        override is used only by temporary QTHISS retries; a kinetics retry
+        retains its configured Hessian mode.
+        """
+        local_kinetics = kind == "kinetics" and config.kinetics_disable_global_minimization
+        if local_kinetics:
+            configured_calc = calc.disable_global_minimization()
+            if configured_calc is not None:
+                calc = configured_calc
+        elif restore_shared_settings:
+            configured_calc = calc.enable_global_minimization()
+            if configured_calc is not None:
+                calc = configured_calc
+        max_grid_points = None if local_kinetics else (
+            config.global_minimization_max_grid_points if grid_points_override is None else grid_points_override
+        )
+        disable_hessian = kind == "kinetics" and config.kinetics_disable_positive_definite_hessian
+        if max_grid_points is None and not disable_hessian and not restore_shared_settings:
             return calc
         if self._tc_python is None:
             raise ThermoCalcBackendError("TC-Python module is not available for SingleEquilibriumOptions.")
@@ -522,15 +676,36 @@ class _TCPythonBackend:
             raise ThermoCalcBackendError("This TC-Python version does not expose SingleEquilibriumOptions.")
 
         options = options_factory()
-        setter = getattr(options, "set_global_minimization_max_grid_points", None)
-        if setter is None:
-            raise ThermoCalcBackendError(
-                "This TC-Python SingleEquilibriumOptions object does not support "
-                "set_global_minimization_max_grid_points()."
-            )
-        configured_options = setter(int(max_grid_points))
-        if configured_options is not None:
-            options = configured_options
+        if restore_shared_settings:
+            setter = getattr(options, "enable_force_positive_definite_phase_hessian", None)
+            if setter is None:
+                raise ThermoCalcBackendError(
+                    "This TC-Python SingleEquilibriumOptions object does not support "
+                    "enable_force_positive_definite_phase_hessian()."
+                )
+            configured_options = setter()
+            if configured_options is not None:
+                options = configured_options
+        if max_grid_points is not None:
+            setter = getattr(options, "set_global_minimization_max_grid_points", None)
+            if setter is None:
+                raise ThermoCalcBackendError(
+                    "This TC-Python SingleEquilibriumOptions object does not support "
+                    "set_global_minimization_max_grid_points()."
+                )
+            configured_options = setter(int(max_grid_points))
+            if configured_options is not None:
+                options = configured_options
+        if disable_hessian:
+            setter = getattr(options, "disable_force_positive_definite_phase_hessian", None)
+            if setter is None:
+                raise ThermoCalcBackendError(
+                    "This TC-Python SingleEquilibriumOptions object does not support "
+                    "disable_force_positive_definite_phase_hessian()."
+                )
+            configured_options = setter()
+            if configured_options is not None:
+                options = configured_options
 
         with_options = getattr(calc, "with_options", None)
         if with_options is None:
