@@ -69,13 +69,14 @@ def _validate_2x2_matrix(matrix, label):
     return matrix
 
 
-def _validate_positive_2x2_matrix(matrix, label):
+def _validate_positive_2x2_matrix(matrix, label, *, debug_on_failure=True):
     """
     Validates a finite 2x2 matrix with positive real eigenvalues.
 
     The ternary Illingworth bulk solver requires interdiffusivity matrices whose
     normalized eigenvalues stay positive. Continuous surrogate splines are
     checked at build time so runtime evaluation can remain a cheap array call.
+    Bulk-sample filtering disables the interactive debugger on rejected points.
     """
     matrix = _validate_2x2_matrix(matrix, label)
     scale = float(np.linalg.norm(matrix, ord=np.inf))
@@ -83,7 +84,8 @@ def _validate_positive_2x2_matrix(matrix, label):
         raise ValueError(f"{label} must have nonzero norm.")
     eigenvalues = np.linalg.eigvals(matrix / scale)
     if np.any(np.abs(np.imag(eigenvalues)) > 1e-12) or np.any(np.real(eigenvalues) <= 1e-14):
-        debugInPlace()
+        if debug_on_failure:
+            debugInPlace()
         raise ValueError(f"{label} must have positive real eigenvalues.")
     return matrix
 
@@ -1262,6 +1264,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         diffusivity_bulk_bbox=None,
         diffusivity_bulk_spacing=None,
         diffusivity_interpolation=_DIFFUSIVITY_INTERPOLATION_NEAREST,
+        skip_failed_bulk_calculations=False,
+        drop_invalid_bulk_matrices=False,
         min_composition=1e-10,
         thermodynamics_kwargs=None,
         validation_database=None,
@@ -1281,6 +1285,16 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         so the rectangular sampling domain and array ordering are reproducible.
         Simplex-linear interpolation accepts scattered ``diffusivity_bulk_points``
         and can also sample the simplex-valid subset of ``diffusivity_bulk_grids``.
+        With ``skip_failed_bulk_calculations=True``, only bulk queries whose
+        thermodynamics provider marks a ``calculate()`` failure are dropped;
+        details are returned in ``metadata['failed_bulk_points']``. Missing
+        continuous-grid cells switch interpolation to scattered simplex-linear,
+        or nearest-neighbor if the remaining points are collinear.
+        With ``drop_invalid_bulk_matrices=True``, all successful bulk queries
+        complete before their matrices are checked with
+        ``_validate_positive_2x2_matrix``. Rejected samples are returned in
+        ``metadata['invalid_bulk_points']`` and trigger the same interpolation
+        fallback when they leave a grid incomplete.
         """
         if tieline_phases is None:
             raise ValueError("tieline_phases must be provided explicitly.")
@@ -1505,19 +1519,14 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         interface_diff_x = {phase: np.asarray(values, dtype=np.float64) for phase, values in interface_diff_x.items()}
         interface_diff_d = {phase: np.asarray(values, dtype=np.float64) for phase, values in interface_diff_d.items()}
 
+        requested_interpolation = diffusivity_interpolation
+        failed_bulk_points = []
+        invalid_bulk_points = []
+        pending_bulk_matrices = {phase: [] for phase in tieline_phases}
         if diffusivity_interpolation == _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID:
             bulk_points = _bulk_points_from_axes(bulk_grid_axes)
             general_diff_x = {phase: [] for phase in tieline_phases}
             general_diff_d = {phase: [] for phase in tieline_phases}
-            for phase in tieline_phases:
-                for point in tqdm.tqdm(bulk_points, desc=f"Sampling bulk diffusivity for phase {phase}", total=len(bulk_points)):
-                    general_diff_x[phase].append(point)
-                    general_diff_d[phase].append(
-                        _validate_2x2_matrix(
-                            thermodynamics.getInterdiffusivity(point, temperature, phase=phase),
-                            f"bulk diffusivity for phase {phase} at composition {point.tolist()}",
-                        )
-                    )
         else:
             grid_points = (
                 _bulk_points_from_simplex_axes(bulk_grid_axes, float(min_composition))
@@ -1533,32 +1542,72 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             )
             general_diff_x = {phase: [*interface_diff_x[phase]] for phase in tieline_phases}
             general_diff_d = {phase: [*interface_diff_d[phase]] for phase in tieline_phases}
-            if bulk_points is not None:
-                for phase in tieline_phases:
-                    for point in tqdm.tqdm(bulk_points, desc=f"Sampling bulk diffusivity for phase {phase}", total=len(bulk_points)):
-                        general_diff_x[phase].append(point)
-                        general_diff_d[phase].append(
-                            _validate_2x2_matrix(
-                                thermodynamics.getInterdiffusivity(point, temperature, phase=phase),
-                                f"bulk diffusivity for phase {phase} at composition {point.tolist()}",
-                            )
+        if bulk_points is not None:
+            for phase in tieline_phases:
+                for index, point in enumerate(tqdm.tqdm(
+                    bulk_points, desc=f"Sampling bulk diffusivity for phase {phase}", total=len(bulk_points)
+                )):
+                    try:
+                        matrix = thermodynamics.getInterdiffusivity(point, temperature, phase=phase)
+                    except Exception as exc:
+                        if not skip_failed_bulk_calculations or not getattr(exc, "failed_during_calculate", False):
+                            raise
+                        failed_bulk_points.append({
+                            "phase": phase,
+                            "composition": point.tolist(),
+                            "temperature": temperature,
+                            "bulk_point_index": index,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        })
+                        continue
+                    if drop_invalid_bulk_matrices:
+                        pending_bulk_matrices[phase].append((index, point, matrix))
+                    else:
+                        matrix = _validate_2x2_matrix(
+                            matrix, f"bulk diffusivity for phase {phase} at composition {point.tolist()}"
                         )
-            ## Useful for determine all of the points to add to "points_toSkip"
-            # errors_lst=[]
-            # if bulk_points is not None:
-            #     for phase in tieline_phases:
-            #         for point in bulk_points:
-            #             general_diff_x[phase].append(point)
-            #             try:
-            #                 res = thermodynamics.getInterdiffusivity(point, temperature, phase=phase)
-            #             except Exception as e:
-            #                 errors_lst.append((phase, point, e))
-            #             general_diff_d[phase].append(
-            #                 _validate_2x2_matrix(
-            #                     res,
-            #                     f"bulk diffusivity for phase {phase} at composition {point.tolist()}",
-            #                 )
-            #             )
+                        general_diff_x[phase].append(point)
+                        general_diff_d[phase].append(matrix)
+        if drop_invalid_bulk_matrices:
+            for phase in tieline_phases:
+                for index, point, matrix in pending_bulk_matrices[phase]:
+                    try:
+                        matrix = _validate_positive_2x2_matrix(
+                            matrix,
+                            f"bulk diffusivity for phase {phase} at composition {point.tolist()}",
+                            debug_on_failure=False,
+                        )
+                    except (TypeError, ValueError, np.linalg.LinAlgError) as exc:
+                        invalid_bulk_points.append({
+                            "phase": phase,
+                            "composition": point.tolist(),
+                            "temperature": temperature,
+                            "bulk_point_index": index,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                            "diffusivity_repr": repr(matrix),
+                        })
+                        continue
+                    general_diff_x[phase].append(point)
+                    general_diff_d[phase].append(matrix)
+        if (failed_bulk_points or invalid_bulk_points) and diffusivity_interpolation != _DIFFUSIVITY_INTERPOLATION_NEAREST:
+            if diffusivity_interpolation == _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID:
+                for phase in tieline_phases:
+                    general_diff_x[phase][:0] = [*interface_diff_x[phase]]
+                    general_diff_d[phase][:0] = [*interface_diff_d[phase]]
+            has_scattered_hull = all(
+                len(general_diff_x[phase]) >= 3
+                and np.linalg.matrix_rank(
+                    np.asarray(general_diff_x[phase]) - np.asarray(general_diff_x[phase])[0]
+                ) == 2
+                for phase in tieline_phases
+            )
+            diffusivity_interpolation = (
+                _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR if has_scattered_hull
+                else _DIFFUSIVITY_INTERPOLATION_NEAREST
+            )
+            bulk_grid_axes = None
         general_diff_x = {phase: np.asarray(values, dtype=np.float64) for phase, values in general_diff_x.items()}
         general_diff_d = {phase: np.asarray(values, dtype=np.float64) for phase, values in general_diff_d.items()}
 
@@ -1578,6 +1627,16 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 **sampling_metadata,
                 "precipitate_phase": precipitate_phase,
                 **validation_metadata,
+                **({
+                    "failed_bulk_points": failed_bulk_points,
+                } if skip_failed_bulk_calculations else {}),
+                **({
+                    "invalid_bulk_points": invalid_bulk_points,
+                } if drop_invalid_bulk_matrices else {}),
+                **({
+                    "requested_diffusivity_interpolation": requested_interpolation,
+                    "effective_diffusivity_interpolation": diffusivity_interpolation,
+                } if skip_failed_bulk_calculations or drop_invalid_bulk_matrices else {}),
             },
         )
 

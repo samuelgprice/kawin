@@ -167,6 +167,8 @@ def build_moving_boundary_surrogate(
     diffusivity_bulk_points: Any | None = None,
     diffusivity_bulk_grids: Any | None = None,
     diffusivity_interpolation: str = "nearest",
+    skip_failed_bulk_calculations: bool = False,
+    drop_invalid_bulk_matrices: bool = False,
     output_path: str | Path | None = None,
     metadata: dict[str, Any] | None = None,
 ):
@@ -176,6 +178,10 @@ def build_moving_boundary_surrogate(
     using the example adapter as the thermodynamics source.  Tie-line probes
     are independent mole fractions in ``[x_CR, x_NI]`` order for the default
     Fe-Cr-Ni configuration.
+    When requested, TC-Python ``calculate()`` failures at bulk points are
+    recorded in the returned surrogate metadata and omitted from training.
+    Positive-matrix filtering can independently reject completed bulk samples
+    after all queries finish, recording them in ``invalid_bulk_points``.
     """
 
     from kawin.diffusion.MovingBoundarySurrogates import TernaryMovingBoundaryThermodynamicsSurrogate
@@ -201,6 +207,8 @@ def build_moving_boundary_surrogate(
             diffusivity_bulk_points=diffusivity_bulk_points,
             diffusivity_bulk_grids=diffusivity_bulk_grids,
             diffusivity_interpolation=diffusivity_interpolation,
+            skip_failed_bulk_calculations=skip_failed_bulk_calculations,
+            drop_invalid_bulk_matrices=drop_invalid_bulk_matrices,
         )
 
     surrogate.metadata.update(

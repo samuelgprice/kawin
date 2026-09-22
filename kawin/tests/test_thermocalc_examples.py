@@ -802,6 +802,197 @@ def test_build_moving_boundary_surrogate_from_adapter():
     assert loaded.metadata["source"] == "tc_python_adapter"
 
 
+@pytest.mark.parametrize("interpolation", ["nearest", "simplex_linear", "continuous_grid"])
+def test_bulk_calculate_failures_are_optional_and_recorded(interpolation):
+    failed_point = np.array([0.35, 0.16])
+
+    class FailingBulkBackend(FakeThermoCalcBackend):
+        def calculate_kinetics(self, x, T, phase, collect_diagnostics=False):
+            if phase == "BCC_A2" and np.allclose(x, failed_point, rtol=0, atol=1e-15):
+                raise ThermoCalcSolveError("TC-Python kinetics calculation failed: sample failure")
+            return super().calculate_kinetics(x, T, phase, collect_diagnostics=collect_diagnostics)
+
+    grids = (np.array([0.25, 0.35, 0.45]), np.array([0.08, 0.16, 0.24]))
+    points = np.array([[0.25, 0.08], [0.35, 0.16], [0.45, 0.24], [0.45, 0.08]])
+    kwargs = (
+        {"diffusivity_bulk_grids": grids} if interpolation == "continuous_grid"
+        else {"diffusivity_bulk_points": points}
+    )
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=FailingBulkBackend())
+    with pytest.raises(ThermoCalcSolveError, match="sample failure"):
+        build_moving_boundary_surrogate(therm, diffusivity_interpolation=interpolation, **kwargs)
+
+    path = Path("examples") / "ThermoCalc" / "outputs" / f"test_filtered_bulk_{interpolation}.npz"
+    try:
+        surrogate = build_moving_boundary_surrogate(
+            therm, diffusivity_interpolation=interpolation,
+            skip_failed_bulk_calculations=True, output_path=path, **kwargs,
+        )
+        loaded = type(surrogate).load(path)
+    finally:
+        path.unlink(missing_ok=True)
+    failures = loaded.metadata["failed_bulk_points"]
+    assert failures == [{
+        "phase": "BCC_A2", "composition": failed_point.tolist(),
+        "temperature": 1373.0, "bulk_point_index": 4 if interpolation == "continuous_grid" else 1,
+        "error_type": "ThermoCalcSolveError",
+        "error": "TC-Python kinetics calculation failed: sample failure",
+    }]
+    assert loaded.metadata["requested_diffusivity_interpolation"] == interpolation
+    assert loaded.metadata["effective_diffusivity_interpolation"] == (
+        "simplex_linear" if interpolation == "continuous_grid" else interpolation
+    )
+    assert not np.any(np.all(np.isclose(
+        loaded.diffusivity_compositions["general"]["BCC_A2"], failed_point, rtol=0, atol=1e-15,
+    ), axis=1))
+    assert np.any(np.all(np.isclose(
+        loaded.diffusivity_compositions["general"]["FCC_A1"], failed_point, rtol=0, atol=1e-15,
+    ), axis=1))
+
+
+def test_bulk_skip_keeps_non_calculate_failures_as_errors():
+    class FailedQuantityBackend(FakeThermoCalcBackend):
+        def calculate_kinetics(self, x, T, phase, collect_diagnostics=False):
+            if phase == "BCC_A2" and np.allclose(x, [0.35, 0.16], rtol=0, atol=1e-15):
+                raise ThermoCalcCalculationError("quantity query failed")
+            return super().calculate_kinetics(x, T, phase, collect_diagnostics=collect_diagnostics)
+
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=FailedQuantityBackend())
+    with pytest.raises(ThermoCalcCalculationError, match="quantity query failed"):
+        build_moving_boundary_surrogate(
+            therm, diffusivity_bulk_points=[[0.35, 0.16]], skip_failed_bulk_calculations=True,
+        )
+
+
+def test_all_failed_bulk_samples_fall_back_to_nearest():
+    class FailingBulkBackend(FakeThermoCalcBackend):
+        def calculate_kinetics(self, x, T, phase, collect_diagnostics=False):
+            if np.allclose(x, [0.35, 0.16], rtol=0, atol=1e-15):
+                raise ThermoCalcSolveError("sample failure")
+            return super().calculate_kinetics(x, T, phase, collect_diagnostics=collect_diagnostics)
+
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=FailingBulkBackend())
+    surrogate = build_moving_boundary_surrogate(
+        therm, diffusivity_interpolation="simplex_linear",
+        diffusivity_bulk_points=[[0.35, 0.16]], skip_failed_bulk_calculations=True,
+    )
+    assert surrogate.diffusivityInterpolation == "nearest"
+    assert len(surrogate.metadata["failed_bulk_points"]) == 2
+
+
+@pytest.mark.parametrize("interpolation", ["nearest", "simplex_linear", "continuous_grid"])
+def test_invalid_bulk_matrices_are_optionally_dropped_and_recorded(interpolation, monkeypatch):
+    import kawin.diffusion.MovingBoundarySurrogates as surrogate_module
+
+    invalid_point = np.array([0.35, 0.16])
+    points = np.array([[0.25, 0.08], [0.35, 0.16], [0.45, 0.24], [0.45, 0.08]])
+    grids = (np.array([0.25, 0.35, 0.45]), np.array([0.08, 0.16, 0.24]))
+    kwargs = (
+        {"diffusivity_bulk_grids": grids} if interpolation == "continuous_grid"
+        else {"diffusivity_bulk_points": points}
+    )
+
+    class InvalidBulkBackend(FakeThermoCalcBackend):
+        def calculate_kinetics(self, x, T, phase, collect_diagnostics=False):
+            output = super().calculate_kinetics(x, T, phase, collect_diagnostics=collect_diagnostics)
+            if phase == "BCC_A2" and np.allclose(x, invalid_point, rtol=0, atol=1e-15):
+                output["interdiffusivity"] = np.diag([1e-14, -1e-14])
+            return output
+
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=InvalidBulkBackend())
+    if interpolation == "nearest":
+        unchanged = build_moving_boundary_surrogate(therm, diffusivity_interpolation=interpolation, **kwargs)
+        assert "invalid_bulk_points" not in unchanged.metadata
+        assert np.any(np.all(np.isclose(
+            unchanged.diffusivity_compositions["general"]["BCC_A2"], invalid_point, rtol=0, atol=1e-15,
+        ), axis=1))
+
+    monkeypatch.setattr(surrogate_module, "debugInPlace", lambda: pytest.fail("interactive debugger was invoked"))
+    path = Path("examples") / "ThermoCalc" / "outputs" / f"test_invalid_bulk_{interpolation}.npz"
+    try:
+        filtered = build_moving_boundary_surrogate(
+            therm, diffusivity_interpolation=interpolation,
+            drop_invalid_bulk_matrices=True, output_path=path, **kwargs,
+        )
+        loaded = type(filtered).load(path)
+    finally:
+        path.unlink(missing_ok=True)
+
+    dropped = loaded.metadata["invalid_bulk_points"]
+    assert len(dropped) == 1
+    assert dropped[0]["phase"] == "BCC_A2"
+    assert dropped[0]["composition"] == invalid_point.tolist()
+    assert dropped[0]["bulk_point_index"] == (4 if interpolation == "continuous_grid" else 1)
+    assert dropped[0]["temperature"] == 1373.0
+    assert dropped[0]["error_type"] == "ValueError"
+    assert "positive real eigenvalues" in dropped[0]["error"]
+    assert "-1.e-14" in dropped[0]["diffusivity_repr"]
+    assert loaded.metadata["effective_diffusivity_interpolation"] == (
+        "simplex_linear" if interpolation == "continuous_grid" else interpolation
+    )
+    assert not np.any(np.all(np.isclose(
+        loaded.diffusivity_compositions["general"]["BCC_A2"], invalid_point, rtol=0, atol=1e-15,
+    ), axis=1))
+    assert np.any(np.all(np.isclose(
+        loaded.diffusivity_compositions["general"]["FCC_A1"], invalid_point, rtol=0, atol=1e-15,
+    ), axis=1))
+
+
+def test_invalid_bulk_validation_waits_for_all_queries_and_drops_nonfinite(monkeypatch):
+    import kawin.diffusion.MovingBoundarySurrogates as surrogate_module
+
+    points = np.array([[0.25, 0.08], [0.35, 0.16], [0.45, 0.08]])
+    sampled_bulk = []
+    validation_started = []
+
+    class NonfiniteBulkBackend(FakeThermoCalcBackend):
+        def calculate_kinetics(self, x, T, phase, collect_diagnostics=False):
+            if any(np.allclose(x, point, rtol=0, atol=1e-15) for point in points):
+                sampled_bulk.append((phase, tuple(x)))
+            output = super().calculate_kinetics(x, T, phase, collect_diagnostics=collect_diagnostics)
+            if phase == "BCC_A2" and np.allclose(x, points[1], rtol=0, atol=1e-15):
+                output["interdiffusivity"][0, 0] = np.nan
+            return output
+
+    original_validator = surrogate_module._validate_positive_2x2_matrix
+
+    def record_validation(matrix, label, **kwargs):
+        if label.startswith("bulk diffusivity") and not validation_started:
+            validation_started.append(len(sampled_bulk))
+        return original_validator(matrix, label, **kwargs)
+
+    monkeypatch.setattr(surrogate_module, "_validate_positive_2x2_matrix", record_validation)
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=NonfiniteBulkBackend())
+    filtered = build_moving_boundary_surrogate(
+        therm, diffusivity_bulk_points=points, drop_invalid_bulk_matrices=True,
+    )
+
+    assert validation_started == [len(points) * 2]
+    assert len(filtered.metadata["invalid_bulk_points"]) == 1
+    assert "finite 2x2 matrix" in filtered.metadata["invalid_bulk_points"][0]["error"]
+
+
+def test_calculation_and_invalid_matrix_filters_are_independent():
+    class MixedBulkBackend(FakeThermoCalcBackend):
+        def calculate_kinetics(self, x, T, phase, collect_diagnostics=False):
+            if phase == "BCC_A2" and np.allclose(x, [0.25, 0.08], rtol=0, atol=1e-15):
+                raise ThermoCalcSolveError("calculate failed")
+            output = super().calculate_kinetics(x, T, phase, collect_diagnostics=collect_diagnostics)
+            if phase == "BCC_A2" and np.allclose(x, [0.35, 0.16], rtol=0, atol=1e-15):
+                output["interdiffusivity"] = np.zeros((2, 2))
+            return output
+
+    therm = TCPythonThermodynamics(config=_fecrni_config(), backend=MixedBulkBackend())
+    filtered = build_moving_boundary_surrogate(
+        therm, diffusivity_bulk_points=[[0.25, 0.08], [0.35, 0.16], [0.45, 0.08]],
+        skip_failed_bulk_calculations=True, drop_invalid_bulk_matrices=True,
+    )
+    assert len(filtered.metadata["failed_bulk_points"]) == 1
+    assert len(filtered.metadata["invalid_bulk_points"]) == 1
+    assert filtered.metadata["failed_bulk_points"][0]["composition"] == [0.25, 0.08]
+    assert filtered.metadata["invalid_bulk_points"][0]["composition"] == [0.35, 0.16]
+
+
 def test_live_tc_python_one_point():
     if not bool(int(__import__("os").environ.get("KAWIN_TC_PYTHON_LIVE", "0"))):
         pytest.skip("Set KAWIN_TC_PYTHON_LIVE=1 to run Thermo-Calc license/database tests.")
