@@ -9,8 +9,10 @@ from kawin.diffusion import (
     MergedPhaseDiffusivitySurrogate,
     TernaryMovingBoundaryThermodynamicsSurrogate,
     evaluate_diffusivity_diagnostics,
+    evaluate_diffusivity_leave_one_out,
     evaluate_tieline_diagnostics,
     plot_bulk_diffusivity_diagnostics,
+    plot_diffusivity_leave_one_out,
     plot_interface_diffusivity_diagnostics,
     plot_surrogate_diagnostics,
     plot_tieline_diagnostics,
@@ -126,6 +128,186 @@ def _merged(interpolation="nearest"):
 
 
 @pytest.mark.parametrize("source", ["from_database", "from_database_seed_point"])
+def _loo_surrogate(interpolation="simplex_linear"):
+    """Build a nonconstant, positive-matrix bulk sample set for holdout tests."""
+    if interpolation == "continuous_grid":
+        axes = (np.asarray([0.20, 0.30, 0.40]), np.asarray([0.10, 0.20, 0.30]))
+        points = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 2)
+    else:
+        axes = None
+        points = np.asarray([
+            [0.20, 0.10], [0.40, 0.10], [0.20, 0.30], [0.40, 0.30], [0.30, 0.20],
+        ])
+    matrices = np.asarray([
+        [[2.0 + x, 0.1], [0.05, 1.0 + y]] for x, y in points
+    ])
+    matrices[len(points) // 2] *= 1.5
+    return TernaryMovingBoundaryThermodynamicsSurrogate(
+        elements=ELEMENTS,
+        phases=PHASES,
+        tieline_phases=PHASES,
+        temperature=1000.0,
+        eta_samples=ETA,
+        tieline_compositions={PHASES[0]: LEFT, PHASES[1]: RIGHT},
+        diffusivity_compositions={
+            "interface": {PHASES[0]: LEFT, PHASES[1]: RIGHT},
+            "general": {PHASES[0]: points, PHASES[1]: points},
+        },
+        diffusivities={
+            "interface": {PHASES[0]: _matrices(3), PHASES[1]: _matrices(3, 0.5)},
+            "general": {PHASES[0]: matrices, PHASES[1]: matrices * 0.5},
+        },
+        diffusivity_interpolation=interpolation,
+        diffusivity_bulk_grids=axes,
+    )
+
+
+def test_diffusivity_leave_one_out_refits_each_sample_and_reports_hull_fallback():
+    surrogate = _loo_surrogate()
+    original = surrogate.diffusivities["general"]["ALPHA"].copy()
+    report = evaluate_diffusivity_leave_one_out(surrogate, phases="ALPHA")
+    phase = report["phase_reports"]["ALPHA"]
+
+    assert report["phases"] == ("ALPHA",)
+    assert np.array_equal(phase["sample_indices"], np.arange(5))
+    np.testing.assert_array_equal(phase["actual_matrices"], original)
+    np.testing.assert_array_equal(surrogate.diffusivities["general"]["ALPHA"], original)
+    assert phase["predicted_matrices"].shape == (5, 2, 2)
+    assert phase["fallback"][0]
+    assert phase["refit_interpolation"][0] == "nearest"
+    assert not phase["fallback"][4]
+    assert phase["refit_interpolation"][4] == "simplex_linear"
+    assert phase["matrix_relative_error"][4] > 0.0
+    assert phase["summary"]["nearest_fallback_count"] == 4
+    assert phase["summary"]["failure_count"] == 0
+    assert np.all(phase["actual_valid"])
+    np.testing.assert_allclose(
+        np.sort(phase["actual_eigenvalues"][4].real),
+        np.sort(np.linalg.eigvals(original[4]).real),
+    )
+
+
+def test_diffusivity_leave_one_out_nearest_subset_and_merged_surrogate():
+    surrogate = _loo_surrogate(interpolation="nearest")
+    report = evaluate_diffusivity_leave_one_out(
+        surrogate, phases="ALPHA", sample_indices={"ALPHA": [4, 0]}
+    )["phase_reports"]["ALPHA"]
+    assert report["sample_indices"].tolist() == [4, 0]
+    assert np.all(report["refit_interpolation"] == "nearest")
+    assert not np.any(report["fallback"])
+    for row, index in enumerate(report["sample_indices"]):
+        points = np.delete(surrogate.diffusivity_compositions["general"]["ALPHA"], index, axis=0)
+        matrices = np.delete(surrogate.diffusivities["general"]["ALPHA"], index, axis=0)
+        nearest = np.argmin(np.sum((points - report["compositions"][row]) ** 2, axis=1))
+        np.testing.assert_array_equal(report["predicted_matrices"][row], matrices[nearest])
+
+    merged = evaluate_diffusivity_leave_one_out(_merged())
+    assert merged["phases"] == ("BETA",)
+    assert merged["phase_reports"]["BETA"]["summary"]["sample_count"] == len(GENERAL)
+
+
+def test_diffusivity_leave_one_out_regular_grid_uses_scattered_refit():
+    surrogate = _loo_surrogate(interpolation="continuous_grid")
+    report = evaluate_diffusivity_leave_one_out(
+        surrogate, phases="ALPHA", sample_indices=[4]
+    )
+    phase = report["phase_reports"]["ALPHA"]
+    assert report["source_interpolation"] == "continuous_grid"
+    assert phase["refit_interpolation"].tolist() == ["simplex_linear"]
+    assert not phase["fallback"][0]
+    assert phase["matrix_relative_error"][0] > 0.0
+    assert phase["summary"]["failure_count"] == 0
+
+
+def test_diffusivity_leave_one_out_reports_unavailable_single_sample():
+    point = GENERAL[:1]
+    surrogate = MergedPhaseDiffusivitySurrogate(
+        elements=ELEMENTS,
+        phase="BETA",
+        temperature=1000.0,
+        diffusivity_compositions={"interface": point, "general": point},
+        diffusivities={"interface": _matrices(1), "general": _matrices(1)},
+    )
+    phase = evaluate_diffusivity_leave_one_out(surrogate)["phase_reports"]["BETA"]
+    assert phase["summary"]["failure_count"] == 1
+    assert phase["summary"]["invalid_prediction_count"] == 0
+    assert np.isnan(phase["predicted_matrices"]).all()
+    assert "single stored sample" in phase["failures"][0]["error"]
+
+    with pytest.raises(ValueError, match="missing phase"):
+        evaluate_diffusivity_leave_one_out(surrogate, sample_indices={"ALPHA": [0]})
+
+
+def test_diffusivity_leave_one_out_exposes_invalid_interpolated_matrix():
+    points = np.asarray([
+        [0.20, 0.10], [0.40, 0.10], [0.20, 0.30], [0.2666666667, 0.1666666667],
+    ])
+    matrices = np.asarray([
+        [[2.0, 100.0], [0.01, 2.0]],
+        [[2.0, 0.01], [100.0, 2.0]],
+        [[2.0, 0.0], [0.0, 2.0]],
+        [[2.0, 0.0], [0.0, 2.0]],
+    ])
+    surrogate = MergedPhaseDiffusivitySurrogate(
+        elements=ELEMENTS,
+        phase="BETA",
+        temperature=1000.0,
+        diffusivity_compositions={"interface": points, "general": points},
+        diffusivities={"interface": matrices, "general": matrices},
+        diffusivity_interpolation="simplex_linear",
+    )
+    phase = evaluate_diffusivity_leave_one_out(
+        surrogate, sample_indices=[3]
+    )["phase_reports"]["BETA"]
+    assert phase["actual_valid"].tolist() == [True]
+    assert phase["predicted_valid"].tolist() == [False]
+    assert np.min(phase["predicted_eigenvalues"].real) < 0.0
+    assert phase["summary"]["invalid_prediction_count"] == 1
+
+
+def test_diffusivity_leave_one_out_plot_shows_matrices_and_point_status():
+    pytest.importorskip("plotly")
+    report = evaluate_diffusivity_leave_one_out(_loo_surrogate(), phases="ALPHA")
+    figure = plot_diffusivity_leave_one_out(report, "ALPHA", renderer=None)
+    trace = figure.data[0]
+
+    assert trace.type == "scatterternary"
+    assert len(trace.a) == 5
+    assert np.allclose(np.asarray(trace.a) + np.asarray(trace.b) + np.asarray(trace.c), 1.0)
+    assert figure.layout.ternary.aaxis.title.text == ELEMENTS[2]
+    assert figure.layout.ternary.baxis.title.text == ELEMENTS[0]
+    assert figure.layout.ternary.caxis.title.text == ELEMENTS[1]
+    assert trace.marker.symbol[0] == "diamond"
+    assert trace.marker.symbol[4] == "circle"
+    assert "Actual D (m²/s)" in trace.text[4]
+    assert "Predicted D (m²/s)" in trace.text[4]
+    assert "Absolute error" in trace.text[4]
+    assert "Predicted eigenvalues" in trace.text[4]
+    assert "Frobenius relative error" in trace.text[4]
+    assert trace.marker.showscale
+
+    with pytest.raises(ValueError, match="does not contain phase"):
+        plot_diffusivity_leave_one_out(report, "MISSING", renderer=None)
+
+
+def test_diffusivity_leave_one_out_plot_marks_failed_refit():
+    pytest.importorskip("plotly")
+    point = GENERAL[:1]
+    surrogate = MergedPhaseDiffusivitySurrogate(
+        elements=ELEMENTS,
+        phase="BETA",
+        temperature=1000.0,
+        diffusivity_compositions={"interface": point, "general": point},
+        diffusivities={"interface": _matrices(1), "general": _matrices(1)},
+    )
+    report = evaluate_diffusivity_leave_one_out(surrogate)
+    figure = plot_diffusivity_leave_one_out(report, "BETA", renderer=None)
+    assert len(figure.data) == 1
+    assert figure.data[0].name == "Failed refit"
+    assert figure.data[0].marker.symbol == "x"
+    assert "single stored sample" in figure.data[0].text[0]
+
+
 def test_tieline_report_reconstructs_probe_path_and_exact_truth(source):
     truth = _Truth()
     report = evaluate_tieline_diagnostics(_surrogate(source=source), thermodynamics=truth, eta_count=5)

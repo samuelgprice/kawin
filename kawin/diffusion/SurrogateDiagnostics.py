@@ -8,12 +8,15 @@ lazily and return figures without displaying or writing them.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from html import escape
 
 import numpy as np
+import tqdm
 
 from .MovingBoundarySurrogates import (
     MergedPhaseDiffusivitySurrogate,
     TernaryMovingBoundaryThermodynamicsSurrogate,
+    _BulkDiffusivitySimplexLinear2D,
     _matrix_validity_diagnostics,
 )
 
@@ -367,6 +370,171 @@ def _diffusivity_training_compositions(surrogate, context, phase):
     return np.asarray(values, dtype=np.float64)
 
 
+def _diffusivity_training_matrices(surrogate, context, phase):
+    """Return stored matrices in the same row order as training compositions."""
+    values = surrogate.diffusivities[context]
+    if isinstance(values, Mapping):
+        values = values[phase]
+    return np.asarray(values, dtype=np.float64)
+
+
+def _loo_sample_indices(sample_indices, phase, count):
+    """Select unique held-out row indices, retaining the caller's order."""
+    if sample_indices is None:
+        return np.arange(count, dtype=np.int64)
+    if isinstance(sample_indices, Mapping) and phase not in sample_indices:
+        raise ValueError(f"sample_indices is missing phase {phase}.")
+    values = sample_indices[phase] if isinstance(sample_indices, Mapping) else sample_indices
+    indices = np.asarray(values)
+    if indices.ndim != 1 or indices.dtype.kind not in "iu":
+        raise ValueError("sample_indices must be a one-dimensional sequence of integers.")
+    if np.any(indices < 0) or np.any(indices >= count) or np.unique(indices).size != indices.size:
+        raise ValueError(f"sample_indices for phase {phase} must be unique and between 0 and {count - 1}.")
+    return indices.astype(np.int64, copy=True)
+
+
+def _loo_bulk_matrix(points, matrices, index, interpolation):
+    """Refit one bulk interpolator after deleting a row and evaluate that row.
+
+    Removing one node invalidates a rectangular tensor-product spline, so
+    ``continuous_grid`` uses the same scattered simplex-linear mode that the
+    surrogate builder selects for incomplete grids. Hull queries and sets
+    without two-dimensional support use nearest-neighbor sampling.
+    """
+    retained = np.arange(len(points)) != index
+    remaining_points = points[retained]
+    remaining_matrices = matrices[retained]
+    if not len(remaining_points):
+        raise ValueError("A single stored sample cannot be evaluated leave-one-out.")
+    point = points[index]
+    distance_squared = np.sum((remaining_points - point) ** 2, axis=1)
+    nearest = int(np.argmin(distance_squared))
+    distance = float(np.sqrt(distance_squared[nearest]))
+    if interpolation == "nearest":
+        return remaining_matrices[nearest].copy(), "nearest", False, distance
+    if len(remaining_points) < 3 or np.linalg.matrix_rank(remaining_points - remaining_points[0]) < 2:
+        return remaining_matrices[nearest].copy(), "nearest", True, distance
+
+    refit = _BulkDiffusivitySimplexLinear2D(remaining_points, remaining_matrices)
+    transformed = np.asarray(refit._linear(point[None, :]), dtype=np.float64)
+    if not np.all(np.isfinite(transformed)):
+        # Match the production interpolator's nearest fallback without invoking
+        # its interactive debugger for a held-out convex-hull vertex.
+        nearest_transformed = np.asarray(refit._nearest(point[None, :]), dtype=np.float64)
+        return (nearest_transformed[0] ** 3).reshape(2, 2), "nearest", True, distance
+    return (transformed[0] ** 3).reshape(2, 2), "simplex_linear", False, distance
+
+
+def evaluate_diffusivity_leave_one_out(
+    surrogate,
+    *,
+    phases=None,
+    sample_indices=None,
+    relative_error_floor=1e-300,
+    eigen_imag_tol=1e-12,
+    eigen_real_min=1e-14,
+):
+    """Compare stored bulk matrices with predictions from leave-one-out refits.
+
+    Reads ``diffusivity_compositions['general']`` and ``diffusivities['general']``
+    from the surrogate; it makes no thermodynamics queries and does not mutate
+    the original model. All general samples are tested by default, including
+    interface samples included in scattered bulk training. ``sample_indices``
+    can select rows globally or by phase. For ``continuous_grid``, omitting a
+    node prevents a regular-grid refit, so each refit uses scattered
+    simplex-linear interpolation. A held-out point outside the remaining hull
+    uses the production nearest-neighbor fallback, reported per sample.
+
+    Returns one report per phase with held-out compositions, actual and
+    predicted 2x2 matrices, component and Frobenius relative errors, physical
+    eigenvalues, and fallback flags. Failed refits have NaN predictions and
+    entries in ``failures``. Rebuilding a triangulation for each held-out row
+    can be slow for large grids; use ``sample_indices`` for a subset if needed.
+    """
+    if not isinstance(surrogate, (TernaryMovingBoundaryThermodynamicsSurrogate, MergedPhaseDiffusivitySurrogate)):
+        raise TypeError("Leave-one-out diagnostics require a supported ternary diffusivity surrogate.")
+    floor = float(relative_error_floor)
+    if not np.isfinite(floor) or floor <= 0.0:
+        raise ValueError("relative_error_floor must be positive and finite.")
+    selected_phases = _surrogate_phases(surrogate, phases)
+    interpolation = str(surrogate.diffusivityInterpolation)
+    phase_reports = {}
+    for phase in selected_phases:
+        points = _diffusivity_training_compositions(surrogate, "general", phase)
+        matrices = _diffusivity_training_matrices(surrogate, "general", phase)
+        if points.ndim != 2 or points.shape[1] != 2 or matrices.shape != (len(points), 2, 2):
+            raise ValueError(f"Stored general diffusivity samples for phase {phase} have incompatible shapes.")
+        indices = _loo_sample_indices(sample_indices, phase, len(points))
+        held_out = matrices[indices].copy()
+        predicted = np.full((len(indices), 2, 2), np.nan, dtype=np.float64)
+        nearest_distance = np.full(len(indices), np.nan, dtype=np.float64)
+        fallback = np.zeros(len(indices), dtype=bool)
+        refit_interpolation = np.full(len(indices), "failed", dtype=object)
+        failures = []
+        for row, index in tqdm.tqdm(enumerate(indices), total=len(indices)):
+            try:
+                prediction, mode, used_fallback, distance = _loo_bulk_matrix(
+                    points, matrices, int(index), interpolation
+                )
+                predicted[row] = prediction
+                refit_interpolation[row] = mode
+                fallback[row] = used_fallback
+                nearest_distance[row] = distance
+            except Exception as exc:
+                failures.append({
+                    "index": int(index), "phase": phase,
+                    "composition": points[index].copy(), "error": str(exc),
+                })
+        predicted_validity = _matrix_validity_diagnostics(
+            predicted, eigen_imag_tol=eigen_imag_tol, eigen_real_min=eigen_real_min
+        )
+        actual_validity = _matrix_validity_diagnostics(
+            held_out, eigen_imag_tol=eigen_imag_tol, eigen_real_min=eigen_real_min
+        )
+        absolute = np.abs(predicted - held_out)
+        relative = absolute / np.maximum(np.abs(held_out), floor)
+        matrix_relative = np.linalg.norm(predicted - held_out, axis=(1, 2)) / np.maximum(
+            np.linalg.norm(held_out, axis=(1, 2)), floor
+        )
+        finite_error = matrix_relative[np.isfinite(matrix_relative)]
+        phase_reports[phase] = {
+            "sample_indices": indices,
+            "compositions": points[indices].copy(),
+            "actual_matrices": held_out,
+            "predicted_matrices": predicted,
+            "actual_valid": actual_validity["valid"],
+            "predicted_valid": predicted_validity["valid"],
+            "actual_eigenvalues": actual_validity["eigenvalues"] * actual_validity["scales"][:, None],
+            "predicted_eigenvalues": predicted_validity["eigenvalues"] * predicted_validity["scales"][:, None],
+            "absolute_error": absolute,
+            "relative_error": relative,
+            "matrix_relative_error": matrix_relative,
+            "nearest_training_distance": nearest_distance,
+            "fallback": fallback,
+            "refit_interpolation": refit_interpolation,
+            "failures": failures,
+            "summary": {
+                "sample_count": len(indices),
+                "failure_count": len(failures),
+                "nearest_fallback_count": int(np.count_nonzero(fallback)),
+                "invalid_prediction_count": int(np.count_nonzero(
+                    predicted_validity["finite"] & ~predicted_validity["valid"]
+                )),
+                "mean_matrix_relative_error": float(np.mean(finite_error)) if finite_error.size else np.nan,
+                "max_matrix_relative_error": float(np.max(finite_error)) if finite_error.size else np.nan,
+            },
+        }
+    return {
+        "kind": "diffusivity_leave_one_out",
+        "elements": tuple(surrogate.elements),
+        "phases": selected_phases,
+        "temperature": float(surrogate.temperature),
+        "source_interpolation": interpolation,
+        "context": "general",
+        "phase_reports": phase_reports,
+    }
+
+
 def _fallback_mask(surrogate, points, phase, context):
     """Identify simplex-linear queries that use nearest-neighbor hull fallback."""
     if getattr(surrogate, "diffusivityInterpolation", None) != "simplex_linear":
@@ -674,6 +842,126 @@ def _ternary_coordinates(compositions):
     """Map reference-first ternary compositions to the diagnostic corner order."""
     fields = _composition_fields(compositions)
     return {"a": fields["x2"], "b": fields["x_ref"], "c": fields["x1"]}
+
+
+def plot_diffusivity_leave_one_out(report, phase, *, hover_format=".6g", renderer="browser"):
+    """Plot held-out bulk samples on a ternary with full per-point diagnostics.
+
+    Marker color is the base-10 log of Frobenius relative matrix error, with
+    zero displayed at a 1e-16 floor. Diamonds mark nearest-sample fallbacks,
+    crosses mark invalid predicted matrices, and black X markers mark failed refits.
+    The hover shows both 2x2 matrices, component errors, eigenvalues, and
+    refit details. The returned Plotly figure is not displayed automatically.
+    """
+    if report.get("kind") != "diffusivity_leave_one_out" or phase not in report.get("phase_reports", {}):
+        raise ValueError(f"Leave-one-out diffusivity report does not contain phase '{phase}'.")
+    go, _ = _require_plotly(renderer)
+    values = report["phase_reports"][phase]
+    points = np.asarray(values["compositions"], dtype=np.float64)
+    errors = np.asarray(values["matrix_relative_error"], dtype=np.float64)
+    failures = {int(item["index"]): str(item["error"]) for item in values["failures"]}
+    failed_mask = np.asarray([int(index) in failures for index in values["sample_indices"]], dtype=bool)
+    finite = np.isfinite(errors) & ~failed_mask
+    log_errors = np.full(len(points), np.nan, dtype=np.float64)
+    log_errors[finite] = np.log10(np.maximum(errors[finite], 1e-16))
+    log_errors[~finite & ~failed_mask] = float(np.max(log_errors[finite]) + 1.0) if np.any(finite) else 0.0
+    displayed_colors = log_errors[~failed_mask]
+    color_min = float(np.min(displayed_colors)) if displayed_colors.size else -16.0
+    color_max = float(np.max(displayed_colors)) if displayed_colors.size else -15.0
+    if color_min == color_max:
+        color_min -= 0.5
+        color_max += 0.5
+
+    symbols = []
+    hover = []
+
+    def matrix_text(matrix):
+        return "[" + ", ".join(format(float(value), hover_format) for value in matrix[0]) + "]<br>[" + ", ".join(
+            format(float(value), hover_format) for value in matrix[1]
+        ) + "]"
+
+    def eigen_text(eigenvalues):
+        return ", ".join(
+            format(float(value.real), hover_format)
+            + (f" {format(float(value.imag), '+' + hover_format)}i" if abs(value.imag) > 0 else "")
+            for value in eigenvalues
+        )
+
+    for row, index in enumerate(values["sample_indices"]):
+        failed = int(index) in failures
+        invalid = not bool(values["predicted_valid"][row])
+        symbols.append("cross" if invalid else "diamond" if values["fallback"][row] else "circle")
+        composition = points[row]
+        fields = _composition_fields(composition[None, :])
+        lines = [
+            f"<b>{escape(str(phase))} · sample {int(index)}</b>",
+            f"{escape(str(report['elements'][0]))}: {format(fields['x_ref'][0], hover_format)}; "
+            f"{escape(str(report['elements'][1]))}: {format(composition[0], hover_format)}; "
+            f"{escape(str(report['elements'][2]))}: {format(composition[1], hover_format)}",
+            f"Actual D (m²/s):<br>{matrix_text(values['actual_matrices'][row])}",
+            f"Predicted D (m²/s):<br>{matrix_text(values['predicted_matrices'][row])}",
+            f"Absolute error (m²/s):<br>{matrix_text(values['absolute_error'][row])}",
+            f"Relative component error:<br>{matrix_text(values['relative_error'][row])}",
+            f"Frobenius relative error: {format(errors[row], hover_format)}",
+            f"Actual valid: {bool(values['actual_valid'][row])}; predicted valid: {not invalid}",
+            f"Actual eigenvalues (m²/s): {eigen_text(values['actual_eigenvalues'][row])}",
+            f"Predicted eigenvalues (m²/s): {eigen_text(values['predicted_eigenvalues'][row])}",
+            f"Source interpolation: {escape(str(report['source_interpolation']))}; context: {escape(str(report['context']))}",
+            f"Nearest retained sample distance: {format(values['nearest_training_distance'][row], hover_format)}",
+            f"Refit: {escape(str(values['refit_interpolation'][row]))}; nearest fallback: {bool(values['fallback'][row])}",
+        ]
+        if failed:
+            lines.append(f"Failure: {escape(failures[int(index)])}")
+        hover.append("<br>".join(lines))
+
+    fig = go.Figure()
+    if np.any(~failed_mask):
+        good = ~failed_mask
+        fig.add_trace(go.Scatterternary(
+            **_ternary_coordinates(points[good]),
+            mode="markers",
+            name=f"{phase} held-out samples",
+            marker={
+                "size": 8,
+                "symbol": np.asarray(symbols, dtype=object)[good],
+                "color": log_errors[good],
+                "colorscale": "Viridis",
+                "cmin": color_min,
+                "cmax": color_max,
+                "showscale": True,
+                "colorbar": {"title": "log10 relative error"},
+            },
+            text=np.asarray(hover, dtype=object)[good],
+            hovertemplate="%{text}<extra></extra>",
+        ))
+    if np.any(failed_mask):
+        fig.add_trace(go.Scatterternary(
+            **_ternary_coordinates(points[failed_mask]),
+            mode="markers",
+            name="Failed refit",
+            marker={"size": 10, "symbol": "x", "color": "black"},
+            text=np.asarray(hover, dtype=object)[failed_mask],
+            hovertemplate="%{text}<extra></extra>",
+        ))
+    fig.update_layout(
+        title=f"Diffusivity leave-one-out: {phase} at {report['temperature']:g} K",
+        template="plotly_white",
+        width=1050,
+        height=850,
+        margin={"t": 100, "b": 50, "l": 50, "r": 140},
+        uirevision=f"diffusivity-leave-one-out-{phase}",
+        ternary={
+            "sum": 1,
+            "aaxis": {"title": report["elements"][2]},
+            "baxis": {"title": report["elements"][0]},
+            "caxis": {"title": report["elements"][1]},
+        },
+        annotations=[{
+            "text": "Diamond: nearest fallback · Cross: invalid matrix · X: failed refit",
+            "x": 0.5, "y": 1.03, "xref": "paper", "yref": "paper", "showarrow": False,
+        }],
+    )
+    return fig
 
 
 def _leave_room_above_ternary(fig, layout_name="ternary", gap=0.07):
