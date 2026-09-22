@@ -478,6 +478,8 @@ def _sample_expected_tieline(
     min_composition,
     *,
     eta=None,
+    construction_records=None,
+    construction_stage="tie_line",
 ):
     """
     Samples one tie-line and phase-endpoint diffusivities from a valid probe.
@@ -489,10 +491,15 @@ def _sample_expected_tieline(
     and phase sets raise ``_ExpectedTielineRegionError``; diffusivity errors
     retain their original exception type.
     """
+    def record(kind, **values):
+        if construction_records is not None:
+            construction_records.append({"kind": kind, "stage": construction_stage, **values})
+
     try:
         probe = _as_independent_ternary_components(composition, elements, "probe composition")
         probe = _validate_independent_composition(probe, float(min_composition), "probe composition")
     except ValueError as exc:
+        record("equilibrium", outcome="invalid", composition=np.asarray(composition, dtype=np.float64).reshape(-1).tolist(), eta=eta, error=str(exc))
         raise _ExpectedTielineRegionError(str(exc)) from exc
     _, _, meta = _call_interfacial_composition(thermodynamics, probe, temperature, precipitate_phase, eta)
     try:
@@ -505,7 +512,9 @@ def _sample_expected_tieline(
             composition=probe,
         )
     except ValueError as exc:
+        record("equilibrium", outcome="invalid", composition=probe.tolist(), eta=eta, error=str(exc), observed_phases=meta.get("stable_phases") if isinstance(meta, dict) else None)
         raise _ExpectedTielineRegionError(str(exc)) from exc
+    record("equilibrium", outcome="success", composition=probe.tolist(), eta=eta, phases=list(tieline_phases))
     diffusivities = tuple(
         _validate_2x2_matrix(
             thermodynamics.getInterdiffusivity(comp, temperature, phase=phase),
@@ -521,6 +530,8 @@ def _sample_expected_tieline(
                 # debugInPlace()
                 print(np.abs((interD-diffusivities[i])/diffusivities[i]))
                 # raise
+    for phase, comp in zip(tieline_phases, endpoints):
+        record("kinetics", outcome="success", context="interface", phase=phase, composition=np.asarray(comp, dtype=np.float64).tolist(), eta=eta)
     return {
         "probe": probe,
         "endpoints": endpoints,
@@ -586,6 +597,7 @@ def _find_seed_scan_extent(
     search_step,
     xtol,
     max_search_steps,
+    construction_records=None,
 ):
     """
     Follow one side of a seed-point scan through the expected two-phase region.
@@ -621,6 +633,8 @@ def _find_seed_scan_extent(
                 tieline_phases,
                 elements,
                 min_composition,
+                construction_records=construction_records,
+                construction_stage="seed_scan",
             )
         except _ExpectedTielineRegionError as exc:
             # if thermodynamics._backend.totalNumCalcs!=(prevNumCalcs+1):
@@ -643,6 +657,8 @@ def _find_seed_scan_extent(
                         tieline_phases,
                         elements,
                         min_composition,
+                        construction_records=construction_records,
+                        construction_stage="seed_bisection",
                     )
                 except _ExpectedTielineRegionError:
                     lst_ofFailedProbes.append(middle_probe.copy())
@@ -680,6 +696,7 @@ def _resample_seed_scan_side(
     min_composition,
     samples_per_side,
     lst_ofSamples,
+    construction_records=None,
 ):
 
     """
@@ -729,7 +746,7 @@ def _resample_seed_scan_side(
     midPts_toSample = tielineMidpoint_interp(relativeDist_toSample)
 
     samples = []
-    for relativeDist, target in tqdm.tqdm(zip(relativeDist_toSample, midPts_toSample), desc=f"Resampling tieline diffusivities", total=len(midPts_toSample)):
+    for relativeDist, target in tqdm.tqdm(zip(relativeDist_toSample, midPts_toSample), desc=f"Resampling tieline data", total=len(midPts_toSample)):
         try:
             sample = _sample_expected_tieline(
                 thermodynamics,
@@ -739,6 +756,8 @@ def _resample_seed_scan_side(
                 tieline_phases,
                 elements,
                 min_composition,
+                construction_records=construction_records,
+                construction_stage="seed_resample",
             )
         except ValueError as exc:
             raise ValueError(
@@ -1356,6 +1375,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         tieline_values = {phase: [] for phase in tieline_phases}
         interface_diff_x = {phase: [] for phase in tieline_phases}
         interface_diff_d = {phase: [] for phase in tieline_phases}
+        construction_records = []
         if seed_mode:
             (
                 probe_samples_per_side,
@@ -1376,6 +1396,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 tieline_phases,
                 elements,
                 float(min_composition),
+                construction_records=construction_records,
+                construction_stage="seed",
             )
             scan_direction = _seed_tieline_scan_direction(seed_sample["endpoints"])
             print(f"Initial scan direction: {scan_direction}")
@@ -1397,6 +1419,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 probe_boundary_search_step,
                 probe_boundary_xtol,
                 probe_max_search_steps,
+                construction_records=construction_records,
             )
             print(f"scan direction after neg scan: {scan_direction}")
             print(f"seed_sample after neg scan: {seed_sample}")
@@ -1414,6 +1437,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 probe_boundary_search_step,
                 probe_boundary_xtol,
                 probe_max_search_steps,
+                construction_records=construction_records,
             )
             print(f"scan direction after pos scan: {scan_direction}")
             print(f"seed_sample after pos scan: {seed_sample}")
@@ -1450,6 +1474,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 float(min_composition),
                 probe_samples_per_side,
                 lst_ofSamples_neg[::-1] + [seed_sample] + lst_ofSamples_pos,
+                construction_records=construction_records,
                 # [terminal_artificial_sample] + lst_ofSamples_neg[::-1] + [seed_sample] + lst_ofSamples_pos,
             )
             # midpoint_distBool = (np.linalg.norm(terminal_artificial_sample['midpoint'] - both_sides[0][1]['midpoint'])==0)
@@ -1509,6 +1534,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                     elements,
                     float(min_composition),
                     eta=eta,
+                    construction_records=construction_records,
+                    construction_stage="line",
                 )
                 for phase, comp, diffusivity in zip(tieline_phases, sample["endpoints"], sample["diffusivities"]):
                     tieline_values[phase].append(comp)
@@ -1560,6 +1587,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                             "error_type": type(exc).__name__,
                             "error": str(exc),
                         })
+                        construction_records.append({"kind": "kinetics", "stage": "bulk", "outcome": "failed", "context": "bulk", "phase": phase, "composition": point.tolist(), "bulk_point_index": index, "error_type": type(exc).__name__, "error": str(exc)})
                         continue
                     if drop_invalid_bulk_matrices:
                         pending_bulk_matrices[phase].append((index, point, matrix))
@@ -1569,6 +1597,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                         )
                         general_diff_x[phase].append(point)
                         general_diff_d[phase].append(matrix)
+                        construction_records.append({"kind": "kinetics", "stage": "bulk", "outcome": "success", "context": "bulk", "phase": phase, "composition": point.tolist(), "bulk_point_index": index})
         if drop_invalid_bulk_matrices:
             for phase in tieline_phases:
                 for index, point, matrix in pending_bulk_matrices[phase]:
@@ -1588,9 +1617,11 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                             "error": str(exc),
                             "diffusivity_repr": repr(matrix),
                         })
+                        construction_records.append({"kind": "kinetics", "stage": "bulk", "outcome": "invalid", "context": "bulk", "phase": phase, "composition": point.tolist(), "bulk_point_index": index, "error_type": type(exc).__name__, "error": str(exc)})
                         continue
                     general_diff_x[phase].append(point)
                     general_diff_d[phase].append(matrix)
+                    construction_records.append({"kind": "kinetics", "stage": "bulk", "outcome": "success", "context": "bulk", "phase": phase, "composition": point.tolist(), "bulk_point_index": index})
         if (failed_bulk_points or invalid_bulk_points) and diffusivity_interpolation != _DIFFUSIVITY_INTERPOLATION_NEAREST:
             if diffusivity_interpolation == _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID:
                 for phase in tieline_phases:
@@ -1626,6 +1657,21 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             metadata={
                 **sampling_metadata,
                 "precipitate_phase": precipitate_phase,
+                "construction_diagnostics": {
+                    "schema_version": 1,
+                    "settings": {
+                        "elements": list(elements), "phases": list(phases), "tieline_phases": list(tieline_phases),
+                        "temperature": temperature, "min_composition": float(min_composition),
+                        "build_mode": "seed_point" if seed_mode else "line",
+                        "requested_diffusivity_interpolation": requested_interpolation,
+                        "effective_diffusivity_interpolation": diffusivity_interpolation,
+                        "skip_failed_bulk_calculations": bool(skip_failed_bulk_calculations),
+                        "drop_invalid_bulk_matrices": bool(drop_invalid_bulk_matrices),
+                        "bulk_point_count": 0 if bulk_points is None else int(len(bulk_points)),
+                        "probe_parameters": sampling_metadata,
+                    },
+                    "records": construction_records,
+                },
                 **validation_metadata,
                 **({
                     "failed_bulk_points": failed_bulk_points,

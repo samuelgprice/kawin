@@ -1103,10 +1103,14 @@ def build_tieline_surrogate(source_thermodynamics):
         report_path.write_text(json.dumps(invalid, indent=2) + "\n", encoding="utf-8")
         print(f"Dropped {len(invalid)} bulk samples with invalid matrices; details: {report_path}")
     if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS:
-        surrogate_ab.metadata["thermocalc_config"] = source_thermodynamics.config.to_metadata()
+        surrogate_ab.metadata["thermocalc_config"] = source_thermodynamics.config.to_metadata() | {
+            "default_remove_cache": source_thermodynamics.default_remove_cache,
+        }
         surrogate_ab.metadata["kinetics_diagnostics_sidecar"] = f"{_diffusivity_artifact_stem()}_kinetics.jsonl"
     if TC_CAPTURE_SITE_FRACTIONS:
-        surrogate_ab.metadata["thermocalc_config"] = source_thermodynamics.config.to_metadata()
+        surrogate_ab.metadata["thermocalc_config"] = source_thermodynamics.config.to_metadata() | {
+            "default_remove_cache": source_thermodynamics.default_remove_cache,
+        }
         surrogate_ab.metadata["site_fractions_sidecar"] = f"{_diffusivity_artifact_stem()}_site_fractions.jsonl"
     if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS or TC_CAPTURE_SITE_FRACTIONS:
         surrogate_ab.save(OUTPUTS / f"{_diffusivity_artifact_stem()}.npz")
@@ -1906,6 +1910,13 @@ source_thermodynamics = build_source_thermodynamics()
 tieline_surrogate = build_tieline_surrogate(source_thermodynamics)
 
 print(f"Built tie-line surrogate with eta bounds {tieline_surrogate.eta_bounds}.")
+
+# Construction-only dashboard: reads persisted build provenance and does not
+# issue additional Thermo-Calc queries.
+construction_diagnostics = plot_surrogate_diagnostics(
+    tieline_surrogate, renderer="browser"
+)
+construction_diagnostics["figures"]["construction"].show()
 
 if BULK_DIFFUSIVITY_MODE == "phase_uniform":
     fixed_diffusivity_matrices = select_fixed_diffusivity_matrices(

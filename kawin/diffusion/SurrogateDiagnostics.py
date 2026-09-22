@@ -2211,6 +2211,127 @@ def _hover_for_section(hover_fields, section):
     return hover_fields
 
 
+def evaluate_surrogate_construction_diagnostics(surrogate):
+    """Return persisted construction attempts and outcome counts for a surrogate.
+
+    This inspection is entirely metadata-based and never calls the original
+    thermodynamics provider.  Surrogates made before construction provenance
+    was introduced return an empty, schema-versioned report.
+    """
+    payload = getattr(surrogate, "metadata", {}).get("construction_diagnostics", {})
+    records = [dict(record) for record in payload.get("records", [])]
+    counts = {}
+    for record in records:
+        key = (record.get("kind", "unknown"), record.get("phase", ""), record.get("outcome", "unknown"))
+        counts[key] = counts.get(key, 0) + 1
+    settings = dict(payload.get("settings", {}))
+    metadata = getattr(surrogate, "metadata", {})
+    thermocalc_config = metadata.get("thermocalc_config")
+    if isinstance(thermocalc_config, Mapping):
+        settings.update({
+            f"thermocalc.{key}": value
+            for key, value in thermocalc_config.items()
+        })
+        settings["thermocalc.capture_diffusivity_diagnostics"] = (
+            "kinetics_diagnostics_sidecar" in metadata
+        )
+        settings["thermocalc.capture_site_fractions"] = "site_fractions_sidecar" in metadata
+    return {
+        "kind": "surrogate_construction", "schema_version": int(payload.get("schema_version", 1)),
+        "elements": tuple(getattr(surrogate, "elements", ())),
+        "settings": settings, "records": records, "counts": counts,
+    }
+
+
+def plot_surrogate_construction_diagnostics(report, *, hover_format=".6g", renderer="browser"):
+    """Create a tabbed Plotly map of recorded surrogate-construction attempts."""
+    if report.get("kind") != "surrogate_construction":
+        raise ValueError("Construction report has an unexpected kind.")
+    go, _ = _require_plotly(renderer)
+    elements = tuple(report.get("elements", ("reference", "x1", "x2")))
+    if len(elements) != 3:
+        elements = ("reference", "x1", "x2")
+    fig = go.Figure()
+    records = report["records"]
+    outcomes = {"success": "#2ca02c", "failed": "#d62728", "invalid": "#ff7f0e"}
+    groups = [("Equilibrium", [r for r in records if r.get("kind") == "equilibrium"])]
+    phases = list(report["settings"].get("tieline_phases", []))
+    phases.extend(sorted({r.get("phase") for r in records if r.get("kind") == "kinetics" and r.get("phase") not in phases}))
+    groups.extend([(f"Kinetics: {phase}", [r for r in records if r.get("kind") == "kinetics" and r.get("phase") == phase]) for phase in phases])
+    count_lines = [
+        f"{kind} / {phase or 'all phases'} / {outcome}: {value}"
+        for (kind, phase, outcome), value in sorted(report["counts"].items())
+    ]
+    settings = report["settings"]
+    setting_lines = [
+        f"{escape(str(key))}: {escape(str(value))}"
+        for key, value in settings.items()
+        if key != "probe_parameters"
+    ]
+    overview_annotations = [
+        {
+            "text": "<b>Outcome counts</b><br>" + "<br>".join(count_lines or ["No persisted construction records."]),
+            "showarrow": False, "x": 0.03, "y": 0.94, "xref": "paper", "yref": "paper",
+            "xanchor": "left", "yanchor": "top", "align": "left",
+        },
+        {
+            "text": "<b>Build settings</b><br>" + "<br>".join(setting_lines or ["No persisted settings."]),
+            "showarrow": False, "x": 0.53, "y": 0.94, "xref": "paper", "yref": "paper",
+            "xanchor": "left", "yanchor": "top", "align": "left",
+        },
+    ]
+    overview_shapes = [
+        {"type": "rect", "x0": 0.01, "x1": 0.49, "y0": 0.08, "y1": 0.98, "xref": "paper", "yref": "paper", "fillcolor": "#eef3fa", "line": {"width": 0}, "layer": "below"},
+        {"type": "rect", "x0": 0.51, "x1": 0.99, "y0": 0.08, "y1": 0.98, "xref": "paper", "yref": "paper", "fillcolor": "#eef3fa", "line": {"width": 0}, "layer": "below"},
+    ]
+    trace_tabs = {"Overview": []}
+    for tab, rows in groups:
+        trace_tabs[tab] = []
+        for outcome in outcomes:
+            subset = [r for r in rows if r.get("outcome") == outcome and len(r.get("composition", ())) == 2]
+            if not subset:
+                continue
+            points = np.asarray([r["composition"] for r in subset], dtype=float)
+            hover = ["<br>".join(f"{escape(str(k))}: {escape(str(v))}" for k, v in row.items() if v is not None) for row in subset]
+            symbols = ["diamond" if r.get("context") == "interface" else "circle" for r in subset]
+            index = len(fig.data)
+            fig.add_trace(go.Scatterternary(
+                **_ternary_coordinates(points), mode="markers", name=f"{tab} {outcome}",
+                marker={"size": 9, "color": outcomes[outcome], "symbol": symbols},
+                text=hover, hovertemplate="%{text}<extra></extra>", visible=False,
+            ))
+            trace_tabs[tab].append(index)
+    buttons = []
+    for tab, indices in trace_tabs.items():
+        visible = [i in indices for i in range(len(fig.data))]
+        annotation = overview_annotations if tab == "Overview" else [{
+            "text": "Diamond: interface endpoint; circle: bulk query.",
+            "showarrow": False, "x": 0.5, "y": 0.88,
+            "xref": "paper", "yref": "paper", "align": "center",
+        }]
+        layout_update = {
+            "annotations": annotation,
+            "shapes": overview_shapes if tab == "Overview" else [],
+            "ternary.domain.y": [0.0, 0.01] if tab == "Overview" else [0.0, 0.80],
+        }
+        buttons.append({
+            "label": tab,
+            "method": "update",
+            "args": [
+                {"visible": visible},
+                layout_update,
+            ],
+        })
+    fig.update_layout(
+        title="Surrogate construction diagnostics", template="plotly_white", height=760,
+        ternary={"sum": 1, "domain": {"y": [0.0, 0.01]}, "aaxis": {"title": elements[2]}, "baxis": {"title": elements[0]}, "caxis": {"title": elements[1]}},
+        updatemenus=[{"type": "buttons", "direction": "right", "buttons": buttons, "x": 0.5, "xanchor": "center", "y": 1.12}],
+        annotations=overview_annotations, shapes=overview_shapes,
+        margin={"t": 105}, uirevision="surrogate-construction",
+    )
+    return fig
+
+
 def plot_surrogate_diagnostics(
     surrogate,
     *,
@@ -2242,6 +2363,9 @@ def plot_surrogate_diagnostics(
     """
     figures = {}
     reports = {}
+    construction = evaluate_surrogate_construction_diagnostics(surrogate)
+    reports["construction"] = construction
+    figures["construction"] = plot_surrogate_construction_diagnostics(construction, renderer=renderer)
     if isinstance(surrogate, TernaryMovingBoundaryThermodynamicsSurrogate):
         tieline = evaluate_tieline_diagnostics(
             surrogate,
@@ -2300,5 +2424,7 @@ __all__ = [
     "plot_tieline_diagnostics",
     "plot_interface_diffusivity_diagnostics",
     "plot_bulk_diffusivity_diagnostics",
+    "evaluate_surrogate_construction_diagnostics",
+    "plot_surrogate_construction_diagnostics",
     "plot_surrogate_diagnostics",
 ]

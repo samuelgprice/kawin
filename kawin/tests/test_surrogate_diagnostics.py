@@ -618,14 +618,14 @@ def test_high_level_plot_returns_reports_and_merged_bulk_only():
         bulk_axes=(np.asarray([0.20, 0.30]), np.asarray([0.10, 0.20])),
         display_tieline_count=2,
     )
-    assert set(result["figures"]) == {"thermodynamics", "interface_diffusivity", "bulk_diffusivity"}
+    assert set(result["figures"]) == {"construction", "thermodynamics", "interface_diffusivity", "bulk_diffusivity"}
 
     merged = plot_surrogate_diagnostics(
         _merged(),
         bulk_axes=(np.asarray([0.20, 0.30]), np.asarray([0.10, 0.20])),
     )
-    assert set(merged["figures"]) == {"bulk_diffusivity"}
-    assert set(merged["reports"]) == {"diffusivity"}
+    assert set(merged["figures"]) == {"construction", "bulk_diffusivity"}
+    assert set(merged["reports"]) == {"construction", "diffusivity"}
 
 
 def test_three_phase_example_helper_routes_interfaces_truth_and_merged(monkeypatch):
