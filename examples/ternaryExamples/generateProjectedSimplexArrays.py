@@ -35,7 +35,7 @@ bufferedProj_input = projOntoBufferedInteriorSimplex_flexibleDir.projOntoBuffere
 bufferedProj_input.precomputeForSetDimension(ndims=3)
 
 import pickle as pk
-with open(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\fullSystemData\allValid_3Element_compositions_0.01inc.pkl", 'rb') as fh:
+with open(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\fullSystemData\allValid_3Element_compositions_0.001inc.pkl", 'rb') as fh:
     ternComps_arr = pk.load(fh)
     
     
@@ -70,11 +70,11 @@ def compositions(arr, n, target=1.0, tol=1e-12):
 
     yield from search([], n, 0.0)
 
-increment = 0.04
+increment = 0.005
 ternComps_arr = ternComps_arr[np.linalg.norm((ternComps_arr*100/(increment/0.01))-np.round(ternComps_arr*100/(increment/0.01)), axis=1)<1e-9].copy()
 
 ternComps_alt_arr = np.array(list(compositions(arr=np.round(np.arange(0, 1+1e-10, increment), 8).copy(), n=3, target=1.0, tol=1e-4))).copy()
-(ternComps_alt_arr == ternComps_arr).all(axis=1).all()
+assert (ternComps_alt_arr == ternComps_arr).all(axis=1).all()
 # ternComps_alt_arr[np.invert((ternComps_alt_arr == ternComps_arr).all(axis=1))][0,2]
 # ternComps_arr[np.invert((ternComps_alt_arr == ternComps_arr).all(axis=1))][0,2]
 
@@ -83,7 +83,7 @@ projed_arr = np.round(projed_arr, 10).copy()
 (projed_arr == ternComps_arr).all(axis=1).sum()
 len(ternComps_arr) - (projed_arr == ternComps_arr).all(axis=1).sum()
 (ternComps_arr==0).any(axis=1).sum()
-np.linalg.norm((projed_arr - ternComps_arr), axis=1)
+(np.linalg.norm((projed_arr - ternComps_arr), axis=1)>0).sum()
 
 # with open(rf"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\allValid_3Element_compositions_{increment}inc_projTo1eminus4.pkl", 'wb') as fh:
 #     pk.dump(projed_arr, fh)
