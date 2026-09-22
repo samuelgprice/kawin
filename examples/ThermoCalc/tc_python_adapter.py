@@ -8,6 +8,7 @@ thermodynamics API used by the moving-boundary surrogate builder.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import re
@@ -66,7 +67,7 @@ class ThermoCalcDatabaseError(ThermoCalcError):
 
 @dataclass(frozen=True)
 class ThermoCalcConfig:
-    """Configuration for the Fe-Cr-Ni TC-Python example adapter.
+    """Configuration for the TC-Python example adapter.
 
     Elements are stored in kawin order with the reference element first.
     Public composition inputs use independent mole fractions in the order of
@@ -77,9 +78,16 @@ class ThermoCalcConfig:
     ``use_default_phases=False`` to reproduce the older behavior where only
     ``phases`` are selected in the Thermo-Calc system. The optional
     ``global_minimization_max_grid_points`` value is applied through
-    TC-Python's ``SingleEquilibriumOptions`` object. Kinetics controls apply only to kinetics;
-    QTHISS retries use larger grids only when global minimization is active.
-    Subsequent calculations restore the configured grid.
+    TC-Python's ``SingleEquilibriumOptions`` object. The two kinetics-only
+    switches leave equilibrium and driving-force minimization unchanged; their
+    defaults are reasserted after a forced kinetics calculation. The
+    ``equilibrium_qthiss_retry_grid_points`` also applies to driving-force and
+    kinetics calculations that already use global minimization. Local kinetics
+    calculations are never retried. Later queries regain the configured grid.
+    ``kinetics_constrain_single_composition_set`` suspends all composition sets,
+    re-enters only the requested kinetics set, and uses local minimization.
+    Global minimization can create new sets despite phase-status restrictions;
+    the usual bulk-composition conditions remain, and site fractions are free.
     """
 
     thermodynamic_database: str = None #"TCFE9"
@@ -94,6 +102,7 @@ class ThermoCalcConfig:
     equilibrium_qthiss_retry_grid_points: tuple[int, ...] = ()
     kinetics_disable_global_minimization: bool = False
     kinetics_disable_positive_definite_hessian: bool = False
+    kinetics_constrain_single_composition_set: bool = False
     cache_dir: str | Path | None = Path("examples") / "ThermoCalc" / "outputs" / "tc_cache"
     timeout_seconds: float | None = 300.0
     calculation_version: int = 1
@@ -177,6 +186,17 @@ def base_phase_name(phase: str) -> str:
     return str(phase).split("#", maxsplit=1)[0].upper()
 
 
+def _site_fraction_quantity(phase: str, constituent: str, sublattice: int) -> str:
+    """Return the Console Mode site-fraction quantity for one sublattice.
+
+    TC-Python's single-equilibrium result accepts quantity strings. Its
+    ``ThermodynamicQuantity`` factory does not provide site fractions, so use
+    the same ``Y(phase,constituent#ordinal)`` syntax as ``ScheilQuantity``.
+    """
+
+    return f"Y({phase},{constituent}#{sublattice})"
+
+
 def normalized_driving_force_to_j_per_mol(dgm: float, T: float) -> float:
     """Convert TC-Python's dimensionless ``DGM`` quantity to J/mol."""
 
@@ -246,6 +266,8 @@ class _TCPythonBackend:
         self._last_calculation_kind: str | None = None
         self._retry_calculation: Any | None = None
         self._retry_settings_dirty = False
+        self._site_fraction_capture_callback = None
+        self._site_fraction_capture_index = 0
 
     def start(self, config: ThermoCalcConfig):
         """Start TC-Python and build the selected system."""
@@ -458,8 +480,12 @@ class _TCPythonBackend:
             "elements": config.elements,
         }
 
-    def calculate_kinetics(self, x: np.ndarray, T: float, phase: str) -> dict[str, Any]:
-        """Calculate metastable single-phase tracer and chemical diffusivities."""
+    def calculate_kinetics(self, x: np.ndarray, T: float, phase: str, collect_diagnostics: bool = False) -> dict[str, Any]:
+        """Calculate single-phase diffusivities and optionally inspect that result.
+
+        During capture, failed tracer or phase-state queries are recorded as
+        optional diagnostic errors without discarding a chemical matrix.
+        """
 
         config = self._require_config()
         phase = phase.upper()
@@ -485,20 +511,113 @@ class _TCPythonBackend:
             ],
             dtype=np.float64,
         )
-        tracer = np.array(
-            [
-                self._value(result, tq.tracer_diffusion_coefficient(phase, tc_element_name(element)))
-                for element in config.elements
-            ],
-            dtype=np.float64,
-        )
-        return {
+        tracer_errors = {}
+        if collect_diagnostics:
+            tracer = []
+            for element in config.elements:
+                try:
+                    value = float(result.get_value_of(
+                        tq.tracer_diffusion_coefficient(phase, tc_element_name(element))
+                    ))
+                    if not np.isfinite(value):
+                        raise ValueError("non-finite tracer diffusivity")
+                    tracer.append(value)
+                except Exception as exc:
+                    tracer.append(None)
+                    tracer_errors[f"tracer_diffusivity[{element}]"] = str(exc)
+        else:
+            tracer = np.array(
+                [
+                    self._value(result, tq.tracer_diffusion_coefficient(phase, tc_element_name(element)))
+                    for element in config.elements
+                ],
+                dtype=np.float64,
+            )
+        output = {
             "interdiffusivity": interdiffusivity,
             "tracer_diffusivity": tracer,
             "phase": phase,
             "independent_elements": independent,
             "elements": config.elements,
             "units": "m^2/s",
+        }
+        if collect_diagnostics:
+            output["diagnostics"] = self._kinetics_diagnostics(result, phase)
+            output["diagnostics"]["errors"].update(tracer_errors)
+        return output
+
+    def _kinetics_diagnostics(self, result: Any, phase: str) -> dict[str, Any]:
+        """Read optional phase-state quantities without invalidating a usable matrix.
+
+        All values come from the forced single-phase kinetics equilibrium. A
+        failed quantity is represented by ``None`` and named in ``errors``.
+        """
+        config = self._require_config()
+        tq = self._tq()
+        errors = {}
+
+        def optional(name, query):
+            try:
+                value = query()
+                if isinstance(value, (float, np.floating)) and not np.isfinite(value):
+                    raise ValueError(f"{name} is non-finite")
+                return value
+            except Exception as exc:
+                errors[name] = str(exc)
+                return None
+
+        stable_phases = optional("stable_phases", lambda: [str(name).upper() for name in result.get_stable_phases()])
+        factor = [
+            [
+                optional(
+                    f"thermodynamic_factor[{diffusing},{gradient}]",
+                    lambda d=diffusing, g=gradient: float(result.get_value_of(
+                        tq.thermodynamic_factor(
+                            phase, tc_element_name(d), tc_element_name(g), tc_element_name(config.reference_element)
+                        )
+                    )),
+                )
+                for gradient in config.independent_elements
+            ]
+            for diffusing in config.independent_elements
+        ]
+        composition = [
+            optional(
+                f"phase_composition[{element}]",
+                lambda e=element: float(result.get_value_of(
+                    tq.composition_of_phase_as_mole_fraction(phase, tc_element_name(e))
+                )),
+            )
+            for element in config.elements
+        ]
+        site_fractions = optional(
+            "site_fractions.phase",
+            lambda: self._get_system(False).get_phase_object(phase).get_sublattices(),
+        )
+        if site_fractions is not None:
+            sublattices = site_fractions
+            site_fractions = []
+            for index, sublattice in enumerate(sublattices, start=1):
+                names = optional(
+                    f"site_fractions[{index}].constituents",
+                    lambda s=sublattice: sorted(species.get_name() for species in s.get_constituents()),
+                )
+                constituents = None if names is None else {
+                    name: optional(
+                        f"site_fractions[{index},{name}]",
+                        lambda n=name, i=index: float(result.get_value_of(
+                            _site_fraction_quantity(phase, n, i)
+                        )),
+                    )
+                    for name in names
+                }
+                site_fractions.append({"sublattice": index, "constituents": constituents})
+        return {
+            "thermodynamic_factors": factor,
+            "stable_composition_sets": stable_phases,
+            "phase_composition": composition,
+            "site_fractions": site_fractions,
+            "errors": errors,
         }
 
     def _build_system(self, config: ThermoCalcConfig, include_default_phases: bool):
@@ -539,30 +658,167 @@ class _TCPythonBackend:
         return calc
 
     def _force_kinetics_phase(self, calc: Any, phase: str):
-        """Enter the requested kinetics phase and suspend other selected phases."""
+        """Select one kinetics composition set while leaving its sites free.
+
+        In constrained mode, suspend all selected and database-supplied sets
+        before re-entering the requested one. Local minimization is separately
+        enforced so Thermo-Calc does not create a new set during the solve.
+        """
+        constrain_single = self._require_config().kinetics_constrain_single_composition_set
+        if constrain_single:
+            calc.set_phase_to_suspended("*")
+            calc.set_phase_to_entered(phase, 0.0)
+            return
         for candidate in self._require_config().phases:
             if candidate == phase:
                 calc.set_phase_to_entered(candidate)
             else:
                 calc.set_phase_to_suspended(candidate)
 
-    def _calculate(self, kind: str, phase: str | None, x: np.ndarray, T: float):
-        """Calculate with kind-specific settings and retry global QTHISS failures.
+    def _validate_single_kinetics_phase(self, result: Any, phase: str, x: np.ndarray):
+        """Reject a constrained result if TC split or relabeled the phase.
 
-        Thermo-Calc may retain minimization settings across calculation objects.
-        Higher-grid retries use fresh calculators; later queries regain the
-        configured grid and kinetics-only settings do not leak to equilibrium.
+        A local solve with other sets suspended should retain just the entered
+        set. Check the actual result because shared TC state may still change.
+        """
+        if not self._require_config().kinetics_constrain_single_composition_set:
+            return
+        stable = [str(name).upper() for name in result.get_stable_phases()]
+        if stable != [phase]:
+            raise ThermoCalcCalculationError(
+                f"Constrained kinetics for {phase} returned stable composition sets {stable}; expected only {phase}."
+            )
+        actual = self._phase_composition(result, phase)
+        expected = independent_to_full_composition(x, self._require_config())
+        if not np.allclose(actual, expected, rtol=0, atol=1e-6):
+            raise ThermoCalcCalculationError(
+                f"Constrained kinetics for {phase} returned composition {actual.tolist()}; "
+                f"expected {expected.tolist()}."
+            )
+
+    def _emit_site_fraction_calculation(self, kind, phase, x, T, *, result=None, error=None, grid_points=None):
+        """Record one actual calculate attempt without changing its result.
+
+        Every stable composition set is queried from that same result. Missing
+        optional quantities are recorded per phase; failed calculate attempts
+        retain their error and have no phase-state values.
+        """
+        callback = self._site_fraction_capture_callback
+        if callback is None:
+            return
+        config = self._require_config()
+        record = {
+            "record_type": "calculation_site_fractions",
+            "calculation_index": self._site_fraction_capture_index,
+            "kind": kind,
+            "requested_phase": phase,
+            "temperature": float(T),
+            "input_composition": np.asarray(x, dtype=np.float64).tolist(),
+            "input_full_composition": independent_to_full_composition(x, config).tolist(),
+            "grid_points": grid_points,
+            "status": "calculate_error" if error is not None else "ok",
+            "error": None if error is None else str(error),
+            "stable_composition_sets": None,
+            "phases": [],
+            "diagnostic_errors": {},
+        }
+        if result is not None:
+            try:
+                stable = [str(name).upper() for name in result.get_stable_phases()]
+                record["stable_composition_sets"] = stable
+            except Exception as exc:
+                stable = []
+                record["diagnostic_errors"]["stable_composition_sets"] = str(exc)
+            names = list(dict.fromkeys(stable + ([phase] if phase is not None else [])))
+            for name in names:
+                try:
+                    record["phases"].append(self._site_fraction_phase_state(result, name, name in stable, kind))
+                except Exception as exc:
+                    record["diagnostic_errors"][f"phase[{name}]"] = str(exc)
+        callback(record)
+        self._site_fraction_capture_index += 1
+
+    def _site_fraction_phase_state(self, result, phase, stable, kind):
+        """Read one composition set's composition and labeled sublattice sites."""
+        config = self._require_config()
+        tq = self._tq()
+        errors = {}
+
+        def optional(label, query):
+            try:
+                value = query()
+                if isinstance(value, (float, np.floating)) and not np.isfinite(value):
+                    raise ValueError("non-finite value")
+                return value
+            except Exception as exc:
+                errors[label] = str(exc)
+                return None
+
+        composition = [
+            optional(f"composition[{element}]", lambda e=element: float(result.get_value_of(
+                tq.composition_of_phase_as_mole_fraction(phase, tc_element_name(e))
+            )))
+            for element in config.elements
+        ]
+        amount = optional("phase_amount", lambda: float(result.get_value_of(tq.mole_fraction_of_a_phase(phase)))) if stable else None
+        include_default_phases = config.use_default_phases if kind != "kinetics" else False
+        system = self._get_system(include_default_phases)
+        phase_object = optional("phase_object", lambda: system.get_phase_object(phase))
+        if phase_object is None and base_phase_name(phase) != phase:
+            phase_object = optional("base_phase_object", lambda: system.get_phase_object(base_phase_name(phase)))
+            if phase_object is not None:
+                errors.pop("phase_object", None)
+        sublattices = None if phase_object is None else optional("sublattices", phase_object.get_sublattices)
+        site_fractions = None if sublattices is None else []
+        if sublattices is not None:
+            for index, sublattice in enumerate(sublattices, start=1):
+                ratio = optional(f"sublattice[{index}].site_ratio", lambda s=sublattice: float(s.get_nr_of_sites()))
+                names = optional(
+                    f"sublattice[{index}].constituents",
+                    lambda s=sublattice: sorted(str(species.get_name()) for species in s.get_constituents()),
+                )
+                constituents = None if names is None else {
+                    name: optional(
+                        f"sublattice[{index}].{name}",
+                        lambda n=name, i=index: float(result.get_value_of(
+                            _site_fraction_quantity(phase, n, i)
+                        )),
+                    )
+                    for name in names
+                }
+                site_fractions.append({"sublattice": index, "site_ratio": ratio, "constituents": constituents})
+        return {
+            "phase": phase,
+            "stable": stable,
+            "phase_amount": amount,
+            "phase_composition": composition,
+            "site_fractions": site_fractions,
+            "diagnostic_errors": errors,
+        }
+
+    def _calculate(self, kind: str, phase: str | None, x: np.ndarray, T: float):
+        """Calculate with the requested settings after any kinetics mode switch.
+
+        The TC-Python engine can retain minimization settings across calculation
+        objects in one session, so a transition reasserts the relevant options.
+        Only QTHISS iteration failures from a ``calculate()`` call already
+        using global minimization trigger higher-grid retries. An active site-
+        fraction capture emits a record for each actual attempt, including
+        failed attempts and retries, before the result can be replaced.
         """
         calc = self._get_calculation(kind, phase)
         config = self._require_config()
         mode_switch = (
             self._last_calculation_kind is not None
             and (kind == "kinetics") != (self._last_calculation_kind == "kinetics")
-            and (config.kinetics_disable_global_minimization or config.kinetics_disable_positive_definite_hessian)
+            and (config.kinetics_disable_global_minimization or config.kinetics_disable_positive_definite_hessian
+                 or config.kinetics_constrain_single_composition_set)
         )
         if mode_switch or self._retry_settings_dirty:
             calc = self._configure_global_minimization(
-                calc, config, kind,
+                calc,
+                config,
+                kind,
                 restore_shared_settings=kind != "kinetics" or self._retry_settings_dirty,
             )
             include_default_phases = config.use_default_phases if kind != "kinetics" else False
@@ -576,16 +832,34 @@ class _TCPythonBackend:
             self.total_kind_lst.append(kind)
             self.total_x_lst.append(x.copy())
             try:
-                return calc.calculate()
+                result = calc.calculate()
             except Exception as exc:
-                uses_global = kind != "kinetics" or not config.kinetics_disable_global_minimization
-                if (uses_global and config.equilibrium_qthiss_retry_grid_points
+                self._emit_site_fraction_calculation(
+                    kind, phase, x, T, error=exc,
+                    grid_points=None if kind == "kinetics" and (
+                        config.kinetics_disable_global_minimization or config.kinetics_constrain_single_composition_set)
+                    else config.global_minimization_max_grid_points,
+                )
+                uses_global_minimization = kind != "kinetics" or not (
+                    config.kinetics_disable_global_minimization or config.kinetics_constrain_single_composition_set)
+                if (uses_global_minimization and config.equilibrium_qthiss_retry_grid_points
                         and _is_qthiss_iteration_error(exc)):
                     return self._retry_after_qthiss(
                         kind, phase, x, T, exc, config.equilibrium_qthiss_retry_grid_points,
                     )
                 raise ThermoCalcSolveError(f"TC-Python {kind} calculation failed: {exc}") from exc
+            self._emit_site_fraction_calculation(
+                kind, phase, x, T, result=result,
+                grid_points=None if kind == "kinetics" and (
+                    config.kinetics_disable_global_minimization or config.kinetics_constrain_single_composition_set)
+                else config.global_minimization_max_grid_points,
+            )
+            if kind == "kinetics":
+                self._validate_single_kinetics_phase(result, phase, x)
+            return result
         except ThermoCalcSolveError:
+            raise
+        except ThermoCalcCalculationError:
             raise
         except Exception as exc:
             print(kind, phase, x, T)
@@ -599,7 +873,12 @@ class _TCPythonBackend:
         self, kind: str, phase: str | None, x: np.ndarray, T: float,
         initial_error: Exception, retry_points: tuple[int, ...],
     ):
-        """Retry QTHISS failures with larger grids, restoring normal settings later."""
+        """Retry QTHISS failures on fresh calculators with larger global grids.
+
+        Retries preserve phase status and minimization mode. The normal
+        calculator is evicted and shared settings are restored before the
+        next query uses the configured grid limit.
+        """
         config = self._require_config()
         include_default_phases = config.use_default_phases if kind != "kinetics" else False
         key = (kind, phase, include_default_phases)
@@ -610,7 +889,10 @@ class _TCPythonBackend:
                 print(f"Retrying {kind} {phase} at {(x, T)} with {grid_points} grid points", flush=True)
                 calc = system.with_single_equilibrium_calculation()
                 calc = self._configure_global_minimization(
-                    calc, config, kind, restore_shared_settings=True,
+                    calc,
+                    config,
+                    kind,
+                    restore_shared_settings=True,
                     grid_points_override=grid_points,
                 )
                 if kind == "kinetics":
@@ -625,10 +907,14 @@ class _TCPythonBackend:
                 try:
                     result = calc.calculate()
                 except Exception as exc:
+                    self._emit_site_fraction_calculation(kind, phase, x, T, error=exc, grid_points=grid_points)
                     if not _is_qthiss_iteration_error(exc):
                         raise ThermoCalcSolveError(f"TC-Python {kind} calculation failed: {exc}") from exc
                     last_error = exc
                 else:
+                    self._emit_site_fraction_calculation(kind, phase, x, T, result=result, grid_points=grid_points)
+                    if kind == "kinetics":
+                        self._validate_single_kinetics_phase(result, phase, x)
                     self._retry_calculation = calc
                     return result
             raise ThermoCalcSolveError(f"TC-Python {kind} calculation failed: {last_error}") from last_error
@@ -653,7 +939,8 @@ class _TCPythonBackend:
         override is used only by temporary QTHISS retries; a kinetics retry
         retains its configured Hessian mode.
         """
-        local_kinetics = kind == "kinetics" and config.kinetics_disable_global_minimization
+        local_kinetics = kind == "kinetics" and (
+            config.kinetics_disable_global_minimization or config.kinetics_constrain_single_composition_set)
         if local_kinetics:
             configured_calc = calc.disable_global_minimization()
             if configured_calc is not None:
@@ -820,6 +1107,8 @@ class TCPythonThermodynamics:
         self._started = False
         self._cache: dict[tuple[Any, ...], Any] = {}
         self.default_remove_cache = bool(default_remove_cache)
+        self._kinetics_diagnostic_callback = None
+        self._kinetics_diagnostic_index = 0
 
     def __enter__(self):
         self._ensure_started()
@@ -845,6 +1134,50 @@ class TCPythonThermodynamics:
         """Clear adapter-side cached values without restarting TC-Python."""
 
         self._cache.clear()
+
+    @contextmanager
+    def captureKineticsDiagnostics(self, callback):
+        """Emit ordered records for interdiffusivity queries within this scope.
+
+        Cached queries also emit records. Optional phase-state values come from
+        the same forced kinetics equilibrium as the returned diffusivity; a
+        cached result without those values is refreshed on first use.
+        """
+        if not callable(callback):
+            raise TypeError("callback must be callable.")
+        previous_callback = self._kinetics_diagnostic_callback
+        previous_index = self._kinetics_diagnostic_index
+        self._kinetics_diagnostic_callback = callback
+        self._kinetics_diagnostic_index = 0
+        try:
+            yield self
+        finally:
+            self._kinetics_diagnostic_callback = previous_callback
+            self._kinetics_diagnostic_index = previous_index
+
+    @contextmanager
+    def captureCalculationSiteFractions(self, callback):
+        """Emit one record for each backend ``calculate()`` attempt in scope.
+
+        Successful equilibrium, driving-force, and kinetics attempts include
+        the stable composition sets and their phase compositions and labeled
+        site fractions. Failed attempts, including higher-grid retries, retain
+        the calculation error. Adapter cache hits make no backend attempt and
+        therefore emit no record. Optional quantity failures do not discard a
+        successful calculation.
+        """
+        if not callable(callback):
+            raise TypeError("callback must be callable.")
+        backend = self._backend
+        previous_callback = getattr(backend, "_site_fraction_capture_callback", None)
+        previous_index = getattr(backend, "_site_fraction_capture_index", 0)
+        backend._site_fraction_capture_callback = callback
+        backend._site_fraction_capture_index = 0
+        try:
+            yield self
+        finally:
+            backend._site_fraction_capture_callback = previous_callback
+            backend._site_fraction_capture_index = previous_index
 
     def getRuntimeVersion(self) -> str | None:
         """Return the TC-Python package version when it can be determined."""
@@ -882,26 +1215,56 @@ class TCPythonThermodynamics:
         Rows and columns follow ``independent_elements`` order.  For the
         default Fe-Cr-Ni configuration, the result is a 2x2 matrix in
         ``[CR, NI]`` order. When ``removeCache`` is omitted, the instance's
-        ``default_remove_cache`` policy is used.
+        ``default_remove_cache`` policy is used. An active kinetics diagnostic
+        scope emits one record per query, including cache hits.
         """
 
         removeCache = self._resolve_remove_cache(removeCache)
         phase = _getMatrixPhase(self.phases, phase).upper()
         x_array, T_array = self._process_xT(x, T)
-        values = [self._get_kinetics_single(xi, Ti, phase, removeCache)["interdiffusivity"] for xi, Ti in zip(x_array, T_array)]
+        values = []
+        for xi, Ti in zip(x_array, T_array):
+            kinetics, cache_hit = self._get_kinetics_single(
+                xi, Ti, phase, removeCache, diagnostics=self._kinetics_diagnostic_callback is not None
+            )
+            values.append(kinetics["interdiffusivity"])
+            if self._kinetics_diagnostic_callback is not None:
+                diagnostics = kinetics.get("diagnostics", {})
+                record = {
+                    "record_type": "kinetics",
+                    "query_index": self._kinetics_diagnostic_index,
+                    "cache_hit": cache_hit,
+                    "requested_phase": phase,
+                    "temperature": float(Ti),
+                    "input_composition": xi.tolist(),
+                    "interdiffusivity": np.asarray(kinetics["interdiffusivity"], dtype=np.float64).tolist(),
+                    "tracer_diffusivities": [None if value is None else float(value) for value in kinetics["tracer_diffusivity"]],
+                    "thermodynamic_factors": diagnostics.get("thermodynamic_factors"),
+                    "stable_composition_sets": diagnostics.get("stable_composition_sets"),
+                    "phase_composition": diagnostics.get("phase_composition"),
+                    "site_fractions": diagnostics.get("site_fractions"),
+                    "diagnostic_errors": dict(diagnostics.get("errors", {})),
+                }
+                if not diagnostics:
+                    record["diagnostic_errors"]["diagnostics"] = "Backend did not return optional diagnostics."
+                self._kinetics_diagnostic_callback(record)
+                self._kinetics_diagnostic_index += 1
         return np.squeeze(np.array(values, dtype=np.float64))
 
     def getTracerDiffusivity(self, x, T, phase=None, removeCache=None):
         """Return tracer diffusivities in full ``elements`` order.
 
         When ``removeCache`` is omitted, the instance's
-        ``default_remove_cache`` policy is used.
+        ``default_remove_cache`` policy is used. Missing tracer values from a
+        diagnostic capture raise an error rather than returning NaNs.
         """
 
         removeCache = self._resolve_remove_cache(removeCache)
         phase = _getMatrixPhase(self.phases, phase).upper()
         x_array, T_array = self._process_xT(x, T)
-        values = [self._get_kinetics_single(xi, Ti, phase, removeCache)["tracer_diffusivity"] for xi, Ti in zip(x_array, T_array)]
+        values = [self._get_kinetics_single(xi, Ti, phase, removeCache)[0]["tracer_diffusivity"] for xi, Ti in zip(x_array, T_array)]
+        if any(any(value is None for value in tracer) for tracer in values):
+            raise ThermoCalcCalculationError(f"Tracer diffusivity is unavailable for phase {phase}.")
         return np.squeeze(np.array(values, dtype=np.float64))
 
     def getEquilibriumData(self, x, T, removeCache=None):
@@ -990,9 +1353,17 @@ class TCPythonThermodynamics:
         )
         return result["driving_force"], full_to_independent_composition(result["precipitate_composition"], self.config)
 
-    def _get_kinetics_single(self, x: np.ndarray, T: float, phase: str, removeCache: bool):
+    def _get_kinetics_single(self, x: np.ndarray, T: float, phase: str, removeCache: bool, *, diagnostics: bool = False):
+        """Return kinetics and cache status, refreshing missing diagnostic data."""
         key = ("kinetics", phase, tuple(np.asarray(x, dtype=float)), float(T))
-        return self._cached_or_calculate(key, removeCache, lambda: self._backend.calculate_kinetics(x, T, phase))
+        if diagnostics and not removeCache and key in self._cache and "diagnostics" not in self._cache[key]:
+            del self._cache[key]
+        cache_hit = not removeCache and key in self._cache
+        if diagnostics:
+            callback = lambda: self._backend.calculate_kinetics(x, T, phase, collect_diagnostics=True)
+        else:
+            callback = lambda: self._backend.calculate_kinetics(x, T, phase)
+        return self._cached_or_calculate(key, removeCache, callback), cache_hit
 
     def _cached_or_calculate(self, key: tuple[Any, ...], removeCache: bool, callback):
         self._backend.totalNumQueries += 1

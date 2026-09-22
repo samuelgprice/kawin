@@ -1,4 +1,5 @@
 import builtins
+import io
 from pathlib import Path
 import tomllib
 
@@ -11,7 +12,9 @@ from kawin.diffusion import (
     evaluate_diffusivity_diagnostics,
     evaluate_diffusivity_leave_one_out,
     evaluate_tieline_diagnostics,
+    load_calculation_site_fractions,
     plot_bulk_diffusivity_diagnostics,
+    plot_calculation_site_fractions,
     plot_diffusivity_leave_one_out,
     plot_interface_diffusivity_diagnostics,
     plot_surrogate_diagnostics,
@@ -127,7 +130,6 @@ def _merged(interpolation="nearest"):
     )
 
 
-@pytest.mark.parametrize("source", ["from_database", "from_database_seed_point"])
 def _loo_surrogate(interpolation="simplex_linear"):
     """Build a nonconstant, positive-matrix bulk sample set for holdout tests."""
     if interpolation == "continuous_grid":
@@ -308,6 +310,56 @@ def test_diffusivity_leave_one_out_plot_marks_failed_refit():
     assert "single stored sample" in figure.data[0].text[0]
 
 
+def test_site_fraction_plot_compares_equivalent_b2_sublattices_with_disordered_state():
+    pytest.importorskip("plotly")
+    phase_state = {
+        "phase": "BCC_B2#3", "stable": True, "phase_amount": 1.0,
+        "phase_composition": [0.5, 0.3, 0.2], "diagnostic_errors": {},
+        "site_fractions": [
+            {"sublattice": 1, "site_ratio": 1.0, "constituents": {"W": 0.8, "TI": 0.15, "FE": 0.05}},
+            {"sublattice": 2, "site_ratio": 1.0, "constituents": {"W": 0.2, "TI": 0.45, "FE": 0.35}},
+            {"sublattice": 3, "site_ratio": 3.0, "constituents": {"VA": 1.0}},
+        ],
+    }
+    report = {
+        "metadata": {"record_type": "metadata", "element_order": ["W", "TI", "FE"]},
+        "records": [{
+            "record_type": "calculation_site_fractions", "calculation_index": 0,
+            "kind": "equilibrium", "requested_phase": None, "temperature": 1973.0,
+            "input_full_composition": [0.5, 0.3, 0.2], "status": "ok",
+            "stable_composition_sets": ["BCC_B2#3"], "phases": [phase_state],
+        }],
+    }
+    fig = plot_calculation_site_fractions(report, "BCC_B2", renderer=None)
+
+    assert len(fig.data) == 8
+    assert fig.data[0].name == "Maximum ordering deviation"
+    assert fig.data[0].marker.color[0] == pytest.approx(0.3)
+    assert fig.data[0].marker.symbol[0] == "circle"
+    assert fig.data[1].name == "s1 W"
+    assert fig.data[1].marker.color[0] == pytest.approx(0.3)
+    assert fig.data[1].marker.colorbar.title.text == "actual − disordered"
+    assert fig.data[0].b[0] == pytest.approx(0.5)
+    assert "BCC_B2#3" in fig.data[0].text[0]
+    assert "disordered: 0.5" in fig.data[0].text[0]
+    assert len(fig.layout.updatemenus[0].buttons) == 8
+
+    phase_state["site_fractions"][1]["constituents"] = {"VA": 1.0}
+    fig_without_reference = plot_calculation_site_fractions(report, "BCC_B2", renderer=None)
+    assert fig_without_reference.data[0].marker.colorbar.title.text == "site fraction"
+
+
+def test_site_fraction_sidecar_loader_checks_ordered_records(monkeypatch):
+    lines = (
+        '{"record_type":"metadata","element_order":["W","TI","FE"]}\n'
+        '{"record_type":"calculation_site_fractions","calculation_index":0}\n'
+    )
+    monkeypatch.setattr(Path, "open", lambda self, *args, **kwargs: io.StringIO(lines))
+    loaded = load_calculation_site_fractions("unused.jsonl")
+    assert loaded["records"][0]["calculation_index"] == 0
+
+
+@pytest.mark.parametrize("source", ["from_database", "from_database_seed_point"])
 def test_tieline_report_reconstructs_probe_path_and_exact_truth(source):
     truth = _Truth()
     report = evaluate_tieline_diagnostics(_surrogate(source=source), thermodynamics=truth, eta_count=5)

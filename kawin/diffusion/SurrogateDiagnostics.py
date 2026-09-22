@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from html import escape
+import json
+from pathlib import Path
 
 import numpy as np
 import tqdm
@@ -960,6 +962,234 @@ def plot_diffusivity_leave_one_out(report, phase, *, hover_format=".6g", rendere
             "text": "Diamond: nearest fallback · Cross: invalid matrix · X: failed refit",
             "x": 0.5, "y": 1.03, "xref": "paper", "yref": "paper", "showarrow": False,
         }],
+    )
+    return fig
+
+
+def load_calculation_site_fractions(path):
+    """Return metadata and ordered records from a TC-Python site-fraction sidecar."""
+    with Path(path).open("r", encoding="utf-8") as stream:
+        rows = [json.loads(line) for line in stream if line.strip()]
+    if not rows or rows[0].get("record_type") != "metadata":
+        raise ValueError("Site-fraction sidecar must begin with a metadata record.")
+    if any(row.get("record_type") != "calculation_site_fractions" for row in rows[1:]):
+        raise ValueError("Site-fraction sidecar contains an unexpected record type.")
+    return {"metadata": rows[0], "records": rows[1:]}
+
+
+def _disordered_site_reference(phase_state, elements):
+    """Return random occupancies only for equivalent elemental sublattices.
+
+    Variable substitutional sublattices must contain all selected elements;
+    any extra constituents there must have zero occupancy. Other sublattices
+    may contain only vacant sites. Weighted
+    observed occupancies must reproduce the reported phase composition. This
+    avoids inventing a random reference for more complex sublattice models.
+    """
+    sublattices = phase_state.get("site_fractions")
+    composition = phase_state.get("phase_composition")
+    if not sublattices or composition is None or len(composition) != len(elements):
+        return None
+    if any(value is None or not np.isfinite(value) for value in composition):
+        return None
+    element_names = tuple(str(element).upper() for element in elements)
+    x = dict(zip(element_names, (float(value) for value in composition)))
+    if not np.isclose(sum(x.values()), 1.0, atol=1e-6):
+        return None
+    variable = []
+    for sublattice in sublattices:
+        constituents = sublattice.get("constituents")
+        if not constituents:
+            return None
+        values = {str(name).upper(): value for name, value in constituents.items()}
+        selected = set(values) & set(element_names)
+        if selected:
+            if selected != set(element_names):
+                return None
+            if any(value is None or abs(value) > 1e-8 for name, value in values.items()
+                   if name not in element_names):
+                return None
+            variable.append(sublattice)
+        else:
+            if ("VA" not in values or values["VA"] is None
+                    or not np.isclose(values["VA"], 1.0, atol=1e-8)
+                    or any(value is None or abs(value) > 1e-8
+                           for name, value in values.items() if name != "VA")):
+                return None
+    if not variable:
+        return None
+    ratios = [sublattice.get("site_ratio") for sublattice in variable]
+    if any(value is None or not np.isfinite(value) or value <= 0 for value in ratios):
+        return None
+    for element in element_names:
+        if any(next((value for name, value in sublattice["constituents"].items()
+                     if str(name).upper() == element), None) is None for sublattice in variable):
+            return None
+        weighted = sum(
+            float(ratio) * float(next(value for name, value in sublattice["constituents"].items()
+                                      if str(name).upper() == element))
+            for sublattice, ratio in zip(variable, ratios)
+        ) / sum(ratios)
+        if not np.isclose(weighted, x[element], rtol=1e-4, atol=1e-4):
+            return None
+    return {
+        (int(sublattice["sublattice"]), str(name).upper()): x[str(name).upper()]
+        for sublattice in variable
+        for name in sublattice["constituents"]
+        if str(name).upper() in element_names
+    }
+
+
+def plot_calculation_site_fractions(
+    source, phase, *, kinds=("equilibrium", "kinetics"), hover_format=".6g", renderer="browser",
+):
+    """Plot construction-time site occupancies and disordered deviations.
+
+    ``source`` is a path to the JSON Lines sidecar or the result of
+    :func:`load_calculation_site_fractions`. ``phase`` matches the base phase
+    name, so BCC_B2 includes BCC_B2#1, #2, etc. A dropdown selects a
+    summary of maximum ordering deviation or a sublattice/constituent. Color
+    shows actual minus random occupancy for a selected constituent when a
+    composition-matched disordered reference is justified by equivalent
+    elemental sublattices; otherwise it shows actual occupancy. Hover gives
+    the full recorded phase constitution, result and input compositions, and
+    composition-set identity. Circles denote equilibrium calculations and
+    diamonds denote kinetics calculations. Failed calculations have no site
+    fractions and are excluded from the markers.
+    """
+    data = load_calculation_site_fractions(source) if isinstance(source, (str, Path)) else source
+    metadata = data["metadata"]
+    elements = tuple(metadata["element_order"])
+    selected_kinds = {kinds} if isinstance(kinds, str) else {str(kind) for kind in kinds}
+    base = str(phase).split("#", 1)[0].upper()
+    entries = []
+    for record in data["records"]:
+        if record.get("status") != "ok" or record.get("kind") not in selected_kinds:
+            continue
+        for state in record.get("phases", []):
+            if str(state["phase"]).split("#", 1)[0].upper() != base or not state.get("site_fractions"):
+                continue
+            entries.append((record, state, _disordered_site_reference(state, elements)))
+    if not entries:
+        raise ValueError(f"No recorded site fractions for phase '{phase}' and kinds {sorted(selected_kinds)}.")
+
+    def format_value(value):
+        return "unavailable" if value is None else format(float(value), hover_format)
+
+    points = []
+    hover = []
+    site_keys = set()
+    marker_symbols = []
+    for record, state, reference in entries:
+        point = np.asarray(record["input_full_composition"], dtype=np.float64)
+        points.append(point)
+        marker_symbols.append({"equilibrium": "circle", "kinetics": "diamond", "driving_force": "square"}.get(record["kind"], "cross"))
+        lines = [
+            f"<b>{escape(str(state['phase']))} · calculation {record['calculation_index']}</b>",
+            f"Kind: {escape(str(record['kind']))}; requested: {escape(str(record['requested_phase']))}",
+            "Input: " + ", ".join(f"{escape(str(e))}={format_value(v)}" for e, v in zip(elements, point)),
+            "Phase: " + ", ".join(f"{escape(str(e))}={format_value(v)}" for e, v in zip(elements, state.get("phase_composition") or [None] * len(elements))),
+            f"Phase amount: {format_value(state.get('phase_amount'))}; stable: {bool(state['stable'])}",
+            "Stable sets: " + escape(", ".join(record.get("stable_composition_sets") or [])),
+        ]
+        for sublattice in state["site_fractions"]:
+            index = int(sublattice["sublattice"])
+            lines.append(f"Sublattice {index} (sites={format_value(sublattice.get('site_ratio'))}):")
+            for constituent, actual in (sublattice.get("constituents") or {}).items():
+                key = (index, str(constituent).upper())
+                site_keys.add(key)
+                random = None if reference is None else reference.get(key)
+                lines.append(
+                    f"&nbsp;&nbsp;{escape(str(constituent))}: {format_value(actual)}; "
+                    f"disordered: {format_value(random)}; Δ: "
+                    f"{format_value(None if actual is None or random is None else actual - random)}"
+                )
+        if state.get("diagnostic_errors"):
+            lines.append("Diagnostic errors: " + escape(str(state["diagnostic_errors"])))
+        hover.append("<br>".join(lines))
+
+    go, _ = _require_plotly(renderer)
+    fig = go.Figure()
+    ordered_rows = []
+    order_magnitude = []
+    for row, (_, state, reference) in enumerate(entries):
+        if reference is None:
+            continue
+        observed = {
+            (int(site["sublattice"]), str(name).upper()): value
+            for site in state["site_fractions"]
+            for name, value in (site.get("constituents") or {}).items()
+        }
+        if any(observed.get(key) is None for key in reference):
+            continue
+        ordered_rows.append(row)
+        order_magnitude.append(max(abs(float(observed[key]) - target) for key, target in reference.items()))
+    if ordered_rows:
+        ordered_points = np.asarray(points)[ordered_rows]
+        fig.add_trace(go.Scatterternary(
+            a=ordered_points[:, 2], b=ordered_points[:, 0], c=ordered_points[:, 1],
+            mode="markers", name="Maximum ordering deviation", visible=True,
+            marker={
+                "size": 7, "symbol": np.asarray(marker_symbols, dtype=object)[ordered_rows],
+                "color": order_magnitude, "colorscale": "Viridis",
+                "cmin": 0, "cmax": 1, "showscale": True,
+                "colorbar": {"title": "max |actual − disordered|"},
+            },
+            text=np.asarray(hover, dtype=object)[ordered_rows],
+            hovertemplate="%{text}<extra></extra>",
+        ))
+    ordered_elements = tuple(str(element).upper() for element in elements)
+    ordered_keys = sorted(site_keys, key=lambda key: (key[0], ordered_elements.index(key[1]) if key[1] in ordered_elements else len(elements), key[1]))
+    for key in ordered_keys:
+        rows, actual_values, random_values = [], [], []
+        for row, (_, state, reference) in enumerate(entries):
+            sublattice = next((site for site in state["site_fractions"] if int(site["sublattice"]) == key[0]), None)
+            constituents = {} if sublattice is None else (sublattice.get("constituents") or {})
+            actual = next((value for name, value in constituents.items() if str(name).upper() == key[1]), None)
+            if actual is None:
+                continue
+            rows.append(row)
+            actual_values.append(float(actual))
+            random_values.append(None if reference is None else reference.get(key))
+        if not rows:
+            continue
+        comparable = all(value is not None for value in random_values)
+        color = np.asarray(actual_values) - np.asarray(random_values, dtype=np.float64) if comparable else actual_values
+        selected_points = np.asarray(points)[rows]
+        fig.add_trace(go.Scatterternary(
+            a=selected_points[:, 2], b=selected_points[:, 0], c=selected_points[:, 1],
+            mode="markers", name=f"s{key[0]} {key[1]}", visible=len(fig.data) == 0,
+            marker={
+                "size": 7, "symbol": np.asarray(marker_symbols, dtype=object)[rows],
+                "color": color,
+                "colorscale": "RdBu_r" if comparable else "Viridis",
+                "cmin": -1 if comparable else 0, "cmax": 1,
+                "showscale": True,
+                "colorbar": {"title": "actual − disordered" if comparable else "site fraction"},
+            },
+            text=np.asarray(hover, dtype=object)[rows],
+            hovertemplate="%{text}<extra></extra>",
+        ))
+    buttons = [
+        {"label": trace.name, "method": "update", "args": [{"visible": [i == index for i in range(len(fig.data))]}]}
+        for index, trace in enumerate(fig.data)
+    ]
+    fig.update_layout(
+        title=f"Site fractions: {base} during surrogate construction",
+        template="plotly_white", width=1050, height=850,
+        margin={"t": 125, "r": 150},
+        ternary={
+            "sum": 1,
+            "aaxis": {"title": elements[2]},
+            "baxis": {"title": elements[0]},
+            "caxis": {"title": elements[1]},
+        },
+        updatemenus=[{"buttons": buttons, "direction": "down", "x": 0.02, "y": 1.10}],
+        annotations=[
+            {"text": "Sublattice / constituent", "x": 0.02, "y": 1.16, "xref": "paper", "yref": "paper", "showarrow": False},
+            {"text": "Circle: equilibrium · Diamond: kinetics · Square: driving force", "x": 0.5, "y": 1.02,
+             "xref": "paper", "yref": "paper", "showarrow": False},
+        ],
     )
     return fig
 
@@ -2063,6 +2293,10 @@ def plot_surrogate_diagnostics(
 __all__ = [
     "evaluate_tieline_diagnostics",
     "evaluate_diffusivity_diagnostics",
+    "evaluate_diffusivity_leave_one_out",
+    "plot_diffusivity_leave_one_out",
+    "load_calculation_site_fractions",
+    "plot_calculation_site_fractions",
     "plot_tieline_diagnostics",
     "plot_interface_diffusivity_diagnostics",
     "plot_bulk_diffusivity_diagnostics",
