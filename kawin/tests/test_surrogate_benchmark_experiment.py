@@ -125,6 +125,17 @@ def test_canonical_row_identity_and_loo_coordinate_population_are_deterministic(
     assert len(results["loo"]["kawin_nearest"]["rows"]) == len(loo_keys)
 
 
+def test_frozen_manifest_reuses_exact_split_and_robust_identities():
+    dataset = _dataset()
+    kwargs = {"coarse_count": 12, "medium_count": 24, "validation_count": 8}
+    original = run_experiment(dataset, split_kwargs=kwargs)
+    replay = run_experiment(dataset, frozen_manifest=original["manifest"])
+    for level in ("coarse", "medium", "fine"):
+        assert replay["manifest"]["refinement_levels"][level]["raw_master_row_indices"] == original["manifest"]["refinement_levels"][level]["raw_master_row_indices"]
+    assert replay["manifest"]["validation_master_row_indices"] == original["manifest"]["validation_master_row_indices"]
+    assert replay["manifest"]["robust_positive_validation_mask"] == original["manifest"]["robust_positive_validation_mask"]
+
+
 def test_conflicting_duplicate_keys_remain_excluded_after_subsetting():
     dataset = DiffusivityDataset(
         [[.1, .1], [.1, .1], [.2, .1], [.1, .2]],

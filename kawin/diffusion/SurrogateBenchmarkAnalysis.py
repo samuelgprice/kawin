@@ -17,7 +17,7 @@ from .SurrogateBenchmark import SpectralCriteria
 from .SurrogateBenchmarkExperiment import load_thermocalc_surrogate_dataset
 
 
-SCHEMES = ("kawin_nearest", "kawin_simplex_linear", "idw_signed_cuberoot_p2")
+SCHEMES = ("kawin_nearest", "kawin_simplex_linear", "idw_signed_cuberoot_p2", "kawin_simplex_positive_2x2")
 LEVELS = ("coarse", "medium", "fine")
 STRATA = ("robust_positive", "gt_positive", "near_boundary", "gt_invalid")
 
@@ -50,7 +50,7 @@ def load_benchmark_analysis(benchmark_directory, dataset_path=None):
 def _validate_paired_alignment(pointwise, validation_compositions):
     """Reject artifact rows that do not preserve paired validation identities."""
     for level in LEVELS:
-        for scheme in SCHEMES:
+        for scheme in np.unique(pointwise["scheme"]):
             mask = (pointwise["level"] == level) & (pointwise["scheme"] == scheme)
             points = pointwise["composition"][mask]
             if len(points) != len(validation_compositions) or not np.allclose(points, validation_compositions, rtol=0., atol=1e-14):
@@ -59,7 +59,7 @@ def _validate_paired_alignment(pointwise, validation_compositions):
 
 def pointwise_level_rows(pointwise, level, scheme):
     """Return a field-preserving view of one recorded independent-holdout level."""
-    if level not in LEVELS or scheme not in SCHEMES:
+    if level not in LEVELS or scheme not in set(pointwise["scheme"]):
         raise ValueError("requested level or scheme is not present in the benchmark analysis contract.")
     mask = (pointwise["level"] == level) & (pointwise["scheme"] == scheme)
     return {name: pointwise[name][mask] for name in pointwise.files}

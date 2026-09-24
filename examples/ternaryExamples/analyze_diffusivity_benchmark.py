@@ -29,6 +29,12 @@ from kawin.diffusion.SurrogateBenchmarkAnalysis import (
 from kawin.diffusion.SurrogateBenchmark import robust_positive_mask
 
 
+def _available_schemes(pointwise):
+    """Return recorded schemes in the documented display order."""
+    available = set(pointwise["scheme"])
+    return tuple(scheme for scheme in SCHEMES if scheme in available)
+
+
 def _write_csv(path, rows):
     """Write records with nested diagnostics JSON-encoded for portable tables."""
     rows = list(rows)
@@ -47,9 +53,10 @@ def _summary_value(rows, level, scheme, stratum, metric, statistic):
 def _refinement_table(data):
     """Flatten experiment-specific support counts and key aggregate metrics."""
     output = []
+    schemes = _available_schemes(data["pointwise"])
     for level in LEVELS:
         metadata = data["manifest"]["refinement_levels"][level]
-        for scheme in SCHEMES:
+        for scheme in schemes:
             row = {"level": level, "scheme": scheme, "selection_location_count": metadata["selection_location_count"],
                    "raw_sample_count": metadata["raw_sample_count"], "fit_eligible_count": metadata["fit_eligible_count"],
                    "fit_eligible_location_count": metadata["fit_eligible_coordinate_count"],
@@ -72,8 +79,9 @@ def _save_refinement_figure(table, figures):
     metrics = ("frobenius_relative_error", "spectral_relative_error", "operator_relative_error", "relative_flux_error",
                "robust_positive_spectral_invalid_rate", "robust_positive_unusable_rate")
     fig, axes = plt.subplots(2, 3, figsize=(14, 8), constrained_layout=True)
+    schemes = tuple(dict.fromkeys(row["scheme"] for row in table))
     for axis, metric in zip(axes.flat, metrics):
-        for scheme in SCHEMES:
+        for scheme in schemes:
             rows = [row for row in table if row["scheme"] == scheme]
             values = [row.get(f"{metric}_median", row.get(metric)) for row in rows]
             axis.plot([row["raw_sample_count"] for row in rows], values, "o-", label=scheme)
@@ -86,7 +94,7 @@ def _save_refinement_figure(table, figures):
     fig.savefig(figures / "refinement_vs_raw_cost.png", dpi=180)
     for axis, metric in zip(axes.flat, metrics):
         axis.clear()
-        for scheme in SCHEMES:
+        for scheme in schemes:
             rows = [row for row in table if row["scheme"] == scheme]
             axis.plot([row["fit_eligible_location_count"] for row in rows], [row.get(f"{metric}_median", row.get(metric)) for row in rows], "o-", label=scheme)
         axis.set_xscale("log")
@@ -116,8 +124,9 @@ def _save_maps(data, figures):
     fig.colorbar(image, ax=axes[1], label="log10 normalized minimum eigenvalue")
     axes[1].set_title("GT spectral margin")
     fig.savefig(figures / "gt_classification_and_margin_maps.png", dpi=180); plt.close(fig)
-    fig, axes = plt.subplots(3, 3, figsize=(13, 11), constrained_layout=True)
-    for row, scheme in enumerate(SCHEMES):
+    schemes = _available_schemes(pointwise)
+    fig, axes = plt.subplots(len(schemes), 3, figsize=(13, 3.6 * len(schemes)), constrained_layout=True)
+    for row, scheme in enumerate(schemes):
         mask = (pointwise["level"] == "fine") & (pointwise["scheme"] == scheme)
         points = pointwise["composition"][mask]
         failure = pointwise["prediction_failure"][mask] == "negative"
@@ -157,10 +166,13 @@ def _save_simplex_diagnostics(data, figures):
 def _save_paired_and_loo(data, figures):
     """Save paired fine error comparisons and LOO/holdout distribution CDFs."""
     pointwise = data["pointwise"]
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
+    schemes = _available_schemes(pointwise)
+    comparisons = tuple(scheme for scheme in ("kawin_nearest", "idw_signed_cuberoot_p2", "kawin_simplex_positive_2x2") if scheme in schemes)
+    fig, axes = plt.subplots(1, len(comparisons), figsize=(5 * len(comparisons), 4), constrained_layout=True)
+    axes = np.atleast_1d(axes)
     fine = {scheme: {name: pointwise[name][(pointwise["level"] == "fine") & (pointwise["scheme"] == scheme)]
-                     for name in pointwise.files} for scheme in SCHEMES}
-    for axis, other in zip(axes, ("kawin_nearest", "idw_signed_cuberoot_p2")):
+                     for name in pointwise.files} for scheme in schemes}
+    for axis, other in zip(axes, comparisons):
         ratio = fine["kawin_simplex_linear"]["frobenius_relative_error"] / fine[other]["frobenius_relative_error"]
         image = axis.scatter(fine[other]["composition"][:, 0], fine[other]["composition"][:, 1], c=np.log10(ratio), cmap="coolwarm", s=16)
         fig.colorbar(image, ax=axis, label="log10 error ratio")
@@ -169,7 +181,7 @@ def _save_paired_and_loo(data, figures):
     fig, axes = plt.subplots(1, 3, figsize=(12, 3.6), constrained_layout=True)
     loo = data["loo"]
     for axis, metric in zip(axes, ("frobenius", "minimum_eigenvalue", "relative_flux")):
-        for scheme in SCHEMES:
+        for scheme in schemes:
             medium = pointwise_level_rows(pointwise, "medium", scheme)
             independent = medium["frobenius_relative_error"] if metric == "frobenius" else (medium["minimum_eigenvalue_absolute_error"] if metric == "minimum_eigenvalue" else np.nanmedian(medium["flux_relative_error"], axis=1))
             lm = loo["scheme"] == scheme
@@ -192,6 +204,16 @@ def run_analysis(benchmark_directory, output_directory, dataset_path=None):
     output, figures, tables = Path(output_directory), Path(output_directory) / "figures", Path(output_directory) / "tables"
     figures.mkdir(parents=True, exist_ok=True); tables.mkdir(parents=True, exist_ok=True)
     refinement = _refinement_table(data); negative = negative_prediction_breakdown(data["pointwise"]); failures, vertices = fine_simplex_failures(data); matched = matched_failure_success_summary(data, failures)
+    if "kawin_simplex_positive_2x2" in set(data["pointwise"]["scheme"]):
+        positive_mask = ((data["pointwise"]["level"] == "fine") &
+                         (data["pointwise"]["scheme"] == "kawin_simplex_positive_2x2"))
+        positive_rows = {tuple(point): index for index, point in enumerate(data["pointwise"]["composition"][positive_mask])}
+        positive_failure = data["pointwise"]["prediction_failure"][positive_mask]
+        positive_frobenius = data["pointwise"]["frobenius_relative_error"][positive_mask]
+        for row in failures:
+            index = positive_rows[(row["composition_x"], row["composition_y"])]
+            row["simplex_positive_2x2_prediction_failure"] = str(positive_failure[index])
+            row["simplex_positive_2x2_frobenius_relative_error"] = float(positive_frobenius[index])
     _write_csv(tables / "refinement_metric_summary.csv", refinement); _write_csv(tables / "simplex_negative_predictions_by_stratum.csv", negative)
     _write_csv(tables / "simplex_fine_robust_positive_failures.csv", failures); _write_csv(tables / "simplex_failure_simplex_vertices.csv", vertices)
     _write_csv(tables / "simplex_failure_vs_success_summary.csv", [{"group": key, **value} for key, value in matched.items() if key != "matches" and isinstance(value, dict)])

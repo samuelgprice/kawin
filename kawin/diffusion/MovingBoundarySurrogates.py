@@ -5,18 +5,22 @@ import numpy as np
 from scipy import optimize
 try:
     from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator, PchipInterpolator, RectBivariateSpline
+    from scipy.spatial import Delaunay
 except ImportError:  # pragma: no cover - SciPy is a package dependency.
     LinearNDInterpolator = None
     NearestNDInterpolator = None
     PchipInterpolator = None
     RectBivariateSpline = None
+    Delaunay = None
 
 from kawin.thermo import MulticomponentThermodynamics
+from ._spectral_validation import TERNARY_DIFFUSIVITY_POSITIVE_EIGENVALUE_TOL, TERNARY_DIFFUSIVITY_REAL_SPECTRUM_TOL
 import tqdm
 
 _DIFFUSIVITY_INTERPOLATION_NEAREST = "nearest"
 _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID = "continuous_grid"
 _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR = "simplex_linear"
+_DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2 = "simplex_positive_2x2"
 
 DIFFUSIVITY_REL_TOL = 7e-8
 from examples.debugInPlace import debugInPlace
@@ -83,7 +87,8 @@ def _validate_positive_2x2_matrix(matrix, label, *, debug_on_failure=True):
     if not np.isfinite(scale) or scale <= 0.0:
         raise ValueError(f"{label} must have nonzero norm.")
     eigenvalues = np.linalg.eigvals(matrix / scale)
-    if np.any(np.abs(np.imag(eigenvalues)) > 1e-12) or np.any(np.real(eigenvalues) <= 1e-14):
+    if (np.any(np.abs(np.imag(eigenvalues)) > TERNARY_DIFFUSIVITY_REAL_SPECTRUM_TOL)
+            or np.any(np.real(eigenvalues) <= TERNARY_DIFFUSIVITY_POSITIVE_EIGENVALUE_TOL)):
         if debug_on_failure:
             debugInPlace()
         raise ValueError(f"{label} must have positive real eigenvalues.")
@@ -96,9 +101,10 @@ def _coerce_diffusivity_interpolation(mode):
         _DIFFUSIVITY_INTERPOLATION_NEAREST,
         _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID,
         _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR,
+        _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2,
     }:
         raise ValueError(
-            "diffusivity_interpolation must be 'nearest', 'continuous_grid', or 'simplex_linear'."
+            "diffusivity_interpolation must be 'nearest', 'continuous_grid', 'simplex_linear', or 'simplex_positive_2x2'."
         )
     return mode
 
@@ -106,6 +112,111 @@ def _coerce_diffusivity_interpolation(mode):
 def _signed_cuberoot(values):
     values = np.asarray(values, dtype=np.float64)
     return np.sign(values) * np.cbrt(np.abs(values))
+
+
+def _positive_2x2_spectral_parameters(matrix, label):
+    """Return stable positive-spectrum parameters for one real 2x2 matrix.
+
+    The calculation is performed after entrywise normalization.  A slightly
+    negative discriminant is treated as a repeated real root only when its
+    implied imaginary eigenvalue is within the production real-spectrum
+    tolerance; genuinely complex or nonpositive spectra are rejected. Exact
+    training-vertex round trips apply to genuinely real-positive inputs; this
+    tolerance-level canonicalization may intentionally change a numerically
+    real complex-pair source by roundoff-sized entries.
+    """
+    values = _validate_2x2_matrix(matrix, label)
+    scale = float(np.max(np.abs(values)))
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError(f"{label} must have nonzero finite entrywise scale.")
+    normalized = values / scale
+    a, b, c, d = normalized.ravel()
+    trace = a + d
+    determinant = a * d - b * c
+    discriminant = trace * trace - 4.0 * determinant
+    # For a complex conjugate pair, abs(imag(lambda)) is sqrt(-disc) / 2.
+    discriminant_floor = -4.0 * TERNARY_DIFFUSIVITY_REAL_SPECTRUM_TOL ** 2
+    if discriminant < discriminant_floor:
+        raise ValueError(f"{label} must have real eigenvalues within the production spectrum tolerance.")
+    roundoff_repeated = discriminant < 0.0
+    if roundoff_repeated:
+        discriminant = 0.0
+    root = float(np.sqrt(discriminant))
+    high_normalized = 0.5 * (trace + root)
+    if not np.isfinite(high_normalized) or high_normalized <= 0.0:
+        raise ValueError(f"{label} must have strictly positive real eigenvalues.")
+    # det / lambda_high avoids cancellation for highly separated eigenvalues.
+    low_normalized = determinant / high_normalized
+    if not np.isfinite(low_normalized) or low_normalized <= 0.0:
+        raise ValueError(f"{label} must have strictly positive real eigenvalues.")
+    low, high = sorted((scale * low_normalized, scale * high_normalized))
+    if not np.isfinite(low) or not np.isfinite(high) or low <= 0.0:
+        raise ValueError(f"{label} has eigenvalues outside the finite positive floating-point range.")
+    m = 0.5 * low + 0.5 * high
+    k = 0.5 * (values[0, 1] - values[1, 0])
+    x = 0.5 * (values[0, 0] - values[1, 1])
+    y = 0.5 * (values[0, 1] + values[1, 0])
+    with np.errstate(over="raise", invalid="raise", divide="raise"):
+        try:
+            q = float(np.arcsinh(k / m))
+            parameters = np.asarray((np.log(low), np.log(high), q), dtype=np.float64)
+        except FloatingPointError as error:
+            raise ValueError(f"{label} cannot be represented by finite positive spectral parameters.") from error
+    if not np.all(np.isfinite(parameters)):
+        raise ValueError(f"{label} cannot be represented by finite positive spectral parameters.")
+    direction = np.asarray((x, y), dtype=np.float64)
+    # A tolerance-level complex pair has no exact real directional vector. It
+    # is intentionally canonicalized as a repeated root, rather than clipping
+    # a genuinely complex matrix; only the zero-vector case needs a fixed
+    # nilpotent representative.
+    if (np.hypot(direction[0], direction[1]) == 0.0 and k != 0.0
+            and abs(x * x + y * y - k * k) <= TERNARY_DIFFUSIVITY_REAL_SPECTRUM_TOL ** 2):
+        direction = np.asarray((abs(k), 0.0), dtype=np.float64)
+    return parameters, direction
+
+
+def _reconstruct_positive_2x2(parameters, direction, label):
+    """Reconstruct a finite positive-real 2x2 matrix from spectral fields.
+
+    ``direction`` supplies an unnormalized physical ``(x, y)`` direction. It
+    is normalized and rescaled to the spectral radius, so admissibility comes
+    from the representation rather than from a posteriori matrix clipping.
+    """
+    u, v, q = np.asarray(parameters, dtype=np.float64).reshape(3)
+    direction = np.asarray(direction, dtype=np.float64).reshape(2)
+    if not np.all(np.isfinite((u, v, q))) or not np.all(np.isfinite(direction)):
+        raise FloatingPointError(f"{label} has non-finite spectral interpolation fields.")
+    with np.errstate(over="raise", under="raise", invalid="raise"):
+        try:
+            eigenvalues = np.exp(np.asarray((u, v), dtype=np.float64))
+            if np.any(eigenvalues <= 0.0) or not np.all(np.isfinite(eigenvalues)):
+                raise FloatingPointError
+            low, high = np.sort(eigenvalues)
+            m = 0.5 * low + 0.5 * high
+            delta = 0.5 * high - 0.5 * low
+            k = m * np.sinh(q)
+            rho = np.hypot(delta, k)
+        except FloatingPointError as error:
+            raise FloatingPointError(f"{label} overflows, underflows, or is non-finite after spectral reconstruction.") from error
+    if not np.all(np.isfinite((m, delta, k, rho))) or m <= 0.0:
+        raise FloatingPointError(f"{label} is not finite after spectral reconstruction.")
+    if rho == 0.0:
+        return np.asarray(((m, 0.0), (0.0, m)), dtype=np.float64)
+    direction_norm = float(np.hypot(direction[0], direction[1]))
+    if direction_norm <= 64.0 * np.finfo(np.float64).eps * max(rho, np.finfo(np.float64).tiny):
+        raise FloatingPointError(f"{label} needs a nonzero directional fallback.")
+    x, y = rho * direction / direction_norm
+    # These branches avoid losing lambda_low when x is close to +/- delta.
+    if x >= 0.0:
+        diagonal_a = high + (x - delta)
+        diagonal_d = low + (delta - x)
+    else:
+        diagonal_a = low + (delta + x)
+        diagonal_d = high - (delta + x)
+    result = np.asarray(((diagonal_a, y + k), (y - k, diagonal_d)), dtype=np.float64)
+    if not np.all(np.isfinite(result)):
+        raise FloatingPointError(f"{label} is non-finite after spectral reconstruction.")
+    return result
 
 
 def _coerce_positive_int(value, name):
@@ -293,6 +404,91 @@ class _InterfaceDiffusivitySpline1D:
             _validate_positive_2x2_matrix(matrix, f"{label} dense interface sample {i}")
 
 
+class _InterfaceDiffusivitySpectral2x2:
+    """Positive-real 2x2 interface interpolation over the existing eta grid."""
+
+    def __init__(self, eta_samples, endpoint_compositions, matrices):
+        self.eta_samples = np.asarray(eta_samples, dtype=np.float64).reshape(-1)
+        self.endpoint_compositions = np.asarray(endpoint_compositions, dtype=np.float64)
+        values = np.asarray(matrices, dtype=np.float64)
+        if self.endpoint_compositions.shape != (self.eta_samples.size, 2):
+            raise ValueError("interface endpoint compositions must have shape (n_eta, 2).")
+        if values.shape != (self.eta_samples.size, 2, 2):
+            raise ValueError("interface diffusivity matrices must have shape (n_eta, 2, 2).")
+        extracted = []
+        for i, matrix in enumerate(values):
+            label = f"spectral interface diffusivity sample {i}"
+            _validate_positive_2x2_matrix(matrix, label, debug_on_failure=False)
+            extracted.append(_positive_2x2_spectral_parameters(matrix, label))
+        self._parameters = np.asarray([item[0] for item in extracted], dtype=np.float64)
+        self._directions = np.asarray([item[1] for item in extracted], dtype=np.float64)
+        self._splines = (PchipInterpolator(self.eta_samples, np.column_stack((self._parameters, self._directions)), axis=0,
+                                           extrapolate=True) if PchipInterpolator is not None else None)
+        self._inverse_component = None
+        for component in range(2):
+            diffs = np.diff(self.endpoint_compositions[:, component])
+            if np.all(diffs >= 0.0) and np.any(diffs > 0.0):
+                self._inverse_component = component
+                self._inverse_x = self.endpoint_compositions[:, component]
+                self._inverse_eta = self.eta_samples
+                break
+            if np.all(diffs <= 0.0) and np.any(diffs < 0.0):
+                self._inverse_component = component
+                self._inverse_x = self.endpoint_compositions[::-1, component]
+                self._inverse_eta = self.eta_samples[::-1]
+                break
+
+    def _eta_from_composition(self, values):
+        if self._inverse_component is not None:
+            return np.interp(values[:, self._inverse_component], self._inverse_x, self._inverse_eta,
+                             left=self.eta_samples[0], right=self.eta_samples[-1])
+        segments = self.endpoint_compositions[1:] - self.endpoint_compositions[:-1]
+        squared = np.sum(segments * segments, axis=1)
+        result = np.empty(len(values), dtype=np.float64)
+        for row, value in enumerate(values):
+            best_distance, best_eta = np.inf, self.eta_samples[0]
+            for index, segment in enumerate(segments):
+                fraction = 0.0 if squared[index] == 0.0 else float(np.clip(np.dot(value - self.endpoint_compositions[index], segment) / squared[index], 0.0, 1.0))
+                distance = float(np.sum((value - self.endpoint_compositions[index] - fraction * segment) ** 2))
+                if distance < best_distance:
+                    best_distance = distance
+                    best_eta = self.eta_samples[index] + fraction * (self.eta_samples[index + 1] - self.eta_samples[index])
+            result[row] = best_eta
+        return result
+
+    def _direction_fallback(self, eta):
+        """Choose the nearest non-scalar eta direction with a stable tie break."""
+        norms = np.hypot(self._directions[:, 0], self._directions[:, 1])
+        candidates = np.flatnonzero(norms > 0.0)
+        if not len(candidates):
+            raise FloatingPointError("spectral interface interpolation has no directional fallback.")
+        distances = np.abs(self.eta_samples[candidates] - eta)
+        return self._directions[candidates[int(np.flatnonzero(np.isclose(distances, distances.min()))[0])]]
+
+    def evaluate(self, values):
+        values = np.asarray(values, dtype=np.float64)
+        return self.evaluate_eta(np.clip(self._eta_from_composition(values), self.eta_samples[0], self.eta_samples[-1]))
+
+    def evaluate_eta(self, eta):
+        eta = np.asarray(eta, dtype=np.float64).reshape(-1)
+        fields = (np.asarray(self._splines(eta), dtype=np.float64) if self._splines is not None else np.vstack(
+            [np.interp(eta, self.eta_samples, np.column_stack((self._parameters, self._directions))[:, column]) for column in range(5)]).T)
+        result = []
+        for index, (query_eta, field) in enumerate(zip(eta, fields)):
+            try:
+                result.append(_reconstruct_positive_2x2(field[:3], field[3:], f"spectral interface query {index}"))
+            except FloatingPointError as error:
+                if "directional fallback" not in str(error):
+                    raise
+                result.append(_reconstruct_positive_2x2(field[:3], self._direction_fallback(query_eta), f"spectral interface query {index}"))
+        return np.asarray(result, dtype=np.float64)
+
+    def validate_dense(self, label):
+        eta = np.linspace(self.eta_samples[0], self.eta_samples[-1], max(25, 4 * self.eta_samples.size))
+        for index, matrix in enumerate(self.evaluate_eta(eta)):
+            _positive_2x2_spectral_parameters(matrix, f"{label} dense interface sample {index}")
+
+
 class _BulkDiffusivityGridSpline2D:
     """
     Tensor-product spline for regular-grid ternary bulk diffusivity samples.
@@ -379,6 +575,78 @@ class _BulkDiffusivitySimplexLinear2D:
         matrices = self.evaluate(self.points)
         for i, matrix in enumerate(matrices):
             _validate_positive_2x2_matrix(matrix, f"{label} training sample {i}")
+
+
+class _BulkDiffusivitySimplexPositive2x2:
+    """Scattered 2x2 interpolation that preserves real positive eigenvalues.
+
+    Spectral fields are linearly interpolated in each Delaunay simplex.  The
+    actual ``(x, y)`` source vectors determine orientation, so scalar samples
+    contribute no arbitrary direction to neighboring predictions.
+    """
+
+    def __init__(self, points, matrices):
+        if Delaunay is None or NearestNDInterpolator is None:  # pragma: no cover - SciPy is a package dependency.
+            raise ImportError("Delaunay and NearestNDInterpolator are required for simplex_positive_2x2 diffusivity interpolation.")
+        self.points = np.asarray(points, dtype=np.float64)
+        self.matrices = np.asarray(matrices, dtype=np.float64)
+        if self.points.ndim != 2 or self.points.shape[1] != 2:
+            raise ValueError("simplex_positive_2x2 bulk diffusivity points must have shape (n_points, 2).")
+        if self.points.shape[0] < 3:
+            raise ValueError("simplex_positive_2x2 bulk diffusivity requires at least three sample points.")
+        if self.matrices.shape != (self.points.shape[0], 2, 2):
+            raise ValueError("simplex_positive_2x2 bulk diffusivity matrices must have shape (n_points, 2, 2).")
+        extracted = []
+        for index, matrix in enumerate(self.matrices):
+            label = f"spectral bulk diffusivity sample {index}"
+            _validate_positive_2x2_matrix(matrix, label, debug_on_failure=False)
+            extracted.append(_positive_2x2_spectral_parameters(matrix, label))
+        self._parameters = np.asarray([item[0] for item in extracted], dtype=np.float64)
+        self._directions = np.asarray([item[1] for item in extracted], dtype=np.float64)
+        self._triangulation = Delaunay(self.points)
+        self._nearest = NearestNDInterpolator(self.points, np.arange(len(self.points), dtype=np.float64))
+
+    def _weights(self, simplex, point):
+        transform = self._triangulation.transform[simplex]
+        weights = transform[:2] @ (point - transform[2])
+        return np.r_[weights, 1.0 - weights.sum()]
+
+    def _direction_fallback(self, vertices, weights):
+        """Return the lowest global-index tied direction after cancellation."""
+        directions = self._directions[vertices]
+        norms = np.hypot(directions[:, 0], directions[:, 1])
+        scores = weights * norms
+        maximum = float(np.max(scores))
+        candidates = np.flatnonzero(np.isclose(scores, maximum, rtol=16.0 * np.finfo(np.float64).eps, atol=0.0)
+                                & (norms > 0.0))
+        if not len(candidates):
+            raise FloatingPointError("spectral simplex interpolation has no directional fallback.")
+        return directions[int(candidates[np.argmin(vertices[candidates])])]
+
+    def evaluate(self, values):
+        values = np.asarray(values, dtype=np.float64)
+        simplices = self._triangulation.find_simplex(values)
+        result = np.empty((len(values), 2, 2), dtype=np.float64)
+        for index, (point, simplex) in enumerate(zip(values, simplices)):
+            if simplex < 0:
+                nearest = int(np.rint(self._nearest(point[None, :])[0]))
+                result[index] = self.matrices[nearest]
+                continue
+            vertices = self._triangulation.simplices[simplex]
+            weights = self._weights(simplex, point)
+            parameters = weights @ self._parameters[vertices]
+            direction = weights @ self._directions[vertices]
+            try:
+                result[index] = _reconstruct_positive_2x2(parameters, direction, f"spectral simplex query {index}")
+            except FloatingPointError as error:
+                if "directional fallback" not in str(error):
+                    raise
+                result[index] = _reconstruct_positive_2x2(parameters, self._direction_fallback(vertices, weights), f"spectral simplex query {index}")
+        return result
+
+    def validate_dense(self, label):
+        for index, matrix in enumerate(self.evaluate(self.points)):
+            _positive_2x2_spectral_parameters(matrix, f"{label} training sample {index}")
 
 
 def _validate_tieline_phases(tieline_phases):
@@ -846,13 +1114,14 @@ class MergedPhaseDiffusivitySurrogate:
         self.merge_report = {} if merge_report is None else dict(merge_report)
         self._bulkDiffusivityInterpolators = (
             {
-                context: _BulkDiffusivitySimplexLinear2D(
+                context: (_BulkDiffusivitySimplexLinear2D if self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR
+                          else _BulkDiffusivitySimplexPositive2x2)(
                     self.diffusivity_compositions[context],
                     self.diffusivities[context],
                 )
                 for context in _MERGED_DIFFUSIVITY_CONTEXTS
             }
-            if self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR
+            if self.diffusivityInterpolation in {_DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR, _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2}
             else {}
         )
 
@@ -876,7 +1145,7 @@ class MergedPhaseDiffusivitySurrogate:
         if values.shape[1] != 2:
             raise ValueError("getInterdiffusivity expects independent ternary compositions with shape (n, 2).")
         context = "interface" if query_context == "interface" else "general"
-        if self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR:
+        if self.diffusivityInterpolation in {_DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR, _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2}:
             out = self._bulkDiffusivityInterpolators[context].evaluate(values)
         else:
             samples_x = self.diffusivity_compositions[context]
@@ -901,8 +1170,9 @@ def _coerce_merged_diffusivity_interpolation(mode):
     mode = _DIFFUSIVITY_INTERPOLATION_NEAREST if mode is None else str(mode)
     if mode == _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID:
         return _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR
-    if mode not in {_DIFFUSIVITY_INTERPOLATION_NEAREST, _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR}:
-        raise ValueError("merged diffusivity interpolation must be 'nearest' or 'simplex_linear'.")
+    if mode not in {_DIFFUSIVITY_INTERPOLATION_NEAREST, _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR,
+                    _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2}:
+        raise ValueError("merged diffusivity interpolation must be 'nearest', 'simplex_linear', or 'simplex_positive_2x2'.")
     return mode
 
 
@@ -1199,6 +1469,9 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
     ``diffusivity_interpolation='simplex_linear'``, general/bulk diffusivities
     are linearly interpolated over simplex-valid scattered samples with nearest
     fallback outside the sampled convex hull.
+    ``diffusivity_interpolation='simplex_positive_2x2'`` uses stable positive
+    spectral coordinates for the same scattered bulk support and for interface
+    eta interpolation, preserving positive real eigenvalues by construction.
     """
 
     def __init__(
@@ -1258,6 +1531,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             self._build_continuous_diffusivity_interpolators(diffusivity_bulk_grids)
         elif self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR:
             self._build_simplex_linear_diffusivity_interpolators()
+        elif self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2:
+            self._build_simplex_positive_2x2_diffusivity_interpolators()
 
     @classmethod
     def from_database(
@@ -1326,7 +1601,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             if diffusivity_bulk_points is not None or diffusivity_bulk_bbox is not None or diffusivity_bulk_spacing is not None:
                 raise ValueError("continuous_grid diffusivity interpolation uses diffusivity_bulk_grids only.")
             bulk_grid_axes = _bulk_grid_axes(diffusivity_bulk_grids, float(min_composition))
-        elif diffusivity_interpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR and diffusivity_bulk_grids is not None:
+        elif diffusivity_interpolation in {_DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR, _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2} and diffusivity_bulk_grids is not None:
             bulk_grid_axes = tuple(np.asarray(axis, dtype=np.float64).reshape(-1).copy() for axis in diffusivity_bulk_grids)
             for i, axis in enumerate(bulk_grid_axes):
                 if axis.size < 2:
@@ -1557,7 +1832,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         else:
             grid_points = (
                 _bulk_points_from_simplex_axes(bulk_grid_axes, float(min_composition))
-                if diffusivity_interpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR
+                if diffusivity_interpolation in {_DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR, _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2}
                 else _bulk_points_from_grids(diffusivity_bulk_grids)
             )
             bulk_points = cls._merge_bulk_points(
@@ -1635,7 +1910,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 for phase in tieline_phases
             )
             diffusivity_interpolation = (
-                _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR if has_scattered_hull
+                (requested_interpolation if requested_interpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2
+                 else _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR) if has_scattered_hull
                 else _DIFFUSIVITY_INTERPOLATION_NEAREST
             )
             bulk_grid_axes = None
@@ -1792,6 +2068,22 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             )
             interface.validate_dense(f"simplex-linear interface diffusivity for phase {phase}")
             bulk.validate_dense(f"simplex-linear bulk diffusivity for phase {phase}")
+            self._interfaceDiffusivityInterpolators[phase] = interface
+            self._bulkDiffusivityInterpolators[phase] = bulk
+
+    def _build_simplex_positive_2x2_diffusivity_interpolators(self):
+        """Build positive-spectrum interface and scattered bulk evaluators."""
+        for phase in self.tieline_phases:
+            if self.diffusivity_compositions["interface"][phase].shape[0] != self.eta_samples.size:
+                raise ValueError(f"simplex_positive_2x2 interface diffusivity samples for phase {phase} must match eta_samples.")
+            interface = _InterfaceDiffusivitySpectral2x2(
+                self.eta_samples, self.tieline_compositions[phase], self.diffusivities["interface"][phase]
+            )
+            bulk = _BulkDiffusivitySimplexPositive2x2(
+                self.diffusivity_compositions["general"][phase], self.diffusivities["general"][phase]
+            )
+            interface.validate_dense(f"spectral interface diffusivity for phase {phase}")
+            bulk.validate_dense(f"spectral bulk diffusivity for phase {phase}")
             self._interfaceDiffusivityInterpolators[phase] = interface
             self._bulkDiffusivityInterpolators[phase] = bulk
 
@@ -2007,6 +2299,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         if self.diffusivityInterpolation in {
             _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID,
             _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR,
+            _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2,
         }:
             if context == "interface":
                 out = self._interfaceDiffusivityInterpolators[phase].evaluate(values)

@@ -3498,12 +3498,12 @@ def test_seed_scan_resample_follows_curved_accepted_path():
     assert probes[-1, 0] < probes[0, 0] - 1.0e-4
 
 
-@pytest.mark.parametrize("diffusivity_interpolation", ["nearest", "continuous_grid", "simplex_linear"])
+@pytest.mark.parametrize("diffusivity_interpolation", ["nearest", "continuous_grid", "simplex_linear", "simplex_positive_2x2"])
 def test_ternary_surrogate_seed_point_supports_diffusivity_interpolation_modes(diffusivity_interpolation):
     kwargs = {}
     if diffusivity_interpolation == "continuous_grid":
         kwargs["diffusivity_bulk_grids"] = _continuous_bulk_grids()
-    elif diffusivity_interpolation == "simplex_linear":
+    elif diffusivity_interpolation in {"simplex_linear", "simplex_positive_2x2"}:
         kwargs["diffusivity_bulk_grids"] = (
             np.asarray([0.18, 0.30, 0.42, 0.70], dtype=np.float64),
             np.asarray([0.06, 0.18, 0.30, 0.45], dtype=np.float64),

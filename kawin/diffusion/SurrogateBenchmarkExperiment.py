@@ -217,10 +217,11 @@ class _IDWPredictor:
 
 
 def experiment_schemes(criteria=SpectralCriteria()):
-    """Return the three paired schemes used by the W--Ti--Fe experiment."""
+    """Return the paired production and benchmark schemes for W--Ti--Fe."""
     return [
         SurrogateScheme("kawin_nearest", lambda training: _MergedPredictor(training, "nearest", criteria)),
         SurrogateScheme("kawin_simplex_linear", lambda training: _MergedPredictor(training, "simplex_linear", criteria)),
+        SurrogateScheme("kawin_simplex_positive_2x2", lambda training: _MergedPredictor(training, "simplex_positive_2x2", criteria)),
         SurrogateScheme("idw_signed_cuberoot_p2", lambda training: _IDWPredictor(training, criteria)),
     ]
 
@@ -327,13 +328,42 @@ def _raw_spacing(dataset):
     return float(np.median(np.min(distances, axis=1)))
 
 
-def run_experiment(dataset, criteria=SpectralCriteria(), *, split_kwargs=None):
+def _frozen_experiment_splits(dataset, criteria, manifest):
+    """Recover and verify an existing experiment design without reselection."""
+    state = manifest.get("state", {})
+    current = {"phase": dataset.phases[0], "context": dataset.contexts[0], "temperature": float(dataset.temperatures[0])}
+    if state != current or manifest.get("spectral_criteria") != asdict(criteria):
+        raise ValueError("frozen manifest state or spectral criteria does not match the requested dataset.")
+    if manifest.get("gradient_directions") != DEFAULT_GRADIENTS.tolist():
+        raise ValueError("frozen manifest gradient directions do not match the approved experiment contract.")
+    frozen_source = manifest.get("dataset_metadata", {}).get("source_archive")
+    if frozen_source is not None and str(dataset.metadata.get("source_archive")) != str(frozen_source):
+        raise ValueError("frozen manifest source archive does not match the requested dataset.")
+    levels = manifest.get("refinement_levels", {})
+    if any(name not in levels for name in ("coarse", "medium", "fine")):
+        raise ValueError("frozen manifest is missing refinement level identities.")
+    splits = {name: np.asarray(levels[name]["raw_master_row_indices"], dtype=np.int64) for name in ("coarse", "medium", "fine")}
+    splits["validation"] = np.asarray(manifest["validation_master_row_indices"], dtype=np.int64)
+    splits["validation_raw"] = np.asarray(manifest["validation_raw_master_row_indices"], dtype=np.int64)
+    splits["coordinate_keys"] = {name: levels[name]["coordinate_keys"] for name in ("coarse", "medium", "fine")}
+    splits["coordinate_keys"]["validation"] = manifest["validation_coordinate_keys"]
+    splits["selection_location_counts"] = {name: int(levels[name]["selection_location_count"]) for name in ("coarse", "medium", "fine")}
+    splits["selection_location_counts"]["validation"] = int(manifest["validation_selection_location_count"])
+    splits["conflicting_coordinate_groups_excluded_from_validation"] = int(manifest.get("conflicting_coordinate_groups_excluded_from_validation", 0))
+    if any(np.any(indices < 0) or np.any(indices >= len(dataset)) for indices in splits.values() if isinstance(indices, np.ndarray)):
+        raise ValueError("frozen manifest contains dataset indices outside the current cache.")
+    return splits
+
+
+def run_experiment(dataset, criteria=SpectralCriteria(), *, split_kwargs=None, frozen_manifest=None):
     """Run the controlled post-hoc refinement, flux, and medium LOO studies.
 
     ``split_kwargs`` is primarily useful for small synthetic regression cases;
     production defaults retain the approved 64/256/1327/200 design.
     """
-    splits = build_experiment_splits(dataset, criteria, **(split_kwargs or {}))
+    frozen = None if frozen_manifest is None else (json.loads(Path(frozen_manifest).read_text(encoding="utf-8"))
+                                                    if not isinstance(frozen_manifest, dict) else frozen_manifest)
+    splits = build_experiment_splits(dataset, criteria, **(split_kwargs or {})) if frozen is None else _frozen_experiment_splits(dataset, criteria, frozen)
     validation = dataset.subset(splits["validation"])
     training = dataset.subset(splits["fine"])
     levels = {name: np.asarray([np.where(splits["fine"] == index)[0][0] for index in indices], dtype=np.int64)
@@ -345,6 +375,13 @@ def run_experiment(dataset, criteria=SpectralCriteria(), *, split_kwargs=None):
     # support cloud available to interpolators, not raw provenance duplicates.
     effective_plan = make_independent_holdout_plan(effective_support, validation, criteria)
     effective_robust_mask = effective_plan.validation_robust_positive_mask
+    if frozen is not None:
+        frozen_support = np.asarray(frozen["robust_positive_support_master_row_indices"], dtype=np.int64)
+        if not np.array_equal(support_master_indices, frozen_support):
+            raise ValueError("frozen manifest effective interpolation support does not match the current cache.")
+        effective_robust_mask = np.asarray(frozen["robust_positive_validation_mask"], dtype=bool)
+        if effective_robust_mask.shape != (len(validation),):
+            raise ValueError("frozen manifest robust-positive validation mask has the wrong length.")
     refinement = run_refinement_study(training, validation, schemes, levels, criteria,
                                       validation_robust_positive_mask=effective_robust_mask)
     for level in refinement["levels"]:
@@ -414,6 +451,7 @@ def run_experiment(dataset, criteria=SpectralCriteria(), *, split_kwargs=None):
         "schemes": [
             {"name": "kawin_nearest", "implementation": "MergedPhaseDiffusivitySurrogate", "interpolation": "nearest"},
             {"name": "kawin_simplex_linear", "implementation": "MergedPhaseDiffusivitySurrogate", "interpolation": "simplex_linear"},
+            {"name": "kawin_simplex_positive_2x2", "implementation": "MergedPhaseDiffusivitySurrogate", "interpolation": "simplex_positive_2x2"},
             {"name": "idw_signed_cuberoot_p2", "implementation": "benchmark_idw", "transform": "signed_cuberoot", "power": 2},
         ], "gradient_directions": DEFAULT_GRADIENTS.tolist(), "validation_class_counts": validation_counts,
         "source_identifiers": {key: dataset.metadata.get(key) for key in ("source_archive", "invalid_sidecar", "source_rows", "provenance")},

@@ -2,6 +2,7 @@ import warnings
 from dataclasses import dataclass
 
 import numpy as np
+from ._spectral_validation import TERNARY_DIFFUSIVITY_POSITIVE_EIGENVALUE_TOL, TERNARY_DIFFUSIVITY_REAL_SPECTRUM_TOL
 
 from kawin.GenericModel import GenericModel
 from kawin.diffusion.Diffusion import DiffusionModel
@@ -229,8 +230,8 @@ def _validate_ternary_diffusivity_matrix(D, phase, context="ternary Illingworth 
     if not np.isfinite(matrix_norm) or matrix_norm <= 0.0:
         raise ValueError(f"{label} must have a positive finite matrix norm.")
     scaled_eigenvalues = np.linalg.eigvals(values / matrix_norm)
-    imaginary_tol = 1.0e-12
-    positive_tol = 1.0e-14
+    imaginary_tol = TERNARY_DIFFUSIVITY_REAL_SPECTRUM_TOL
+    positive_tol = TERNARY_DIFFUSIVITY_POSITIVE_EIGENVALUE_TOL
     if np.any(np.abs(np.imag(scaled_eigenvalues)) > imaginary_tol):
         raise ValueError(f"{label} must have real positive eigenvalues; scaled eigenvalues={scaled_eigenvalues}.")
     real_eigenvalues = np.real(scaled_eigenvalues)
