@@ -131,7 +131,7 @@ def _merged(interpolation="nearest"):
     )
 
 
-def _loo_surrogate(interpolation="simplex_linear"):
+def _loo_surrogate(interpolation="simplex_linear", validity_policy="raise"):
     """Build a nonconstant, positive-matrix bulk sample set for holdout tests."""
     if interpolation == "continuous_grid":
         axes = (np.asarray([0.20, 0.30, 0.40]), np.asarray([0.10, 0.20, 0.30]))
@@ -162,10 +162,11 @@ def _loo_surrogate(interpolation="simplex_linear"):
         },
         diffusivity_interpolation=interpolation,
         diffusivity_bulk_grids=axes,
+        validity_policy=validity_policy,
     )
 
 
-def test_diffusivity_leave_one_out_refits_each_sample_and_reports_hull_fallback():
+def test_diffusivity_leave_one_out_strictly_reports_missing_retained_hull_support():
     surrogate = _loo_surrogate()
     original = surrogate.diffusivities["general"]["ALPHA"].copy()
     report = evaluate_diffusivity_leave_one_out(surrogate, phases="ALPHA")
@@ -176,12 +177,15 @@ def test_diffusivity_leave_one_out_refits_each_sample_and_reports_hull_fallback(
     np.testing.assert_array_equal(phase["actual_matrices"], original)
     np.testing.assert_array_equal(surrogate.diffusivities["general"]["ALPHA"], original)
     assert phase["predicted_matrices"].shape == (5, 2, 2)
-    assert phase["fallback"][0]
-    assert phase["refit_interpolation"][0] == "nearest"
+    assert phase["prediction_status"][0] == "insufficient_fit_support"
+    assert not phase["fallback"][0]
+    assert np.isnan(phase["predicted_matrices"][0]).all()
     assert not phase["fallback"][4]
     assert phase["refit_interpolation"][4] == "simplex_linear"
+    assert phase["prediction_status"][4] == "ok"
     assert phase["matrix_relative_error"][4] > 0.0
-    assert phase["summary"]["nearest_fallback_count"] == 4
+    assert phase["summary"]["nearest_fallback_count"] == 0
+    assert phase["summary"]["insufficient_fit_support_count"] == 4
     assert phase["summary"]["failure_count"] == 0
     assert np.all(phase["actual_valid"])
     np.testing.assert_allclose(
@@ -197,12 +201,13 @@ def test_diffusivity_leave_one_out_nearest_subset_and_merged_surrogate():
     )["phase_reports"]["ALPHA"]
     assert report["sample_indices"].tolist() == [4, 0]
     assert np.all(report["refit_interpolation"] == "nearest")
-    assert not np.any(report["fallback"])
+    assert report["prediction_status"].tolist() == ["ok", "insufficient_fit_support"]
     for row, index in enumerate(report["sample_indices"]):
-        points = np.delete(surrogate.diffusivity_compositions["general"]["ALPHA"], index, axis=0)
-        matrices = np.delete(surrogate.diffusivities["general"]["ALPHA"], index, axis=0)
+        points = np.delete(surrogate._fitSupport["ALPHA"]["points"], index, axis=0)
+        matrices = np.delete(surrogate._fitSupport["ALPHA"]["matrices"], index, axis=0)
         nearest = np.argmin(np.sum((points - report["compositions"][row]) ** 2, axis=1))
-        np.testing.assert_array_equal(report["predicted_matrices"][row], matrices[nearest])
+        if report["prediction_status"][row] == "ok":
+            np.testing.assert_array_equal(report["predicted_matrices"][row], matrices[nearest])
 
     merged = evaluate_diffusivity_leave_one_out(_merged())
     assert merged["phases"] == ("BETA",)
@@ -217,6 +222,7 @@ def test_diffusivity_leave_one_out_regular_grid_uses_scattered_refit():
     phase = report["phase_reports"]["ALPHA"]
     assert report["source_interpolation"] == "continuous_grid"
     assert phase["refit_interpolation"].tolist() == ["simplex_linear"]
+    assert phase["refit_note"].tolist() == ["continuous_grid_missing_node_downgrade"]
     assert not phase["fallback"][0]
     assert phase["matrix_relative_error"][0] > 0.0
     assert phase["summary"]["failure_count"] == 0
@@ -232,10 +238,11 @@ def test_diffusivity_leave_one_out_reports_unavailable_single_sample():
         diffusivities={"interface": _matrices(1), "general": _matrices(1)},
     )
     phase = evaluate_diffusivity_leave_one_out(surrogate)["phase_reports"]["BETA"]
-    assert phase["summary"]["failure_count"] == 1
+    assert phase["summary"]["failure_count"] == 0
+    assert phase["summary"]["insufficient_fit_support_count"] == 1
     assert phase["summary"]["invalid_prediction_count"] == 0
     assert np.isnan(phase["predicted_matrices"]).all()
-    assert "single stored sample" in phase["failures"][0]["error"]
+    assert phase["prediction_status"].tolist() == ["insufficient_fit_support"]
 
     with pytest.raises(ValueError, match="missing phase"):
         evaluate_diffusivity_leave_one_out(surrogate, sample_indices={"ALPHA": [0]})
@@ -268,6 +275,89 @@ def test_diffusivity_leave_one_out_exposes_invalid_interpolated_matrix():
     assert phase["summary"]["invalid_prediction_count"] == 1
 
 
+def test_diffusivity_leave_one_out_refits_simplex_positive_2x2_with_production_evaluator(monkeypatch):
+    surrogate = _loo_surrogate(interpolation="simplex_positive_2x2")
+    import kawin.diffusion.SurrogateDiagnostics as diagnostics_module
+
+    monkeypatch.setattr(
+        diagnostics_module, "_BulkDiffusivitySimplexLinear2D",
+        lambda *args: (_ for _ in ()).throw(AssertionError("simplex-linear refit was used")),
+    )
+    phase = evaluate_diffusivity_leave_one_out(
+        surrogate, phases="ALPHA", sample_indices=[4]
+    )["phase_reports"]["ALPHA"]
+
+    assert phase["refit_interpolation"].tolist() == ["simplex_positive_2x2"]
+    assert phase["prediction_status"].tolist() == ["ok"]
+    assert phase["predicted_valid"].tolist() == [True]
+    assert not phase["fallback"][0]
+
+
+def test_diffusivity_leave_one_out_positive_refit_avoids_simplex_linear_crossing():
+    points = np.asarray([
+        [0.20, 0.10], [0.40, 0.10], [0.20, 0.30], [0.2666666667, 0.1666666667],
+    ])
+    matrices = np.asarray([
+        [[2.0, 100.0], [0.01, 2.0]],
+        [[2.0, 0.01], [100.0, 2.0]],
+        [[2.0, 0.0], [0.0, 2.0]],
+        [[2.0, 0.0], [0.0, 2.0]],
+    ])
+
+    def make(mode):
+        return MergedPhaseDiffusivitySurrogate(
+            elements=ELEMENTS, phase="BETA", temperature=1000.0,
+            diffusivity_compositions={"interface": points, "general": points},
+            diffusivities={"interface": matrices, "general": matrices},
+            diffusivity_interpolation=mode,
+        )
+
+    linear = evaluate_diffusivity_leave_one_out(make("simplex_linear"), sample_indices=[3])["phase_reports"]["BETA"]
+    positive = evaluate_diffusivity_leave_one_out(make("simplex_positive_2x2"), sample_indices=[3])["phase_reports"]["BETA"]
+    assert linear["refit_interpolation"].tolist() == ["simplex_linear"]
+    assert linear["prediction_status"].tolist() == ["invalid_prediction"]
+    assert positive["refit_interpolation"].tolist() == ["simplex_positive_2x2"]
+    assert positive["prediction_status"].tolist() == ["ok"]
+    assert positive["predicted_valid"].tolist() == [True]
+
+
+def test_diffusivity_leave_one_out_legacy_marks_vertex_nearest_fallback():
+    strict = _loo_surrogate(validity_policy="raise")
+    legacy = _loo_surrogate(validity_policy="legacy")
+    strict_phase = evaluate_diffusivity_leave_one_out(strict, phases="ALPHA", sample_indices=[0])["phase_reports"]["ALPHA"]
+    legacy_phase = evaluate_diffusivity_leave_one_out(legacy, phases="ALPHA", sample_indices=[0])["phase_reports"]["ALPHA"]
+    assert strict_phase["prediction_status"].tolist() == ["insufficient_fit_support"]
+    assert not strict_phase["fallback"][0]
+    assert np.isnan(strict_phase["predicted_matrices"][0]).all()
+    assert legacy_phase["prediction_status"].tolist() == ["nearest_fallback"]
+    assert legacy_phase["fallback"].tolist() == [True]
+    assert np.all(np.isfinite(legacy_phase["predicted_matrices"][0]))
+
+
+def test_diffusivity_leave_one_out_uses_canonical_solver_usable_fit_population():
+    corners = np.asarray([[0.10, 0.10], [0.35, 0.10], [0.10, 0.35], [0.35, 0.35]])
+    points = np.vstack((corners, [0.22, 0.12], [0.12, 0.22], [0.24, 0.24], corners[0]))
+    matrices = np.asarray([
+        np.eye(2), np.eye(2), np.eye(2), np.eye(2),
+        [[1.0, 0.0], [0.0, -1.0]], np.eye(2) * 3.0, np.eye(2) * 2.0, np.eye(2),
+    ])
+    validity = {
+        "coordinates": points,
+        "statuses": ("VALID",) * 4 + ("KNOWN_INVALID", "UNKNOWN", "VALID", "VALID"),
+        "fit_usable": (True,) * 6 + (False, True),
+    }
+    surrogate = MergedPhaseDiffusivitySurrogate(
+        elements=ELEMENTS, phase="BETA", temperature=1000.0,
+        diffusivity_compositions={"interface": corners, "general": points},
+        diffusivities={"interface": _matrices(4), "general": matrices},
+        diffusivity_validity={"interface": None, "general": validity},
+    )
+    phase = evaluate_diffusivity_leave_one_out(surrogate)["phase_reports"]["BETA"]
+    assert phase["source_sample_count"] == 4
+    assert phase["loo_fit_sample_count"] == 3
+    np.testing.assert_allclose(phase["compositions"], corners)
+
+
 def test_diffusivity_leave_one_out_plot_shows_matrices_and_point_status():
     pytest.importorskip("plotly")
     report = evaluate_diffusivity_leave_one_out(_loo_surrogate(), phases="ALPHA")
@@ -275,19 +365,20 @@ def test_diffusivity_leave_one_out_plot_shows_matrices_and_point_status():
     trace = figure.data[0]
 
     assert trace.type == "scatterternary"
-    assert len(trace.a) == 5
+    assert len(trace.a) == 1
     assert np.allclose(np.asarray(trace.a) + np.asarray(trace.b) + np.asarray(trace.c), 1.0)
     assert figure.layout.ternary.aaxis.title.text == ELEMENTS[2]
     assert figure.layout.ternary.baxis.title.text == ELEMENTS[0]
     assert figure.layout.ternary.caxis.title.text == ELEMENTS[1]
-    assert trace.marker.symbol[0] == "diamond"
-    assert trace.marker.symbol[4] == "circle"
-    assert "Actual D (m²/s)" in trace.text[4]
-    assert "Predicted D (m²/s)" in trace.text[4]
-    assert "Absolute error" in trace.text[4]
-    assert "Predicted eigenvalues" in trace.text[4]
-    assert "Frobenius relative error" in trace.text[4]
+    assert trace.marker.symbol[0] == "circle"
+    assert "Actual D" in trace.text[0]
+    assert "Predicted D" in trace.text[0]
+    assert "Absolute error" in trace.text[0]
+    assert "Predicted eigenvalues" in trace.text[0]
+    assert "prediction status: ok" in trace.text[0]
     assert trace.marker.showscale
+    assert figure.data[1].name == "Insufficient fit support"
+    assert figure.data[1].marker.symbol == "square-open"
 
     with pytest.raises(ValueError, match="does not contain phase"):
         plot_diffusivity_leave_one_out(report, "MISSING", renderer=None)
@@ -306,9 +397,9 @@ def test_diffusivity_leave_one_out_plot_marks_failed_refit():
     report = evaluate_diffusivity_leave_one_out(surrogate)
     figure = plot_diffusivity_leave_one_out(report, "BETA", renderer=None)
     assert len(figure.data) == 1
-    assert figure.data[0].name == "Failed refit"
-    assert figure.data[0].marker.symbol == "x"
-    assert "single stored sample" in figure.data[0].text[0]
+    assert figure.data[0].name == "Insufficient fit support"
+    assert figure.data[0].marker.symbol == "square-open"
+    assert "insufficient_fit_support" in figure.data[0].text[0]
 
 
 def test_site_fraction_plot_compares_equivalent_b2_sublattices_with_disordered_state():

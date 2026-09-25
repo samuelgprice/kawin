@@ -14,11 +14,13 @@ from pathlib import Path
 
 import numpy as np
 import tqdm
+from scipy.spatial import Delaunay
 
 from .MovingBoundarySurrogates import (
     MergedPhaseDiffusivitySurrogate,
     TernaryMovingBoundaryThermodynamicsSurrogate,
     _BulkDiffusivitySimplexLinear2D,
+    _BulkDiffusivitySimplexPositive2x2,
     _matrix_validity_diagnostics,
 )
 
@@ -395,36 +397,56 @@ def _loo_sample_indices(sample_indices, phase, count):
     return indices.astype(np.int64, copy=True)
 
 
-def _loo_bulk_matrix(points, matrices, index, interpolation):
-    """Refit one bulk interpolator after deleting a row and evaluate that row.
+def _loo_refit_supports_point(points, point):
+    """Return whether retained samples provide nondegenerate 2-D support.
 
-    Removing one node invalidates a rectangular tensor-product spline, so
-    ``continuous_grid`` uses the same scattered simplex-linear mode that the
-    surrogate builder selects for incomplete grids. Hull queries and sets
-    without two-dimensional support use nearest-neighbor sampling.
+    This intentionally rebuilds the geometry after each holdout.  The source
+    surrogate's cached hull contains the held-out row and therefore cannot
+    establish support for a leave-one-out prediction.
+    """
+    if len(points) < 3 or np.linalg.matrix_rank(points - points[0]) < 2:
+        return False
+    try:
+        return int(Delaunay(points).find_simplex(point)) >= 0
+    except Exception:
+        return False
+
+
+def _loo_bulk_matrix(points, matrices, index, interpolation, validity_policy):
+    """Refit the configured bulk evaluator after deleting one fit sample.
+
+    ``simplex_positive_2x2`` uses the production spectral evaluator directly.
+    ``continuous_grid`` cannot be reconstructed after deleting one node and is
+    explicitly downgraded to scattered ``simplex_linear``.  Strict sources do
+    not extrapolate from an unsupported retained cloud; legacy sources retain
+    the historical nearest-neighbor diagnostic fallback.
     """
     retained = np.arange(len(points)) != index
     remaining_points = points[retained]
     remaining_matrices = matrices[retained]
     if not len(remaining_points):
-        raise ValueError("A single stored sample cannot be evaluated leave-one-out.")
+        return None, "unavailable", False, np.nan, "insufficient_fit_support", None
     point = points[index]
     distance_squared = np.sum((remaining_points - point) ** 2, axis=1)
     nearest = int(np.argmin(distance_squared))
     distance = float(np.sqrt(distance_squared[nearest]))
-    if interpolation == "nearest":
-        return remaining_matrices[nearest].copy(), "nearest", False, distance
-    if len(remaining_points) < 3 or np.linalg.matrix_rank(remaining_points - remaining_points[0]) < 2:
-        return remaining_matrices[nearest].copy(), "nearest", True, distance
+    refit_mode = "simplex_linear" if interpolation == "continuous_grid" else interpolation
+    refit_note = "continuous_grid_missing_node_downgrade" if interpolation == "continuous_grid" else None
+    supported = _loo_refit_supports_point(remaining_points, point)
+    if not supported:
+        if validity_policy == "raise":
+            return None, refit_mode, False, distance, "insufficient_fit_support", refit_note
+        return remaining_matrices[nearest].copy(), "nearest", True, distance, "nearest_fallback", refit_note
 
-    refit = _BulkDiffusivitySimplexLinear2D(remaining_points, remaining_matrices)
-    transformed = np.asarray(refit._linear(point[None, :]), dtype=np.float64)
-    if not np.all(np.isfinite(transformed)):
-        # Match the production interpolator's nearest fallback without invoking
-        # its interactive debugger for a held-out convex-hull vertex.
-        nearest_transformed = np.asarray(refit._nearest(point[None, :]), dtype=np.float64)
-        return (nearest_transformed[0] ** 3).reshape(2, 2), "nearest", True, distance
-    return (transformed[0] ** 3).reshape(2, 2), "simplex_linear", False, distance
+    if interpolation == "nearest":
+        return remaining_matrices[nearest].copy(), "nearest", False, distance, "ok", None
+    evaluator = (
+        _BulkDiffusivitySimplexPositive2x2
+        if refit_mode == "simplex_positive_2x2"
+        else _BulkDiffusivitySimplexLinear2D
+    )(remaining_points, remaining_matrices)
+    prediction = np.asarray(evaluator.evaluate(point[None, :]), dtype=np.float64)[0]
+    return prediction, refit_mode, False, distance, "ok", refit_note
 
 
 def evaluate_diffusivity_leave_one_out(
@@ -438,14 +460,14 @@ def evaluate_diffusivity_leave_one_out(
 ):
     """Compare stored bulk matrices with predictions from leave-one-out refits.
 
-    Reads ``diffusivity_compositions['general']`` and ``diffusivities['general']``
-    from the surrogate; it makes no thermodynamics queries and does not mutate
-    the original model. All general samples are tested by default, including
-    interface samples included in scattered bulk training. ``sample_indices``
-    can select rows globally or by phase. For ``continuous_grid``, omitting a
-    node prevents a regular-grid refit, so each refit uses scattered
-    simplex-linear interpolation. A held-out point outside the remaining hull
-    uses the production nearest-neighbor fallback, reported per sample.
+    Uses the source surrogate's cached canonical solver-usable general fit
+    population, not raw provenance rows. It makes no thermodynamics queries or
+    changes to the original model. ``sample_indices`` indexes that fit
+    population. ``continuous_grid`` is explicitly downgraded to scattered
+    simplex-linear after a node is removed. With ``validity_policy='raise'``,
+    a point outside the rebuilt retained 2-D hull is reported as
+    ``insufficient_fit_support``. ``legacy`` retains an explicitly labeled
+    nearest-neighbor fallback in that case.
 
     Returns one report per phase with held-out compositions, actual and
     predicted 2x2 matrices, component and Frobenius relative errors, physical
@@ -462,8 +484,9 @@ def evaluate_diffusivity_leave_one_out(
     interpolation = str(surrogate.diffusivityInterpolation)
     phase_reports = {}
     for phase in selected_phases:
-        points = _diffusivity_training_compositions(surrogate, "general", phase)
-        matrices = _diffusivity_training_matrices(surrogate, "general", phase)
+        support = surrogate._fitSupport[phase if isinstance(surrogate, TernaryMovingBoundaryThermodynamicsSurrogate) else "general"]
+        points = np.asarray(support["points"], dtype=np.float64)
+        matrices = np.asarray(support["matrices"], dtype=np.float64)
         if points.ndim != 2 or points.shape[1] != 2 or matrices.shape != (len(points), 2, 2):
             raise ValueError(f"Stored general diffusivity samples for phase {phase} have incompatible shapes.")
         indices = _loo_sample_indices(sample_indices, phase, len(points))
@@ -472,16 +495,21 @@ def evaluate_diffusivity_leave_one_out(
         nearest_distance = np.full(len(indices), np.nan, dtype=np.float64)
         fallback = np.zeros(len(indices), dtype=bool)
         refit_interpolation = np.full(len(indices), "failed", dtype=object)
+        refit_note = np.full(len(indices), None, dtype=object)
+        prediction_status = np.full(len(indices), "refit_failure", dtype=object)
         failures = []
         for row, index in tqdm.tqdm(enumerate(indices), total=len(indices)):
             try:
-                prediction, mode, used_fallback, distance = _loo_bulk_matrix(
-                    points, matrices, int(index), interpolation
+                prediction, mode, used_fallback, distance, status, note = _loo_bulk_matrix(
+                    points, matrices, int(index), interpolation, surrogate.validity_policy
                 )
-                predicted[row] = prediction
+                if prediction is not None:
+                    predicted[row] = prediction
                 refit_interpolation[row] = mode
                 fallback[row] = used_fallback
                 nearest_distance[row] = distance
+                refit_note[row] = note
+                prediction_status[row] = status
             except Exception as exc:
                 failures.append({
                     "index": int(index), "phase": phase,
@@ -499,6 +527,9 @@ def evaluate_diffusivity_leave_one_out(
             np.linalg.norm(held_out, axis=(1, 2)), floor
         )
         finite_error = matrix_relative[np.isfinite(matrix_relative)]
+        attempted_prediction = np.isin(prediction_status, ("ok", "nearest_fallback"))
+        invalid_prediction = attempted_prediction & ~predicted_validity["valid"]
+        prediction_status[invalid_prediction] = "invalid_prediction"
         phase_reports[phase] = {
             "sample_indices": indices,
             "compositions": points[indices].copy(),
@@ -514,14 +545,17 @@ def evaluate_diffusivity_leave_one_out(
             "nearest_training_distance": nearest_distance,
             "fallback": fallback,
             "refit_interpolation": refit_interpolation,
+            "refit_note": refit_note,
+            "prediction_status": prediction_status,
+            "source_sample_count": len(points),
+            "loo_fit_sample_count": max(len(points) - 1, 0),
             "failures": failures,
             "summary": {
                 "sample_count": len(indices),
                 "failure_count": len(failures),
                 "nearest_fallback_count": int(np.count_nonzero(fallback)),
-                "invalid_prediction_count": int(np.count_nonzero(
-                    predicted_validity["finite"] & ~predicted_validity["valid"]
-                )),
+                "insufficient_fit_support_count": int(np.count_nonzero(prediction_status == "insufficient_fit_support")),
+                "invalid_prediction_count": int(np.count_nonzero(invalid_prediction)),
                 "mean_matrix_relative_error": float(np.mean(finite_error)) if finite_error.size else np.nan,
                 "max_matrix_relative_error": float(np.max(finite_error)) if finite_error.size else np.nan,
             },
@@ -532,6 +566,7 @@ def evaluate_diffusivity_leave_one_out(
         "phases": selected_phases,
         "temperature": float(surrogate.temperature),
         "source_interpolation": interpolation,
+        "source_validity_policy": str(surrogate.validity_policy),
         "context": "general",
         "phase_reports": phase_reports,
     }
@@ -850,10 +885,10 @@ def plot_diffusivity_leave_one_out(report, phase, *, hover_format=".6g", rendere
     """Plot held-out bulk samples on a ternary with full per-point diagnostics.
 
     Marker color is the base-10 log of Frobenius relative matrix error, with
-    zero displayed at a 1e-16 floor. Diamonds mark nearest-sample fallbacks,
-    crosses mark invalid predicted matrices, and black X markers mark failed refits.
-    The hover shows both 2x2 matrices, component errors, eigenvalues, and
-    refit details. The returned Plotly figure is not displayed automatically.
+    zero displayed at a 1e-16 floor. Circles mark valid predictions, diamonds
+    explicit legacy nearest fallbacks, crosses invalid predicted matrices, open
+    squares insufficient retained fit support, and black X markers unexpected
+    refit failures. The returned Plotly figure is not displayed automatically.
     """
     if report.get("kind") != "diffusivity_leave_one_out" or phase not in report.get("phase_reports", {}):
         raise ValueError(f"Leave-one-out diffusivity report does not contain phase '{phase}'.")
@@ -862,12 +897,14 @@ def plot_diffusivity_leave_one_out(report, phase, *, hover_format=".6g", rendere
     points = np.asarray(values["compositions"], dtype=np.float64)
     errors = np.asarray(values["matrix_relative_error"], dtype=np.float64)
     failures = {int(item["index"]): str(item["error"]) for item in values["failures"]}
-    failed_mask = np.asarray([int(index) in failures for index in values["sample_indices"]], dtype=bool)
-    finite = np.isfinite(errors) & ~failed_mask
+    statuses = np.asarray(values["prediction_status"], dtype=object)
+    failed_mask = statuses == "refit_failure"
+    support_mask = statuses == "insufficient_fit_support"
+    finite = np.isfinite(errors) & ~failed_mask & ~support_mask
     log_errors = np.full(len(points), np.nan, dtype=np.float64)
     log_errors[finite] = np.log10(np.maximum(errors[finite], 1e-16))
-    log_errors[~finite & ~failed_mask] = float(np.max(log_errors[finite]) + 1.0) if np.any(finite) else 0.0
-    displayed_colors = log_errors[~failed_mask]
+    log_errors[~finite & ~failed_mask & ~support_mask] = float(np.max(log_errors[finite]) + 1.0) if np.any(finite) else 0.0
+    displayed_colors = log_errors[~failed_mask & ~support_mask]
     color_min = float(np.min(displayed_colors)) if displayed_colors.size else -16.0
     color_max = float(np.max(displayed_colors)) if displayed_colors.size else -15.0
     if color_min == color_max:
@@ -890,9 +927,9 @@ def plot_diffusivity_leave_one_out(report, phase, *, hover_format=".6g", rendere
         )
 
     for row, index in enumerate(values["sample_indices"]):
-        failed = int(index) in failures
-        invalid = not bool(values["predicted_valid"][row])
-        symbols.append("cross" if invalid else "diamond" if values["fallback"][row] else "circle")
+        failed = statuses[row] == "refit_failure"
+        invalid = statuses[row] == "invalid_prediction"
+        symbols.append("x" if failed else "square-open" if support_mask[row] else "cross" if invalid else "diamond" if values["fallback"][row] else "circle")
         composition = points[row]
         fields = _composition_fields(composition[None, :])
         lines = [
@@ -905,20 +942,26 @@ def plot_diffusivity_leave_one_out(report, phase, *, hover_format=".6g", rendere
             f"Absolute error (m²/s):<br>{matrix_text(values['absolute_error'][row])}",
             f"Relative component error:<br>{matrix_text(values['relative_error'][row])}",
             f"Frobenius relative error: {format(errors[row], hover_format)}",
-            f"Actual valid: {bool(values['actual_valid'][row])}; predicted valid: {not invalid}",
+            f"Actual valid: {bool(values['actual_valid'][row])}; predicted valid: {bool(values['predicted_valid'][row])}",
             f"Actual eigenvalues (m²/s): {eigen_text(values['actual_eigenvalues'][row])}",
             f"Predicted eigenvalues (m²/s): {eigen_text(values['predicted_eigenvalues'][row])}",
-            f"Source interpolation: {escape(str(report['source_interpolation']))}; context: {escape(str(report['context']))}",
+            f"Source interpolation: {escape(str(report['source_interpolation']))}; source validity policy: {escape(str(report.get('source_validity_policy', 'unknown')))}; context: {escape(str(report['context']))}",
             f"Nearest retained sample distance: {format(values['nearest_training_distance'][row], hover_format)}",
-            f"Refit: {escape(str(values['refit_interpolation'][row]))}; nearest fallback: {bool(values['fallback'][row])}",
+            f"Refit: {escape(str(values['refit_interpolation'][row]))}; prediction status: {escape(str(statuses[row]))}; nearest fallback: {bool(values['fallback'][row])}",
+            f"LOO fit samples: {int(values['loo_fit_sample_count'])} / source fit samples: {int(values['source_sample_count'])}",
         ]
+        if values.get("refit_note") is not None and values["refit_note"][row] is not None:
+            lines.append(f"Refit note: {escape(str(values['refit_note'][row]))}")
+        if support_mask[row]:
+            lines.append("Support reason: held-out composition is outside the retained 2-D fit hull.")
         if failed:
             lines.append(f"Failure: {escape(failures[int(index)])}")
         hover.append("<br>".join(lines))
 
     fig = go.Figure()
-    if np.any(~failed_mask):
-        good = ~failed_mask
+    normal_mask = ~failed_mask & ~support_mask
+    if np.any(normal_mask):
+        good = normal_mask
         fig.add_trace(go.Scatterternary(
             **_ternary_coordinates(points[good]),
             mode="markers",
@@ -945,6 +988,14 @@ def plot_diffusivity_leave_one_out(report, phase, *, hover_format=".6g", rendere
             text=np.asarray(hover, dtype=object)[failed_mask],
             hovertemplate="%{text}<extra></extra>",
         ))
+    if np.any(support_mask):
+        fig.add_trace(go.Scatterternary(
+            **_ternary_coordinates(points[support_mask]),
+            mode="markers", name="Insufficient fit support",
+            marker={"size": 10, "symbol": "square-open", "color": "#9467bd"},
+            text=np.asarray(hover, dtype=object)[support_mask],
+            hovertemplate="%{text}<extra></extra>",
+        ))
     fig.update_layout(
         title=f"Diffusivity leave-one-out: {phase} at {report['temperature']:g} K",
         template="plotly_white",
@@ -959,7 +1010,7 @@ def plot_diffusivity_leave_one_out(report, phase, *, hover_format=".6g", rendere
             "caxis": {"title": report["elements"][1]},
         },
         annotations=[{
-            "text": "Diamond: nearest fallback · Cross: invalid matrix · X: failed refit",
+            "text": "Circle: valid prediction; Diamond: nearest fallback; Cross: invalid predicted matrix; Open square: insufficient fit support; X: failed refit",
             "x": 0.5, "y": 1.03, "xref": "paper", "yref": "paper", "showarrow": False,
         }],
     )
