@@ -43,7 +43,7 @@ def _matrices(count, scale=1.0):
     return np.broadcast_to(scale * MATRIX, (count, 2, 2)).copy()
 
 
-def _surrogate(*, source="from_database", interpolation="nearest"):
+def _surrogate(*, source="from_database", interpolation="nearest", validity_policy="raise"):
     metadata = {
         "source": source,
         "precipitate_phase": PHASES[1],
@@ -75,6 +75,7 @@ def _surrogate(*, source="from_database", interpolation="nearest"):
         },
         diffusivity_interpolation=interpolation,
         metadata=metadata,
+        validity_policy=validity_policy,
     )
 
 
@@ -447,7 +448,7 @@ def test_diffusivity_truth_failures_can_record():
 
 def test_simplex_linear_and_merged_reports_include_fallback_and_bulk_only():
     simplex = evaluate_diffusivity_diagnostics(
-        _surrogate(interpolation="simplex_linear"),
+        _surrogate(interpolation="simplex_linear", validity_policy="legacy"),
         interface_eta_count=3,
         bulk_axes=(np.asarray([0.20, 0.45]), np.asarray([0.10, 0.30])),
     )

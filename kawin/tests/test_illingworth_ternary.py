@@ -2969,6 +2969,7 @@ def _build_surrogate(**kwargs):
         "probe_start": np.asarray([0.20, 0.10], dtype=np.float64),
         "probe_end": np.asarray([0.40, 0.20], dtype=np.float64),
         "eta_samples": np.asarray([0.0, 0.5, 1.0], dtype=np.float64),
+        "validity_policy": "legacy",
     }
     params.update(kwargs)
     return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(**params)
@@ -2985,6 +2986,7 @@ def _build_seed_surrogate(**kwargs):
         "probe_samples_per_side": 2,
         "probe_boundary_search_step": 0.02,
         "probe_boundary_xtol": 1.0e-6,
+        "validity_policy": "legacy",
     }
     params.update(kwargs)
     return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(**params)
@@ -3083,6 +3085,7 @@ def _direct_continuous_surrogate(*, bulk_scale=10.0, invalid_bulk=False):
         diffusivities={"interface": interface_diffusivities, "general": bulk_diffusivities},
         diffusivity_interpolation="continuous_grid",
         diffusivity_bulk_grids=grids,
+        validity_policy="legacy",
     )
 
 
@@ -3123,6 +3126,7 @@ def _direct_nearest_surrogate(*, scale=1.0, invalid=False):
             "general": {phase: general_points for phase in ("ALPHA", "BETA")},
         },
         diffusivities={"interface": interface_diffusivities, "general": general_diffusivities},
+        validity_policy="legacy",
     )
 
 

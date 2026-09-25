@@ -24,6 +24,7 @@ from examples.ThermoCalc.training_data import (
     make_fecrni_demo_grid,
     sample_training_data,
 )
+from kawin.diffusion import DiffusivityDomainError, DiffusivityDomainStatus
 
 
 def _fecrni_config(**overrides):
@@ -1255,9 +1256,11 @@ def test_bulk_calculate_failures_are_optional_and_recorded(interpolation):
     assert failures == [{
         "phase": "BCC_A2", "composition": failed_point.tolist(),
         "temperature": 1373.0, "bulk_point_index": 4 if interpolation == "continuous_grid" else 1,
-        "error_type": "ThermoCalcSolveError",
-        "error": "TC-Python kinetics calculation failed: sample failure",
-    }]
+            "error_type": "ThermoCalcSolveError",
+            "error": "TC-Python kinetics calculation failed: sample failure",
+            "domain_status": "UNKNOWN",
+            "domain_reason": "source_calculation_failed",
+        }]
     assert loaded.metadata["requested_diffusivity_interpolation"] == interpolation
     assert loaded.metadata["effective_diffusivity_interpolation"] == (
         "simplex_linear" if interpolation == "continuous_grid" else interpolation
@@ -1392,7 +1395,7 @@ def test_invalid_bulk_validation_waits_for_all_queries_and_drops_nonfinite(monke
     assert "finite 2x2 matrix" in filtered.metadata["invalid_bulk_points"][0]["error"]
 
 
-def test_calculation_and_invalid_matrix_filters_are_independent():
+def test_calculation_and_invalid_matrix_filters_are_independent(tmp_path):
     class MixedBulkBackend(FakeThermoCalcBackend):
         def calculate_kinetics(self, x, T, phase, collect_diagnostics=False):
             if phase == "BCC_A2" and np.allclose(x, [0.25, 0.08], rtol=0, atol=1e-15):
@@ -1411,6 +1414,28 @@ def test_calculation_and_invalid_matrix_filters_are_independent():
     assert len(filtered.metadata["invalid_bulk_points"]) == 1
     assert filtered.metadata["failed_bulk_points"][0]["composition"] == [0.25, 0.08]
     assert filtered.metadata["invalid_bulk_points"][0]["composition"] == [0.35, 0.16]
+    domain = filtered.diffusivityValidity["general"]["BCC_A2"]
+    for point, expected in (([0.25, 0.08], DiffusivityDomainStatus.UNKNOWN),
+                            ([0.35, 0.16], DiffusivityDomainStatus.KNOWN_INVALID)):
+        assert domain.classify(point)[0] is expected
+        with pytest.raises(DiffusivityDomainError) as error:
+            filtered.getInterdiffusivity(point, phase="BCC_A2")
+        assert error.value.status is expected
+    fit_points, _ = filtered._fit_diffusivity_samples("general", "BCC_A2")
+    assert not any(np.allclose(point, [0.25, 0.08]) or np.allclose(point, [0.35, 0.16]) for point in fit_points)
+    path = tmp_path / "both_drop_validity_roundtrip.npz"
+    try:
+        filtered.save(path)
+        restored = type(filtered).load(path)
+    finally:
+        path.unlink(missing_ok=True)
+    restored_domain = restored.diffusivityValidity["general"]["BCC_A2"]
+    for point, expected, reason in (([0.25, 0.08], DiffusivityDomainStatus.UNKNOWN, "source_calculation_failed"),
+                                    ([0.35, 0.16], DiffusivityDomainStatus.KNOWN_INVALID, "zero_matrix_norm")):
+        exact = restored_domain._exact_index(point)
+        assert restored_domain.classify(point)[0] is expected
+        assert restored_domain.reasons[exact] == reason
+        assert not restored_domain.fit_usable[exact]
 
 
 def test_live_tc_python_one_point():

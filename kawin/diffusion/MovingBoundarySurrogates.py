@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - SciPy is a package dependency.
 
 from kawin.thermo import MulticomponentThermodynamics
 from ._spectral_validation import TERNARY_DIFFUSIVITY_POSITIVE_EIGENVALUE_TOL, TERNARY_DIFFUSIVITY_REAL_SPECTRUM_TOL
+from ._diffusivity_domain import DiffusivityDomain, DiffusivityDomainError, DiffusivityDomainStatus, _same_coordinate_mask, classify_source_matrix
 import tqdm
 
 _DIFFUSIVITY_INTERPOLATION_NEAREST = "nearest"
@@ -22,8 +23,15 @@ _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID = "continuous_grid"
 _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR = "simplex_linear"
 _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2 = "simplex_positive_2x2"
 
+_VALIDITY_POLICY_RAISE = "raise"
+_VALIDITY_POLICY_LEGACY = "legacy"
+
 DIFFUSIVITY_REL_TOL = 7e-8
 from examples.debugInPlace import debugInPlace
+
+
+class InterfaceDiffusivityConstructionError(ValueError):
+    """A strict full-surrogate interface trajectory is not solver-usable."""
 
 def _as_path_with_npz_suffix(path):
     path = Path(path)
@@ -107,6 +115,59 @@ def _coerce_diffusivity_interpolation(mode):
             "diffusivity_interpolation must be 'nearest', 'continuous_grid', 'simplex_linear', or 'simplex_positive_2x2'."
         )
     return mode
+
+
+def _coerce_validity_policy(policy):
+    """Normalize the production diffusivity-domain query policy."""
+    policy = _VALIDITY_POLICY_RAISE if policy is None else str(policy)
+    if policy not in {_VALIDITY_POLICY_RAISE, _VALIDITY_POLICY_LEGACY}:
+        raise ValueError("validity_policy must be 'raise' or 'legacy'.")
+    return policy
+
+
+def _default_validity_records(compositions, matrices):
+    """Infer conservative labels from supplied source matrices.
+
+    This only makes a spectral claim for finite matrices. A nonfinite source
+    result is unknown evidence, not evidence of a spinodal or invalid domain.
+    """
+    statuses, usable, reasons = zip(*(classify_source_matrix(matrix) for matrix in matrices))
+    return {
+        "coordinates": np.asarray(compositions, dtype=np.float64),
+        "statuses": np.asarray([status.value for status in statuses]),
+        "reasons": np.asarray(reasons),
+        "fit_usable": np.asarray(usable, dtype=bool),
+    }
+
+
+def _coerce_validity_records(records, compositions, matrices, label):
+    """Return a domain object, allowing explicit sidecar labels/provenance."""
+    if records is None:
+        records = _default_validity_records(compositions, matrices)
+    if not isinstance(records, dict):
+        raise ValueError(f"{label} validity records must be a mapping.")
+    coordinates = np.asarray(records.get("coordinates", compositions), dtype=np.float64)
+    statuses = records.get("statuses", records.get("status", None))
+    if statuses is None:
+        raise ValueError(f"{label} validity records must include statuses.")
+    statuses = np.asarray(statuses, dtype=object).copy()
+    reasons = np.asarray(["" for _ in coordinates] if records.get("reasons", records.get("reason", None)) is None
+                         else records.get("reasons", records.get("reason")), dtype=object).copy()
+    usable = np.asarray([True] * len(coordinates) if records.get("fit_usable", records.get("solver_usable", None)) is None
+                        else records.get("fit_usable", records.get("solver_usable")), dtype=bool).copy()
+    # Explicit provenance may establish a domain label, but cannot promote a
+    # source matrix that fails the production solver criterion into a fit.
+    for point, matrix in zip(np.asarray(compositions, dtype=np.float64), matrices):
+        matches = np.flatnonzero(_same_coordinate_mask(coordinates, point))
+        if not len(matches):
+            continue
+        source_status, source_usable, source_reason = classify_source_matrix(matrix)
+        for index in matches:
+            if source_status is not DiffusivityDomainStatus.VALID:
+                statuses[index] = source_status.value
+                reasons[index] = source_reason
+            usable[index] = bool(usable[index] and source_usable)
+    return DiffusivityDomain(coordinates, statuses, reasons=reasons, fit_usable=usable)
 
 
 def _signed_cuberoot(values):
@@ -1071,7 +1132,9 @@ class MergedPhaseDiffusivitySurrogate:
 
     The wrapper exposes only ``getInterdiffusivity`` for ``phase``. It is meant
     for three-phase moving-boundary bulk-diffusivity routing where the same
-    physical phase appears in two adjacent interface surrogates.
+    physical phase appears in two adjacent interface surrogates. Its default
+    strict validity policy distinguishes labeled domain support from the
+    numerically solver-usable interpolation subset.
     """
 
     def __init__(
@@ -1086,6 +1149,8 @@ class MergedPhaseDiffusivitySurrogate:
         min_composition=1e-10,
         metadata=None,
         merge_report=None,
+        diffusivity_validity=None,
+        validity_policy=_VALIDITY_POLICY_RAISE,
     ):
         self.elements = tuple(str(e) for e in elements)
         if len(self.elements) != 3:
@@ -1107,17 +1172,24 @@ class MergedPhaseDiffusivitySurrogate:
             self.min_composition,
             matrices=True,
         )
+        self.validity_policy = _coerce_validity_policy(validity_policy)
+        self.diffusivityValidity = {context: _coerce_validity_records(
+            None if diffusivity_validity is None else diffusivity_validity.get(context),
+            self.diffusivity_compositions[context], self.diffusivities[context],
+            f"merged {context}",
+        ) for context in _MERGED_DIFFUSIVITY_CONTEXTS}
         for context in _MERGED_DIFFUSIVITY_CONTEXTS:
             if self.diffusivities[context].shape[0] != self.diffusivity_compositions[context].shape[0]:
                 raise ValueError(f"diffusivity sample counts differ for context '{context}'.")
         self.metadata = {} if metadata is None else dict(metadata)
         self.merge_report = {} if merge_report is None else dict(merge_report)
+        self._fitSupport = {}
+        self._rebuild_fit_support_geometry()
         self._bulkDiffusivityInterpolators = (
             {
                 context: (_BulkDiffusivitySimplexLinear2D if self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR
                           else _BulkDiffusivitySimplexPositive2x2)(
-                    self.diffusivity_compositions[context],
-                    self.diffusivities[context],
+                    *self._fit_samples(context),
                 )
                 for context in _MERGED_DIFFUSIVITY_CONTEXTS
             }
@@ -1128,6 +1200,38 @@ class MergedPhaseDiffusivitySurrogate:
     def clearCache(self):
         """No-op cache hook for thermodynamics-provider compatibility."""
         return
+
+    def _fit_samples(self, context):
+        """Return only domain-valid matrices that meet solver usability."""
+        domain = self.diffusivityValidity[context]
+        mask = np.zeros(len(self.diffusivity_compositions[context]), dtype=bool)
+        seen = set()
+        for index, point in enumerate(self.diffusivity_compositions[context]):
+            exact = domain._exact_index(point)
+            mask[index] = exact is not None and domain.fit_usable[exact] and exact not in seen
+            if exact is not None:
+                seen.add(exact)
+        return self.diffusivity_compositions[context][mask], self.diffusivities[context][mask]
+
+    def _has_fit_support(self, context, point):
+        """Check the selected model's own solver-usable scattered support."""
+        support = self._fitSupport[context]
+        points = support["points"]
+        point = np.asarray(point, dtype=np.float64)
+        tolerance = 32.0 * np.finfo(np.float64).eps * max(1.0, float(np.max(np.abs(point))))
+        if np.any(np.all(np.abs(points - point) <= tolerance, axis=1)):
+            return True
+        triangulation = support["triangulation"]
+        return triangulation is not None and int(triangulation.find_simplex(point)) >= 0
+
+    def _rebuild_fit_support_geometry(self):
+        """Cache the solver-usable scattered support geometry for strict queries."""
+        for context in _MERGED_DIFFUSIVITY_CONTEXTS:
+            points, matrices = self._fit_samples(context)
+            triangulation = None
+            if Delaunay is not None and len(points) >= 3 and np.linalg.matrix_rank(points - points[0]) == 2:
+                triangulation = Delaunay(points)
+            self._fitSupport[context] = {"points": points, "matrices": matrices, "triangulation": triangulation}
 
     def getInterdiffusivity(self, x, T=None, phase=None, query_context=None, **kwargs):
         """
@@ -1145,12 +1249,29 @@ class MergedPhaseDiffusivitySurrogate:
         if values.shape[1] != 2:
             raise ValueError("getInterdiffusivity expects independent ternary compositions with shape (n, 2).")
         context = "interface" if query_context == "interface" else "general"
+        if self.validity_policy == _VALIDITY_POLICY_RAISE:
+            domain = self.diffusivityValidity[context]
+            for point in values:
+                status, reason = domain.classify(point)
+                if status != DiffusivityDomainStatus.VALID:
+                    raise DiffusivityDomainError(status, reason, composition=point, phase=self.phase, context=context)
+                if not self._has_fit_support(context, point):
+                    raise DiffusivityDomainError(
+                        DiffusivityDomainStatus.INSUFFICIENT_FIT_SUPPORT,
+                        "domain-valid query lacks solver-usable interpolation support",
+                        composition=point, phase=self.phase, context=context,
+                    )
         if self.diffusivityInterpolation in {_DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR, _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2}:
             out = self._bulkDiffusivityInterpolators[context].evaluate(values)
         else:
-            samples_x = self.diffusivity_compositions[context]
+            samples_x, samples_d = ((self._fitSupport[context]["points"], self._fitSupport[context]["matrices"])
+                                    if self.validity_policy == _VALIDITY_POLICY_RAISE
+                                    else (self.diffusivity_compositions[context], self.diffusivities[context]))
+            if not len(samples_x):
+                raise DiffusivityDomainError(DiffusivityDomainStatus.INSUFFICIENT_FIT_SUPPORT,
+                                             "no solver-usable diffusivity samples", phase=self.phase, context=context)
             indices = np.argmin(np.sum((values[:, np.newaxis, :] - samples_x[np.newaxis, :, :]) ** 2, axis=2), axis=1)
-            out = self.diffusivities[context][indices]
+            out = samples_d[indices]
         return out[0].copy() if single else out.copy()
 
     def _unsupported(self, *args, **kwargs):
@@ -1334,6 +1455,26 @@ def _merge_report_dict(
     }
 
 
+def _merge_phase_context_validity(sources, phase, context):
+    """Combine parent validity ledgers without rebuilding them from fit rows."""
+    records = []
+    for source in sources:
+        ledger = getattr(source, "diffusivityValidity", {}).get(context, {})
+        domain = ledger.get(phase) if isinstance(ledger, dict) else None
+        if domain is None:
+            compositions, matrices = _phase_diffusivity_samples(source, phase, context)
+            records.append(_default_validity_records(compositions, matrices))
+        else:
+            records.append({
+                "coordinates": domain.coordinates, "statuses": [status.value for status in domain.statuses],
+                "reasons": domain.reasons, "fit_usable": domain.fit_usable,
+            })
+    return {
+        key: np.concatenate([np.asarray(record[key]) for record in records], axis=0)
+        for key in ("coordinates", "statuses", "reasons", "fit_usable")
+    }
+
+
 def merge_phase_diffusivity_surrogates(
     surrogate_a,
     surrogate_b,
@@ -1390,6 +1531,7 @@ def merge_phase_diffusivity_surrogates(
 
     merged_compositions = {}
     merged_diffusivities = {}
+    merged_validity = {}
     contexts = {}
     for context in ("interface", "general"):
         x, d, context_report = _merge_phase_context_samples(
@@ -1403,6 +1545,7 @@ def merge_phase_diffusivity_surrogates(
         )
         merged_compositions[context] = x
         merged_diffusivities[context] = d
+        merged_validity[context] = _merge_phase_context_validity(sources, phase, context)
         contexts[context] = context_report
 
     merge_report = {
@@ -1441,6 +1584,7 @@ def merge_phase_diffusivity_surrogates(
         diffusivities=merged_diffusivities,
         diffusivity_interpolation=diffusivity_interpolation,
         min_composition=min_composition,
+        diffusivity_validity=merged_validity,
         metadata={
             "source": "merge_phase_diffusivity_surrogates",
             "source_tieline_phases": (
@@ -1472,6 +1616,9 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
     ``diffusivity_interpolation='simplex_positive_2x2'`` uses stable positive
     spectral coordinates for the same scattered bulk support and for interface
     eta interpolation, preserving positive real eigenvalues by construction.
+    By default, ``validity_policy='raise'`` checks labeled domain evidence
+    before evaluation and separately requires solver-usable fit support;
+    ``legacy`` retains the historical fallback and clamping behavior.
     """
 
     def __init__(
@@ -1488,6 +1635,9 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         metadata=None,
         diffusivity_interpolation=_DIFFUSIVITY_INTERPOLATION_NEAREST,
         diffusivity_bulk_grids=None,
+        diffusivity_validity=None,
+        validity_policy=_VALIDITY_POLICY_RAISE,
+        interface_query_tolerance=None,
     ):
         self.elements = tuple(str(e) for e in elements)
         self.phases = tuple(str(p) for p in phases)
@@ -1524,7 +1674,24 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         self.diffusivities = self._coerce_diffusivity_samples(diffusivities, "diffusivities", matrices=True)
         self.metadata = {} if metadata is None else dict(metadata)
         self.diffusivityInterpolation = _coerce_diffusivity_interpolation(diffusivity_interpolation)
+        self.validity_policy = _coerce_validity_policy(validity_policy)
+        default_interface_tolerance = float(self.metadata.get("tieline_query_tolerance", 1e-8))
+        self.interface_query_tolerance = default_interface_tolerance if interface_query_tolerance is None else float(interface_query_tolerance)
+        if not np.isfinite(self.interface_query_tolerance) or self.interface_query_tolerance < 0.0:
+            raise ValueError("interface_query_tolerance must be finite and nonnegative.")
+        self.diffusivityValidity = {context: {} for context in ("interface", "general")}
+        for context in ("interface", "general"):
+            for phase in self.tieline_phases:
+                records = None if diffusivity_validity is None else diffusivity_validity.get(context, {}).get(phase)
+                self.diffusivityValidity[context][phase] = _coerce_validity_records(
+                    records, self.diffusivity_compositions[context][phase], self.diffusivities[context][phase],
+                    f"{context} diffusivity phase {phase}",
+                )
+        if self.validity_policy == _VALIDITY_POLICY_RAISE:
+            self._validate_strict_interface_trajectories()
         self.diffusivityBulkGridAxes = None
+        self._fitSupport = {}
+        self._rebuild_fit_support_geometry()
         self._interfaceDiffusivityInterpolators = {}
         self._bulkDiffusivityInterpolators = {}
         if self.diffusivityInterpolation == _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID:
@@ -1560,6 +1727,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         diffusivity_interpolation=_DIFFUSIVITY_INTERPOLATION_NEAREST,
         skip_failed_bulk_calculations=False,
         drop_invalid_bulk_matrices=False,
+        validity_policy=_VALIDITY_POLICY_RAISE,
+        interface_query_tolerance=None,
         min_composition=1e-10,
         thermodynamics_kwargs=None,
         validation_database=None,
@@ -1589,11 +1758,16 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         ``_validate_positive_2x2_matrix``. Rejected samples are returned in
         ``metadata['invalid_bulk_points']`` and trigger the same interpolation
         fallback when they leave a grid incomplete.
+        Failed/nonfinite source results are retained as ``UNKNOWN`` validity
+        sidecar evidence. Finite complex or nonpositive spectra are retained
+        as ``KNOWN_INVALID`` with their spectral reason, independently of the
+        solver-usability threshold used for interpolation fitting.
         """
         if tieline_phases is None:
             raise ValueError("tieline_phases must be provided explicitly.")
         tieline_phases = _validate_tieline_phases(tieline_phases)
         diffusivity_interpolation = _coerce_diffusivity_interpolation(diffusivity_interpolation)
+        validity_policy = _coerce_validity_policy(validity_policy)
         bulk_grid_axes = None
         if diffusivity_interpolation == _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID:
             if diffusivity_bulk_grids is None:
@@ -1861,6 +2035,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                             "bulk_point_index": index,
                             "error_type": type(exc).__name__,
                             "error": str(exc),
+                            "domain_status": DiffusivityDomainStatus.UNKNOWN.value,
+                            "domain_reason": "source_calculation_failed",
                         })
                         construction_records.append({"kind": "kinetics", "stage": "bulk", "outcome": "failed", "context": "bulk", "phase": phase, "composition": point.tolist(), "bulk_point_index": index, "error_type": type(exc).__name__, "error": str(exc)})
                         continue
@@ -1883,6 +2059,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                             debug_on_failure=False,
                         )
                     except (TypeError, ValueError, np.linalg.LinAlgError) as exc:
+                        domain_status, _, domain_reason = classify_source_matrix(matrix)
                         invalid_bulk_points.append({
                             "phase": phase,
                             "composition": point.tolist(),
@@ -1891,6 +2068,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                             "error_type": type(exc).__name__,
                             "error": str(exc),
                             "diffusivity_repr": repr(matrix),
+                            "domain_status": domain_status.value,
+                            "domain_reason": domain_reason,
                         })
                         construction_records.append({"kind": "kinetics", "stage": "bulk", "outcome": "invalid", "context": "bulk", "phase": phase, "composition": point.tolist(), "bulk_point_index": index, "error_type": type(exc).__name__, "error": str(exc)})
                         continue
@@ -1917,6 +2096,20 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             bulk_grid_axes = None
         general_diff_x = {phase: np.asarray(values, dtype=np.float64) for phase, values in general_diff_x.items()}
         general_diff_d = {phase: np.asarray(values, dtype=np.float64) for phase, values in general_diff_d.items()}
+        diffusivity_validity = {"interface": {}, "general": {}}
+        for phase in tieline_phases:
+            interface_records = _default_validity_records(interface_diff_x[phase], interface_diff_d[phase])
+            general_records = _default_validity_records(general_diff_x[phase], general_diff_d[phase])
+            sidecars = [record for record in failed_bulk_points + invalid_bulk_points if record["phase"] == phase]
+            if sidecars:
+                general_records = {
+                    "coordinates": np.vstack((general_records["coordinates"], np.asarray([record["composition"] for record in sidecars], dtype=np.float64))),
+                    "statuses": np.concatenate((general_records["statuses"], np.asarray([record["domain_status"] for record in sidecars]))),
+                    "reasons": np.concatenate((general_records["reasons"], np.asarray([record["domain_reason"] for record in sidecars]))),
+                    "fit_usable": np.concatenate((general_records["fit_usable"], np.zeros(len(sidecars), dtype=bool))),
+                }
+            diffusivity_validity["interface"][phase] = interface_records
+            diffusivity_validity["general"][phase] = general_records
 
         return cls(
             elements=elements,
@@ -1930,6 +2123,9 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             min_composition=min_composition,
             diffusivity_interpolation=diffusivity_interpolation,
             diffusivity_bulk_grids=bulk_grid_axes,
+            diffusivity_validity=diffusivity_validity,
+            validity_policy=validity_policy,
+            interface_query_tolerance=interface_query_tolerance,
             metadata={
                 **sampling_metadata,
                 "precipitate_phase": precipitate_phase,
@@ -1993,8 +2189,6 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 if matrices:
                     if values.ndim != 3 or values.shape[1:] != (2, 2):
                         raise ValueError(f"{name}[{context!r}][{phase!r}] must have shape (n_samples, 2, 2).")
-                    for i, matrix in enumerate(values):
-                        _validate_2x2_matrix(matrix, f"{name}[{context!r}][{phase!r}][{i}]")
                 else:
                     if values.ndim != 2 or values.shape[1] != 2:
                         raise ValueError(f"{name}[{context!r}][{phase!r}] must have shape (n_samples, 2).")
@@ -2004,6 +2198,35 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                     raise ValueError(f"{name}[{context!r}][{phase!r}] must contain at least one sample.")
                 out[context][phase] = values.copy()
         return out
+
+    def _validate_strict_interface_trajectories(self):
+        """Require every full-surrogate interface eta sample before PCHIP build.
+
+        Interface equilibrium samples are expected to be wholly admissible. A
+        rejected sample is therefore a construction error, never a masked gap
+        that an interpolator may span.
+        """
+        for phase in self.tieline_phases:
+            points = self.diffusivity_compositions["interface"][phase]
+            matrices = self.diffusivities["interface"][phase]
+            if len(points) != self.eta_samples.size:
+                raise InterfaceDiffusivityConstructionError(
+                    f"interface phase={phase} has {len(points)} diffusivity samples for {len(self.eta_samples)} eta samples."
+                )
+            domain = self.diffusivityValidity["interface"][phase]
+            for index, (eta, point, matrix) in enumerate(zip(self.eta_samples, points, matrices)):
+                exact = domain._exact_index(point)
+                status = DiffusivityDomainStatus.UNKNOWN if exact is None else domain.statuses[exact]
+                usable = False if exact is None else bool(domain.fit_usable[exact])
+                reason = "missing interface validity provenance" if exact is None else str(domain.reasons[exact])
+                source_status, source_usable, source_reason = classify_source_matrix(matrix)
+                if status is not DiffusivityDomainStatus.VALID or not usable or source_status is not DiffusivityDomainStatus.VALID or not source_usable:
+                    detail = reason or source_reason
+                    raise InterfaceDiffusivityConstructionError(
+                        f"interface diffusivity construction failed: phase={phase}, context=interface, index={index}, "
+                        f"eta={float(eta):.16g}, composition={point.tolist()}, domain_status={status.value}, "
+                        f"fit_usable={usable}, reason={detail}, matrix={np.asarray(matrix).tolist()}"
+                    )
 
     def _build_continuous_diffusivity_interpolators(self, diffusivity_bulk_grids):
         """
@@ -2030,11 +2253,20 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 raise ValueError(
                     f"continuous bulk diffusivity compositions for phase {phase} must be ordered on diffusivity_bulk_grids."
                 )
+            interface_fit = self._fit_diffusivity_samples("interface", phase)
+            general_fit = self._fit_diffusivity_samples("general", phase)
+            if len(interface_fit[0]) != self.eta_samples.size or len(general_fit[0]) != expected_points:
+                for index, matrix in enumerate(self.diffusivities["general"][phase]):
+                    _validate_positive_2x2_matrix(matrix, f"continuous bulk diffusivity sample {index}", debug_on_failure=False)
+                raise ValueError(
+                    f"continuous_grid diffusivity for phase {phase} requires a complete solver-usable valid grid; "
+                    "use scattered interpolation for masked domain evidence."
+                )
 
             interface = _InterfaceDiffusivitySpline1D(
                 self.eta_samples,
                 self.tieline_compositions[phase],
-                self.diffusivities["interface"][phase],
+                interface_fit[1],
             )
             bulk = _BulkDiffusivityGridSpline2D(
                 axes[0],
@@ -2045,6 +2277,39 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             bulk.validate_dense(f"continuous bulk diffusivity for phase {phase}")
             self._interfaceDiffusivityInterpolators[phase] = interface
             self._bulkDiffusivityInterpolators[phase] = bulk
+
+    def _fit_diffusivity_samples(self, context, phase):
+        """Return source rows that are valid evidence and solver-usable."""
+        domain = self.diffusivityValidity[context][phase]
+        points = self.diffusivity_compositions[context][phase]
+        mask = np.zeros(len(points), dtype=bool)
+        seen = set()
+        for index, point in enumerate(points):
+            exact = domain._exact_index(point)
+            mask[index] = exact is not None and domain.fit_usable[exact] and exact not in seen
+            if exact is not None:
+                seen.add(exact)
+        return points[mask], self.diffusivities[context][phase][mask]
+
+    def _has_general_fit_support(self, phase, point):
+        """Check fit support independently of the validity-domain classifier."""
+        support = self._fitSupport[phase]
+        points = support["points"]
+        point = np.asarray(point, dtype=np.float64)
+        tolerance = 32.0 * np.finfo(np.float64).eps * max(1.0, float(np.max(np.abs(point))))
+        if np.any(np.all(np.abs(points - point) <= tolerance, axis=1)):
+            return True
+        triangulation = support["triangulation"]
+        return triangulation is not None and int(triangulation.find_simplex(point)) >= 0
+
+    def _rebuild_fit_support_geometry(self):
+        """Cache general solver-usable fit geometry; NPZ load rebuilds it normally."""
+        for phase in self.tieline_phases:
+            points, matrices = self._fit_diffusivity_samples("general", phase)
+            triangulation = None
+            if Delaunay is not None and len(points) >= 3 and np.linalg.matrix_rank(points - points[0]) == 2:
+                triangulation = Delaunay(points)
+            self._fitSupport[phase] = {"points": points, "matrices": matrices, "triangulation": triangulation}
 
     def _build_simplex_linear_diffusivity_interpolators(self):
         """
@@ -2063,8 +2328,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 self.diffusivities["interface"][phase],
             )
             bulk = _BulkDiffusivitySimplexLinear2D(
-                self.diffusivity_compositions["general"][phase],
-                self.diffusivities["general"][phase],
+                *self._fit_diffusivity_samples("general", phase),
             )
             interface.validate_dense(f"simplex-linear interface diffusivity for phase {phase}")
             bulk.validate_dense(f"simplex-linear bulk diffusivity for phase {phase}")
@@ -2077,10 +2341,10 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             if self.diffusivity_compositions["interface"][phase].shape[0] != self.eta_samples.size:
                 raise ValueError(f"simplex_positive_2x2 interface diffusivity samples for phase {phase} must match eta_samples.")
             interface = _InterfaceDiffusivitySpectral2x2(
-                self.eta_samples, self.tieline_compositions[phase], self.diffusivities["interface"][phase]
+                self.eta_samples, self.tieline_compositions[phase], self._fit_diffusivity_samples("interface", phase)[1]
             )
             bulk = _BulkDiffusivitySimplexPositive2x2(
-                self.diffusivity_compositions["general"][phase], self.diffusivities["general"][phase]
+                *self._fit_diffusivity_samples("general", phase)
             )
             interface.validate_dense(f"spectral interface diffusivity for phase {phase}")
             bulk.validate_dense(f"spectral bulk diffusivity for phase {phase}")
@@ -2104,6 +2368,51 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         if phase not in self.tieline_phases:
             raise ValueError(f"Unknown phase '{phase}'. Expected one of {self.tieline_phases}.")
         return phase
+
+    def _interface_domain_status(self, phase, point):
+        """Classify an interface query without clamping it onto the eta curve."""
+        curve = self.tieline_compositions[phase]
+        domain = self.diffusivityValidity["interface"][phase]
+        exact = domain._exact_index(point)
+        if exact is not None:
+            status = domain.statuses[exact]
+            if status != DiffusivityDomainStatus.VALID:
+                return status, str(domain.reasons[exact] or "exact_labeled_coordinate")
+            if not domain.fit_usable[exact]:
+                return DiffusivityDomainStatus.INSUFFICIENT_FIT_SUPPORT, "exact valid interface point is not solver-usable"
+            return DiffusivityDomainStatus.VALID, "exact valid interface coordinate"
+        segments = curve[1:] - curve[:-1]
+        best = None
+        for index, segment in enumerate(segments):
+            squared = float(np.dot(segment, segment))
+            fraction = 0.0 if squared == 0.0 else float(np.clip(np.dot(point - curve[index], segment) / squared, 0.0, 1.0))
+            projected = curve[index] + fraction * segment
+            residual = float(np.linalg.norm(point - projected))
+            candidate = (residual, index, fraction, float(np.linalg.norm(segment)))
+            if best is None or candidate < best:
+                best = candidate
+        residual, index, fraction, segment_length = best
+        tolerance = max(self.interface_query_tolerance,
+                        32.0 * np.finfo(np.float64).eps * max(1.0, float(np.linalg.norm(point)), segment_length))
+        if residual > tolerance:
+            return DiffusivityDomainStatus.OUTSIDE_SUPPORT, "outside interface endpoint-curve tolerance"
+        endpoint_statuses = []
+        endpoint_usable = []
+        for composition in (curve[index], curve[index + 1]):
+            exact = domain._exact_index(composition)
+            if exact is None:
+                return DiffusivityDomainStatus.UNKNOWN, "interface endpoint has no validity provenance"
+            endpoint_statuses.append(domain.statuses[exact])
+            endpoint_usable.append(domain.fit_usable[exact])
+        labels = set(endpoint_statuses)
+        if len(labels) != 1:
+            return DiffusivityDomainStatus.BOUNDARY_AMBIGUOUS, "mixed interface validity segment"
+        status = labels.pop()
+        if status != DiffusivityDomainStatus.VALID:
+            return status, f"{status.value.lower()} interface segment"
+        if not all(endpoint_usable):
+            return DiffusivityDomainStatus.INSUFFICIENT_FIT_SUPPORT, "domain-valid interface segment lacks solver-usable fit support"
+        return DiffusivityDomainStatus.VALID, "valid interface segment"
 
     def interface_compositions(self, eta):
         """Returns the phase-ordered independent interface compositions."""
@@ -2296,6 +2605,18 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         values = np.atleast_2d(values)
         if values.shape[1] != 2:
             raise ValueError("getInterdiffusivity expects independent ternary compositions with shape (n, 2).")
+        if self.validity_policy == _VALIDITY_POLICY_RAISE:
+            domain = self.diffusivityValidity[context][phase]
+            for point in values:
+                if context == "interface":
+                    status, reason = self._interface_domain_status(phase, point)
+                else:
+                    status, reason = domain.classify(point)
+                    if status == DiffusivityDomainStatus.VALID and not self._has_general_fit_support(phase, point):
+                        status, reason = (DiffusivityDomainStatus.INSUFFICIENT_FIT_SUPPORT,
+                                          "domain-valid query lacks solver-usable interpolation support")
+                if status != DiffusivityDomainStatus.VALID:
+                    raise DiffusivityDomainError(status, reason, composition=point, phase=phase, context=context)
         if self.diffusivityInterpolation in {
             _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID,
             _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR,
@@ -2307,8 +2628,14 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 out = self._bulkDiffusivityInterpolators[phase].evaluate(values)
             return out[0].copy() if single else out.copy()
 
-        samples_x = self.diffusivity_compositions[context][phase]
-        samples_d = self.diffusivities[context][phase]
+        samples_x, samples_d = (
+            (self._fitSupport[phase]["points"], self._fitSupport[phase]["matrices"])
+            if self.validity_policy == _VALIDITY_POLICY_RAISE and context == "general"
+            else (self.diffusivity_compositions[context][phase], self.diffusivities[context][phase])
+        )
+        if not len(samples_x):
+            raise DiffusivityDomainError(DiffusivityDomainStatus.INSUFFICIENT_FIT_SUPPORT,
+                                         "no solver-usable diffusivity samples", phase=phase, context=context)
         deltas = values[:, np.newaxis, :] - samples_x[np.newaxis, :, :]
         indices = np.argmin(np.sum(deltas * deltas, axis=2), axis=1)
         out = samples_d[indices]
@@ -2742,6 +3069,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             "tieline_compositions": np.asarray([self.tieline_compositions[p] for p in self.tieline_phases], dtype=np.float64),
             "metadata_json": np.asarray(json.dumps(self.metadata, sort_keys=True)),
             "diffusivity_interpolation": np.asarray(self.diffusivityInterpolation),
+            "validity_policy": np.asarray(self.validity_policy),
+            "interface_query_tolerance": np.asarray(self.interface_query_tolerance, dtype=np.float64),
         }
         if self.diffusivityBulkGridAxes is not None:
             arrays["diffusivity_bulk_grid_axis_0"] = self.diffusivityBulkGridAxes[0]
@@ -2750,6 +3079,11 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             for i, phase in enumerate(self.tieline_phases):
                 arrays[f"diffusivity_compositions_{context}_{i}"] = self.diffusivity_compositions[context][phase]
                 arrays[f"diffusivities_{context}_{i}"] = self.diffusivities[context][phase]
+                validity = self.diffusivityValidity[context][phase]
+                arrays[f"diffusivity_validity_coordinates_{context}_{i}"] = validity.coordinates
+                arrays[f"diffusivity_validity_statuses_{context}_{i}"] = np.asarray([status.value for status in validity.statuses])
+                arrays[f"diffusivity_validity_reasons_{context}_{i}"] = validity.reasons.astype(str)
+                arrays[f"diffusivity_validity_fit_usable_{context}_{i}"] = validity.fit_usable
         np.savez_compressed(path, **arrays)
 
     @classmethod
@@ -2764,10 +3098,19 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             tieline_compositions = {phase: tieline_array[i] for i, phase in enumerate(tieline_phases)}
             diffusivity_compositions = {"interface": {}, "general": {}}
             diffusivities = {"interface": {}, "general": {}}
+            diffusivity_validity = {"interface": {}, "general": {}}
             for context in ("interface", "general"):
                 for i, phase in enumerate(tieline_phases):
                     diffusivity_compositions[context][phase] = np.asarray(data[f"diffusivity_compositions_{context}_{i}"], dtype=np.float64)
                     diffusivities[context][phase] = np.asarray(data[f"diffusivities_{context}_{i}"], dtype=np.float64)
+                    validity_prefix = f"diffusivity_validity_coordinates_{context}_{i}"
+                    if validity_prefix in data:
+                        diffusivity_validity[context][phase] = {
+                            "coordinates": np.asarray(data[validity_prefix], dtype=np.float64),
+                            "statuses": np.asarray(data[f"diffusivity_validity_statuses_{context}_{i}"], dtype=str),
+                            "reasons": np.asarray(data[f"diffusivity_validity_reasons_{context}_{i}"], dtype=str),
+                            "fit_usable": np.asarray(data[f"diffusivity_validity_fit_usable_{context}_{i}"], dtype=bool),
+                        }
             metadata = json.loads(str(data["metadata_json"].tolist()))
             diffusivity_interpolation = (
                 _DIFFUSIVITY_INTERPOLATION_NEAREST
@@ -2793,4 +3136,11 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 metadata=metadata,
                 diffusivity_interpolation=diffusivity_interpolation,
                 diffusivity_bulk_grids=diffusivity_bulk_grids,
+                diffusivity_validity=diffusivity_validity,
+                validity_policy=(
+                    _VALIDITY_POLICY_RAISE if "validity_policy" not in data else str(data["validity_policy"].tolist())
+                ),
+                interface_query_tolerance=(
+                    None if "interface_query_tolerance" not in data else float(data["interface_query_tolerance"])
+                ),
             )

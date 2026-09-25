@@ -270,9 +270,10 @@ def test_cached_dataset_runs_through_actual_simplex_linear_surrogate():
             tieline_compositions={"ALPHA": interface, "BETA": interface + np.asarray([0.1, 0.0])},
             diffusivity_compositions={"interface": {"ALPHA": interface, "BETA": interface},
                                       "general": {"ALPHA": training.compositions, "BETA": training.compositions}},
-            diffusivities={"interface": {"ALPHA": np.asarray([POSITIVE, POSITIVE]), "BETA": np.asarray([POSITIVE, POSITIVE])},
-                           "general": {"ALPHA": training.matrices, "BETA": training.matrices}},
-            diffusivity_interpolation="simplex_linear",
+                diffusivities={"interface": {"ALPHA": np.asarray([POSITIVE, POSITIVE]), "BETA": np.asarray([POSITIVE, POSITIVE])},
+                               "general": {"ALPHA": training.matrices, "BETA": training.matrices}},
+                diffusivity_interpolation="simplex_linear",
+                validity_policy="legacy",
         )
         return ThermodynamicsPredictor(surrogate)
 
