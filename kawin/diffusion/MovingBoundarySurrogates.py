@@ -684,7 +684,14 @@ class _BulkDiffusivitySimplexPositive2x2:
             raise FloatingPointError("spectral simplex interpolation has no directional fallback.")
         return directions[int(candidates[np.argmin(vertices[candidates])])]
 
-    def evaluate(self, values):
+    def _evaluate_scalar_reference(self, values):
+        """Evaluate with the original per-query algorithm for regression checks.
+
+        This private reference path intentionally retains the scalar control
+        flow, including nearest and directional fallbacks.  Production callers
+        use :meth:`evaluate`; tests and performance diagnostics use this method
+        to establish numerical equivalence with the pre-vectorization logic.
+        """
         values = np.asarray(values, dtype=np.float64)
         simplices = self._triangulation.find_simplex(values)
         result = np.empty((len(values), 2, 2), dtype=np.float64)
@@ -703,6 +710,108 @@ class _BulkDiffusivitySimplexPositive2x2:
                 if "directional fallback" not in str(error):
                     raise
                 result[index] = _reconstruct_positive_2x2(parameters, self._direction_fallback(vertices, weights), f"spectral simplex query {index}")
+        return result
+
+    def evaluate(self, values):
+        """Evaluate bulk matrices in batches while preserving scalar safeguards.
+
+        Delaunay lookup, barycentric interpolation, and ordinary positive
+        spectral reconstruction are vectorized across all in-hull queries.
+        Out-of-hull queries retain nearest-sample fallback.  Rows near a
+        directional cancellation or a floating-point reconstruction guard are
+        delegated to :meth:`_evaluate_scalar_reference` so their legacy
+        fallback and exception behavior remains authoritative.
+        """
+        values = np.asarray(values, dtype=np.float64)
+        simplices = self._triangulation.find_simplex(values)
+        result = np.empty((len(values), 2, 2), dtype=np.float64)
+        in_hull = simplices >= 0
+
+        if np.any(~in_hull):
+            nearest = np.rint(self._nearest(values[~in_hull])).astype(np.intp)
+            result[~in_hull] = self.matrices[nearest]
+        if not np.any(in_hull):
+            return result
+
+        query_indices = np.flatnonzero(in_hull)
+        query_simplices = simplices[in_hull]
+        transforms = self._triangulation.transform[query_simplices]
+        local_points = values[in_hull]
+        barycentric = np.einsum(
+            "nij,nj->ni",
+            transforms[:, :2, :],
+            local_points - transforms[:, 2, :],
+            optimize=True,
+        )
+        weights = np.empty((len(local_points), 3), dtype=np.float64)
+        weights[:, :2] = barycentric
+        weights[:, 2] = 1.0 - np.sum(barycentric, axis=1)
+        vertices = self._triangulation.simplices[query_simplices]
+        parameters = np.einsum("ni,nij->nj", weights, self._parameters[vertices], optimize=True)
+        directions = np.einsum("ni,nij->nj", weights, self._directions[vertices], optimize=True)
+
+        # Reconstruct the same positive-real representation as the scalar
+        # helper. Any row that could take a scalar guard/fallback path remains
+        # scalar so speed never changes admissibility semantics.
+        with np.errstate(over="ignore", under="ignore", invalid="ignore", divide="ignore"):
+            eigenvalues = np.sort(np.exp(parameters[:, :2]), axis=1)
+            low, high = eigenvalues[:, 0], eigenvalues[:, 1]
+            mean = 0.5 * (low + high)
+            delta = 0.5 * (high - low)
+            skew = mean * np.sinh(parameters[:, 2])
+            radius = np.hypot(delta, skew)
+            direction_norm = np.hypot(directions[:, 0], directions[:, 1])
+        direction_threshold = 64.0 * np.finfo(np.float64).eps * np.maximum(radius, np.finfo(np.float64).tiny)
+        scalar_rows = (
+            ~np.all(np.isfinite(parameters), axis=1)
+            | ~np.all(np.isfinite(directions), axis=1)
+            | ~np.all(np.isfinite(eigenvalues), axis=1)
+            | (low <= 0.0)
+            | (high <= 0.0)
+            | ~np.isfinite(mean)
+            | ~np.isfinite(delta)
+            | ~np.isfinite(skew)
+            | ~np.isfinite(radius)
+            | (mean <= 0.0)
+            | ((radius != 0.0) & (direction_norm <= direction_threshold))
+        )
+
+        vector_rows = ~scalar_rows
+        if np.any(vector_rows):
+            vector_result = np.empty((np.count_nonzero(vector_rows), 2, 2), dtype=np.float64)
+            vector_mean = mean[vector_rows]
+            vector_radius = radius[vector_rows]
+            vector_direction_norm = direction_norm[vector_rows]
+            vector_directions = directions[vector_rows]
+            vector_delta = delta[vector_rows]
+            vector_skew = skew[vector_rows]
+            non_scalar = vector_radius != 0.0
+            vector_result[:, 0, 0] = vector_mean
+            vector_result[:, 1, 1] = vector_mean
+            vector_result[:, 0, 1] = 0.0
+            vector_result[:, 1, 0] = 0.0
+            if np.any(non_scalar):
+                x, y = (
+                    vector_radius[non_scalar, None] * vector_directions[non_scalar] /
+                    vector_direction_norm[non_scalar, None]
+                ).T
+                high_values = high[vector_rows][non_scalar]
+                low_values = low[vector_rows][non_scalar]
+                delta_values = vector_delta[non_scalar]
+                diagonal_a = np.where(x >= 0.0, high_values + (x - delta_values), low_values + (delta_values + x))
+                diagonal_d = np.where(x >= 0.0, low_values + (delta_values - x), high_values - (delta_values + x))
+                vector_result[non_scalar, 0, 0] = diagonal_a
+                vector_result[non_scalar, 1, 1] = diagonal_d
+                vector_result[non_scalar, 0, 1] = y + vector_skew[non_scalar]
+                vector_result[non_scalar, 1, 0] = y - vector_skew[non_scalar]
+            finite_result = np.all(np.isfinite(vector_result), axis=(1, 2))
+            local_vector_indices = np.flatnonzero(vector_rows)
+            result[query_indices[local_vector_indices[finite_result]]] = vector_result[finite_result]
+            scalar_rows[local_vector_indices[~finite_result]] = True
+
+        if np.any(scalar_rows):
+            fallback_indices = query_indices[scalar_rows]
+            result[fallback_indices] = self._evaluate_scalar_reference(values[fallback_indices])
         return result
 
     def validate_dense(self, label):

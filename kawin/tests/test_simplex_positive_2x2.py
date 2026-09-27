@@ -10,7 +10,11 @@ from kawin.diffusion.MovingBoundarySurrogates import (
     _reconstruct_positive_2x2,
 )
 from kawin.diffusion import TernaryMovingBoundaryThermodynamicsSurrogate
-from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import _validate_ternary_diffusivity_matrix
+from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import (
+    MovingBoundaryIllingworthTernaryFD1DModel,
+    _validate_ternary_diffusivity_matrix,
+)
+from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 
 
 def _matrix(low, high, k=0.0, phi=0.0):
@@ -100,6 +104,37 @@ def test_bulk_vertices_random_barycentric_queries_and_global_tied_fallback():
     np.testing.assert_allclose(midpoint, expected, rtol=4e-12, atol=1e-30)
 
 
+def test_vectorized_bulk_evaluator_matches_scalar_reference_in_hull_and_out_of_hull():
+    points = np.asarray(((0., 0.), (1., 0.), (0., 1.)))
+    matrices = np.asarray((_matrix(1e-9, 4e-9, 2e-9, 0.), _matrix(1e-9, 4e-9, 2e-9, np.pi),
+                           _matrix(2e-9, 8e-9, 6e-9, 1.2)))
+    interpolator = _BulkDiffusivitySimplexPositive2x2(points, matrices)
+    rng = np.random.default_rng(90210)
+    in_hull = rng.dirichlet((1., 1., 1.), size=500) @ points
+    queries = np.vstack((points, in_hull, [[0.5, 0.0], [1.5, 0.2], [-0.2, 0.4]]))
+    np.testing.assert_allclose(
+        interpolator.evaluate(queries),
+        interpolator._evaluate_scalar_reference(queries),
+        rtol=4e-12,
+        atol=1e-30,
+    )
+
+
+def test_vectorized_bulk_evaluator_preserves_scalar_underflow_error():
+    points = np.asarray(((0., 0.), (1., 0.), (0., 1.)))
+    interpolator = _BulkDiffusivitySimplexPositive2x2(
+        points,
+        np.asarray((_matrix(1e-9, 4e-9, 2e-9, 0.),) * 3),
+    )
+    interpolator._parameters[0, 0] = -1000.0
+    query = points[[0]]
+    with pytest.raises(FloatingPointError) as scalar_error:
+        interpolator._evaluate_scalar_reference(query)
+    with pytest.raises(FloatingPointError) as vector_error:
+        interpolator.evaluate(query)
+    assert str(vector_error.value) == str(scalar_error.value)
+
+
 def test_direction_fallback_uses_scale_aware_scores_and_global_ties():
     points = np.asarray(((0., 0.), (1., 0.), (0., 1.)))
     interpolator = _BulkDiffusivitySimplexPositive2x2(points, np.asarray((_matrix(1e-9, 2e-9),) * 3))
@@ -163,3 +198,34 @@ def test_public_interface_path_dense_positive_and_save_load_round_trip(tmp_path)
     for context, query in (("interface", points[[0, 25, -1]]), ("general", np.asarray(((.20, .14),)) )):
         np.testing.assert_allclose(loaded.getInterdiffusivity(query, 1000., phase="ALPHA", query_context=context),
                                    surrogate.getInterdiffusivity(query, 1000., phase="ALPHA", query_context=context), rtol=4e-12, atol=1e-30)
+
+
+@pytest.mark.parametrize("bulk_diffusivity_mode", ["composition_dependent_lagged", "composition_dependent_implicit"])
+def test_vectorized_positive_bulk_evaluator_matches_scalar_solver_step(bulk_diffusivity_mode):
+    """The vectorized path must not change one accepted two-phase solver step."""
+    def build(scalar_reference):
+        surrogate = _production_spectral_surrogate()
+        if scalar_reference:
+            for phase in surrogate.tieline_phases:
+                bulk = surrogate._bulkDiffusivityInterpolators[phase]
+                bulk.evaluate = bulk._evaluate_scalar_reference
+        left, right = surrogate.interface_compositions(0.5)
+        mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+        mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(0.5, left, right), ["X", "Y"])]))
+        return MovingBoundaryIllingworthTernaryFD1DModel(
+            mesh=mesh, elements=["Z", "X", "Y"], phases=["ALPHA", "BETA"], thermodynamics=surrogate,
+            temperature=1000.0, interfacePosition=0.5, interface_equilibrium=surrogate,
+            initial_eta_bracket=(0.0, 1.0), bulk_diffusivity_mode=bulk_diffusivity_mode,
+            bulk_picard_max_iterations=20, time_step=1.0, record=True,
+        )
+
+    vectorized, scalar = build(False), build(True)
+    vectorized.setup()
+    scalar.setup()
+    vector_dxdt = vectorized.getdXdt(vectorized.currentTime, vectorized.getCurrentX())
+    scalar_dxdt = scalar.getdXdt(scalar.currentTime, scalar.getCurrentX())
+    for vector_value, scalar_value in zip(vector_dxdt, scalar_dxdt):
+        np.testing.assert_allclose(vector_value, scalar_value, rtol=4e-12, atol=1e-30)
+    assert vectorized._lastBulkConverged == scalar._lastBulkConverged
+    assert vectorized._lastBulkLeftPicardIterations == scalar._lastBulkLeftPicardIterations
+    assert vectorized._lastBulkRightPicardIterations == scalar._lastBulkRightPicardIterations
