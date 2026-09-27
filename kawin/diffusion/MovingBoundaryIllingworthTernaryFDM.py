@@ -2051,10 +2051,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         The caller owns branch selection, Newton convergence, and line search.
         This helper only builds the mutually consistent physical candidate and
-        its scaled residual for the supplied trial variables. In lagged mode,
-        ``lagged_face_cache`` may retain accepted-profile matrices for this
-        implicit-step attempt; a ``None`` cache preserves the historical
-        per-candidate provider query behavior.
+        its scaled residual for the supplied trial variables. Candidates whose
+        phase profiles leave the ternary composition simplex raise
+        ``ValueError`` so the caller can retry with a smaller timestep. In
+        lagged mode, ``lagged_face_cache`` may retain accepted-profile matrices
+        for this implicit-step attempt; a ``None`` cache preserves the
+        historical per-candidate provider query behavior.
         """
         self._reset_candidate_bulk_diagnostics()
         future_s, future_eta = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
@@ -2117,6 +2119,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 "bulkDiffusivityMode must be 'phase_uniform', "
                 "'composition_dependent_lagged', or 'composition_dependent_implicit'."
             )
+        self._validate_candidate_profiles((left_result.profile, right_result.profile))
         residual = self._interface_residual(
             left_result.profile,
             right_result.profile,
@@ -2497,14 +2500,33 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr, self._eta_curr], False
 
     def _validate_profile_compositions(self, profile, name):
+        """Reject a transformed profile outside the ternary composition simplex."""
+        profile = np.asarray(profile, dtype=np.float64)
+        if not np.all(np.isfinite(profile)):
+            raise ValueError(f"{name} contains non-finite values.")
+        violation = self._profile_composition_violation(profile)
+        if violation is not None:
+            raise ValueError(f"{name} violates ternary composition bounds: {violation}.")
+
+    def _profile_composition_violation(self, profile):
+        """Return the first node and component that leaves the ternary simplex."""
         profile = np.asarray(profile, dtype=np.float64)
         min_comp = float(self.constraints.minComposition)
         dependent = 1.0 - np.sum(profile, axis=1)
-        if not np.all(np.isfinite(profile)):
-            raise ValueError(f"{name} contains non-finite values.")
-        if np.any(profile < min_comp) or np.any(dependent < min_comp):
-            debugInPlace()
-            raise ValueError(f"{name} violates ternary composition bounds.")
+        component_bad = np.argwhere(profile < min_comp)
+        if component_bad.size:
+            node, component = component_bad[0]
+            return f"node {int(node)} component {int(component)} = {profile[node, component]:.6g}"
+        dependent_bad = np.flatnonzero(dependent < min_comp)
+        if dependent_bad.size:
+            node = int(dependent_bad[0])
+            return f"node {node} dependent component = {dependent[node]:.6g}"
+        return None
+
+    def _validate_candidate_profiles(self, profiles):
+        """Reject nonlinear trial profiles before residual convergence or acceptance."""
+        for side, profile in zip(("left", "right"), profiles):
+            self._validate_profile_compositions(profile, f"candidate {side} transformed profile")
 
     def postSolve(self):
         self.data.finalize()

@@ -1699,6 +1699,53 @@ def test_ternary_implicit_inner_failure_propagates_to_timestep_retry(monkeypatch
     assert all(np.all(np.isfinite(np.asarray(part, dtype=np.float64))) for part in dXdt)
 
 
+def test_ternary_candidate_profile_bounds_report_node_and_component():
+    model = _make_scope_validation_model()
+    model.setup()
+    left, right, _, _ = model.getCurrentX()
+
+    invalid_independent = np.asarray(left, dtype=np.float64).copy()
+    invalid_independent[1, 0] = -1.0e-4
+    with pytest.raises(
+        ValueError,
+        match=r"candidate left transformed profile violates ternary composition bounds: node 1 component 0 = -0.0001",
+    ):
+        model._validate_candidate_profiles((invalid_independent, right))
+
+    invalid_dependent = np.asarray(left, dtype=np.float64).copy()
+    invalid_dependent[2] = [0.8, 0.3]
+    with pytest.raises(
+        ValueError,
+        match=r"candidate left transformed profile violates ternary composition bounds: node 2 dependent component = -0.1",
+    ):
+        model._validate_candidate_profiles((invalid_dependent, right))
+
+
+def test_ternary_candidate_profile_bounds_failure_retries_smaller_timestep(monkeypatch):
+    model = _make_scope_validation_model()
+    model.setup()
+    original = model._validate_candidate_profiles
+    calls = {"count": 0}
+
+    def fail_first_candidate(profiles):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise ValueError(
+                "candidate left transformed profile violates ternary composition bounds: "
+                "node 1 dependent component = -1e-06."
+            )
+        return original(profiles)
+
+    monkeypatch.setattr(model, "_validate_candidate_profiles", fail_first_candidate)
+
+    dXdt = model.getdXdt(model.currentTime, model.getCurrentX())
+
+    assert calls["count"] > 1
+    assert model._lastStepRetries == 1
+    assert model.getDt(dXdt) == pytest.approx(model.timeStep * model.retryFactor)
+    assert all(np.all(np.isfinite(np.asarray(part, dtype=np.float64))) for part in dXdt)
+
+
 def test_ternary_single_thin_phase_extra_retry_stops_after_converged_step(monkeypatch):
     model = _make_scope_validation_model()
     model.maxStepRetries = 2
