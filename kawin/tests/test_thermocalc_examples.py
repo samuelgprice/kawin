@@ -25,6 +25,7 @@ from examples.ThermoCalc.training_data import (
     sample_training_data,
 )
 from kawin.diffusion import DiffusivityDomainError, DiffusivityDomainStatus
+from kawin.diffusion.MovingBoundarySurrogates import _extract_expected_tieline
 
 
 def _fecrni_config(**overrides):
@@ -83,14 +84,6 @@ class FakeThermoCalcBackend:
                 "FCC_A1": np.array([0.8, 0.15, 0.05]),
             },
             "chemical_potentials": {"FE": -1.0, "CR": -2.0, "NI": -3.0},
-            "phase_interdiffusivities": {
-                "BCC_A2": np.array([[1.0, 0.1], [0.2, 2.0]]) * 1e-14,
-                "FCC_A1": np.array([[2.0, 0.2], [0.4, 4.0]]) * 1e-14,
-            },
-            "phase_tracerdiffusivities": {
-                "BCC_A2": np.array([3.0, 4.0, 5.0]) * 1e-14,
-                "FCC_A1": np.array([6.0, 8.0, 10.0]) * 1e-14,
-            },
         }
 
     def calculate_driving_force(self, x, T, precipitate_phase):
@@ -1115,6 +1108,88 @@ def test_missing_tie_line_metadata_reports_actual_stable_phases():
 
     assert metadata["endpoint_phases"] == (None, None)
     assert metadata["stable_phases"] == ("BCC_A2#2",)
+
+
+def test_extra_composition_set_is_reported_without_equilibrium_diffusivity_queries():
+    """A three-set equilibrium must reach tie-line validation without querying diffusion data."""
+    class Quantities:
+        @staticmethod
+        def mole_fraction_of_a_phase(phase):
+            return ("amount", phase)
+
+        @staticmethod
+        def composition_of_phase_as_mole_fraction(phase, element):
+            return ("composition", phase, element)
+
+        @staticmethod
+        def chemical_potential_of_component(element):
+            return ("chemical_potential", element)
+
+        @staticmethod
+        def chemical_diffusion_coefficient(*args):
+            raise AssertionError("unrestricted equilibrium queried a chemical diffusivity")
+
+        @staticmethod
+        def tracer_diffusion_coefficient(*args):
+            raise AssertionError("unrestricted equilibrium queried a tracer diffusivity")
+
+    amounts = {"BCC_B2#2": 0.4672, "LIQUID#1": 0.5002, "LIQUID#2": 0.0326}
+    compositions = {
+        "BCC_B2#2": {"Cu": 0.20, "Ni": 0.50, "Ti": 0.30},
+        "LIQUID#1": {"Cu": 0.65, "Ni": 0.10, "Ti": 0.25},
+        "LIQUID#2": {"Cu": 0.15, "Ni": 0.70, "Ti": 0.15},
+    }
+
+    class Result:
+        def get_stable_phases(self):
+            return list(amounts)
+
+        def get_value_of(self, quantity):
+            if quantity[0] == "amount":
+                return amounts[quantity[1]]
+            if quantity[0] == "composition":
+                return compositions[quantity[1]][quantity[2]]
+            if quantity[0] == "chemical_potential":
+                return {"Cu": -1.0, "Ni": -2.0, "Ti": -3.0}[quantity[1]]
+            raise AssertionError(quantity)
+
+    config = ThermoCalcConfig(
+        thermodynamic_database="TCHEA5",
+        kinetic_database="MOBHEA4",
+        elements=("CU", "NI", "TI"),
+        phases=("BCC_B2#2", "LIQUID#1"),
+        reference_element="CU",
+        use_default_phases=False,
+    )
+    backend = _TCPythonBackend()
+    backend._config = config
+    backend._setup = object()
+    backend._tc_python = type("TC", (), {"ThermodynamicQuantity": Quantities})()
+    backend._calculate = lambda kind, phase, x, T: Result()
+    backend.totalNumCalcs = 0
+    backend.totalNumCaches = 0
+    backend.totalNumQueries = 0
+    therm = TCPythonThermodynamics(config, backend=backend)
+    therm._started = True
+
+    equilibrium = therm.getEquilibriumData([0.27474092971865743, 0.215950457571364], 1393.0)
+    assert equilibrium["stable_phases"] == ["BCC_B2#2", "LIQUID#1", "LIQUID#2"]
+    assert "phase_interdiffusivities" not in equilibrium
+    assert "phase_tracerdiffusivities" not in equilibrium
+
+    _, _, metadata = therm.getInterfacialComposition(
+        [0.27474092971865743, 0.215950457571364], 1393.0, returnMeta=True,
+    )
+    assert metadata["stable_phases"] == ("BCC_B2#2", "LIQUID#1", "LIQUID#2")
+    assert "other" not in metadata
+    with pytest.raises(ValueError, match="stable phases.*LIQUID#2"):
+        _extract_expected_tieline(
+            metadata,
+            ("BCC_B2#2", "LIQUID#1"),
+            ("CU", "NI", "TI"),
+            1e-10,
+            composition=[0.27474092971865743, 0.215950457571364],
+        )
 
 
 def test_default_remove_cache_is_configurable_per_adapter():

@@ -377,7 +377,9 @@ class _TCPythonBackend:
         Stable phases are reported by base phase name. When Thermo-Calc creates
         multiple composition sets such as ``BCC_B2#2``, amounts are summed by
         base phase and the representative composition is taken from the largest
-        composition set for that base phase.
+        composition set for that base phase. Diffusivities are intentionally
+        excluded because the surrogate obtains them from forced single-phase
+        kinetics calculations rather than an unrestricted equilibrium result.
         """
 
         config = self._require_config()
@@ -398,53 +400,6 @@ class _TCPythonBackend:
                 phase_compositions[base_phase] = self._phase_composition(result, raw_phase)
         reported_phases = tuple(dict.fromkeys((*config.phases, *stable_phases)))
 
-        tq = self._tq()
-        independent = config.independent_elements
-        reference = tc_element_name(config.reference_element)
-        phase_interdiffs_dict = {}
-        for D_phase in stable_phases:
-            try:
-                interdiffusivity = np.array(
-                            [
-                                [
-                                    self._value(
-                                        result,
-                                        tq.chemical_diffusion_coefficient(
-                                            D_phase,
-                                            tc_element_name(diffusing),
-                                            tc_element_name(gradient),
-                                            reference,
-                                        ),
-                                    )
-                                    for gradient in independent
-                                ]
-                                for diffusing in independent
-                            ],
-                            dtype=np.float64,
-                        )
-            except Exception as exc:
-                if not _is_missing_diffusion_quantity_error(exc):
-                    from examples.debugInPlace import debugInPlace
-                    print(exc)
-                    debugInPlace()
-                    raise
-                interdiffusivity={}
-
-                
-                
-            phase_interdiffs_dict.update({D_phase:interdiffusivity.copy()})
-
-        phase_tracerdiffs_dict = {}
-        for D_phase in stable_phases:
-            tracer = np.array(
-                        [
-                            self._value(result, tq.tracer_diffusion_coefficient(D_phase, tc_element_name(element)))
-                            for element in config.elements
-                        ],
-                        dtype=np.float64,
-                    )
-            phase_tracerdiffs_dict.update({D_phase:tracer.copy()})
-
         return {
             "stable_phases": stable_phase_names,
             "phase_amounts": {
@@ -460,8 +415,6 @@ class _TCPythonBackend:
                 element: self._value(result, self._tq().chemical_potential_of_component(tc_element_name(element)))
                 for element in config.elements
             },
-            "phase_interdiffusivities": phase_interdiffs_dict.copy(),
-            "phase_tracerdiffusivities": phase_tracerdiffs_dict.copy(),
         }
 
     def calculate_driving_force(self, x: np.ndarray, T: float, precipitate_phase: str) -> dict[str, Any]:
@@ -1270,6 +1223,7 @@ class TCPythonThermodynamics:
     def getEquilibriumData(self, x, T, removeCache=None):
         """Return stable phases, phase amounts, compositions, and chemical potentials.
 
+        Diffusivity quantities are queried through the dedicated kinetics API.
         When ``removeCache`` is omitted, the instance's
         ``default_remove_cache`` policy is used.
         """
@@ -1305,7 +1259,6 @@ class TCPythonThermodynamics:
                     {"phase": matrix_phase, "composition": x_alpha},
                     {"phase": precPhase, "composition": x_beta},
                 ),
-                "other":{'phase_interdiffusivities':equilibrium['phase_interdiffusivities'].copy(), 'phase_tracerdiffusivities':equilibrium['phase_tracerdiffusivities'].copy()},
             }
         else:
             # from examples.debugInPlace import debugInPlace

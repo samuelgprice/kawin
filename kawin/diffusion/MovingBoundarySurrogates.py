@@ -26,7 +26,6 @@ _DIFFUSIVITY_INTERPOLATION_SIMPLEX_POSITIVE_2X2 = "simplex_positive_2x2"
 _VALIDITY_POLICY_RAISE = "raise"
 _VALIDITY_POLICY_LEGACY = "legacy"
 
-DIFFUSIVITY_REL_TOL = 7e-8
 from examples.debugInPlace import debugInPlace
 
 
@@ -956,18 +955,10 @@ def _sample_expected_tieline(
     diffusivities = tuple(
         _validate_2x2_matrix(
             thermodynamics.getInterdiffusivity(comp, temperature, phase=phase),
-            # meta['other']['phase_interdiffusivities'][phase].copy(),
             f"interface diffusivity for phase {phase} at {_sample_label(eta=eta, composition=probe)}",
         )
         for phase, comp in zip(tieline_phases, endpoints)
     )
-    if 'other' in meta:
-        for i, phase in enumerate(tieline_phases):
-            interD = meta['other']['phase_interdiffusivities'][phase].copy()
-            if np.abs((interD-diffusivities[i])/diffusivities[i]).max()>DIFFUSIVITY_REL_TOL:
-                # debugInPlace()
-                print(np.abs((interD-diffusivities[i])/diffusivities[i]))
-                # raise
     for phase, comp in zip(tieline_phases, endpoints):
         record("kinetics", outcome="success", context="interface", phase=phase, composition=np.asarray(comp, dtype=np.float64).tolist(), eta=eta)
     return {
