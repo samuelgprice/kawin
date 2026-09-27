@@ -50,6 +50,7 @@ WTIFE_HALF_LENGTH = 50.0e-6
 WTIFE_INTERFACE = WTIFE_HALF_LENGTH - 2.0e-6 + 1.0e-12
 VARIANTS = ("nearest", "simplex_linear", "simplex_positive_2x2", "continuous_grid")
 MODES = ("phase_uniform", "composition_dependent_lagged", "composition_dependent_implicit")
+OPTIMIZATION_PATHS = ("baseline", "batched_validation", "lagged_cache", "both")
 
 
 class TimingCollector:
@@ -217,6 +218,30 @@ def reconstruct_variant(source, interpolation):
     )
 
 
+def _scalar_classify_many(domain, values, **_kwargs):
+    """Benchmark-local scalar reference for the production batch classifier."""
+    results = [domain._classify_scalar_reference(point) for point in np.asarray(values, dtype=np.float64)]
+    return (
+        np.asarray([status for status, _ in results], dtype=object),
+        np.asarray([reason for _, reason in results], dtype=object),
+    )
+
+
+def _configure_optimization_path(surrogate, model, path):
+    """Select benchmark-only reference/optimized paths without public toggles."""
+    if path not in OPTIMIZATION_PATHS:
+        raise ValueError(f"optimization path must be one of {OPTIMIZATION_PATHS}.")
+    if path in {"baseline", "lagged_cache"}:
+        for phase in surrogate.tieline_phases:
+            domain = surrogate.diffusivityValidity["general"][phase]
+            domain.classify_many = lambda values, _domain=domain, **kwargs: _scalar_classify_many(_domain, values, **kwargs)
+        surrogate._has_general_fit_support_many = lambda phase, values, **kwargs: np.asarray(
+            [surrogate._has_general_fit_support_scalar_reference(phase, point) for point in values], dtype=bool
+        )
+    if path in {"baseline", "batched_validation"}:
+        model._prepare_lagged_face_diffusivity_cache = lambda *args, **kwargs: None
+
+
 def validate_wtife_archive(source):
     """Reject archives that cannot represent the copied W--Ti--Fe benchmark."""
     if tuple(value.upper() for value in source.elements) != WTIFE_ELEMENTS:
@@ -253,6 +278,15 @@ def _states_match(first, second):
     return all(np.array_equal(np.asarray(a), np.asarray(b)) for a, b in zip(first, second))
 
 
+def _solver_work(model):
+    """Return solver diagnostics needed to interpret optimization speedups."""
+    return {
+        "candidate_evaluations": int(getattr(model, "_lastImplicitCandidateEvaluations", 0)),
+        "bulk_provider_calls": int(getattr(model, "_lastBulkDiffusivityProviderCalls", 0)),
+        "bulk_face_matrices_evaluated": int(getattr(model, "_lastBulkFaceMatricesEvaluated", 0)),
+    }
+
+
 def _delays(delay_us, delay_category, backend):
     return {
         name: DelayInjector(delay_us if delay_category in {"all", name} else 0.0, backend)
@@ -260,7 +294,7 @@ def _delays(delay_us, delay_category, backend):
     }
 
 
-def measure_microbenchmark(base, variant, mode, repetitions, warmups, delay_us, delay_category, delay_backend):
+def measure_microbenchmark(base, variant, mode, optimization_path, repetitions, warmups, delay_us, delay_category, delay_backend):
     """Time identical initial numerical states; setup is outside the timed region."""
     samples = []
     reference_state = None
@@ -271,6 +305,7 @@ def measure_microbenchmark(base, variant, mode, repetitions, warmups, delay_us, 
         model = build_model(proxy, mode)
         with _wrap_model_regions(model, collector):
             model.setup()
+            _configure_optimization_path(proxy._source, model, optimization_path)
             state = _clone_state(model.getCurrentX())
             if reference_state is None:
                 reference_state = _clone_state(state)
@@ -284,12 +319,12 @@ def measure_microbenchmark(base, variant, mode, repetitions, warmups, delay_us, 
             model.getdXdt(0.0, _clone_state(state))
             elapsed = time.perf_counter_ns() - start
         if index >= warmups:
-            samples.append({"elapsed_ns": elapsed, "timing": collector.summary(), "work": dict(proxy.work),
+            samples.append({"elapsed_ns": elapsed, "timing": collector.summary(), "work": dict(proxy.work), "solver_work": _solver_work(model),
                             "delay": {k: v.record() for k, v in delays.items()}})
     return samples
 
 
-def measure_end_to_end(base, variant, mode, end_time, delay_us, delay_category, delay_backend):
+def measure_end_to_end(base, variant, mode, optimization_path, end_time, delay_us, delay_category, delay_backend):
     """Time a complete solve; setup, loading, and output remain outside timing."""
     collector = TimingCollector()
     delays = _delays(delay_us, delay_category, delay_backend)
@@ -297,6 +332,7 @@ def measure_end_to_end(base, variant, mode, end_time, delay_us, delay_category, 
     model = build_model(proxy, mode)
     with _wrap_model_regions(model, collector):
         model.setup()
+        _configure_optimization_path(proxy._source, model, optimization_path)
         collector.reset()
         proxy.work.clear()
         for injector in delays.values():
@@ -313,7 +349,7 @@ def measure_end_to_end(base, variant, mode, end_time, delay_us, delay_category, 
     }
 
 
-def measure_short_trajectory(base, variant, mode, steps):
+def measure_short_trajectory(base, variant, mode, optimization_path, steps):
     """Time a small, native trajectory without repeating delay experiments.
 
     This uses the same Euler update/post-processing sequence as the solver but
@@ -326,6 +362,7 @@ def measure_short_trajectory(base, variant, mode, steps):
     model = build_model(proxy, mode)
     with _wrap_model_regions(model, collector):
         model.setup()
+        _configure_optimization_path(proxy._source, model, optimization_path)
         collector.reset()
         proxy.work.clear()
         state = _clone_state(model.getCurrentX())
@@ -347,16 +384,16 @@ def measure_short_trajectory(base, variant, mode, steps):
             "timing": collector.summary(), "work": dict(proxy.work)}
 
 
-def _flatten_samples(samples, variant, mode, delay_category, delay_us):
+def _flatten_samples(samples, variant, mode, optimization_path, delay_category, delay_us):
     rows = []
     for index, sample in enumerate(samples):
         for category, timing in sample["timing"].items():
             delay = sample["delay"]
-            rows.append({"variant": variant, "mode": mode, "delay_category": delay_category,
+            rows.append({"variant": variant, "mode": mode, "optimization_path": optimization_path, "delay_category": delay_category,
                          "delay_requested_us": delay_us, "sample": index, "category": category,
                          "step_elapsed_ns": sample["elapsed_ns"],
                          "realized_delay_ns": sum(item["actual_ns"] for item in delay.values()),
-                         "delay_calls": sum(item["calls"] for item in delay.values()), **timing, **sample["work"]})
+            "delay_calls": sum(item["calls"] for item in delay.values()), **timing, **sample["work"], **sample["solver_work"]})
     return rows
 
 
@@ -379,7 +416,7 @@ def _write_outputs(output, records):
         if not successful:
             return
         fig, ax = plt.subplots(figsize=(9, 4.5))
-        labels = [f"{row['variant']}\n{row['mode']}" for row in successful]
+        labels = [f"{row['variant']}\n{row['mode']}\n{row['optimization_path']}" for row in successful]
         ax.bar(labels, [row["median_step_ms"] for row in successful])
         ax.set_ylabel("Median fixed-state step time (ms)")
         ax.tick_params(axis="x", labelrotation=45)
@@ -418,6 +455,8 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, default=Path("benchmark_results") / time.strftime("wtife_surrogate_%Y%m%d_%H%M%S"))
     parser.add_argument("--variants", nargs="+", default=list(VARIANTS))
     parser.add_argument("--modes", nargs="+", default=list(MODES))
+    parser.add_argument("--optimization-paths", nargs="+", choices=OPTIMIZATION_PATHS, default=["baseline", "both"],
+                        help="Benchmark-local reference/optimization configurations. Include baseline to report speedups.")
     parser.add_argument("--micro-repetitions", type=int, default=5)
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--end-time", type=float, default=60.0)
@@ -427,7 +466,8 @@ def main(argv=None):
     parser.add_argument("--full-example", action="store_true", help="Use the WTiFe example's 5400 s horizon.")
     parser.add_argument("--trajectory-steps", type=int, default=5,
                         help="Native accepted steps per variant/mode; set 0 to disable.")
-    parser.add_argument("--delay-us", type=float, nargs="+", default=[0.0, 1000.0])
+    parser.add_argument("--delay-us", type=float, nargs="+", default=[0.0],
+                        help="Injected delay levels in microseconds; specify nonzero values for latency experiments.")
     parser.add_argument("--delay-categories", nargs="+", choices=("all", "interface_compositions", "interface_diffusivity", "bulk_diffusivity"),
                         default=["interface_compositions", "interface_diffusivity", "bulk_diffusivity"],
                         help="Categories to delay independently; 'all' is an explicitly combined experiment.")
@@ -440,46 +480,50 @@ def main(argv=None):
                                                "The default sleep delay is OS-scheduled; realized elapsed delay is reported per call."]}
     for variant in args.variants:
         for mode in args.modes:
-            for delay_category in args.delay_categories:
-                for delay_us in args.delay_us:
-                    case = {"variant": variant, "mode": mode, "delay_category": delay_category, "delay_requested_us": delay_us}
-                    try:
-                        samples = measure_microbenchmark(base, variant, mode, args.micro_repetitions, args.warmups,
-                                                         delay_us, delay_category, args.delay_backend)
-                        case["rows"] = _flatten_samples(samples, variant, mode, delay_category, delay_us)
-                        elapsed = np.asarray([sample["elapsed_ns"] for sample in samples], dtype=float)
-                        realized = np.asarray(
-                            [sum(item["actual_ns"] for item in sample["delay"].values()) for sample in samples], dtype=float
-                        )
-                        summary = {"variant": variant, "mode": mode, "delay_requested_us": delay_us,
-                                   "delay_category": delay_category, "status": "ok",
-                                   "median_step_ms": float(np.median(elapsed) / 1e6), "min_step_ms": float(np.min(elapsed) / 1e6),
-                                   "max_step_ms": float(np.max(elapsed) / 1e6), "std_step_ms": float(np.std(elapsed) / 1e6),
-                                   "sample_count": int(elapsed.size), "median_realized_delay_ms": float(np.median(realized) / 1e6)}
-                        native_baseline = delay_us == 0.0 and delay_category == args.delay_categories[0]
-                        if native_baseline and args.trajectory_steps > 0:
-                            trajectory = measure_short_trajectory(base, variant, mode, args.trajectory_steps)
-                            summary.update({"trajectory_ms": trajectory["elapsed_ns"] / 1e6,
-                                            "trajectory_steps": trajectory["accepted_steps"],
-                                            "trajectory_final_time": trajectory["final_time"]})
-                            case["trajectory"] = trajectory
-                        if native_baseline and args.full_end_to_end and not args.skip_end_to_end:
-                            end_time = 5400.0 if args.full_example else args.end_time
-                            end = measure_end_to_end(base, variant, mode, end_time, 0.0, "all",
-                                                     args.delay_backend)
-                            summary.update({"end_to_end_ms": end["elapsed_ns"] / 1e6, "end_to_end_final_time": end["final_time"],
-                                            "end_to_end_realized_delay_ms": sum(item["actual_ns"] for item in end["delay"].values()) / 1e6})
-                            case["end_to_end"] = end
-                        report["summary"].append(summary)
-                    except Exception as exc:
-                        case["status"] = "failed"; case["error"] = str(exc); case["traceback"] = traceback.format_exc()
-                        report["summary"].append({"variant": variant, "mode": mode, "delay_requested_us": delay_us,
-                                                  "delay_category": delay_category, "status": "failed", "error": str(exc)})
-                    report["cases"].append(case)
+            for optimization_path in args.optimization_paths:
+                for delay_category in args.delay_categories:
+                    for delay_us in args.delay_us:
+                        case = {"variant": variant, "mode": mode, "optimization_path": optimization_path,
+                                "delay_category": delay_category, "delay_requested_us": delay_us}
+                        try:
+                            samples = measure_microbenchmark(base, variant, mode, optimization_path, args.micro_repetitions, args.warmups,
+                                                             delay_us, delay_category, args.delay_backend)
+                            case["rows"] = _flatten_samples(samples, variant, mode, optimization_path, delay_category, delay_us)
+                            elapsed = np.asarray([sample["elapsed_ns"] for sample in samples], dtype=float)
+                            realized = np.asarray(
+                                [sum(item["actual_ns"] for item in sample["delay"].values()) for sample in samples], dtype=float
+                            )
+                            summary = {"variant": variant, "mode": mode, "optimization_path": optimization_path,
+                                       "delay_requested_us": delay_us, "delay_category": delay_category, "status": "ok",
+                                       "median_step_ms": float(np.median(elapsed) / 1e6), "min_step_ms": float(np.min(elapsed) / 1e6),
+                                       "max_step_ms": float(np.max(elapsed) / 1e6), "std_step_ms": float(np.std(elapsed) / 1e6),
+                                       "sample_count": int(elapsed.size), "median_realized_delay_ms": float(np.median(realized) / 1e6)}
+                            summary.update(samples[int(np.argsort(elapsed)[len(elapsed) // 2])]["solver_work"])
+                            native_baseline = delay_us == 0.0 and delay_category == args.delay_categories[0]
+                            if native_baseline and args.trajectory_steps > 0:
+                                trajectory = measure_short_trajectory(base, variant, mode, optimization_path, args.trajectory_steps)
+                                summary.update({"trajectory_ms": trajectory["elapsed_ns"] / 1e6,
+                                                "trajectory_steps": trajectory["accepted_steps"],
+                                                "trajectory_final_time": trajectory["final_time"]})
+                                case["trajectory"] = trajectory
+                            if native_baseline and args.full_end_to_end and not args.skip_end_to_end:
+                                end_time = 5400.0 if args.full_example else args.end_time
+                                end = measure_end_to_end(base, variant, mode, optimization_path, end_time, 0.0, "all",
+                                                         args.delay_backend)
+                                summary.update({"end_to_end_ms": end["elapsed_ns"] / 1e6, "end_to_end_final_time": end["final_time"],
+                                                "end_to_end_realized_delay_ms": sum(item["actual_ns"] for item in end["delay"].values()) / 1e6})
+                                case["end_to_end"] = end
+                            report["summary"].append(summary)
+                        except Exception as exc:
+                            case["status"] = "failed"; case["error"] = str(exc); case["traceback"] = traceback.format_exc()
+                            report["summary"].append({"variant": variant, "mode": mode, "optimization_path": optimization_path,
+                                                      "delay_requested_us": delay_us, "delay_category": delay_category,
+                                                      "status": "failed", "error": str(exc)})
+                        report["cases"].append(case)
     grouped = defaultdict(list)
     for row in report["summary"]:
         if row.get("status") == "ok":
-            grouped[(row["variant"], row["mode"], row["delay_category"])].append(row)
+            grouped[(row["variant"], row["mode"], row["optimization_path"], row["delay_category"])].append(row)
     for rows in grouped.values():
         x = np.asarray([row["median_realized_delay_ms"] for row in rows], dtype=float)
         y = np.asarray([row["median_step_ms"] for row in rows], dtype=float)
@@ -487,7 +531,20 @@ def main(argv=None):
             slope, _ = np.polyfit(x, y, 1)
             for row in rows:
                 row["sensitivity_ns_per_realized_delay_ns"] = float(slope)
+    baseline_times = {
+        (row["variant"], row["mode"], row["delay_category"], row["delay_requested_us"]): row["median_step_ms"]
+        for row in report["summary"]
+        if row.get("status") == "ok" and row.get("optimization_path") == "baseline"
+    }
+    for row in report["summary"]:
+        key = (row.get("variant"), row.get("mode"), row.get("delay_category"), row.get("delay_requested_us"))
+        if row.get("status") == "ok" and key in baseline_times:
+            row["speedup_vs_baseline"] = float(baseline_times[key] / row["median_step_ms"])
     _write_outputs(args.output, report)
+    for row in report["summary"]:
+        if row.get("status") == "ok" and "speedup_vs_baseline" in row:
+            print(f"{row['variant']} {row['mode']} {row['optimization_path']}: "
+                  f"{row['median_step_ms']:.3f} ms, {row['speedup_vs_baseline']:.2f}x vs baseline")
     print(f"Wrote benchmark report to {args.output}")
 
 

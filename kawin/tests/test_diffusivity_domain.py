@@ -169,6 +169,61 @@ def test_vectorized_exact_lookup_matches_scalar_coordinate_equivalence():
     assert np.array_equal(_same_coordinate_mask(coordinates, point), expected)
 
 
+def test_batched_general_domain_classification_matches_scalar_reference():
+    points = np.asarray(((0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (0.4, 0.2)))
+    domain = DiffusivityDomain(
+        points,
+        ("VALID", "KNOWN_INVALID", "VALID", "UNKNOWN"),
+        reasons=("", "bad_vertex", "", "unknown_vertex"),
+    )
+    queries = np.asarray(
+        (
+            points[1],
+            np.nextafter(points[0], (1.0, 1.0)),
+            (0.2, 0.2),
+            (0.8, 0.1),
+            (1.1, 0.1),
+            (np.nan, 0.2),
+        )
+    )
+    expected = [domain._classify_scalar_reference(point) for point in queries]
+    statuses, reasons = domain.classify_many(queries, chunk_size=2)
+
+    assert list(statuses) == [status for status, _ in expected]
+    assert list(reasons) == [reason for _, reason in expected]
+
+
+def test_batched_strict_bulk_query_matches_scalar_results_and_first_error():
+    points = np.asarray(((0.10, 0.10), (0.30, 0.10), (0.10, 0.30), (0.20, 0.20)))
+    records = {"interface": {}, "general": {}}
+    interface = np.asarray(((0.10, 0.10), (0.20, 0.20), (0.30, 0.30)))
+    for phase in ("P", "Q"):
+        records["interface"][phase] = {"coordinates": interface, "statuses": ("VALID",) * 3, "fit_usable": (True,) * 3}
+        records["general"][phase] = {
+            "coordinates": points,
+            "statuses": ("VALID", "KNOWN_INVALID", "VALID", "VALID"),
+            "reasons": ("", "bad_vertex", "", ""),
+            "fit_usable": (True, False, True, True),
+        }
+    surrogate = _surrogate(records)
+    valid = np.asarray(((0.10, 0.10), (0.10, 0.30)))
+    expected_support = np.asarray([surrogate._has_general_fit_support_scalar_reference("P", point) for point in valid])
+    assert np.array_equal(surrogate._has_general_fit_support_many("P", valid), expected_support)
+    expected = np.asarray([surrogate.getInterdiffusivity(point, phase="P") for point in valid])
+    actual = surrogate.getInterdiffusivity(valid, phase="P")
+    np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
+
+    invalid = np.asarray(((0.12, 0.12), (0.30, 0.10), (1.1, 0.1)))
+    with pytest.raises(DiffusivityDomainError) as batched:
+        surrogate.getInterdiffusivity(invalid, phase="P")
+    with pytest.raises(DiffusivityDomainError) as scalar:
+        for point in invalid:
+            surrogate.getInterdiffusivity(point, phase="P")
+    assert batched.value.status is scalar.value.status
+    assert batched.value.reason == scalar.value.reason
+    assert np.array_equal(batched.value.composition, scalar.value.composition)
+
+
 def test_chained_near_duplicate_cluster_fails_deterministically():
     def advance(value, steps):
         for _ in range(steps):

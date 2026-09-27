@@ -1400,6 +1400,22 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             self._right_face_positions(future_s),
         )
 
+    def _prepare_lagged_face_diffusivity_cache(self, p, q, future_s, time):
+        """
+        Return accepted-profile lagged matrices for one implicit-step attempt.
+
+        The ternary Illingworth model rejects non-isothermal temperature
+        fields during configuration, so matrices depend only on the accepted
+        old-time profiles in lagged mode. The caller owns this short-lived
+        cache; retries and later accepted steps always prepare fresh matrices.
+        Returning ``None`` is an internal reference seam that requests the
+        historical per-candidate evaluation path.
+        """
+        return (
+            self._left_lagged_face_diffusivity_matrices(p, future_s, time),
+            self._right_lagged_face_diffusivity_matrices(q, future_s, time),
+        )
+
     def setTimeInfo(self, currTime, simTime):
         """Stores solve-time bounds and prepares optional semi-log target times."""
         super().setTimeInfo(currTime, simTime)
@@ -2028,13 +2044,17 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         c_right_old,
         x_hat,
         motion_branch,
+        lagged_face_cache=None,
     ):
         """
         Evaluates one fixed-branch nonlinear interface trial.
 
         The caller owns branch selection, Newton convergence, and line search.
         This helper only builds the mutually consistent physical candidate and
-        its scaled residual for the supplied trial variables.
+        its scaled residual for the supplied trial variables. In lagged mode,
+        ``lagged_face_cache`` may retain accepted-profile matrices for this
+        implicit-step attempt; a ``None`` cache preserves the historical
+        per-candidate provider query behavior.
         """
         self._reset_candidate_bulk_diagnostics()
         future_s, future_eta = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
@@ -2055,15 +2075,23 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 raise
             self._record_bulk_phase_success("right", right_result)
         elif self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_LAGGED:
+            matrices = None
+            if lagged_face_cache is not None:
+                if not lagged_face_cache["prepared"]:
+                    lagged_face_cache["matrices"] = self._prepare_lagged_face_diffusivity_cache(
+                        p, q, future_s, self.currentTime
+                    )
+                    lagged_face_cache["prepared"] = True
+                matrices = lagged_face_cache["matrices"]
             try:
-                D_left = self._left_lagged_face_diffusivity_matrices(p, future_s, self.currentTime)
+                D_left = self._left_lagged_face_diffusivity_matrices(p, future_s, self.currentTime) if matrices is None else matrices[0]
                 left_result = self._solve_concentration_left_planar(p, s, future_s, dt, c_left, D_left, motion_branch, validate_diffusivity=False)
             except Exception as exc:
                 self._record_bulk_phase_failure("left", 0, np.inf, f"left bulk solve failed: {exc}")
                 raise
             self._record_bulk_phase_success("left", left_result)
             try:
-                D_right = self._right_lagged_face_diffusivity_matrices(q, future_s, self.currentTime)
+                D_right = self._right_lagged_face_diffusivity_matrices(q, future_s, self.currentTime) if matrices is None else matrices[1]
                 right_result = self._solve_concentration_right_planar(q, s, future_s, dt, c_right, D_right, motion_branch, validate_diffusivity=False)
             except Exception as exc:
                 self._record_bulk_phase_failure("right", 0, np.inf, f"right bulk solve failed: {exc}")
@@ -2148,6 +2176,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         jacobian_evaluations = 0
         iterations_attempted = 0
         failure_reason = "maximum iterations reached"
+        lagged_face_cache = (
+            {"prepared": False, "matrices": None}
+            if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_LAGGED
+            else None
+        )
 
         def record_failure(reason):
             self._record_implicit_failure(
@@ -2176,6 +2209,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 c_right_old=c_right_old,
                 x_hat=trial_x_hat,
                 motion_branch=motion_branch,
+                lagged_face_cache=lagged_face_cache,
             )
             self._record_completed_bulk_candidate(candidate)
             return candidate

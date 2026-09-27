@@ -2400,8 +2400,8 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 seen.add(exact)
         return points[mask], self.diffusivities[context][phase][mask]
 
-    def _has_general_fit_support(self, phase, point):
-        """Check fit support independently of the validity-domain classifier."""
+    def _has_general_fit_support_scalar_reference(self, phase, point):
+        """Reference one-point fit-support check retained for batch equivalence."""
         support = self._fitSupport[phase]
         points = support["points"]
         point = np.asarray(point, dtype=np.float64)
@@ -2410,6 +2410,51 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             return True
         triangulation = support["triangulation"]
         return triangulation is not None and int(triangulation.find_simplex(point)) >= 0
+
+    def _has_general_fit_support(self, phase, point):
+        """Check fit support independently of the validity-domain classifier."""
+        return self._has_general_fit_support_scalar_reference(phase, point)
+
+    def _has_general_fit_support_many(self, phase, values, *, chunk_size=4096):
+        """
+        Return bulk fit-support flags for a composition batch.
+
+        The exact-match and Delaunay operations mirror the scalar reference
+        method. Nonfinite inputs remain on that reference path so strict
+        validation preserves its historical exception and fallback behavior.
+        """
+        values = np.asarray(values, dtype=np.float64)
+        if values.ndim != 2 or values.shape[1] != 2:
+            raise ValueError("values must have shape (n, 2).")
+        support = self._fitSupport[phase]
+        points = support["points"]
+        out = np.zeros(values.shape[0], dtype=bool)
+        if not len(points):
+            return out
+        point_scales = np.max(np.abs(points), axis=1)
+        chunk_size = max(1, int(chunk_size))
+        triangulation = support["triangulation"]
+        for start in range(0, values.shape[0], chunk_size):
+            stop = min(values.shape[0], start + chunk_size)
+            chunk = values[start:stop]
+            finite = np.all(np.isfinite(chunk), axis=1)
+            if np.any(~finite):
+                for index in np.flatnonzero(~finite):
+                    out[start + index] = self._has_general_fit_support_scalar_reference(phase, chunk[index])
+            if not np.any(finite):
+                continue
+            local_indices = np.flatnonzero(finite)
+            valid = chunk[local_indices]
+            query_scales = np.max(np.abs(valid), axis=1)
+            tolerance = 32.0 * np.finfo(np.float64).eps * np.maximum(
+                1.0, np.maximum(point_scales[None, :], query_scales[:, None])
+            )
+            exact = np.any(np.all(np.abs(points[None, :, :] - valid[:, None, :]) <= tolerance[:, :, None], axis=2), axis=1)
+            out[start + local_indices[exact]] = True
+            unresolved = local_indices[~exact]
+            if len(unresolved) and triangulation is not None:
+                out[start + unresolved] = np.asarray(triangulation.find_simplex(chunk[unresolved]), dtype=np.int64) >= 0
+        return out
 
     def _rebuild_fit_support_geometry(self):
         """Cache general solver-usable fit geometry; NPZ load rebuilds it normally."""
@@ -2716,16 +2761,35 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
             raise ValueError("getInterdiffusivity expects independent ternary compositions with shape (n, 2).")
         if self.validity_policy == _VALIDITY_POLICY_RAISE:
             domain = self.diffusivityValidity[context][phase]
-            for point in values:
-                if context == "interface":
-                    status, reason = self._interface_domain_status(phase, point)
-                else:
-                    status, reason = domain.classify(point)
-                    if status == DiffusivityDomainStatus.VALID and not self._has_general_fit_support(phase, point):
-                        status, reason = (DiffusivityDomainStatus.INSUFFICIENT_FIT_SUPPORT,
-                                          "domain-valid query lacks solver-usable interpolation support")
-                if status != DiffusivityDomainStatus.VALID:
-                    raise DiffusivityDomainError(status, reason, composition=point, phase=phase, context=context)
+            if context == "general" and len(values) > 1:
+                statuses, reasons = domain.classify_many(values)
+                valid = np.fromiter(
+                    (status is DiffusivityDomainStatus.VALID for status in statuses), dtype=bool, count=len(statuses)
+                )
+                if np.any(valid):
+                    support = self._has_general_fit_support_many(phase, values[valid])
+                    unsupported = np.flatnonzero(valid)[~support]
+                    statuses[unsupported] = DiffusivityDomainStatus.INSUFFICIENT_FIT_SUPPORT
+                    reasons[unsupported] = "domain-valid query lacks solver-usable interpolation support"
+                failures = np.flatnonzero(
+                    ~np.fromiter(
+                        (status is DiffusivityDomainStatus.VALID for status in statuses), dtype=bool, count=len(statuses)
+                    )
+                )
+                if len(failures):
+                    index = int(failures[0])
+                    raise DiffusivityDomainError(statuses[index], reasons[index], composition=values[index], phase=phase, context=context)
+            else:
+                for point in values:
+                    if context == "interface":
+                        status, reason = self._interface_domain_status(phase, point)
+                    else:
+                        status, reason = domain.classify(point)
+                        if status == DiffusivityDomainStatus.VALID and not self._has_general_fit_support(phase, point):
+                            status, reason = (DiffusivityDomainStatus.INSUFFICIENT_FIT_SUPPORT,
+                                              "domain-valid query lacks solver-usable interpolation support")
+                    if status != DiffusivityDomainStatus.VALID:
+                        raise DiffusivityDomainError(status, reason, composition=point, phase=phase, context=context)
         if self.diffusivityInterpolation in {
             _DIFFUSIVITY_INTERPOLATION_CONTINUOUS_GRID,
             _DIFFUSIVITY_INTERPOLATION_SIMPLEX_LINEAR,

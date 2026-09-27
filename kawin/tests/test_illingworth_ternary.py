@@ -1374,6 +1374,87 @@ def test_ternary_lagged_constant_diffusivity_reproduces_phase_uniform_step():
     assert lagged._lastStepRetries == uniform._lastStepRetries
 
 
+def test_ternary_lagged_face_cache_matches_uncached_reference_and_reduces_queries():
+    cached = _make_scope_validation_model()
+    cached.therm = _SmoothBulkTernaryThermodynamics()
+    cached.bulkDiffusivityMode = "composition_dependent_lagged"
+    cached.setup()
+    uncached = _make_scope_validation_model()
+    uncached.therm = _SmoothBulkTernaryThermodynamics()
+    uncached.bulkDiffusivityMode = "composition_dependent_lagged"
+    uncached.setup()
+    uncached._prepare_lagged_face_diffusivity_cache = lambda *args: None
+
+    cached_derivative = cached.getdXdt(cached.currentTime, cached.getCurrentX())
+    uncached_derivative = uncached.getdXdt(uncached.currentTime, uncached.getCurrentX())
+
+    for actual, expected in zip(cached_derivative, uncached_derivative):
+        np.testing.assert_allclose(actual, expected, rtol=1.0e-13, atol=1.0e-15)
+    cached_state = cached.getCurrentX()
+    uncached_state = uncached.getCurrentX()
+    cached_next = [np.asarray(value) + np.asarray(rate) * cached._currdt for value, rate in zip(cached_state, cached_derivative)]
+    uncached_next = [np.asarray(value) + np.asarray(rate) * uncached._currdt for value, rate in zip(uncached_state, uncached_derivative)]
+    for actual, expected in zip(cached_next, uncached_next):
+        np.testing.assert_allclose(actual, expected, rtol=1.0e-13, atol=1.0e-15)
+    cached_inventory = integrate_planar_transformed_profile_components(
+        cached_next[0], cached_next[1], float(cached_next[2]), cached._R, cached._u_grid, cached._v_grid
+    )
+    uncached_inventory = integrate_planar_transformed_profile_components(
+        uncached_next[0], uncached_next[1], float(uncached_next[2]), uncached._R, uncached._u_grid, uncached._v_grid
+    )
+    np.testing.assert_allclose(cached_inventory, uncached_inventory, rtol=1.0e-13, atol=1.0e-15)
+    for attr in ("_D_left", "_D_right"):
+        np.testing.assert_allclose(getattr(cached, attr), getattr(uncached, attr), rtol=1.0e-13, atol=1.0e-15)
+    for attr in (
+        "_lastImplicitIterations",
+        "_lastImplicitCandidateEvaluations",
+        "_lastImplicitJacobianEvaluations",
+        "_lastStepRetries",
+    ):
+        assert getattr(cached, attr) == getattr(uncached, attr)
+    cached.residualTolerance = -1.0
+    uncached.residualTolerance = -1.0
+    cached.maxIterations = 2
+    uncached.maxIterations = 2
+    with pytest.raises(RuntimeError, match="step failed"):
+        cached.getdXdt(cached.currentTime, cached.getCurrentX())
+    with pytest.raises(RuntimeError, match="step failed"):
+        uncached.getdXdt(uncached.currentTime, uncached.getCurrentX())
+    assert cached._lastImplicitCandidateEvaluations == uncached._lastImplicitCandidateEvaluations
+    assert cached._lastBulkDiffusivityProviderCalls < uncached._lastBulkDiffusivityProviderCalls
+    assert cached._lastBulkFaceMatricesEvaluated < uncached._lastBulkFaceMatricesEvaluated
+
+
+def test_ternary_lagged_face_cache_is_scoped_to_each_implicit_attempt():
+    model = _make_scope_validation_model()
+    model.therm = _SmoothBulkTernaryThermodynamics()
+    model.bulkDiffusivityMode = "composition_dependent_lagged"
+    model.setup()
+    calls = {"count": 0}
+    original = model._prepare_lagged_face_diffusivity_cache
+
+    def counted(*args, **kwargs):
+        calls["count"] += 1
+        return original(*args, **kwargs)
+
+    model._prepare_lagged_face_diffusivity_cache = counted
+    state = model.getCurrentX()
+    model.getdXdt(model.currentTime, state)
+    model.getdXdt(model.currentTime, state)
+
+    assert calls["count"] == 2
+
+
+def test_ternary_implicit_mode_does_not_prepare_lagged_face_cache():
+    model = _make_scope_validation_model()
+    model.therm = _SmoothBulkTernaryThermodynamics()
+    model.bulkDiffusivityMode = "composition_dependent_implicit"
+    model.setup()
+    model._prepare_lagged_face_diffusivity_cache = lambda *args: (_ for _ in ()).throw(AssertionError("unexpected cache"))
+
+    model.getdXdt(model.currentTime, model.getCurrentX())
+
+
 def test_ternary_implicit_constant_diffusivity_reproduces_phase_uniform_step_in_one_picard_cycle():
     uniform = _make_scope_validation_model()
     uniform.therm = _SmoothBulkTernaryThermodynamics(constant=True)

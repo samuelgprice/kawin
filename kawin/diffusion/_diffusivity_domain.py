@@ -182,8 +182,8 @@ class DiffusivityDomain:
         found = np.flatnonzero(_same_coordinate_mask(self.coordinates, point))
         return None if not len(found) else int(found[0])
 
-    def classify(self, point):
-        """Return the domain status/reason with exact labels taking precedence."""
+    def _classify_scalar_reference(self, point):
+        """Reference one-point classifier retained for semantic fallback checks."""
         point = np.asarray(point, dtype=np.float64).reshape(2)
         exact = self._exact_index(point)
         if exact is not None:
@@ -198,6 +198,74 @@ class DiffusivityDomain:
             only = labels.pop()
             return only, f"{only.value.lower()} labeled simplex"
         return DiffusivityDomainStatus.BOUNDARY_AMBIGUOUS, "mixed labeled simplex"
+
+    def classify(self, point):
+        """Return the domain status/reason with exact labels taking precedence."""
+        return self._classify_scalar_reference(point)
+
+    def classify_many(self, points, *, chunk_size=4096):
+        """
+        Classify a batch while preserving :meth:`classify` label precedence.
+
+        Exact-coordinate matching and Delaunay lookup are batched to avoid an
+        archive-wide coordinate scan for every bulk face. Nonfinite queries use
+        the scalar reference path so unusual SciPy error behavior remains
+        identical to the historical one-point implementation.
+        """
+        values = np.asarray(points, dtype=np.float64)
+        if values.ndim != 2 or values.shape[1] != 2:
+            raise ValueError("points must have shape (n, 2).")
+        statuses = np.empty(values.shape[0], dtype=object)
+        reasons = np.empty(values.shape[0], dtype=object)
+        coordinate_scales = np.max(np.abs(self.coordinates), axis=1)
+        chunk_size = max(1, int(chunk_size))
+
+        for start in range(0, values.shape[0], chunk_size):
+            stop = min(values.shape[0], start + chunk_size)
+            chunk = values[start:stop]
+            finite = np.all(np.isfinite(chunk), axis=1)
+            if np.any(~finite):
+                for index in np.flatnonzero(~finite):
+                    statuses[start + index], reasons[start + index] = self._classify_scalar_reference(chunk[index])
+
+            if not np.any(finite):
+                continue
+            local_indices = np.flatnonzero(finite)
+            valid = chunk[local_indices]
+            point_scales = np.max(np.abs(valid), axis=1)
+            scales = np.maximum(1.0, np.maximum(coordinate_scales[None, :], point_scales[:, None]))
+            tolerances = 32.0 * np.finfo(np.float64).eps * scales
+            matches = np.all(np.abs(self.coordinates[None, :, :] - valid[:, None, :]) <= tolerances[:, :, None], axis=2)
+            exact_mask = np.any(matches, axis=1)
+            if np.any(exact_mask):
+                exact_indices = np.argmax(matches[exact_mask], axis=1)
+                output_indices = start + local_indices[exact_mask]
+                statuses[output_indices] = self.statuses[exact_indices]
+                reasons[output_indices] = [str(self.reasons[index] or "exact_labeled_coordinate") for index in exact_indices]
+
+            nonexact_local = local_indices[~exact_mask]
+            if not len(nonexact_local):
+                continue
+            output_indices = start + nonexact_local
+            if self._triangulation is None:
+                statuses[output_indices] = DiffusivityDomainStatus.OUTSIDE_SUPPORT
+                reasons[output_indices] = "labeled support has no two-dimensional simplex"
+                continue
+            simplex_indices = np.asarray(self._triangulation.find_simplex(chunk[nonexact_local]), dtype=np.int64)
+            for output_index, simplex in zip(output_indices, simplex_indices):
+                if simplex < 0:
+                    statuses[output_index] = DiffusivityDomainStatus.OUTSIDE_SUPPORT
+                    reasons[output_index] = "outside labeled diffusivity support"
+                    continue
+                labels = set(self.statuses[self._triangulation.simplices[simplex]])
+                if len(labels) == 1:
+                    only = labels.pop()
+                    statuses[output_index] = only
+                    reasons[output_index] = f"{only.value.lower()} labeled simplex"
+                else:
+                    statuses[output_index] = DiffusivityDomainStatus.BOUNDARY_AMBIGUOUS
+                    reasons[output_index] = "mixed labeled simplex"
+        return statuses, reasons
 
     def has_fit_support(self, point, interpolation):
         """Return whether a valid query has usable support for its evaluator."""
