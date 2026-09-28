@@ -382,6 +382,508 @@ def _diffusivity_training_matrices(surrogate, context, phase):
     return np.asarray(values, dtype=np.float64)
 
 
+def _bulk_only_diffusivity_samples(surrogate, phase):
+    """Return true bulk rows, excluding an interface prefix copied into a scattered fit.
+
+    Surrogate construction prepends all interface rows to ``general`` when a
+    failed or invalid regular-grid calculation requires a scattered fallback.
+    Those rows support interpolation but are not independent bulk calculations.
+    Only an exact composition-and-matrix prefix is removed, so a genuine bulk
+    calculation at the same composition remains available for comparison.
+    """
+    bulk_points = _diffusivity_training_compositions(surrogate, "general", phase)
+    bulk_matrices = _diffusivity_training_matrices(surrogate, "general", phase)
+    interface_points = _diffusivity_training_compositions(surrogate, "interface", phase)
+    interface_matrices = _diffusivity_training_matrices(surrogate, "interface", phase)
+    prefix_count = min(len(interface_points), len(bulk_points))
+    if prefix_count and (
+        not np.array_equal(bulk_points[:prefix_count], interface_points[:prefix_count])
+        or not np.array_equal(bulk_matrices[:prefix_count], interface_matrices[:prefix_count])
+    ):
+        prefix_count = 0
+    indices = np.arange(prefix_count, len(bulk_points), dtype=np.int64)
+    return bulk_points[prefix_count:], bulk_matrices[prefix_count:], indices, prefix_count
+
+
+def _selected_kinetics_records(source):
+    """Load selected-result kinetics records from a JSONL path or iterable."""
+    if isinstance(source, (str, Path)):
+        records = []
+        with Path(source).open(encoding="utf-8") as input_file:
+            for line_number, line in enumerate(input_file, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as error:
+                    raise ValueError(
+                        f"Invalid kinetics diagnostics JSON on line {line_number}."
+                    ) from error
+                if record.get("record_type") == "kinetics":
+                    records.append(record)
+        return records
+    return [record for record in source if record.get("record_type") == "kinetics"]
+
+
+def _site_fraction_map(record):
+    """Flatten labeled sublattice fractions, rejecting incomplete states."""
+    site_fractions = record.get("site_fractions")
+    if not isinstance(site_fractions, Sequence) or not site_fractions:
+        return None
+    values = {}
+    for sublattice in site_fractions:
+        constituents = sublattice.get("constituents")
+        if not isinstance(constituents, Mapping):
+            return None
+        try:
+            index = int(sublattice["sublattice"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        for constituent, value in constituents.items():
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(value):
+                return None
+            values[(index, str(constituent).upper())] = value
+    return values or None
+
+
+def _match_kinetics_site_fractions(records, phase, points, matrices, used, composition_tolerance):
+    """Match stored surrogate rows to unique selected-result kinetics records."""
+    matched = []
+    failures = []
+    phase_name = str(phase).upper()
+    for sample_index, (point, matrix) in enumerate(zip(points, matrices)):
+        match = None
+        for record_index, record in enumerate(records):
+            if record_index in used or str(record.get("requested_phase", "")).upper() != phase_name:
+                continue
+            try:
+                record_point = np.asarray(record.get("input_composition"), dtype=np.float64)
+                record_matrix = np.asarray(record.get("interdiffusivity"), dtype=np.float64)
+            except (TypeError, ValueError):
+                continue
+            if record_point.shape != point.shape or record_matrix.shape != matrix.shape:
+                continue
+            if not np.allclose(record_point, point, rtol=0.0, atol=composition_tolerance):
+                continue
+            if not np.allclose(record_matrix, matrix, rtol=1e-10, atol=0.0):
+                continue
+            match = record_index
+            break
+        if match is None:
+            matched.append(None)
+            failures.append({
+                "phase": phase,
+                "sample_index": int(sample_index),
+                "reason": "no_matching_kinetics_record",
+            })
+            continue
+        used.add(match)
+        state = _site_fraction_map(records[match])
+        if state is None:
+            failures.append({
+                "phase": phase,
+                "sample_index": int(sample_index),
+                "query_index": records[match].get("query_index"),
+                "reason": "missing_or_invalid_site_fractions",
+            })
+        matched.append((state, records[match]))
+    return matched, failures
+
+
+def _evaluate_interface_bulk_site_fraction_consistency(
+    surrogate,
+    phases,
+    kinetics_diagnostics,
+    *,
+    neighbor_count,
+    absolute_threshold,
+    local_outlier_factor,
+    max_distance_ratio,
+    max_composition_distance,
+    scale_floor,
+    composition_match_tolerance,
+):
+    """Compare selected sublattice states using the diffusivity check's geometry."""
+    records = _selected_kinetics_records(kinetics_diagnostics)
+    phase_reports = {}
+    all_flags = []
+    all_failures = []
+    used = set()
+    for phase in phases:
+        interface_points = _diffusivity_training_compositions(surrogate, "interface", phase)
+        interface_matrices = _diffusivity_training_matrices(surrogate, "interface", phase)
+        bulk_points, bulk_matrices, raw_bulk_indices, excluded_prefix = _bulk_only_diffusivity_samples(
+            surrogate, phase
+        )
+        interface_matches, failures = _match_kinetics_site_fractions(
+            records, phase, interface_points, interface_matrices, used, composition_match_tolerance
+        )
+        bulk_matches, bulk_failures = _match_kinetics_site_fractions(
+            records, phase, bulk_points, bulk_matrices, used, composition_match_tolerance
+        )
+        for failure in bulk_failures:
+            failure["sample_index"] = int(raw_bulk_indices[failure["sample_index"]])
+            failure["sample_kind"] = "bulk"
+        for failure in failures:
+            failure["sample_kind"] = "interface"
+        failures.extend(bulk_failures)
+        all_failures.extend(failures)
+
+        state_maps = [
+            match[0] for match in interface_matches + bulk_matches
+            if match is not None and match[0] is not None
+        ]
+        labels = tuple(sorted(set().union(*(state.keys() for state in state_maps)))) if state_maps else ()
+
+        def vector(match):
+            if match is None or match[0] is None or not labels:
+                return None
+            return np.asarray([match[0].get(label, 0.0) for label in labels], dtype=np.float64)
+
+        interface_vectors = [vector(match) for match in interface_matches]
+        bulk_vectors = [vector(match) for match in bulk_matches]
+        count = len(interface_points)
+        nearest_indices = np.full(count, -1, dtype=np.int64)
+        nearest_distances = np.full(count, np.nan, dtype=np.float64)
+        bulk_spacings = np.full(count, np.nan, dtype=np.float64)
+        distance_ratios = np.full(count, np.nan, dtype=np.float64)
+        maximum_differences = np.full(count, np.nan, dtype=np.float64)
+        l2_differences = np.full(count, np.nan, dtype=np.float64)
+        local_variations = np.full(count, np.nan, dtype=np.float64)
+        outlier_factors = np.full(count, np.nan, dtype=np.float64)
+        nearby = np.zeros(count, dtype=bool)
+        flagged = np.zeros(count, dtype=bool)
+
+        valid_bulk = np.asarray([item is not None for item in bulk_vectors], dtype=bool)
+        for index, (point, interface_vector) in enumerate(zip(interface_points, interface_vectors)):
+            if interface_vector is None or not np.any(valid_bulk):
+                continue
+            eligible = np.flatnonzero(valid_bulk)
+            squared = np.sum((bulk_points[eligible] - point) ** 2, axis=1)
+            nearest = int(eligible[np.argmin(squared)])
+            nearest_indices[index] = nearest
+            nearest_distances[index] = np.sqrt(np.min(squared))
+            bulk_vector = bulk_vectors[nearest]
+            delta = interface_vector - bulk_vector
+            maximum_differences[index] = float(np.max(np.abs(delta)))
+            l2_differences[index] = float(np.linalg.norm(delta))
+
+            bulk_squared = np.sum((bulk_points - bulk_points[nearest]) ** 2, axis=1)
+            positive = np.flatnonzero((bulk_squared > 1e-28) & valid_bulk)
+            if positive.size:
+                ordered = positive[np.argsort(bulk_squared[positive])]
+                bulk_spacings[index] = np.sqrt(bulk_squared[ordered[0]])
+                local = ordered[:neighbor_count]
+                local_variations[index] = float(np.median([
+                    np.linalg.norm(bulk_vectors[item] - bulk_vector) for item in local
+                ]))
+            else:
+                bulk_spacings[index] = np.inf
+                local_variations[index] = 0.0
+            distance_ratios[index] = nearest_distances[index] / bulk_spacings[index]
+            outlier_factors[index] = l2_differences[index] / max(local_variations[index], scale_floor)
+            if max_composition_distance is None:
+                nearby[index] = distance_ratios[index] <= max_distance_ratio
+            else:
+                nearby[index] = nearest_distances[index] <= max_composition_distance
+            flagged[index] = (
+                nearby[index]
+                and maximum_differences[index] >= absolute_threshold
+                and outlier_factors[index] >= local_outlier_factor
+            )
+
+        flagged_indices = np.flatnonzero(flagged)
+        for interface_index in flagged_indices:
+            nearest = nearest_indices[interface_index]
+            interface_record = interface_matches[interface_index][1]
+            bulk_record = bulk_matches[nearest][1]
+            all_flags.append({
+                "phase": phase,
+                "interface_index": int(interface_index),
+                "interface_composition": interface_points[interface_index].copy(),
+                "interface_site_fractions": interface_record.get("site_fractions"),
+                "interface_query_index": interface_record.get("query_index"),
+                "nearest_bulk_index": int(raw_bulk_indices[nearest]),
+                "nearest_bulk_composition": bulk_points[nearest].copy(),
+                "nearest_bulk_site_fractions": bulk_record.get("site_fractions"),
+                "nearest_bulk_query_index": bulk_record.get("query_index"),
+                "composition_distance": float(nearest_distances[interface_index]),
+                "bulk_spacing": float(bulk_spacings[interface_index]),
+                "distance_ratio": float(distance_ratios[interface_index]),
+                "maximum_site_fraction_difference": float(maximum_differences[interface_index]),
+                "site_fraction_l2_difference": float(l2_differences[interface_index]),
+                "local_bulk_site_fraction_variation": float(local_variations[interface_index]),
+                "local_outlier_factor": float(outlier_factors[interface_index]),
+            })
+        phase_reports[phase] = {
+            "site_fraction_labels": labels,
+            "nearest_bulk_indices": np.where(
+                nearest_indices >= 0, raw_bulk_indices[np.maximum(nearest_indices, 0)], -1
+            ),
+            "composition_distance": nearest_distances,
+            "bulk_spacing": bulk_spacings,
+            "distance_ratio": distance_ratios,
+            "maximum_site_fraction_difference": maximum_differences,
+            "site_fraction_l2_difference": l2_differences,
+            "local_bulk_site_fraction_variation": local_variations,
+            "local_outlier_factor": outlier_factors,
+            "nearby": nearby,
+            "flagged": flagged,
+            "flagged_indices": flagged_indices,
+            "excluded_general_interface_prefix_count": int(excluded_prefix),
+            "summary": {
+                "interface_sample_count": count,
+                "matched_interface_sample_count": int(sum(item is not None and item[0] is not None for item in interface_matches)),
+                "independent_bulk_sample_count": len(bulk_points),
+                "matched_bulk_sample_count": int(np.count_nonzero(valid_bulk)),
+                "flagged_count": int(flagged_indices.size),
+                "matching_failure_count": len(failures),
+                "max_site_fraction_difference": (
+                    float(np.nanmax(maximum_differences))
+                    if np.any(np.isfinite(maximum_differences)) else np.nan
+                ),
+                "max_local_outlier_factor": (
+                    float(np.nanmax(outlier_factors))
+                    if np.any(np.isfinite(outlier_factors)) else np.nan
+                ),
+            },
+        }
+    return phase_reports, all_flags, all_failures
+
+
+def evaluate_interface_bulk_diffusivity_consistency(
+    surrogate,
+    *,
+    phases=None,
+    neighbor_count=5,
+    matrix_relative_threshold=0.75,
+    local_outlier_factor=5.0,
+    max_distance_ratio=1.5,
+    max_composition_distance=None,
+    relative_scale_floor=1e-12,
+    kinetics_diagnostics=None,
+    site_fraction_absolute_threshold=0.1,
+    site_fraction_local_outlier_factor=None,
+    site_fraction_scale_floor=1e-12,
+    composition_match_tolerance=1e-12,
+):
+    """Flag interface matrices or site fractions discontinuous with nearby bulk samples.
+
+    Each stored interface matrix is compared with the nearest independently
+    calculated bulk matrix for the same phase. A point is flagged only when
+    (1) the bulk point is nearby, (2) the symmetric Frobenius difference exceeds
+    ``matrix_relative_threshold``, and (3) that difference exceeds the local
+    bulk-matrix variation by ``local_outlier_factor``. This conjunction avoids
+    treating a smooth, steep bulk trend as an interface/bulk discontinuity.
+
+    "Nearby" defaults to ``max_distance_ratio`` times the local bulk sampling
+    spacing. Supplying ``max_composition_distance`` replaces that adaptive
+    distance test with an absolute Euclidean composition distance. The check is
+    a heuristic quality-control signal, not a thermodynamic validity proof.
+    Interface rows copied into the general fit after failed grid calculations
+    are excluded from the bulk population. When ``kinetics_diagnostics`` is a
+    selected-result kinetics JSONL path or record iterable, the same neighbor
+    and local-outlier test is also applied to labeled sublattice site fractions.
+    Records are matched by phase, composition, and diffusivity matrix; missing
+    matches are reported and make the combined check fail rather than silently
+    passing. Site-fraction comparisons use the maximum absolute constituent
+    change as the threshold and the flattened-vector L2 change for the local
+    outlier ratio.
+    """
+    if not isinstance(surrogate, TernaryMovingBoundaryThermodynamicsSurrogate):
+        raise TypeError("Interface/bulk consistency requires TernaryMovingBoundaryThermodynamicsSurrogate.")
+    neighbor_count = _positive_int(neighbor_count, "neighbor_count")
+    thresholds = {
+        "matrix_relative_threshold": float(matrix_relative_threshold),
+        "local_outlier_factor": float(local_outlier_factor),
+        "max_distance_ratio": float(max_distance_ratio),
+        "relative_scale_floor": float(relative_scale_floor),
+    }
+    if any(not np.isfinite(value) or value <= 0.0 for value in thresholds.values()):
+        raise ValueError("Consistency thresholds and scale floors must be positive and finite.")
+    if max_composition_distance is not None:
+        max_composition_distance = float(max_composition_distance)
+        if not np.isfinite(max_composition_distance) or max_composition_distance <= 0.0:
+            raise ValueError("max_composition_distance must be positive and finite when provided.")
+    if site_fraction_local_outlier_factor is None:
+        site_fraction_local_outlier_factor = thresholds["local_outlier_factor"]
+    site_thresholds = {
+        "absolute_threshold": float(site_fraction_absolute_threshold),
+        "local_outlier_factor": float(site_fraction_local_outlier_factor),
+        "scale_floor": float(site_fraction_scale_floor),
+        "composition_match_tolerance": float(composition_match_tolerance),
+    }
+    if any(not np.isfinite(value) or value <= 0.0 for value in site_thresholds.values()):
+        raise ValueError("Site-fraction thresholds and tolerances must be positive and finite.")
+
+    selected_phases = _surrogate_phases(surrogate, phases)
+    phase_reports = {}
+    all_flags = []
+    tiny = np.finfo(np.float64).tiny
+    for phase in selected_phases:
+        interface_points = _diffusivity_training_compositions(surrogate, "interface", phase)
+        interface_matrices = _diffusivity_training_matrices(surrogate, "interface", phase)
+        bulk_points, bulk_matrices, raw_bulk_indices, excluded_prefix = _bulk_only_diffusivity_samples(
+            surrogate, phase
+        )
+        if interface_points.shape != (len(interface_matrices), 2) or interface_matrices.shape[1:] != (2, 2):
+            raise ValueError(f"Stored interface diffusivity samples for phase {phase} have incompatible shapes.")
+        if bulk_points.shape != (len(bulk_matrices), 2) or bulk_matrices.shape[1:] != (2, 2):
+            raise ValueError(f"Stored general diffusivity samples for phase {phase} have incompatible shapes.")
+        if len(bulk_points) == 0:
+            raise ValueError(f"Phase {phase} has no independent bulk diffusivity samples to compare.")
+        if not all(np.all(np.isfinite(values)) for values in (
+            interface_points, interface_matrices, bulk_points, bulk_matrices
+        )):
+            raise ValueError(f"Phase {phase} consistency samples must be finite.")
+
+        count = len(interface_points)
+        nearest_indices = np.empty(count, dtype=np.int64)
+        nearest_distances = np.empty(count, dtype=np.float64)
+        bulk_spacings = np.empty(count, dtype=np.float64)
+        distance_ratios = np.empty(count, dtype=np.float64)
+        matrix_relative = np.empty(count, dtype=np.float64)
+        matrix_norm_ratios = np.empty(count, dtype=np.float64)
+        local_variations = np.empty(count, dtype=np.float64)
+        outlier_factors = np.empty(count, dtype=np.float64)
+        nearby = np.empty(count, dtype=bool)
+        flagged = np.empty(count, dtype=bool)
+
+        for index, (point, interface_matrix) in enumerate(zip(interface_points, interface_matrices)):
+            squared = np.sum((bulk_points - point) ** 2, axis=1)
+            nearest = int(np.argmin(squared))
+            nearest_indices[index] = nearest
+            nearest_distances[index] = np.sqrt(squared[nearest])
+            bulk_matrix = bulk_matrices[nearest]
+            interface_norm = float(np.linalg.norm(interface_matrix))
+            bulk_norm = float(np.linalg.norm(bulk_matrix))
+            matrix_scale = max(interface_norm, bulk_norm, tiny)
+            difference = float(np.linalg.norm(interface_matrix - bulk_matrix))
+            matrix_relative[index] = difference / matrix_scale
+            matrix_norm_ratios[index] = max(interface_norm, bulk_norm) / max(
+                min(interface_norm, bulk_norm), tiny
+            )
+
+            bulk_squared = np.sum((bulk_points - bulk_points[nearest]) ** 2, axis=1)
+            positive = np.flatnonzero(bulk_squared > 1e-28)
+            if positive.size:
+                ordered = positive[np.argsort(bulk_squared[positive])]
+                bulk_spacings[index] = np.sqrt(bulk_squared[ordered[0]])
+                local = ordered[:neighbor_count]
+                local_variations[index] = float(np.median(
+                    np.linalg.norm(bulk_matrices[local] - bulk_matrix, axis=(1, 2))
+                ))
+            else:
+                bulk_spacings[index] = np.inf
+                local_variations[index] = 0.0
+            distance_ratios[index] = nearest_distances[index] / bulk_spacings[index]
+            local_scale = max(
+                local_variations[index], thresholds["relative_scale_floor"] * matrix_scale, tiny
+            )
+            outlier_factors[index] = difference / local_scale
+            if max_composition_distance is None:
+                nearby[index] = distance_ratios[index] <= thresholds["max_distance_ratio"]
+            else:
+                nearby[index] = nearest_distances[index] <= max_composition_distance
+            flagged[index] = (
+                nearby[index]
+                and matrix_relative[index] >= thresholds["matrix_relative_threshold"]
+                and outlier_factors[index] >= thresholds["local_outlier_factor"]
+            )
+
+        flagged_indices = np.flatnonzero(flagged)
+        for interface_index in flagged_indices:
+            nearest = nearest_indices[interface_index]
+            all_flags.append({
+                "phase": phase,
+                "interface_index": int(interface_index),
+                "interface_composition": interface_points[interface_index].copy(),
+                "interface_matrix": interface_matrices[interface_index].copy(),
+                "nearest_bulk_index": int(raw_bulk_indices[nearest]),
+                "nearest_bulk_composition": bulk_points[nearest].copy(),
+                "nearest_bulk_matrix": bulk_matrices[nearest].copy(),
+                "composition_distance": float(nearest_distances[interface_index]),
+                "bulk_spacing": float(bulk_spacings[interface_index]),
+                "distance_ratio": float(distance_ratios[interface_index]),
+                "matrix_relative_difference": float(matrix_relative[interface_index]),
+                "matrix_norm_ratio": float(matrix_norm_ratios[interface_index]),
+                "local_bulk_matrix_variation": float(local_variations[interface_index]),
+                "local_outlier_factor": float(outlier_factors[interface_index]),
+            })
+        phase_reports[phase] = {
+            "interface_compositions": interface_points.copy(),
+            "interface_matrices": interface_matrices.copy(),
+            "nearest_bulk_indices": raw_bulk_indices[nearest_indices],
+            "nearest_bulk_compositions": bulk_points[nearest_indices].copy(),
+            "nearest_bulk_matrices": bulk_matrices[nearest_indices].copy(),
+            "composition_distance": nearest_distances,
+            "bulk_spacing": bulk_spacings,
+            "distance_ratio": distance_ratios,
+            "matrix_relative_difference": matrix_relative,
+            "matrix_norm_ratio": matrix_norm_ratios,
+            "local_bulk_matrix_variation": local_variations,
+            "local_outlier_factor": outlier_factors,
+            "nearby": nearby,
+            "flagged": flagged,
+            "flagged_indices": flagged_indices,
+            "excluded_general_interface_prefix_count": int(excluded_prefix),
+            "summary": {
+                "interface_sample_count": count,
+                "independent_bulk_sample_count": len(bulk_points),
+                "flagged_count": int(flagged_indices.size),
+                "max_matrix_relative_difference": float(np.max(matrix_relative)) if count else np.nan,
+                "max_local_outlier_factor": float(np.max(outlier_factors)) if count else np.nan,
+            },
+        }
+    site_phase_reports = {}
+    site_flags = []
+    site_matching_failures = []
+    if kinetics_diagnostics is not None:
+        site_phase_reports, site_flags, site_matching_failures = (
+            _evaluate_interface_bulk_site_fraction_consistency(
+                surrogate,
+                selected_phases,
+                kinetics_diagnostics,
+                neighbor_count=neighbor_count,
+                absolute_threshold=site_thresholds["absolute_threshold"],
+                local_outlier_factor=site_thresholds["local_outlier_factor"],
+                max_distance_ratio=thresholds["max_distance_ratio"],
+                max_composition_distance=max_composition_distance,
+                scale_floor=site_thresholds["scale_floor"],
+                composition_match_tolerance=site_thresholds["composition_match_tolerance"],
+            )
+        )
+    return {
+        "kind": "interface_bulk_diffusivity_consistency",
+        "elements": tuple(surrogate.elements),
+        "phases": selected_phases,
+        "temperature": float(surrogate.temperature),
+        "settings": {
+            "neighbor_count": neighbor_count,
+            **thresholds,
+            "max_composition_distance": max_composition_distance,
+        },
+        "phase_reports": phase_reports,
+        "flags": all_flags,
+        "site_fraction_settings": site_thresholds if kinetics_diagnostics is not None else None,
+        "site_fraction_phase_reports": site_phase_reports,
+        "site_fraction_flags": site_flags,
+        "site_fraction_matching_failures": site_matching_failures,
+        "summary": {
+            "interface_sample_count": int(sum(len(report["flagged"]) for report in phase_reports.values())),
+            "diffusivity_flagged_count": len(all_flags),
+            "site_fraction_flagged_count": len(site_flags),
+            "site_fraction_matching_failure_count": len(site_matching_failures),
+            "flagged_count": len(all_flags) + len(site_flags),
+            "ok": not all_flags and not site_flags and not site_matching_failures,
+        },
+    }
+
+
 def _loo_sample_indices(sample_indices, phase, count):
     """Select unique held-out row indices, retaining the caller's order."""
     if sample_indices is None:
@@ -1104,7 +1606,9 @@ def plot_calculation_site_fractions(
     composition-matched disordered reference is justified by equivalent
     elemental sublattices; otherwise it shows actual occupancy. Hover gives
     the full recorded phase constitution, result and input compositions, and
-    composition-set identity. Circles denote equilibrium calculations and
+    composition-set identity. Markers are located at the phase composition,
+    which can differ from the calculation's overall input composition in a
+    multiphase result. Circles denote equilibrium calculations and
     diamonds denote kinetics calculations. Failed calculations have no site
     fractions and are excluded from the markers.
     """
@@ -1120,6 +1624,12 @@ def plot_calculation_site_fractions(
         for state in record.get("phases", []):
             if str(state["phase"]).split("#", 1)[0].upper() != base or not state.get("site_fractions"):
                 continue
+            try:
+                phase_composition = np.asarray(state.get("phase_composition"), dtype=np.float64)
+            except (TypeError, ValueError):
+                continue
+            if phase_composition.shape != (len(elements),) or not np.all(np.isfinite(phase_composition)):
+                continue
             entries.append((record, state, _disordered_site_reference(state, elements)))
     if not entries:
         raise ValueError(f"No recorded site fractions for phase '{phase}' and kinds {sorted(selected_kinds)}.")
@@ -1132,13 +1642,14 @@ def plot_calculation_site_fractions(
     site_keys = set()
     marker_symbols = []
     for record, state, reference in entries:
-        point = np.asarray(record["input_full_composition"], dtype=np.float64)
+        point = np.asarray(state["phase_composition"], dtype=np.float64)
+        input_point = np.asarray(record["input_full_composition"], dtype=np.float64)
         points.append(point)
         marker_symbols.append({"equilibrium": "circle", "kinetics": "diamond", "driving_force": "square"}.get(record["kind"], "cross"))
         lines = [
             f"<b>{escape(str(state['phase']))} · calculation {record['calculation_index']}</b>",
             f"Kind: {escape(str(record['kind']))}; requested: {escape(str(record['requested_phase']))}",
-            "Input: " + ", ".join(f"{escape(str(e))}={format_value(v)}" for e, v in zip(elements, point)),
+            "Input: " + ", ".join(f"{escape(str(e))}={format_value(v)}" for e, v in zip(elements, input_point)),
             "Phase: " + ", ".join(f"{escape(str(e))}={format_value(v)}" for e, v in zip(elements, state.get("phase_composition") or [None] * len(elements))),
             f"Phase amount: {format_value(state.get('phase_amount'))}; stable: {bool(state['stable'])}",
             "Stable sets: " + escape(", ".join(record.get("stable_composition_sets") or [])),
@@ -2383,6 +2894,223 @@ def plot_surrogate_construction_diagnostics(report, *, hover_format=".6g", rende
     return fig
 
 
+def plot_selected_diffusivity_calculations(
+    surrogate,
+    kinetics_diagnostics,
+    *,
+    hover_format=".6g",
+    renderer="browser",
+):
+    """Plot only selected TC calculations stored in a diffusivity surrogate.
+
+    The four phase/context tabs are built from the exact composition and matrix
+    rows stored under ``interface`` and ``general``. Each row is matched to a
+    selected-result kinetics record by phase, composition, and full matrix, so
+    scouts, failed attempts, rejected local candidates, and surrogate
+    predictions are never displayed. ``general`` follows the stored fit data;
+    when construction prepended interface rows to a scattered bulk fit, those
+    rows are labeled as interface calculations and the remaining rows as bulk.
+
+    Marker color is the base-10 logarithm of the matrix Frobenius norm. Hover
+    reports the complete matrix, selected candidate metadata, tracer values,
+    phase composition, and labeled sublattice site fractions when available.
+    """
+    if not isinstance(surrogate, TernaryMovingBoundaryThermodynamicsSurrogate):
+        raise TypeError("Selected diffusivity plotting requires TernaryMovingBoundaryThermodynamicsSurrogate.")
+    records = _selected_kinetics_records(kinetics_diagnostics)
+    if not records:
+        raise ValueError("Kinetics diagnostics contain no selected-result records.")
+    go, _ = _require_plotly(renderer)
+    phases = tuple(surrogate.tieline_phases)
+    elements = tuple(surrogate.elements)
+    tabs = []
+    all_norms = []
+
+    for phase in phases:
+        for context in ("interface", "general"):
+            points = _diffusivity_training_compositions(surrogate, context, phase)
+            matrices = _diffusivity_training_matrices(surrogate, context, phase)
+            matches, failures = _match_kinetics_site_fractions(
+                records,
+                phase,
+                points,
+                matrices,
+                set(),
+                1e-12,
+            )
+            missing = [
+                failure for failure in failures
+                if failure["reason"] == "no_matching_kinetics_record"
+            ]
+            if missing:
+                indices = [failure["sample_index"] for failure in missing[:10]]
+                suffix = "..." if len(missing) > 10 else ""
+                raise ValueError(
+                    f"Could not match {len(missing)} selected TC records for {phase} "
+                    f"{context} rows {indices}{suffix}."
+                )
+            if context == "general":
+                _, _, _, prefix_count = _bulk_only_diffusivity_samples(surrogate, phase)
+                sample_types = np.asarray(
+                    ["interface"] * prefix_count + ["bulk"] * (len(points) - prefix_count),
+                    dtype=object,
+                )
+            else:
+                sample_types = np.full(len(points), "interface", dtype=object)
+            norms = np.linalg.norm(matrices, axis=(1, 2))
+            all_norms.append(norms)
+            tabs.append({
+                "phase": phase,
+                "context": context,
+                "points": points,
+                "matrices": matrices,
+                "matches": matches,
+                "sample_types": sample_types,
+                "norms": norms,
+            })
+
+    color_mapping = _diffusivity_color_mapping(np.concatenate(all_norms), "log")
+    fig = go.Figure()
+
+    def format_value(value):
+        if value is None:
+            return "unavailable"
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return escape(str(value))
+        return format(numeric, hover_format) if np.isfinite(numeric) else "unavailable"
+
+    for tab_index, tab in enumerate(tabs):
+        hover = []
+        for row_index, (point, matrix, match, sample_type) in enumerate(zip(
+            tab["points"], tab["matrices"], tab["matches"], tab["sample_types"]
+        )):
+            record = match[1]
+            phase_composition = record.get("phase_composition")
+            lines = [
+                f"<b>{escape(tab['phase'])} · {escape(tab['context'])} row {row_index}</b>",
+                f"TC calculation type: {escape(str(sample_type))}",
+                f"Selected kinetics query: {escape(str(record.get('query_index')))}",
+                "Input: " + ", ".join(
+                    f"{escape(str(element))}={format_value(value)}"
+                    for element, value in zip(elements, (1.0 - np.sum(point), *point))
+                ),
+                "Phase composition: " + (
+                    ", ".join(
+                        f"{escape(str(element))}={format_value(value)}"
+                        for element, value in zip(elements, phase_composition)
+                    ) if phase_composition is not None else "unavailable"
+                ),
+                "Interdiffusivity (m²/s):",
+                f"[{format_value(matrix[0, 0])}, {format_value(matrix[0, 1])}]",
+                f"[{format_value(matrix[1, 0])}, {format_value(matrix[1, 1])}]",
+                f"Frobenius norm: {format_value(tab['norms'][row_index])} m²/s",
+                "Tracer diffusivities (m²/s): " + ", ".join(
+                    format_value(value) for value in (record.get("tracer_diffusivities") or [])
+                ),
+                f"Strategy: {escape(str(record.get('kinetics_strategy')))}",
+                f"Selected seed: {escape(str(record.get('selected_seed_index')))}; "
+                f"source set: {escape(str(record.get('selected_source_composition_set')))}",
+                f"Selected Gibbs energy: {format_value(record.get('selected_gibbs_energy'))} J",
+                "Stable sets: " + escape(", ".join(record.get("stable_composition_sets") or [])),
+            ]
+            site_fractions = record.get("site_fractions") or []
+            if site_fractions:
+                lines.append("<b>Selected sublattice site fractions</b>")
+                for sublattice in site_fractions:
+                    constituents = sublattice.get("constituents") or {}
+                    lines.append(
+                        f"Sublattice {escape(str(sublattice.get('sublattice')))}: "
+                        + ", ".join(
+                            f"{escape(str(name))}={format_value(value)}"
+                            for name, value in constituents.items()
+                        )
+                    )
+            else:
+                lines.append("Selected sublattice site fractions: unavailable")
+            hover.append("<br>".join(lines))
+
+        transformed = _transform_diffusivity_color_values(tab["norms"], color_mapping)
+        marker = {
+            "size": 8,
+            "symbol": ["diamond" if kind == "interface" else "circle" for kind in tab["sample_types"]],
+            "color": transformed,
+            "colorscale": color_mapping["colorscale"],
+            "cmin": color_mapping["zmin"],
+            "cmax": color_mapping["zmax"],
+            "showscale": True,
+            "colorbar": {
+                "title": "Matrix norm<br>(m²/s, log10)",
+                "tickmode": "array",
+                "tickvals": color_mapping["tickvals"].tolist(),
+                "ticktext": color_mapping["ticktext"],
+            },
+        }
+        fig.add_trace(go.Scatterternary(
+            **_ternary_coordinates(tab["points"]),
+            mode="markers",
+            name=f"{tab['phase']} · {tab['context']}",
+            marker=marker,
+            text=hover,
+            hovertemplate="%{text}<extra></extra>",
+            visible=tab_index == 0,
+        ))
+
+    buttons = []
+    for tab_index, tab in enumerate(tabs):
+        buttons.append({
+            "label": f"{tab['phase']} · {tab['context']}",
+            "method": "update",
+            "args": [
+                {"visible": [index == tab_index for index in range(len(tabs))]},
+                {"title": (
+                    f"Selected TC diffusivity calculations: {tab['phase']} · "
+                    f"{tab['context']} at {surrogate.temperature:g} K"
+                )},
+            ],
+        })
+    first = tabs[0]
+    fig.update_layout(
+        title=(
+            f"Selected TC diffusivity calculations: {first['phase']} · "
+            f"{first['context']} at {surrogate.temperature:g} K"
+        ),
+        template="plotly_white",
+        height=820,
+        margin={"t": 135},
+        updatemenus=[{
+            "type": "buttons",
+            "direction": "right",
+            "buttons": buttons,
+            "x": 0.5,
+            "xanchor": "center",
+            "y": 1.13,
+            "yanchor": "top",
+        }],
+        annotations=[{
+            "text": "Diamond: interface calculation · Circle: bulk calculation · Selected TC results only",
+            "showarrow": False,
+            "x": 0.5,
+            "xanchor": "center",
+            "y": 1.04,
+            "yanchor": "bottom",
+            "xref": "paper",
+            "yref": "paper",
+        }],
+        ternary={
+            "sum": 1,
+            "domain": {"y": [0.0, 0.92]},
+            "aaxis": {"title": elements[2]},
+            "baxis": {"title": elements[0]},
+            "caxis": {"title": elements[1]},
+        },
+        uirevision="selected-tc-diffusivity-calculations",
+    )
+    _leave_room_above_ternary(fig)
+    return fig
+
+
 def plot_surrogate_diagnostics(
     surrogate,
     *,
@@ -2468,6 +3196,7 @@ def plot_surrogate_diagnostics(
 __all__ = [
     "evaluate_tieline_diagnostics",
     "evaluate_diffusivity_diagnostics",
+    "evaluate_interface_bulk_diffusivity_consistency",
     "evaluate_diffusivity_leave_one_out",
     "plot_diffusivity_leave_one_out",
     "load_calculation_site_fractions",
@@ -2477,5 +3206,6 @@ __all__ = [
     "plot_bulk_diffusivity_diagnostics",
     "evaluate_surrogate_construction_diagnostics",
     "plot_surrogate_construction_diagnostics",
+    "plot_selected_diffusivity_calculations",
     "plot_surrogate_diagnostics",
 ]

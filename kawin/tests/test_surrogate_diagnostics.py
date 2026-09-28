@@ -11,12 +11,14 @@ from kawin.diffusion import (
     TernaryMovingBoundaryThermodynamicsSurrogate,
     evaluate_diffusivity_diagnostics,
     evaluate_diffusivity_leave_one_out,
+    evaluate_interface_bulk_diffusivity_consistency,
     evaluate_tieline_diagnostics,
     load_calculation_site_fractions,
     plot_bulk_diffusivity_diagnostics,
     plot_calculation_site_fractions,
     plot_diffusivity_leave_one_out,
     plot_interface_diffusivity_diagnostics,
+    plot_selected_diffusivity_calculations,
     plot_surrogate_diagnostics,
     plot_tieline_diagnostics,
 )
@@ -129,6 +131,227 @@ def _merged(interpolation="nearest"):
         diffusivities={"interface": _matrices(len(points), 0.5), "general": _matrices(len(points), 0.5)},
         diffusivity_interpolation=interpolation,
     )
+
+
+def _interface_bulk_consistency_surrogate(*, anomalous=True):
+    bulk_points = np.asarray([
+        [0.20, 0.11], [0.30, 0.11], [0.20, 0.21], [0.30, 0.21],
+    ])
+    bulk_matrices = _matrices(len(bulk_points))
+    interface_matrices = _matrices(len(LEFT))
+    if anomalous:
+        interface_matrices[1] *= 0.05
+    return TernaryMovingBoundaryThermodynamicsSurrogate(
+        elements=ELEMENTS,
+        phases=PHASES,
+        tieline_phases=PHASES,
+        temperature=1000.0,
+        eta_samples=ETA,
+        tieline_compositions={PHASES[0]: LEFT, PHASES[1]: RIGHT},
+        diffusivity_compositions={
+            "interface": {PHASES[0]: LEFT, PHASES[1]: RIGHT},
+            "general": {
+                PHASES[0]: np.vstack((LEFT, bulk_points)),
+                PHASES[1]: bulk_points,
+            },
+        },
+        diffusivities={
+            "interface": {
+                PHASES[0]: interface_matrices,
+                PHASES[1]: _matrices(len(RIGHT), 0.5),
+            },
+            "general": {
+                PHASES[0]: np.concatenate((interface_matrices, bulk_matrices)),
+                PHASES[1]: _matrices(len(bulk_points), 0.5),
+            },
+        },
+        diffusivity_interpolation="nearest",
+    )
+
+
+def _interface_bulk_kinetics_records(surrogate, *, anomalous_site=True):
+    """Build selected-result records in interface-then-independent-bulk order."""
+    base_state = [
+        {"sublattice": 1, "constituents": {"X": 0.9, "Y": 0.1}},
+        {"sublattice": 2, "constituents": {"X": 0.1, "Y": 0.9}},
+    ]
+    anomalous_state = [
+        {"sublattice": 1, "constituents": {"X": 0.5, "Y": 0.5}},
+        {"sublattice": 2, "constituents": {"X": 0.5, "Y": 0.5}},
+    ]
+    interface_points = surrogate.diffusivity_compositions["interface"]["ALPHA"]
+    interface_matrices = surrogate.diffusivities["interface"]["ALPHA"]
+    bulk_points = surrogate.diffusivity_compositions["general"]["ALPHA"][len(interface_points):]
+    bulk_matrices = surrogate.diffusivities["general"]["ALPHA"][len(interface_points):]
+    points = list(zip(interface_points, interface_matrices, range(len(interface_points))))
+    points.extend((point, matrix, None) for point, matrix in zip(bulk_points, bulk_matrices))
+    records = []
+    for query_index, (point, matrix, interface_index) in enumerate(points):
+        state = anomalous_state if anomalous_site and interface_index == 1 else base_state
+        records.append({
+            "record_type": "kinetics",
+            "query_index": query_index,
+            "requested_phase": "ALPHA",
+            "input_composition": point.tolist(),
+            "interdiffusivity": matrix.tolist(),
+            "site_fractions": state,
+        })
+    return records
+
+
+def _selected_plot_kinetics_records(surrogate):
+    """Build one selected record for every independent TC kinetics query."""
+    records = []
+    query_index = 0
+    for phase in PHASES:
+        interface_points = surrogate.diffusivity_compositions["interface"][phase]
+        interface_matrices = surrogate.diffusivities["interface"][phase]
+        general_points = surrogate.diffusivity_compositions["general"][phase]
+        general_matrices = surrogate.diffusivities["general"][phase]
+        prefix = len(interface_points) if (
+            len(general_points) >= len(interface_points)
+            and np.array_equal(general_points[:len(interface_points)], interface_points)
+            and np.array_equal(general_matrices[:len(interface_points)], interface_matrices)
+        ) else 0
+        rows = list(zip(interface_points, interface_matrices))
+        rows.extend(zip(general_points[prefix:], general_matrices[prefix:]))
+        for point, matrix in rows:
+            full = [1.0 - float(np.sum(point)), *point.tolist()]
+            records.append({
+                "record_type": "kinetics",
+                "query_index": query_index,
+                "requested_phase": phase,
+                "input_composition": point.tolist(),
+                "phase_composition": full,
+                "interdiffusivity": matrix.tolist(),
+                "tracer_diffusivities": [1e-14, 2e-14, 3e-14],
+                "site_fractions": [{
+                    "sublattice": 1,
+                    "constituents": {"X": float(point[0]), "Y": float(point[1])},
+                }],
+                "kinetics_strategy": "multistart_global_scout",
+                "selected_seed_index": 0,
+                "selected_source_composition_set": phase,
+                "selected_gibbs_energy": -100.0 - query_index,
+                "stable_composition_sets": [phase],
+            })
+            query_index += 1
+    return records
+
+
+def test_interface_bulk_consistency_flags_discontinuous_interface_matrix_and_excludes_prefix():
+    report = evaluate_interface_bulk_diffusivity_consistency(
+        _interface_bulk_consistency_surrogate(), phases="ALPHA"
+    )
+    phase = report["phase_reports"]["ALPHA"]
+
+    assert report["summary"]["interface_sample_count"] == 3
+    assert report["summary"]["diffusivity_flagged_count"] == 1
+    assert report["summary"]["site_fraction_flagged_count"] == 0
+    assert report["summary"]["flagged_count"] == 1
+    assert not report["summary"]["ok"]
+    assert phase["excluded_general_interface_prefix_count"] == 3
+    assert phase["flagged_indices"].tolist() == [1]
+    assert phase["nearest_bulk_indices"][1] >= 3
+    assert phase["matrix_relative_difference"][1] == pytest.approx(0.95)
+    assert report["flags"][0]["phase"] == "ALPHA"
+    assert report["flags"][0]["interface_index"] == 1
+    assert report["flags"][0]["nearest_bulk_index"] == phase["nearest_bulk_indices"][1]
+
+
+def test_interface_bulk_consistency_accepts_matching_samples_and_distance_gate():
+    matching = evaluate_interface_bulk_diffusivity_consistency(
+        _interface_bulk_consistency_surrogate(anomalous=False), phases="ALPHA"
+    )
+    assert matching["summary"]["ok"]
+    assert matching["summary"]["flagged_count"] == 0
+
+    distant = evaluate_interface_bulk_diffusivity_consistency(
+        _interface_bulk_consistency_surrogate(),
+        phases="ALPHA",
+        max_composition_distance=1e-6,
+    )
+    assert distant["summary"]["ok"]
+    assert not np.any(distant["phase_reports"]["ALPHA"]["nearby"])
+
+
+def test_interface_bulk_consistency_flags_selected_site_fraction_discontinuity():
+    surrogate = _interface_bulk_consistency_surrogate(anomalous=False)
+    report = evaluate_interface_bulk_diffusivity_consistency(
+        surrogate,
+        phases="ALPHA",
+        kinetics_diagnostics=_interface_bulk_kinetics_records(surrogate),
+    )
+    phase = report["site_fraction_phase_reports"]["ALPHA"]
+
+    assert report["summary"]["diffusivity_flagged_count"] == 0
+    assert report["summary"]["site_fraction_flagged_count"] == 1
+    assert report["summary"]["site_fraction_matching_failure_count"] == 0
+    assert not report["summary"]["ok"]
+    assert phase["flagged_indices"].tolist() == [1]
+    assert phase["maximum_site_fraction_difference"][1] == pytest.approx(0.4)
+    assert report["site_fraction_flags"][0]["interface_query_index"] == 1
+    assert report["site_fraction_flags"][0]["nearest_bulk_query_index"] >= 3
+
+
+def test_interface_bulk_consistency_reports_missing_site_fraction_records():
+    surrogate = _interface_bulk_consistency_surrogate(anomalous=False)
+    records = _interface_bulk_kinetics_records(surrogate, anomalous_site=False)
+    records[1]["site_fractions"] = None
+    report = evaluate_interface_bulk_diffusivity_consistency(
+        surrogate, phases="ALPHA", kinetics_diagnostics=records
+    )
+
+    assert report["summary"]["site_fraction_flagged_count"] == 0
+    assert report["summary"]["site_fraction_matching_failure_count"] == 1
+    assert not report["summary"]["ok"]
+    assert report["site_fraction_matching_failures"][0]["sample_kind"] == "interface"
+    assert report["site_fraction_matching_failures"][0]["reason"] == "missing_or_invalid_site_fractions"
+
+
+def test_selected_diffusivity_calculation_plot_has_four_exact_tc_tabs():
+    pytest.importorskip("plotly")
+    surrogate = _interface_bulk_consistency_surrogate(anomalous=False)
+    figure = plot_selected_diffusivity_calculations(
+        surrogate, _selected_plot_kinetics_records(surrogate), renderer=None
+    )
+
+    assert len(figure.data) == 4
+    assert [trace.name for trace in figure.data] == [
+        "ALPHA · interface", "ALPHA · general", "BETA · interface", "BETA · general",
+    ]
+    assert [trace.visible for trace in figure.data] == [True, False, False, False]
+    assert len(figure.layout.updatemenus[0].buttons) == 4
+    assert len(figure.data[0].a) == len(LEFT)
+    assert len(figure.data[1].a) == len(LEFT) + 4
+    assert list(figure.data[1].marker.symbol[:len(LEFT)]) == ["diamond"] * len(LEFT)
+    assert list(figure.data[1].marker.symbol[len(LEFT):]) == ["circle"] * 4
+    assert "Interdiffusivity" in figure.data[0].text[0]
+    assert "Sublattice 1" in figure.data[0].text[0]
+    assert "TC calculation type" in figure.data[0].text[0]
+
+
+def test_selected_diffusivity_calculation_plot_rejects_missing_selected_record():
+    pytest.importorskip("plotly")
+    surrogate = _interface_bulk_consistency_surrogate(anomalous=False)
+    records = _selected_plot_kinetics_records(surrogate)
+    records.pop()
+    with pytest.raises(ValueError, match="Could not match"):
+        plot_selected_diffusivity_calculations(surrogate, records, renderer=None)
+
+
+def test_interface_bulk_consistency_validates_settings_and_phase_support():
+    surrogate = _interface_bulk_consistency_surrogate()
+    with pytest.raises(ValueError, match="neighbor_count"):
+        evaluate_interface_bulk_diffusivity_consistency(surrogate, neighbor_count=0)
+    with pytest.raises(ValueError, match="positive and finite"):
+        evaluate_interface_bulk_diffusivity_consistency(surrogate, matrix_relative_threshold=np.nan)
+    with pytest.raises(ValueError, match="Site-fraction thresholds"):
+        evaluate_interface_bulk_diffusivity_consistency(
+            surrogate, site_fraction_absolute_threshold=0.0
+        )
+    with pytest.raises(TypeError, match="TernaryMovingBoundary"):
+        evaluate_interface_bulk_diffusivity_consistency(_merged())
 
 
 def _loo_surrogate(interpolation="simplex_linear", validity_policy="raise"):
@@ -418,7 +641,7 @@ def test_site_fraction_plot_compares_equivalent_b2_sublattices_with_disordered_s
         "records": [{
             "record_type": "calculation_site_fractions", "calculation_index": 0,
             "kind": "equilibrium", "requested_phase": None, "temperature": 1973.0,
-            "input_full_composition": [0.5, 0.3, 0.2], "status": "ok",
+            "input_full_composition": [0.6, 0.25, 0.15], "status": "ok",
             "stable_composition_sets": ["BCC_B2#3"], "phases": [phase_state],
         }],
     }
@@ -432,6 +655,8 @@ def test_site_fraction_plot_compares_equivalent_b2_sublattices_with_disordered_s
     assert fig.data[1].marker.color[0] == pytest.approx(0.3)
     assert fig.data[1].marker.colorbar.title.text == "actual − disordered"
     assert fig.data[0].b[0] == pytest.approx(0.5)
+    assert "Input: W=0.6, TI=0.25, FE=0.15" in fig.data[0].text[0]
+    assert "Phase: W=0.5, TI=0.3, FE=0.2" in fig.data[0].text[0]
     assert "BCC_B2#3" in fig.data[0].text[0]
     assert "disordered: 0.5" in fig.data[0].text[0]
     assert len(fig.layout.updatemenus[0].buttons) == 8
