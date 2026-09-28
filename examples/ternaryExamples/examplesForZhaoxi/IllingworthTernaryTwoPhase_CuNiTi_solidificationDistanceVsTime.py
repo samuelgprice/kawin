@@ -45,7 +45,8 @@ if str(REPO_ROOT) not in sys.path:
 from kawin.diffusion import (
     MovingBoundaryIllingworthTernaryFD1DModel,
     TernaryMovingBoundaryThermodynamicsSurrogate,
-    plot_calculation_site_fractions,
+    evaluate_interface_bulk_diffusivity_consistency,
+    plot_selected_diffusivity_calculations,
     plot_surrogate_diagnostics,
 )
 from kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM import (
@@ -71,14 +72,20 @@ THERM_ENGINE = ["PYCALPAHD", "TC"][-1]
 TC_USE_DEFAULT_PHASES = False #True
 DEFAULT_REMOVE_CACHE=False
 GLOBAL_MINIMIZATION_MAX_GRID_POINTS = 2000
-TC_EQUILIBRIUM_QTHISS_RETRY_GRID_POINTS = (20_000, 200_000)  # Applies to all global-minimization calculations; set to () to disable.
+TC_EQUILIBRIUM_QTHISS_RETRY_GRID_POINTS = () #(20_000, 200_000)  # Applies to all global-minimization calculations; set to () to disable.
 TC_KINETICS_DISABLE_GLOBAL_MINIMIZATION = True
 TC_KINETICS_DISABLE_POSITIVE_DEFINITE_HESSIAN = False
 TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET = True  # Requires local kinetics minimization to prevent set splitting.
+TC_KINETICS_MULTISTART_MODE = "global_scout"
+TC_KINETICS_SESSION_RESTART_INTERVAL = 100
 TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS = True
-TC_CAPTURE_SITE_FRACTIONS = True
 TC_DROP_FAILED_BULK_CALCULATIONS = True
 TC_DROP_INVALID_BULK_MATRICES = True
+TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY = True
+TC_INTERFACE_BULK_MATRIX_RELATIVE_THRESHOLD = 0.75
+TC_INTERFACE_BULK_LOCAL_OUTLIER_FACTOR = 5.0
+TC_INTERFACE_BULK_MAX_DISTANCE_RATIO = 1.5
+TC_INTERFACE_BULK_SITE_FRACTION_ABSOLUTE_THRESHOLD = 0.1
 PYCALPHAD_USE_DEFAULT_PHASES = True
 PYCALPHAD_EQUILIBRIUM_PHASES = None
 G_OFFSET = 0.0
@@ -98,6 +105,7 @@ if systemStr =="CuNiTi":
 
 
 TIELINE_PHASES = (PHASE_A, PHASE_B)
+TC_KINETICS_MULTISTART_PHASES = (PHASE_A,)
 if systemStr =="CuNiTi":
     TEMPERATURE = 1393.0
 
@@ -157,11 +165,14 @@ DIFFUSIVITY_INTERPOLATION =  "simplex_positive_2x2" #"nearest" "simplex_linear"
 if systemStr =="CuNiTi":
     CUNITI_BCC_DIFFUSIVITY_MATRIX = None
 
-# The default simplex-valid ternary compositions avoid sampling invalid
-# Cu-Ni-Ti points while constructing the bulk-diffusivity surrogate.
+# The default coarse simplex-valid ternary compositions avoid sampling invalid
+# Cu-Ni-Ti points while keeping the initial TC-Python build practical. Refine
+# flagged or trajectory-adjacent regions separately when higher resolution is
+# needed.
 # Set this to an explicit ``(n, 2)`` array to use custom samples.
 BULK_DIFFUSIVITY_POINTS = None
 BULK_DIFFUSIVITY_GRIDS = None
+BULK_DIFFUSIVITY_GRID_SPACING = 0.02
 
 # Freeze one phase matrix sampled at this tie line when using ``phase_uniform``.
 # Keeping those matrices identical in both solvers supports the original
@@ -409,6 +420,9 @@ def _make_tc_config(phases):
         kinetics_disable_global_minimization=TC_KINETICS_DISABLE_GLOBAL_MINIMIZATION,
         kinetics_disable_positive_definite_hessian=TC_KINETICS_DISABLE_POSITIVE_DEFINITE_HESSIAN,
         kinetics_constrain_single_composition_set=TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET,
+        kinetics_multistart_mode=TC_KINETICS_MULTISTART_MODE,
+        kinetics_multistart_phases=TC_KINETICS_MULTISTART_PHASES,
+        kinetics_session_restart_interval=TC_KINETICS_SESSION_RESTART_INTERVAL,
         cache_dir=OUTPUTS / "tc_cache",
     )
 
@@ -469,7 +483,7 @@ def _surrogate_diffusivity_sampling_kwargs():
         with open(
             EXAMPLES_DIR
             / "ternaryExamples"
-            / "allValid_3Element_compositions_0.02inc_projTo1eminus4.pkl",
+            / f"allValid_3Element_compositions_{BULK_DIFFUSIVITY_GRID_SPACING:g}inc_projTo1eminus4.pkl",
             "rb",
         ) as bulk_diffusivity_file:
             bulk_points = pickle.load(bulk_diffusivity_file)[:, :-1].copy()
@@ -518,7 +532,7 @@ def _surrogate_diffusivity_sampling_kwargs():
 
 
 def _diffusivity_artifact_stem():
-    """Name W-Ti-Fe artifacts by temperature and kinetics calculation settings."""
+    """Name surrogate artifacts by temperature, kinetics strategy, and grid."""
     global_enabled = int(not (
         TC_KINETICS_DISABLE_GLOBAL_MINIMIZATION or TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET
     ))
@@ -526,7 +540,112 @@ def _diffusivity_artifact_stem():
     stem = f"wtife_{TEMPERATURE:g}K_global_{global_enabled}_hessian_{hessian_forced}"
     if TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET:
         stem += "_single_set_1"
+    if TC_KINETICS_MULTISTART_MODE != "off":
+        stem += f"_multistart_{TC_KINETICS_MULTISTART_MODE}"
+        phase_tag = "-".join(
+            str(phase).replace("#", "set").lower()
+            for phase in TC_KINETICS_MULTISTART_PHASES
+        )
+        stem += f"_phases_{phase_tag}"
+    stem += f"_bulk_{str(BULK_DIFFUSIVITY_GRID_SPACING).replace('.', 'p')}"
     return stem
+
+
+def _record_interface_bulk_consistency(surrogate):
+    """Persist a compact warning report for discontinuous matrices or site states.
+
+    This is a heuristic comparison against independently calculated nearby
+    bulk samples. Selected-result kinetics diagnostics supply the labeled
+    sublattice site fractions. The report records enough state data to
+    investigate every flag without storing the full NumPy arrays in metadata.
+    """
+    kinetics_path = OUTPUTS / f"{_diffusivity_artifact_stem()}_kinetics.jsonl"
+    report = evaluate_interface_bulk_diffusivity_consistency(
+        surrogate,
+        matrix_relative_threshold=TC_INTERFACE_BULK_MATRIX_RELATIVE_THRESHOLD,
+        local_outlier_factor=TC_INTERFACE_BULK_LOCAL_OUTLIER_FACTOR,
+        max_distance_ratio=TC_INTERFACE_BULK_MAX_DISTANCE_RATIO,
+        kinetics_diagnostics=kinetics_path,
+        site_fraction_absolute_threshold=TC_INTERFACE_BULK_SITE_FRACTION_ABSOLUTE_THRESHOLD,
+    )
+    flags = [
+        {
+            key: value.tolist() if isinstance(value, np.ndarray) else value
+            for key, value in item.items()
+        }
+        for item in report["flags"]
+    ]
+    site_fraction_flags = [
+        {
+            key: value.tolist() if isinstance(value, np.ndarray) else value
+            for key, value in item.items()
+        }
+        for item in report["site_fraction_flags"]
+    ]
+    payload = {
+        "kind": report["kind"],
+        "temperature": report["temperature"],
+        "settings": report["settings"],
+        "summary": report["summary"],
+        "phase_summaries": {
+            phase: phase_report["summary"] | {
+                "excluded_general_interface_prefix_count": phase_report[
+                    "excluded_general_interface_prefix_count"
+                ],
+            }
+            for phase, phase_report in report["phase_reports"].items()
+        },
+        "flags": flags,
+        "site_fraction_settings": report["site_fraction_settings"],
+        "site_fraction_phase_summaries": {
+            phase: phase_report["summary"] | {
+                "excluded_general_interface_prefix_count": phase_report[
+                    "excluded_general_interface_prefix_count"
+                ],
+            }
+            for phase, phase_report in report["site_fraction_phase_reports"].items()
+        },
+        "site_fraction_flags": site_fraction_flags,
+        "site_fraction_matching_failures": report["site_fraction_matching_failures"],
+    }
+    surrogate.metadata["interface_bulk_diffusivity_consistency"] = payload
+    report_path = OUTPUTS / f"{_diffusivity_artifact_stem()}_interface_bulk_consistency.json"
+    report_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    if flags or site_fraction_flags or report["site_fraction_matching_failures"]:
+        details = []
+        if flags:
+            worst = max(flags, key=lambda item: item["matrix_relative_difference"])
+            details.append(
+                f"{len(flags)} matrix sample(s); worst phase={worst['phase']}, "
+                f"interface_index={worst['interface_index']}, "
+                f"relative_difference={worst['matrix_relative_difference']:.3g}"
+            )
+        if site_fraction_flags:
+            worst_site = max(
+                site_fraction_flags,
+                key=lambda item: item["maximum_site_fraction_difference"],
+            )
+            details.append(
+                f"{len(site_fraction_flags)} site-fraction sample(s); worst phase={worst_site['phase']}, "
+                f"interface_index={worst_site['interface_index']}, "
+                f"maximum_difference={worst_site['maximum_site_fraction_difference']:.3g}"
+            )
+        if report["site_fraction_matching_failures"]:
+            details.append(
+                f"{len(report['site_fraction_matching_failures'])} site-fraction record match failure(s)"
+            )
+        print(
+            "\n"
+            + "WARNING: interface/bulk diffusivity and site-fraction consistency check flagged "
+            + "; ".join(details) + ". "
+            f"Details: {report_path}"
+        )
+    else:
+        print(
+            "Interface/bulk diffusivity and site-fraction consistency check passed; "
+            f"details: {report_path}"
+        )
+    return report
 
 
 @contextmanager
@@ -561,59 +680,37 @@ def _capture_surrogate_kinetics(source_thermodynamics):
             yield path
 
 
-@contextmanager
-def _capture_surrogate_site_fractions(source_thermodynamics):
-    """Write every construction-time TC calculation attempt and its phase sites."""
-    if systemStr != "CuNiTi" or not isinstance(source_thermodynamics, TCPythonThermodynamics):
-        raise ValueError("Cu-Ni-Ti site-fraction capture requires the direct TC-Python source.")
-    path = OUTPUTS / f"{_diffusivity_artifact_stem()}_site_fractions.jsonl"
-    config = source_thermodynamics.config
-    with path.open("w", encoding="utf-8", newline="\n") as output:
-        header = {
-            "record_type": "metadata",
-            "schema_version": 1,
-            "tc_python_version": source_thermodynamics.getRuntimeVersion(),
-            "config": config.to_metadata(),
-            "temperature_unit": "K",
-            "composition_unit": "mole_fraction",
-            "site_fraction_unit": "fraction_of_sublattice_sites",
-            "site_ratio_unit": "sites_per_formula_unit",
-            "phase_amount_unit": "mole_fraction",
-            "element_order": list(config.elements),
-            "calculation_scope": "actual_calculate_attempts_including_retries",
-        }
-        output.write(json.dumps(header, allow_nan=False) + "\n")
-        output.flush()
+def plot_selected_diffusivity_calculations_for_run(surrogate=None, *, renderer="browser"):
+    """Plot only the selected TC records used by all four diffusivity datasets.
 
-        def write_record(record):
-            output.write(json.dumps(record, allow_nan=False) + "\n")
-            output.flush()
-
-        with source_thermodynamics.captureCalculationSiteFractions(write_record):
-            yield path
-
-
-def plot_site_fractions_for_run(phase=PHASE_A, *, kinds=("equilibrium", "kinetics"), renderer="browser"):
-    """Visualize recorded W-Ti-Fe phase sites against a disordered reference."""
-    path = OUTPUTS / f"{_diffusivity_artifact_stem()}_site_fractions.jsonl"
-    return plot_calculation_site_fractions(path, phase, kinds=kinds, renderer=renderer)
+    Tabs cross both phases with the interface and general training contexts.
+    Hover includes the stored matrix and selected sublattice state; surrogate
+    predictions, failed attempts, and rejected candidates are excluded.
+    ``surrogate`` defaults to ``result['surrogate_ab']`` after the example run.
+    """
+    if surrogate is None:
+        surrogate = result["surrogate_ab"]
+    sidecar = surrogate.metadata.get("kinetics_diagnostics_sidecar")
+    if not sidecar:
+        raise ValueError("Surrogate metadata does not identify a kinetics diagnostics sidecar.")
+    path = OUTPUTS / sidecar
+    return plot_selected_diffusivity_calculations(surrogate, path, renderer=renderer)
 
 
 def build_tieline_surrogate(source_thermodynamics):
-    """Sample the tie line and optionally capture TC phase-state sidecars.
-
-    Site-fraction capture covers actual equilibrium, driving-force, and
-    kinetics calculate attempts in this construction scope, including retries.
-    """
+    """Sample the tie line and optionally capture selected TC kinetics data."""
     pair_ab = TIELINE_PHASES
     diffusivity_sampling = (
         {}
         if BULK_DIFFUSIVITY_MODE == "phase_uniform"
         else _surrogate_diffusivity_sampling_kwargs()
     )
-    capture = _capture_surrogate_kinetics(source_thermodynamics) if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS else nullcontext()
-    site_capture = _capture_surrogate_site_fractions(source_thermodynamics) if TC_CAPTURE_SITE_FRACTIONS else nullcontext()
-    with source_thermodynamics, capture, site_capture:
+    capture = (
+        _capture_surrogate_kinetics(source_thermodynamics)
+        if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS or TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY
+        else nullcontext()
+    )
+    with source_thermodynamics, capture:
             kwargs_ab = {}
             # if CASE_NAME in [CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC]:
             #     kwargs_ab["validation_database"] = TDB_PATH
@@ -645,12 +742,10 @@ def build_tieline_surrogate(source_thermodynamics):
             "default_remove_cache": source_thermodynamics.default_remove_cache,
         }
         surrogate_ab.metadata["kinetics_diagnostics_sidecar"] = f"{_diffusivity_artifact_stem()}_kinetics.jsonl"
-    if TC_CAPTURE_SITE_FRACTIONS:
-        surrogate_ab.metadata["thermocalc_config"] = source_thermodynamics.config.to_metadata() | {
-            "default_remove_cache": source_thermodynamics.default_remove_cache,
-        }
-        surrogate_ab.metadata["site_fractions_sidecar"] = f"{_diffusivity_artifact_stem()}_site_fractions.jsonl"
-    if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS or TC_CAPTURE_SITE_FRACTIONS:
+    if TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY and BULK_DIFFUSIVITY_MODE != "phase_uniform":
+        _record_interface_bulk_consistency(surrogate_ab)
+    if (TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS
+            or TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY):
         surrogate_ab.save(OUTPUTS / f"{_diffusivity_artifact_stem()}.npz")
     return surrogate_ab
     # return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
@@ -1122,6 +1217,8 @@ construction_diagnostics = plot_surrogate_diagnostics(
 )
 construction_diagnostics["figures"]["construction"].show()
 
+fig = plot_selected_diffusivity_calculations_for_run(surrogate=tieline_surrogate, renderer="browser")
+fig.show()
 if BULK_DIFFUSIVITY_MODE == "phase_uniform":
     fixed_diffusivity_matrices = select_fixed_diffusivity_matrices(
         source_thermodynamics,
@@ -1423,9 +1520,6 @@ report = evaluate_diffusivity_leave_one_out(bulk_thermodynamics, phases=PHASE_A)
 fig = plot_diffusivity_leave_one_out(report, PHASE_A)
 fig.show()
 
-fig = plot_site_fractions_for_run(PHASE_A, kinds=("equilibrium", "kinetics"))
-fig.show()
-
 phase = report["phase_reports"][PHASE_A]
 
 print(phase["summary"])
@@ -1434,9 +1528,6 @@ print(np.unique(phase["refit_interpolation"], return_counts=True))
 # %%
 report = evaluate_diffusivity_leave_one_out(bulk_thermodynamics, phases=PHASE_B)
 fig = plot_diffusivity_leave_one_out(report, PHASE_B)
-fig.show()
-
-fig = plot_site_fractions_for_run(PHASE_B, kinds=("equilibrium", "kinetics"))
 fig.show()
 
 phase = report["phase_reports"][PHASE_B]
