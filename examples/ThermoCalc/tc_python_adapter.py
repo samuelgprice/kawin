@@ -21,6 +21,7 @@ from kawin.thermo.utils import _getMatrixPhase, _getPrecipitatePhase, _process_x
 from examples.debugInPlace import debugInPlace
 
 GAS_CONSTANT = 8.31446261815324
+_MULTISTART_SEED_ATOL = 1.0e-10
 
 def _is_qthiss_iteration_error(exc: Exception) -> bool:
     """Match only TC's QTHISS iteration-limit failure, allowing whitespace variation."""
@@ -88,6 +89,19 @@ class ThermoCalcConfig:
     re-enters only the requested kinetics set, and uses local minimization.
     Global minimization can create new sets despite phase-status restrictions;
     the usual bulk-composition conditions remain, and site fractions are free.
+    ``kinetics_multistart_mode='global_scout'`` instead uses a global calculation
+    to find candidate sublattice constitutions, minimizes each candidate locally
+    as one composition set, and returns the finite candidate with lowest phase
+    Gibbs energy. The scout is never used directly for diffusivity, and local
+    candidate calculators are fresh for every candidate because reused TC
+    calculation objects can retain a path-dependent phase-Hessian state even
+    after their conditions are reset. This heuristic does not prove that every
+    local basin was found.
+    ``kinetics_multistart_phases`` optionally restricts that strategy to named
+    phases; other phases use the ordinary kinetics settings. The optional
+    ``kinetics_session_restart_interval`` recycles the TC Java session between
+    kinetics queries to bound long-run native memory growth while preserving
+    already materialized adapter data and diagnostic callbacks.
     """
 
     thermodynamic_database: str = None #"TCFE9"
@@ -103,6 +117,9 @@ class ThermoCalcConfig:
     kinetics_disable_global_minimization: bool = False
     kinetics_disable_positive_definite_hessian: bool = False
     kinetics_constrain_single_composition_set: bool = False
+    kinetics_multistart_mode: str = "off"
+    kinetics_multistart_phases: tuple[str, ...] | None = None
+    kinetics_session_restart_interval: int | None = None
     cache_dir: str | Path | None = Path("examples") / "ThermoCalc" / "outputs" / "tc_cache"
     timeout_seconds: float | None = 300.0
     calculation_version: int = 1
@@ -145,6 +162,36 @@ class ThermoCalcConfig:
                     "equilibrium_qthiss_retry_grid_points must exceed global_minimization_max_grid_points."
                 )
         object.__setattr__(self, "equilibrium_qthiss_retry_grid_points", tuple(int(value) for value in retry_points))
+        multistart_mode = str(self.kinetics_multistart_mode).strip().lower()
+        if multistart_mode not in {"off", "global_scout"}:
+            raise ThermoCalcInputError("kinetics_multistart_mode must be 'off' or 'global_scout'.")
+        if multistart_mode == "global_scout" and self.kinetics_disable_positive_definite_hessian:
+            raise ThermoCalcInputError(
+                "kinetics_multistart_mode='global_scout' requires the positive-definite phase Hessian."
+            )
+        object.__setattr__(self, "kinetics_multistart_mode", multistart_mode)
+        if self.kinetics_multistart_phases is not None:
+            try:
+                multistart_phases = tuple(str(phase).upper() for phase in self.kinetics_multistart_phases)
+            except TypeError as exc:
+                raise ThermoCalcInputError("kinetics_multistart_phases must be a sequence of phase names.") from exc
+            unknown = [
+                phase for phase in multistart_phases
+                if phase not in normalized_phases
+                and base_phase_name(phase) not in {base_phase_name(item) for item in normalized_phases}
+            ]
+            if unknown:
+                raise ThermoCalcInputError(
+                    f"kinetics_multistart_phases contains phases outside configured phases: {unknown}."
+                )
+            object.__setattr__(self, "kinetics_multistart_phases", multistart_phases)
+        if self.kinetics_session_restart_interval is not None:
+            interval = self.kinetics_session_restart_interval
+            if not isinstance(interval, (int, np.integer)) or isinstance(interval, (bool, np.bool_)) or interval < 1:
+                raise ThermoCalcInputError(
+                    "kinetics_session_restart_interval must be a positive integer when set."
+                )
+            object.__setattr__(self, "kinetics_session_restart_interval", int(interval))
 
     @property
     def independent_elements(self) -> tuple[str, ...]:
@@ -262,15 +309,26 @@ class _TCPythonBackend:
         self._system = None
         self._systems: dict[bool, Any] = {}
         self._config: ThermoCalcConfig | None = None
-        self._calculations: dict[tuple[str, str | None, bool], Any] = {}
+        self._calculations: dict[tuple[Any, ...], Any] = {}
         self._last_calculation_kind: str | None = None
         self._retry_calculation: Any | None = None
         self._retry_settings_dirty = False
         self._site_fraction_capture_callback = None
         self._site_fraction_capture_index = 0
+        self.totalNumCalcs = 0
+        self.totalNumCaches = 0
+        self.totalNumQueries = 0
+        self.total_kind_lst = []
+        self.total_x_lst = []
+        self._kinetics_queries_since_restart = 0
+        self._automatic_session_restart_count = 0
 
-    def start(self, config: ThermoCalcConfig):
-        """Start TC-Python and build the selected system."""
+    def start(self, config: ThermoCalcConfig, *, reset_counters: bool = True):
+        """Start TC-Python and build the selected system.
+
+        ``reset_counters=False`` is reserved for automatic memory-management
+        restarts, which must preserve run-level progress and diagnostics.
+        """
 
         if self._session is not None:
             return
@@ -285,22 +343,17 @@ class _TCPythonBackend:
 
         self._tc_python = tc_python
         self._config = config
-        try:
-            print("\n")
-            print(f"Total number of calcs: {self.totalNumCalcs}")
-            print(f"Total number of caches: {self.totalNumCaches}")
-            print(f"Total number of queries: {self.totalNumQueries}")
-        except:
-            pass
-        finally:
+        if reset_counters:
             self.totalNumCalcs=0
             self.totalNumCaches=0
             self.totalNumQueries=0
             self.total_kind_lst=[]
             self.total_x_lst=[]
-            self._last_calculation_kind = None
-            self._retry_calculation = None
-            self._retry_settings_dirty = False
+            self._automatic_session_restart_count = 0
+        self._kinetics_queries_since_restart = 0
+        self._last_calculation_kind = None
+        self._retry_calculation = None
+        self._retry_settings_dirty = False
         try:
             self._session = TCPython()
             self._setup = self._session.__enter__()
@@ -310,17 +363,18 @@ class _TCPythonBackend:
                 self._setup.set_cache_folder(str(cache_dir))
             self._system = self._get_system(config.use_default_phases)
         except Exception as exc:
-            self.close()
+            self.close(report_totals=False)
             self._raise_backend_error(exc)
 
-    def close(self):
-        """Close the TC-Python session if it is open."""
+    def close(self, *, report_totals: bool = True):
+        """Close the TC-Python session, optionally reporting cumulative counters."""
 
         if self._session is not None:
-            print("\n")
-            print(f"Total number of calcs: {self.totalNumCalcs}")
-            print(f"Total number of caches: {self.totalNumCaches}")
-            print(f"Total number of queries: {self.totalNumQueries}")
+            if report_totals:
+                print("\n")
+                print(f"Total number of calcs: {self.totalNumCalcs}")
+                print(f"Total number of caches: {self.totalNumCaches}")
+                print(f"Total number of queries: {self.totalNumQueries}")
             try:
                 self._session.__exit__(None, None, None)
             finally:
@@ -341,6 +395,16 @@ class _TCPythonBackend:
         config = self._config
         self.close()
         self.start(config)
+
+    def _maybe_restart_before_kinetics(self):
+        """Recycle the TC session at a safe query boundary to release Java memory."""
+        config = self._require_config()
+        interval = config.kinetics_session_restart_interval
+        if interval is None or self._kinetics_queries_since_restart < interval:
+            return
+        self.close(report_totals=False)
+        self.start(config, reset_counters=False)
+        self._automatic_session_restart_count += 1
 
     def get_runtime_version(self) -> str | None:
         """Return the installed TC-Python package version when available."""
@@ -437,12 +501,53 @@ class _TCPythonBackend:
         """Calculate single-phase diffusivities and optionally inspect that result.
 
         During capture, failed tracer or phase-state queries are recorded as
-        optional diagnostic errors without discarding a chemical matrix.
+        optional diagnostic errors without discarding a chemical matrix. In
+        global-scout multistart mode, every scout set is locally minimized and
+        the lowest-Gibbs-energy successful single-set candidate is returned.
+        """
+
+        self._maybe_restart_before_kinetics()
+        phase = phase.upper()
+        try:
+            if self._uses_kinetics_multistart(phase):
+                return self._calculate_kinetics_multistart(x, T, phase, collect_diagnostics)
+            result = self._calculate("kinetics", phase, x, T)
+            try:
+                output = self._kinetics_output_from_result(result, phase, collect_diagnostics)
+            finally:
+                self._invalidate_result(result)
+            if collect_diagnostics:
+                output["diagnostics"]["kinetics_strategy"] = "single_start"
+                output["diagnostics"]["automatic_session_restart_count"] = (
+                    self._automatic_session_restart_count
+                )
+            return output
+        finally:
+            self._kinetics_queries_since_restart += 1
+
+    def _uses_kinetics_multistart(self, phase: str) -> bool:
+        """Return whether global-scout multistart applies to this phase."""
+        config = self._require_config()
+        if config.kinetics_multistart_mode != "global_scout":
+            return False
+        selected = config.kinetics_multistart_phases
+        if selected is None:
+            return True
+        return phase in selected or base_phase_name(phase) in {
+            base_phase_name(candidate) for candidate in selected
+        }
+
+    def _kinetics_output_from_result(
+        self, result: Any, phase: str, collect_diagnostics: bool
+    ) -> dict[str, Any]:
+        """Materialize kinetics quantities while a TC temporary result is valid.
+
+        TC-Python invalidates a temporary result when its calculation state is
+        changed. Multistart therefore converts every successful candidate to
+        ordinary Python and NumPy data before starting the next candidate.
         """
 
         config = self._require_config()
-        phase = phase.upper()
-        result = self._calculate("kinetics", phase, x, T)
         tq = self._tq()
         independent = config.independent_elements
         reference = tc_element_name(config.reference_element)
@@ -499,6 +604,343 @@ class _TCPythonBackend:
             output["diagnostics"]["errors"].update(tracer_errors)
         return output
 
+    def _calculate_kinetics_multistart(
+        self, x: np.ndarray, T: float, phase: str, collect_diagnostics: bool = False
+    ):
+        """Select materialized data from the lowest-energy local candidate.
+
+        The scout may contain several composition sets of the requested base
+        phase. Their site fractions are used only as local start values; every
+        accepted candidate must retain the requested set at the requested
+        overall composition. Candidate failures are isolated unless none
+        survives. When every failure occurred inside ``calculate()``, the
+        aggregate remains a :class:`ThermoCalcSolveError` so bulk samplers can
+        honor their configured failed-point policy. Candidate quantities are
+        materialized immediately because later solves invalidate TC temporary
+        result objects.
+        """
+
+        # Mark the shared engine as kinetics-owned before any attempt so a
+        # later unrestricted calculation restores global/Hessian settings even
+        # when the scout or every candidate fails.
+        self._last_calculation_kind = "kinetics"
+        scout = self._run_multistart_scout(x, T, phase)
+        try:
+            seeds, ledger = self._extract_multistart_seeds(scout, phase)
+        finally:
+            self._invalidate_result(scout)
+        if not seeds:
+            details = "; ".join(entry["error"] for entry in ledger if entry.get("error"))
+            suffix = f" ({details})" if details else ""
+            raise ThermoCalcCalculationError(
+                f"Global kinetics scout found no valid {base_phase_name(phase)} site-fraction seeds{suffix}."
+            )
+
+        successful = []
+        candidate_errors = []
+        for seed in seeds:
+            entry = seed["ledger_entry"]
+            result = None
+            try:
+                result, gibbs_energy = self._run_multistart_candidate(x, T, phase, seed)
+                output = self._kinetics_output_from_result(result, phase, collect_diagnostics)
+                entry.update(status="converged", gibbs_energy=float(gibbs_energy), error=None)
+                successful.append((float(gibbs_energy), seed["seed_index"], output, entry))
+            except Exception as exc:
+                entry.update(status="failed", gibbs_energy=None, error=str(exc))
+                candidate_errors.append(exc)
+            finally:
+                self._invalidate_result(result)
+
+        if not successful:
+            summary = "; ".join(
+                f"seed {entry['seed_index']} ({entry['source_composition_set']}): {entry.get('error')}"
+                for entry in ledger if entry.get("status") == "failed"
+            )
+            error_type = ThermoCalcSolveError if all(
+                getattr(error, "failed_during_calculate", False) for error in candidate_errors
+            ) else ThermoCalcCalculationError
+            raise error_type(f"All multistart kinetics candidates failed for {phase}. {summary}")
+
+        gibbs_energy, selected_index, selected_output, selected_entry = min(
+            successful, key=lambda candidate: (candidate[0], candidate[1])
+        )
+        selected_entry["selected"] = True
+        for entry in ledger:
+            entry.setdefault("selected", False)
+        multistart_diagnostics = {
+            "kinetics_strategy": "multistart_global_scout",
+            "scout_seed_count": len(ledger),
+            "unique_seed_count": len(seeds),
+            "converged_candidate_count": len(successful),
+            "selected_seed_index": selected_index,
+            "selected_source_composition_set": selected_entry["source_composition_set"],
+            "selected_gibbs_energy": gibbs_energy,
+            "selected_gibbs_energy_units": "J",
+            "multistart_candidates": ledger,
+            "automatic_session_restart_count": self._automatic_session_restart_count,
+        }
+        if collect_diagnostics:
+            selected_output["diagnostics"].update(multistart_diagnostics)
+        return selected_output
+
+    def _extract_multistart_seeds(self, result: Any, phase: str):
+        """Extract complete, finite, distinct site-fraction seeds from a scout.
+
+        Seed identity uses every fraction. Initialization uses exactly the
+        system's composition degrees of freedom as ordering markers, selected
+        round-robin from nontrivial sublattices. This distinguishes ordered
+        basins without overconstraining the temporary seed equilibrium.
+        """
+
+        try:
+            stable = [str(name).upper() for name in result.get_stable_phases()]
+        except Exception as exc:
+            raise ThermoCalcCalculationError(f"Could not read global-scout composition sets: {exc}") from exc
+        matching = [name for name in stable if base_phase_name(name) == base_phase_name(phase)]
+        seeds = []
+        ledger = []
+        signatures = []
+        for seed_index, source_phase in enumerate(matching):
+            entry = {
+                "seed_index": seed_index,
+                "source_composition_set": source_phase,
+                "status": "seeded",
+                "gibbs_energy": None,
+                "selected": False,
+                "error": None,
+            }
+            ledger.append(entry)
+            try:
+                state = self._site_fraction_phase_state(result, source_phase, True, "kinetics_scout")
+                site_fractions = state.get("site_fractions")
+                if not site_fractions:
+                    raise ValueError("site fractions are unavailable")
+                phase_composition = np.asarray(state.get("phase_composition"), dtype=np.float64)
+                if phase_composition.shape != (len(self._require_config().elements),):
+                    raise ValueError("phase composition is unavailable")
+                if not np.all(np.isfinite(phase_composition)):
+                    raise ValueError("phase composition contains non-finite values")
+                values = []
+                labels = []
+                command_candidates = []
+                for sublattice in site_fractions:
+                    index = int(sublattice["sublattice"])
+                    constituents = sublattice.get("constituents")
+                    if not constituents:
+                        raise ValueError(f"sublattice {index} constituents are unavailable")
+                    sublattice_values = []
+                    for constituent, value in sorted(constituents.items()):
+                        value = float(value)
+                        if not np.isfinite(value):
+                            raise ValueError(f"non-finite Y({source_phase},{constituent}#{index})")
+                        labels.append((index, str(constituent).upper()))
+                        values.append(value)
+                        sublattice_values.append((str(constituent), value))
+                    if len(sublattice_values) > 1:
+                        command_candidates.append([
+                            (index, constituent, value)
+                            for constituent, value in sorted(
+                                sublattice_values,
+                                key=lambda item: (item[0].upper() == "VA", -item[1], item[0]),
+                            )
+                        ])
+                commands = []
+                required_markers = len(self._require_config().independent_elements)
+                rank = 0
+                while len(commands) < required_markers:
+                    added = False
+                    for candidates in command_candidates:
+                        if rank < len(candidates):
+                            commands.append(candidates[rank])
+                            added = True
+                            if len(commands) == required_markers:
+                                break
+                    if not added:
+                        break
+                    rank += 1
+                if len(commands) != required_markers:
+                    raise ValueError(
+                        f"only {len(commands)} independent ordering markers are available; "
+                        f"expected {required_markers}"
+                    )
+                signature = np.asarray(values, dtype=np.float64)
+                duplicate = any(
+                    labels == prior_labels
+                    and np.allclose(signature, prior_values, rtol=0.0, atol=_MULTISTART_SEED_ATOL)
+                    for prior_labels, prior_values in signatures
+                )
+                if duplicate:
+                    entry["status"] = "duplicate_seed"
+                    continue
+                signatures.append((labels, signature))
+                seeds.append({
+                    "seed_index": seed_index,
+                    "source_composition_set": source_phase,
+                    "phase_composition": phase_composition,
+                    "site_fractions": commands,
+                    "ledger_entry": entry,
+                })
+            except Exception as exc:
+                entry.update(status="invalid_seed", error=str(exc))
+        return seeds, ledger
+
+    def _run_multistart_scout(self, x: np.ndarray, T: float, phase: str):
+        """Run a reusable global phase-restricted scout with QTHISS retries.
+
+        Calculator reuse follows TC-Python's loop guidance and prevents one
+        Java-side calculation object from accumulating per sampled point.
+        A calculator that raises is evicted before a later query reuses it.
+        """
+
+        config = self._require_config()
+        attempts = (config.global_minimization_max_grid_points,) + config.equilibrium_qthiss_retry_grid_points
+        last_error = None
+        for attempt_index, grid_points in enumerate(attempts):
+            key = ("kinetics_scout", phase, False, grid_points)
+            calc = self._calculations.get(key)
+            if calc is None:
+                calc = self._get_system(False).with_single_equilibrium_calculation()
+            calc = self._configure_global_minimization(
+                calc,
+                config,
+                "kinetics_scout",
+                restore_shared_settings=True,
+                grid_points_override=grid_points,
+            )
+            self._calculations[key] = calc
+            calc.set_phase_to_suspended("*")
+            calc.set_phase_to_entered(phase)
+            calc.remove_all_conditions()
+            self._set_conditions(calc, x, T)
+            self._record_calculation_attempt("kinetics_scout", x)
+            try:
+                result = calc.calculate()
+            except Exception as exc:
+                self._emit_site_fraction_calculation(
+                    "kinetics_scout", phase, x, T, error=exc, grid_points=grid_points
+                )
+                self._calculations.pop(key, None)
+                last_error = exc
+                if not _is_qthiss_iteration_error(exc) or attempt_index == len(attempts) - 1:
+                    break
+            else:
+                self._emit_site_fraction_calculation(
+                    "kinetics_scout", phase, x, T, result=result, grid_points=grid_points
+                )
+                return result
+        raise ThermoCalcSolveError(f"TC-Python kinetics scout failed: {last_error}") from last_error
+
+    def _run_multistart_candidate(self, x: np.ndarray, T: float, phase: str, seed: dict[str, Any]):
+        """Run one local single-set candidate from a scout constitution.
+
+        A temporarily constrained local solve installs ordering markers from
+        the scout constitution. The final local solve removes those constraints
+        and moves that state to the requested composition. Calculators are
+        always fresh per query to prevent composition-path history from
+        changing the derivative/Hessian state used for interdiffusivity even
+        when the converged site fractions are nearly identical.
+        """
+
+        config = self._require_config()
+        calc = self._get_system(False).with_single_equilibrium_calculation()
+        calc = self._configure_global_minimization(
+            calc, config, "kinetics_candidate", restore_shared_settings=True
+        )
+        self._force_kinetics_phase(calc, phase, force_single=True)
+        seed_x = full_to_independent_composition(seed["phase_composition"], config)
+        calc.remove_all_conditions()
+        self._set_intensive_conditions(calc, T)
+        self._apply_multistart_seed_conditions(calc, phase, seed["site_fractions"])
+        self._record_calculation_attempt("kinetics_candidate_seed", seed_x)
+        try:
+            seed_result = calc.calculate()
+        except Exception as exc:
+            self._emit_site_fraction_calculation(
+                "kinetics_candidate_seed", phase, seed_x, T, error=exc, grid_points=None,
+                candidate_index=seed["seed_index"], source_phase=seed["source_composition_set"],
+            )
+            raise ThermoCalcSolveError(
+                f"TC-Python kinetics candidate {seed['seed_index']} seed initialization failed: {exc}"
+            ) from exc
+        try:
+            self._emit_site_fraction_calculation(
+                "kinetics_candidate_seed", phase, seed_x, T, result=seed_result, grid_points=None,
+                candidate_index=seed["seed_index"], source_phase=seed["source_composition_set"],
+            )
+            self._validate_single_kinetics_phase(
+                seed_result, phase, seed_x, force_single=True, check_composition=False
+            )
+        except Exception:
+            raise
+        finally:
+            self._invalidate_result(seed_result)
+        calc.remove_all_conditions()
+        self._set_conditions(calc, x, T)
+        self._record_calculation_attempt("kinetics_candidate", x)
+        try:
+            result = calc.calculate()
+        except Exception as exc:
+            self._emit_site_fraction_calculation(
+                "kinetics_candidate", phase, x, T, error=exc, grid_points=None,
+                candidate_index=seed["seed_index"], source_phase=seed["source_composition_set"],
+            )
+            raise ThermoCalcSolveError(
+                f"TC-Python kinetics candidate {seed['seed_index']} failed: {exc}"
+            ) from exc
+        try:
+            self._emit_site_fraction_calculation(
+                "kinetics_candidate", phase, x, T, result=result, grid_points=None,
+                candidate_index=seed["seed_index"], source_phase=seed["source_composition_set"],
+            )
+            self._validate_single_kinetics_phase(result, phase, x, force_single=True)
+            gibbs_energy = self._value(result, self._tq().gibbs_energy_of_a_phase(phase))
+            if not np.isfinite(gibbs_energy):
+                raise ThermoCalcCalculationError(
+                    f"Kinetics candidate {seed['seed_index']} returned non-finite Gibbs energy."
+                )
+        except Exception:
+            raise
+        return result, float(gibbs_energy)
+
+    @staticmethod
+    def _apply_multistart_seed_conditions(calc: Any, phase: str, site_fractions):
+        """Temporarily constrain independent site fractions to initialize a basin.
+
+        The caller removes all conditions before the final local minimization,
+        so no site fraction remains fixed in the diffusivity-producing result.
+        """
+
+        for sublattice, constituent, value in site_fractions:
+            quantity = _site_fraction_quantity(phase, constituent, sublattice)
+            calc.set_condition(quantity, float(value))
+
+    def _record_calculation_attempt(self, kind: str, x: np.ndarray):
+        """Update calculation counters for an actual TC-Python calculate call."""
+
+        self.totalNumCalcs += 1
+        self.total_kind_lst.append(kind)
+        self.total_x_lst.append(x.copy())
+
+    @staticmethod
+    def _invalidate_result(result: Any):
+        """Release TC temporary result data after all required values are copied.
+
+        TC-Python keeps result data in the Java backend until ``invalidate`` is
+        called or another state change invalidates it implicitly. Explicit
+        invalidation is essential for long multistart sampling loops. Cleanup
+        errors are intentionally ignored because all useful values have already
+        been materialized and must not be discarded due to cleanup failure.
+        """
+        if result is None:
+            return
+        invalidate = getattr(result, "invalidate", None)
+        if callable(invalidate):
+            try:
+                invalidate()
+            except Exception:
+                pass
+
     def _kinetics_diagnostics(self, result: Any, phase: str) -> dict[str, Any]:
         """Read optional phase-state quantities without invalidating a usable matrix.
 
@@ -507,6 +949,7 @@ class _TCPythonBackend:
         """
         config = self._require_config()
         tq = self._tq()
+        dq = self._dq()
         errors = {}
 
         def optional(name, query):
@@ -525,7 +968,7 @@ class _TCPythonBackend:
                 optional(
                     f"thermodynamic_factor[{diffusing},{gradient}]",
                     lambda d=diffusing, g=gradient: float(result.get_value_of(
-                        tq.thermodynamic_factor(
+                        dq.thermodynamic_factor(
                             phase, tc_element_name(d), tc_element_name(g), tc_element_name(config.reference_element)
                         )
                     )),
@@ -595,7 +1038,7 @@ class _TCPythonBackend:
 
     def _get_calculation(self, kind: str, phase: str | None):
         config = self._require_config()
-        include_default_phases = config.use_default_phases if kind != "kinetics" else False
+        include_default_phases = config.use_default_phases if not kind.startswith("kinetics") else False
         key = (kind, phase, include_default_phases)
         if key in self._calculations:
             return self._calculations[key]
@@ -610,14 +1053,14 @@ class _TCPythonBackend:
         self._calculations[key] = calc
         return calc
 
-    def _force_kinetics_phase(self, calc: Any, phase: str):
+    def _force_kinetics_phase(self, calc: Any, phase: str, *, force_single: bool = False):
         """Select one kinetics composition set while leaving its sites free.
 
         In constrained mode, suspend all selected and database-supplied sets
         before re-entering the requested one. Local minimization is separately
         enforced so Thermo-Calc does not create a new set during the solve.
         """
-        constrain_single = self._require_config().kinetics_constrain_single_composition_set
+        constrain_single = force_single or self._require_config().kinetics_constrain_single_composition_set
         if constrain_single:
             calc.set_phase_to_suspended("*")
             calc.set_phase_to_entered(phase, 0.0)
@@ -628,19 +1071,27 @@ class _TCPythonBackend:
             else:
                 calc.set_phase_to_suspended(candidate)
 
-    def _validate_single_kinetics_phase(self, result: Any, phase: str, x: np.ndarray):
-        """Reject a constrained result if TC split or relabeled the phase.
+    def _validate_single_kinetics_phase(
+        self, result: Any, phase: str, x: np.ndarray, *, force_single: bool = False,
+        check_composition: bool = True,
+    ):
+        """Reject a constrained result if TC split, relabeled, or drifted.
 
         A local solve with other sets suspended should retain just the entered
         set. Check the actual result because shared TC state may still change.
+        Temporary multistart seed equilibria can omit the composition check;
+        their ordering markers select a basin rather than reproduce the scout
+        composition exactly. Final kinetics results always check it.
         """
-        if not self._require_config().kinetics_constrain_single_composition_set:
+        if not (force_single or self._require_config().kinetics_constrain_single_composition_set):
             return
         stable = [str(name).upper() for name in result.get_stable_phases()]
         if stable != [phase]:
             raise ThermoCalcCalculationError(
                 f"Constrained kinetics for {phase} returned stable composition sets {stable}; expected only {phase}."
             )
+        if not check_composition:
+            return
         actual = self._phase_composition(result, phase)
         expected = independent_to_full_composition(x, self._require_config())
         if not np.allclose(actual, expected, rtol=0, atol=1e-6):
@@ -649,7 +1100,10 @@ class _TCPythonBackend:
                 f"expected {expected.tolist()}."
             )
 
-    def _emit_site_fraction_calculation(self, kind, phase, x, T, *, result=None, error=None, grid_points=None):
+    def _emit_site_fraction_calculation(
+        self, kind, phase, x, T, *, result=None, error=None, grid_points=None,
+        candidate_index=None, source_phase=None,
+    ):
         """Record one actual calculate attempt without changing its result.
 
         Every stable composition set is queried from that same result. Missing
@@ -669,6 +1123,8 @@ class _TCPythonBackend:
             "input_composition": np.asarray(x, dtype=np.float64).tolist(),
             "input_full_composition": independent_to_full_composition(x, config).tolist(),
             "grid_points": grid_points,
+            "candidate_index": candidate_index,
+            "source_composition_set": source_phase,
             "status": "calculate_error" if error is not None else "ok",
             "error": None if error is None else str(error),
             "stable_composition_sets": None,
@@ -714,7 +1170,7 @@ class _TCPythonBackend:
             for element in config.elements
         ]
         amount = optional("phase_amount", lambda: float(result.get_value_of(tq.mole_fraction_of_a_phase(phase)))) if stable else None
-        include_default_phases = config.use_default_phases if kind != "kinetics" else False
+        include_default_phases = config.use_default_phases if not kind.startswith("kinetics") else False
         system = self._get_system(include_default_phases)
         phase_object = optional("phase_object", lambda: system.get_phase_object(phase))
         if phase_object is None and base_phase_name(phase) != phase:
@@ -763,9 +1219,10 @@ class _TCPythonBackend:
         config = self._require_config()
         mode_switch = (
             self._last_calculation_kind is not None
-            and (kind == "kinetics") != (self._last_calculation_kind == "kinetics")
+            and kind.startswith("kinetics") != self._last_calculation_kind.startswith("kinetics")
             and (config.kinetics_disable_global_minimization or config.kinetics_disable_positive_definite_hessian
-                 or config.kinetics_constrain_single_composition_set)
+                 or config.kinetics_constrain_single_composition_set
+                 or config.kinetics_multistart_mode != "off")
         )
         if mode_switch or self._retry_settings_dirty:
             calc = self._configure_global_minimization(
@@ -774,7 +1231,7 @@ class _TCPythonBackend:
                 kind,
                 restore_shared_settings=kind != "kinetics" or self._retry_settings_dirty,
             )
-            include_default_phases = config.use_default_phases if kind != "kinetics" else False
+            include_default_phases = config.use_default_phases if not kind.startswith("kinetics") else False
             self._calculations[(kind, phase, include_default_phases)] = calc
             self._retry_settings_dirty = False
         try:
@@ -833,7 +1290,7 @@ class _TCPythonBackend:
         next query uses the configured grid limit.
         """
         config = self._require_config()
-        include_default_phases = config.use_default_phases if kind != "kinetics" else False
+        include_default_phases = config.use_default_phases if not kind.startswith("kinetics") else False
         key = (kind, phase, include_default_phases)
         last_error = initial_error
         try:
@@ -892,8 +1349,8 @@ class _TCPythonBackend:
         override is used only by temporary QTHISS retries; a kinetics retry
         retains its configured Hessian mode.
         """
-        local_kinetics = kind == "kinetics" and (
-            config.kinetics_disable_global_minimization or config.kinetics_constrain_single_composition_set)
+        local_kinetics = kind == "kinetics_candidate" or (kind == "kinetics" and (
+            config.kinetics_disable_global_minimization or config.kinetics_constrain_single_composition_set))
         if local_kinetics:
             configured_calc = calc.disable_global_minimization()
             if configured_calc is not None:
@@ -962,13 +1419,22 @@ class _TCPythonBackend:
         return self._systems[include_default_phases]
 
     def _set_conditions(self, calc: Any, x: np.ndarray, T: float):
+        """Set intensive variables, system size, and independent composition."""
+
+        config = self._require_config()
+        self._set_intensive_conditions(calc, T)
+        tq = self._tq()
+        for element, value in zip(config.independent_elements, x):
+            calc.set_condition(tq.mole_fraction_of_a_component(tc_element_name(element)), float(value))
+
+    def _set_intensive_conditions(self, calc: Any, T: float):
+        """Set temperature, pressure, and unit system size without composition."""
+
         config = self._require_config()
         tq = self._tq()
         calc.set_condition(tq.temperature(), float(T))
         calc.set_condition(tq.pressure(), float(config.pressure))
         calc.set_condition(tq.system_size(), 1.0)
-        for element, value in zip(config.independent_elements, x):
-            calc.set_condition(tq.mole_fraction_of_a_component(tc_element_name(element)), float(value))
 
     def _phase_composition(self, result: Any, phase: str) -> np.ndarray:
         config = self._require_config()
@@ -998,6 +1464,15 @@ class _TCPythonBackend:
 
     def _tq(self):
         return self._tc_python.ThermodynamicQuantity
+
+    def _dq(self):
+        """Return TC-Python's diffusion-quantity factory.
+
+        Thermodynamic factors are exposed by ``DiffusionQuantity`` in
+        TC-Python 2026a, while phase compositions and Gibbs energies remain on
+        ``ThermodynamicQuantity``.
+        """
+        return self._tc_python.DiffusionQuantity
 
     def _require_config(self) -> ThermoCalcConfig:
         if self._config is None or self._setup is None:
@@ -1196,6 +1671,18 @@ class TCPythonThermodynamics:
                     "stable_composition_sets": diagnostics.get("stable_composition_sets"),
                     "phase_composition": diagnostics.get("phase_composition"),
                     "site_fractions": diagnostics.get("site_fractions"),
+                    "kinetics_strategy": diagnostics.get("kinetics_strategy"),
+                    "scout_seed_count": diagnostics.get("scout_seed_count"),
+                    "unique_seed_count": diagnostics.get("unique_seed_count"),
+                    "converged_candidate_count": diagnostics.get("converged_candidate_count"),
+                    "selected_seed_index": diagnostics.get("selected_seed_index"),
+                    "selected_source_composition_set": diagnostics.get("selected_source_composition_set"),
+                    "selected_gibbs_energy": diagnostics.get("selected_gibbs_energy"),
+                    "selected_gibbs_energy_units": diagnostics.get("selected_gibbs_energy_units"),
+                    "automatic_session_restart_count": diagnostics.get(
+                        "automatic_session_restart_count"
+                    ),
+                    "multistart_candidates": diagnostics.get("multistart_candidates"),
                     "diagnostic_errors": dict(diagnostics.get("errors", {})),
                 }
                 if not diagnostics:

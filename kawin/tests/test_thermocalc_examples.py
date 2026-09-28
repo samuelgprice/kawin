@@ -161,9 +161,17 @@ class FakeTCCalculation:
     def remove_all_conditions(self):
         self.calls.append(("remove_all_conditions",))
 
+    def set_condition(self, quantity, value):
+        self.calls.append(("set_condition", quantity, value))
+        return self
+
     def calculate(self):
         self.calls.append(("calculate",))
         return object()
+
+    def run_poly_command(self, command):
+        self.calls.append(("run_poly_command", command))
+        return self
 
     def set_phase_to_dormant(self, phase):
         self.calls.append(("set_phase_to_dormant", phase))
@@ -691,6 +699,393 @@ def test_single_composition_set_constraint_applies_to_kinetics_only():
     assert _fecrni_config().kinetics_constrain_single_composition_set is False
 
 
+def test_multistart_mode_validation_and_metadata():
+    config = _fecrni_config(
+        kinetics_multistart_mode="GLOBAL_SCOUT",
+        kinetics_multistart_phases=("BCC_A2",),
+        kinetics_session_restart_interval=100,
+    )
+
+    assert config.kinetics_multistart_mode == "global_scout"
+    assert config.to_metadata()["kinetics_multistart_mode"] == "global_scout"
+    assert config.to_metadata()["kinetics_multistart_phases"] == ("BCC_A2",)
+    assert config.to_metadata()["kinetics_session_restart_interval"] == 100
+    with pytest.raises(ThermoCalcInputError, match="off.*global_scout"):
+        _fecrni_config(kinetics_multistart_mode="unknown")
+    with pytest.raises(ThermoCalcInputError, match="positive-definite phase Hessian"):
+        _fecrni_config(
+            kinetics_multistart_mode="global_scout",
+            kinetics_disable_positive_definite_hessian=True,
+        )
+    with pytest.raises(ThermoCalcInputError, match="outside configured phases"):
+        _fecrni_config(kinetics_multistart_phases=("LIQUID",))
+    with pytest.raises(ThermoCalcInputError, match="positive integer"):
+        _fecrni_config(kinetics_session_restart_interval=0)
+
+
+def test_multistart_phase_filter():
+    backend = _TCPythonBackend()
+    backend._config = _fecrni_config(
+        kinetics_multistart_mode="global_scout",
+        kinetics_multistart_phases=("BCC_A2",),
+    )
+    backend._setup = object()
+
+    assert backend._uses_kinetics_multistart("BCC_A2#2")
+    assert not backend._uses_kinetics_multistart("FCC_A1")
+
+
+def test_multistart_scout_and_candidates_use_required_minimization_settings():
+    config = _fecrni_config(
+        global_minimization_max_grid_points=2500,
+        kinetics_multistart_mode="global_scout",
+        kinetics_disable_global_minimization=True,
+        kinetics_constrain_single_composition_set=True,
+    )
+    backend = _TCPythonBackend()
+    calls = []
+    backend._config = config
+    backend._tc_python = FakeTCPythonModule(calls)
+
+    scout = backend._configure_global_minimization(
+        FakeTCCalculation(calls), config, "kinetics_scout", restore_shared_settings=True
+    )
+    backend._force_kinetics_phase(scout, "BCC_A2#2", force_single=True)
+    scout_calls = list(calls)
+    calls.clear()
+    backend._configure_global_minimization(
+        FakeTCCalculation(calls), config, "kinetics_candidate", restore_shared_settings=True
+    )
+    candidate_calls = list(calls)
+
+    assert ("enable_global_minimization",) in scout_calls
+    assert ("options_set_global_minimization_max_grid_points", 2500) in scout_calls
+    assert ("set_phase_to_suspended", "*") in scout_calls
+    assert ("set_phase_to_entered", "BCC_A2#2", 0.0) in scout_calls
+    assert ("disable_global_minimization",) in candidate_calls
+    assert ("enable_global_minimization",) not in candidate_calls
+    assert ("options_enable_force_positive_definite_phase_hessian",) in candidate_calls
+    assert ("options_set_global_minimization_max_grid_points", 2500) not in candidate_calls
+
+
+def test_multistart_scout_reuses_calculator_across_queries(monkeypatch):
+    backend = _TCPythonBackend()
+    backend._config = _fecrni_config(kinetics_multistart_mode="global_scout")
+    backend._setup = object()
+
+    class Result:
+        def invalidate(self):
+            pass
+
+    class Calculation:
+        def __init__(self):
+            self.calculate_count = 0
+
+        def set_phase_to_suspended(self, phase):
+            pass
+
+        def set_phase_to_entered(self, phase):
+            pass
+
+        def remove_all_conditions(self):
+            pass
+
+        def calculate(self):
+            self.calculate_count += 1
+            return Result()
+
+    class System:
+        def __init__(self):
+            self.created = 0
+            self.calculation = None
+
+        def with_single_equilibrium_calculation(self):
+            self.created += 1
+            self.calculation = Calculation()
+            return self.calculation
+
+    system = System()
+    monkeypatch.setattr(backend, "_get_system", lambda include_default: system)
+    monkeypatch.setattr(backend, "_configure_global_minimization", lambda calc, *args, **kwargs: calc)
+    monkeypatch.setattr(backend, "_set_conditions", lambda calc, x, T: None)
+
+    first = backend._run_multistart_scout(np.array([0.3, 0.2]), 1373.0, "BCC_A2#2")
+    backend._invalidate_result(first)
+    second = backend._run_multistart_scout(np.array([0.31, 0.2]), 1373.0, "BCC_A2#2")
+    backend._invalidate_result(second)
+
+    assert system.created == 1
+    assert system.calculation.calculate_count == 2
+
+
+def test_multistart_candidates_always_use_fresh_calculators(monkeypatch):
+    backend = _TCPythonBackend()
+    backend._config = _fecrni_config(kinetics_multistart_mode="global_scout")
+    backend._setup = object()
+
+    class Result:
+        def invalidate(self):
+            pass
+
+    class Calculation:
+        def __init__(self):
+            self.calculate_count = 0
+
+        def remove_all_conditions(self):
+            pass
+
+        def calculate(self):
+            self.calculate_count += 1
+            return Result()
+
+    class System:
+        def __init__(self):
+            self.created = 0
+            self.calculations = []
+
+        def with_single_equilibrium_calculation(self):
+            self.created += 1
+            calculation = Calculation()
+            self.calculations.append(calculation)
+            return calculation
+
+    system = System()
+    monkeypatch.setattr(backend, "_get_system", lambda include_default: system)
+    monkeypatch.setattr(backend, "_configure_global_minimization", lambda calc, *args, **kwargs: calc)
+    monkeypatch.setattr(backend, "_force_kinetics_phase", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backend, "_set_intensive_conditions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backend, "_set_conditions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backend, "_emit_site_fraction_calculation", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backend, "_validate_single_kinetics_phase", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backend, "_tq", lambda: type("Q", (), {
+        "gibbs_energy_of_a_phase": staticmethod(lambda phase: ("gibbs", phase)),
+    }))
+    monkeypatch.setattr(backend, "_value", lambda result, quantity: -10.0)
+    seed = {
+        "seed_index": 0,
+        "source_composition_set": "BCC_A2#1",
+        "phase_composition": np.array([0.5, 0.3, 0.2]),
+        "site_fractions": [],
+    }
+
+    for point in (np.array([0.3, 0.2]), np.array([0.31, 0.2])):
+        result, _ = backend._run_multistart_candidate(point, 1373.0, "BCC_A2#2", seed)
+        backend._invalidate_result(result)
+
+    assert system.created == 2
+    assert [calculation.calculate_count for calculation in system.calculations] == [2, 2]
+
+
+def test_kinetics_session_restart_interval_recycles_at_query_boundary(monkeypatch):
+    backend = _TCPythonBackend()
+    backend._config = _fecrni_config(kinetics_session_restart_interval=2)
+    backend._setup = object()
+    backend._kinetics_queries_since_restart = 2
+    calls = []
+
+    monkeypatch.setattr(backend, "close", lambda report_totals=True: calls.append(("close", report_totals)))
+
+    def start(config, reset_counters=True):
+        calls.append(("start", reset_counters))
+        backend._setup = object()
+        backend._kinetics_queries_since_restart = 0
+
+    monkeypatch.setattr(backend, "start", start)
+
+    backend._maybe_restart_before_kinetics()
+
+    assert calls == [("close", False), ("start", False)]
+    assert backend._automatic_session_restart_count == 1
+    assert backend._kinetics_queries_since_restart == 0
+
+
+def test_multistart_restores_global_settings_before_equilibrium():
+    config = _fecrni_config(
+        global_minimization_max_grid_points=2500,
+        kinetics_multistart_mode="global_scout",
+    )
+    backend = _TCPythonBackend()
+    backend._setup = FakeTCPythonSetup()
+    backend._config = config
+    backend._tc_python = FakeTCPythonModule(backend._setup.calls)
+    backend._set_conditions = lambda calc, x, T: None
+    backend.totalNumCalcs = 0
+    backend.total_kind_lst = []
+    backend.total_x_lst = []
+    backend._last_calculation_kind = "kinetics"
+
+    backend._calculate("equilibrium", None, np.array([0.3, 0.2]), 1373.0)
+
+    assert ("enable_global_minimization",) in backend._setup.calls
+    assert ("options_enable_force_positive_definite_phase_hessian",) in backend._setup.calls
+    assert ("options_set_global_minimization_max_grid_points", 2500) in backend._setup.calls
+
+
+def test_multistart_seed_extraction_deduplicates_but_keeps_sublattice_swaps(monkeypatch):
+    backend = _TCPythonBackend()
+    backend._config = _fecrni_config(kinetics_multistart_mode="global_scout")
+    backend._setup = object()
+
+    class ScoutResult:
+        def get_stable_phases(self):
+            return ["BCC_A2#1", "BCC_A2#2", "BCC_A2#3", "BCC_A2#4", "FCC_A1"]
+
+    states = {
+        "BCC_A2#1": [
+            {"sublattice": 1, "constituents": {"Fe": 0.9, "Cr": 0.1}},
+            {"sublattice": 2, "constituents": {"Fe": 0.1, "Cr": 0.9}},
+        ],
+        "BCC_A2#2": [
+            {"sublattice": 1, "constituents": {"Fe": 0.9 + 5e-11, "Cr": 0.1}},
+            {"sublattice": 2, "constituents": {"Fe": 0.1, "Cr": 0.9}},
+        ],
+        "BCC_A2#3": [
+            {"sublattice": 1, "constituents": {"Fe": 0.1, "Cr": 0.9}},
+            {"sublattice": 2, "constituents": {"Fe": 0.9, "Cr": 0.1}},
+        ],
+        "BCC_A2#4": [{"sublattice": 1, "constituents": {"Fe": None}}],
+    }
+    monkeypatch.setattr(
+        backend,
+        "_site_fraction_phase_state",
+        lambda result, phase, stable, kind: {
+            "phase_composition": [0.5, 0.3, 0.2],
+            "site_fractions": states[phase],
+        },
+    )
+
+    seeds, ledger = backend._extract_multistart_seeds(ScoutResult(), "BCC_A2#2")
+
+    assert [seed["source_composition_set"] for seed in seeds] == ["BCC_A2#1", "BCC_A2#3"]
+    assert [entry["status"] for entry in ledger] == ["seeded", "duplicate_seed", "seeded", "invalid_seed"]
+    assert seeds[0]["site_fractions"] == [(1, "Fe", 0.9), (2, "Cr", 0.9)]
+    assert seeds[1]["site_fractions"] == [(1, "Cr", 0.9), (2, "Fe", 0.9)]
+    assert "float" in ledger[3]["error"]
+
+
+def test_multistart_maps_scout_site_fractions_to_requested_set():
+    calls = []
+    calc = FakeTCCalculation(calls)
+
+    _TCPythonBackend._apply_multistart_seed_conditions(
+        calc,
+        "BCC_A2#2",
+        [(1, "Fe", 0.75), (1, "Cr", 0.25), (2, "VA", 1.0)],
+    )
+
+    assert ("set_condition", "Y(BCC_A2#2,Fe#1)", 0.75) in calls
+    assert ("set_condition", "Y(BCC_A2#2,Cr#1)", 0.25) in calls
+    assert ("set_condition", "Y(BCC_A2#2,VA#2)", 1.0) in calls
+
+
+def test_multistart_selects_lowest_gibbs_survivor_and_records_failures(monkeypatch):
+    backend = _TCPythonBackend()
+    backend._config = _fecrni_config(kinetics_multistart_mode="global_scout")
+    ledger = [
+        {"seed_index": index, "source_composition_set": f"BCC_A2#{index + 1}",
+         "status": "seeded", "gibbs_energy": None, "selected": False, "error": None}
+        for index in range(3)
+    ]
+    seeds = [
+        {"seed_index": index, "source_composition_set": entry["source_composition_set"],
+         "site_fractions": [], "ledger_entry": entry}
+        for index, entry in enumerate(ledger)
+    ]
+    class TemporaryResult:
+        def __init__(self):
+            self.invalidated = False
+
+        def invalidate(self):
+            self.invalidated = True
+
+    scout = TemporaryResult()
+    results = [TemporaryResult(), TemporaryResult(), TemporaryResult()]
+    monkeypatch.setattr(backend, "_run_multistart_scout", lambda x, T, phase: scout)
+    monkeypatch.setattr(backend, "_extract_multistart_seeds", lambda result, phase: (seeds, ledger))
+
+    def candidate(x, T, phase, seed):
+        if seed["seed_index"] == 1:
+            raise ThermoCalcCalculationError("candidate did not converge")
+        energies = {0: -10.0, 2: -20.0}
+        return results[seed["seed_index"]], energies[seed["seed_index"]]
+
+    monkeypatch.setattr(backend, "_run_multistart_candidate", candidate)
+    materialized = []
+
+    def materialize(result, phase, collect_diagnostics):
+        assert not result.invalidated
+        materialized.append(result)
+        return {"result": result, "diagnostics": {}}
+
+    monkeypatch.setattr(backend, "_kinetics_output_from_result", materialize)
+
+    selected = backend._calculate_kinetics_multistart(
+        np.array([0.3, 0.2]), 1373.0, "BCC_A2#2", collect_diagnostics=True
+    )
+    diagnostics = selected["diagnostics"]
+
+    assert materialized == [results[0], results[2]]
+    assert scout.invalidated
+    assert results[0].invalidated
+    assert results[2].invalidated
+    assert selected["result"] is results[2]
+    assert diagnostics["selected_seed_index"] == 2
+    assert diagnostics["selected_gibbs_energy"] == -20.0
+    assert diagnostics["converged_candidate_count"] == 2
+    assert diagnostics["multistart_candidates"][1]["status"] == "failed"
+    assert diagnostics["multistart_candidates"][1]["error"] == "candidate did not converge"
+    assert diagnostics["multistart_candidates"][2]["selected"] is True
+
+
+def test_multistart_raises_when_every_candidate_fails(monkeypatch):
+    backend = _TCPythonBackend()
+    backend._config = _fecrni_config(kinetics_multistart_mode="global_scout")
+    ledger = [{
+        "seed_index": 0, "source_composition_set": "BCC_A2#1", "status": "seeded",
+        "gibbs_energy": None, "selected": False, "error": None,
+    }]
+    seeds = [{
+        "seed_index": 0, "source_composition_set": "BCC_A2#1", "site_fractions": [],
+        "ledger_entry": ledger[0],
+    }]
+    monkeypatch.setattr(backend, "_run_multistart_scout", lambda x, T, phase: object())
+    monkeypatch.setattr(backend, "_extract_multistart_seeds", lambda result, phase: (seeds, ledger))
+    monkeypatch.setattr(
+        backend,
+        "_run_multistart_candidate",
+        lambda x, T, phase, seed: (_ for _ in ()).throw(ThermoCalcCalculationError("split phase")),
+    )
+
+    with pytest.raises(ThermoCalcCalculationError, match="All multistart.*split phase"):
+        backend._calculate_kinetics_multistart(np.array([0.3, 0.2]), 1373.0, "BCC_A2#2")
+
+
+def test_multistart_preserves_all_candidate_solve_failure_classification(monkeypatch):
+    backend = _TCPythonBackend()
+    backend._config = _fecrni_config(kinetics_multistart_mode="global_scout")
+    ledger = [{
+        "seed_index": 0, "source_composition_set": "BCC_A2#1", "status": "seeded",
+        "gibbs_energy": None, "selected": False, "error": None,
+    }]
+    seeds = [{
+        "seed_index": 0, "source_composition_set": "BCC_A2#1", "site_fractions": [],
+        "ledger_entry": ledger[0],
+    }]
+    monkeypatch.setattr(backend, "_run_multistart_scout", lambda x, T, phase: object())
+    monkeypatch.setattr(backend, "_extract_multistart_seeds", lambda result, phase: (seeds, ledger))
+    monkeypatch.setattr(
+        backend,
+        "_run_multistart_candidate",
+        lambda x, T, phase, seed: (_ for _ in ()).throw(
+            ThermoCalcSolveError("ERROR IN QTHISS : TOO MANY ITERATIONS")
+        ),
+    )
+
+    with pytest.raises(ThermoCalcSolveError, match="All multistart.*QTHISS") as caught:
+        backend._calculate_kinetics_multistart(np.array([0.3, 0.2]), 1373.0, "BCC_A2#2")
+    assert caught.value.failed_during_calculate is True
+
+
 def test_single_composition_set_constraint_checks_actual_kinetics_result():
     config = _fecrni_config(kinetics_constrain_single_composition_set=True)
     backend = _TCPythonBackend()
@@ -708,6 +1103,9 @@ def test_single_composition_set_constraint_checks_actual_kinetics_result():
 
     backend._phase_composition = lambda result, phase: np.array(result.composition)
     backend._validate_single_kinetics_phase(Result(["BCC_A2"], [0.5, 0.3, 0.2]), "BCC_A2", x)
+    backend._validate_single_kinetics_phase(
+        Result(["BCC_A2"], [0.4, 0.4, 0.2]), "BCC_A2", x, check_composition=False
+    )
     with pytest.raises(ThermoCalcCalculationError, match="stable composition sets"):
         backend._validate_single_kinetics_phase(Result(["BCC_A2", "BCC_A2#2"], [0.5, 0.3, 0.2]), "BCC_A2", x)
     with pytest.raises(ThermoCalcCalculationError, match="expected"):
@@ -873,12 +1271,13 @@ def test_backend_diagnostics_use_same_result_and_named_sublattices():
             return ("tracer", phase, element)
 
         @staticmethod
-        def thermodynamic_factor(phase, diffusing, gradient, reference):
-            return ("factor", phase, diffusing, gradient, reference)
-
-        @staticmethod
         def composition_of_phase_as_mole_fraction(phase, element):
             return ("composition", phase, element)
+
+    class DiffusionQuantities:
+        @staticmethod
+        def thermodynamic_factor(phase, diffusing, gradient, reference):
+            return ("factor", phase, diffusing, gradient, reference)
 
     class Species:
         def __init__(self, name):
@@ -932,7 +1331,11 @@ def test_backend_diagnostics_use_same_result_and_named_sublattices():
     backend._config = config
     backend._setup = object()
     backend._systems[False] = System()
-    backend._tc_python = type("TCPythonModule", (), {"ThermodynamicQuantity": Quantities})()
+    backend._tc_python = type(
+        "TCPythonModule",
+        (),
+        {"ThermodynamicQuantity": Quantities, "DiffusionQuantity": DiffusionQuantities},
+    )()
     backend._calculate = lambda kind, phase, x, T: Result()
 
     output = backend.calculate_kinetics(np.array([0.3, 0.2]), 1973.0, "BCC_B2#1", collect_diagnostics=True)
