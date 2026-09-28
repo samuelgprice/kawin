@@ -658,15 +658,18 @@ def _capture_surrogate_kinetics(source_thermodynamics):
     with path.open("w", encoding="utf-8", newline="\n") as output:
         header = {
             "record_type": "metadata",
-            "schema_version": 1,
+            "schema_version": 2,
             "tc_python_version": source_thermodynamics.getRuntimeVersion(),
             "config": config.to_metadata(),
             "temperature_unit": "K",
             "composition_unit": "mole_fraction",
             "diffusivity_unit": "m^2/s",
-            "factor_unit": "dimensionless",
+            "mobility_unit": "m^2/(J*s)",
+            "factor_unit": "J/mol",
+            "factor_definition": "d(mu_i - mu_reference)/d(x_j)",
             "matrix_elements": list(config.independent_elements),
             "tracer_and_phase_composition_elements": list(config.elements),
+            "mobility_elements": list(config.elements),
             "stable_phase_scope": "forced_kinetics_equilibrium",
         }
         output.write(json.dumps(header, allow_nan=False) + "\n")

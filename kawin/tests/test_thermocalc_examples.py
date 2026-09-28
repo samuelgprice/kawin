@@ -104,6 +104,7 @@ class FakeThermoCalcBackend:
         if collect_diagnostics:
             output["diagnostics"] = {
                 "thermodynamic_factors": [[1.0, 0.1], [0.2, 2.0]],
+                "mobilities": [6.0e-10, 7.0e-10, 8.0e-10],
                 "stable_composition_sets": [phase],
                 "phase_composition": [1.0 - x[0] - x[1], x[0], x[1]],
                 "site_fractions": [{"sublattice": 1, "constituents": {"Fe": 1.0 - x[0], "Cr": x[0]}}],
@@ -1236,6 +1237,7 @@ def test_kinetics_capture_records_queries_and_refreshes_incomplete_cache():
     assert_allclose(records[0]["interdiffusivity"], matrix)
     assert_allclose(records[0]["tracer_diffusivities"], [3e-14, 4e-14, 5e-14])
     assert_allclose(records[0]["thermodynamic_factors"], [[1.0, 0.1], [0.2, 2.0]])
+    assert_allclose(records[0]["mobilities"], [6.0e-10, 7.0e-10, 8.0e-10])
     assert records[0]["stable_composition_sets"] == ["BCC_A2"]
     assert_allclose(records[0]["phase_composition"], [0.5, 0.3, 0.2])
     assert records[0]["site_fractions"][0]["constituents"]["Cr"] == 0.3
@@ -1249,6 +1251,8 @@ def test_optional_kinetics_quantity_failure_does_not_discard_matrix():
             if collect_diagnostics:
                 output["diagnostics"]["thermodynamic_factors"][0][1] = None
                 output["diagnostics"]["errors"]["thermodynamic_factor[CR,NI]"] = "unavailable"
+                output["diagnostics"]["mobilities"][1] = None
+                output["diagnostics"]["errors"]["mobility[CR]"] = "unavailable"
             return output
 
     therm = TCPythonThermodynamics(config=_fecrni_config(), backend=PartialDiagnosticBackend())
@@ -1258,6 +1262,8 @@ def test_optional_kinetics_quantity_failure_does_not_discard_matrix():
     assert np.all(np.isfinite(matrix))
     assert records[0]["thermodynamic_factors"][0][1] is None
     assert records[0]["diagnostic_errors"]["thermodynamic_factor[CR,NI]"] == "unavailable"
+    assert records[0]["mobilities"][1] is None
+    assert records[0]["diagnostic_errors"]["mobility[CR]"] == "unavailable"
 
 
 def test_backend_diagnostics_use_same_result_and_named_sublattices():
@@ -1278,6 +1284,10 @@ def test_backend_diagnostics_use_same_result_and_named_sublattices():
         @staticmethod
         def thermodynamic_factor(phase, diffusing, gradient, reference):
             return ("factor", phase, diffusing, gradient, reference)
+
+        @staticmethod
+        def mobility_of_component_in_phase(phase, component):
+            return ("mobility", phase, component)
 
     class Species:
         def __init__(self, name):
@@ -1317,6 +1327,8 @@ def test_backend_diagnostics_use_same_result_and_named_sublattices():
                 if quantity[2:] == ("Ti", "Fe", "W"):
                     raise RuntimeError("factor unavailable")
                 return 1 + (quantity[2] == "Fe") + 2 * (quantity[3] == "Fe")
+            if kind == "mobility":
+                return {"W": 6e-10, "Ti": 7e-10, "Fe": 8e-10}[quantity[2]]
             if kind == "composition":
                 return {"W": 0.5, "Ti": 0.3, "Fe": 0.2}[quantity[2]]
             if kind == "site":
@@ -1343,6 +1355,7 @@ def test_backend_diagnostics_use_same_result_and_named_sublattices():
     assert_allclose(output["tracer_diffusivity"], [1e-14, 2e-14, 3e-14])
     diagnostics = output["diagnostics"]
     assert diagnostics["thermodynamic_factors"] == [[1, None], [2, 4]]
+    assert diagnostics["mobilities"] == [6e-10, 7e-10, 8e-10]
     assert diagnostics["errors"]["thermodynamic_factor[TI,FE]"] == "factor unavailable"
     assert diagnostics["stable_composition_sets"] == ["BCC_B2#1"]
     assert diagnostics["phase_composition"] == [0.5, 0.3, 0.2]
@@ -1354,6 +1367,8 @@ def test_backend_diagnostics_use_same_result_and_named_sublattices():
         def get_value_of(self, quantity):
             if quantity == ("tracer", "BCC_B2#1", "Fe"):
                 raise RuntimeError("tracer unavailable")
+            if quantity == ("mobility", "BCC_B2#1", "Fe"):
+                raise RuntimeError("mobility unavailable")
             return super().get_value_of(quantity)
 
     backend._calculate = lambda kind, phase, x, T: FailingTracerResult()
@@ -1361,6 +1376,8 @@ def test_backend_diagnostics_use_same_result_and_named_sublattices():
     assert_allclose(partial["interdiffusivity"], output["interdiffusivity"])
     assert partial["tracer_diffusivity"] == [1e-14, 2e-14, None]
     assert partial["diagnostics"]["errors"]["tracer_diffusivity[FE]"] == "tracer unavailable"
+    assert partial["diagnostics"]["mobilities"] == [6e-10, 7e-10, None]
+    assert partial["diagnostics"]["errors"]["mobility[FE]"] == "mobility unavailable"
 
 
 def test_calculation_site_fraction_capture_records_equilibrium_sets_and_kinetics():

@@ -2913,8 +2913,9 @@ def plot_selected_diffusivity_calculations(
     rows are labeled as interface calculations and the remaining rows as bulk.
 
     Marker color is the base-10 logarithm of the matrix Frobenius norm. Hover
-    reports the complete matrix, selected candidate metadata, tracer values,
-    phase composition, and labeled sublattice site fractions when available.
+    reports the complete matrix, thermodynamic-factor matrix, component
+    mobilities, selected candidate metadata, tracer values, phase composition,
+    and labeled sublattice site fractions when available.
     """
     if not isinstance(surrogate, TernaryMovingBoundaryThermodynamicsSurrogate):
         raise TypeError("Selected diffusivity plotting requires TernaryMovingBoundaryThermodynamicsSurrogate.")
@@ -2989,6 +2990,39 @@ def plot_selected_diffusivity_calculations(
         )):
             record = match[1]
             phase_composition = record.get("phase_composition")
+            mobilities = record.get("mobilities")
+            if (
+                isinstance(mobilities, Sequence)
+                and not isinstance(mobilities, (str, bytes))
+                and len(mobilities) == len(elements)
+            ):
+                mobility_text = ", ".join(
+                    f"{escape(str(element))}={format_value(value)}"
+                    for element, value in zip(elements, mobilities)
+                )
+            else:
+                mobility_text = "unavailable"
+            independent = elements[1:]
+            factor = record.get("thermodynamic_factors")
+            factor_lines = []
+            if (
+                isinstance(factor, Sequence)
+                and not isinstance(factor, (str, bytes))
+                and len(factor) == len(independent)
+            ):
+                for element, row in zip(independent, factor):
+                    if (
+                        not isinstance(row, Sequence)
+                        or isinstance(row, (str, bytes))
+                        or len(row) != len(independent)
+                    ):
+                        factor_lines = []
+                        break
+                    factor_lines.append(
+                        f"{escape(str(element))}: ["
+                        + ", ".join(format_value(value) for value in row)
+                        + "]"
+                    )
             lines = [
                 f"<b>{escape(tab['phase'])} · {escape(tab['context'])} row {row_index}</b>",
                 f"TC calculation type: {escape(str(sample_type))}",
@@ -3010,6 +3044,10 @@ def plot_selected_diffusivity_calculations(
                 "Tracer diffusivities (m²/s): " + ", ".join(
                     format_value(value) for value in (record.get("tracer_diffusivities") or [])
                 ),
+                "Mobilities (m²/(J·s)): " + mobility_text,
+                "Thermodynamic factors "
+                f"(rows/columns {', '.join(map(str, independent))}; reference {elements[0]}):",
+                *(factor_lines or ["unavailable"]),
                 f"Strategy: {escape(str(record.get('kinetics_strategy')))}",
                 f"Selected seed: {escape(str(record.get('selected_seed_index')))}; "
                 f"source set: {escape(str(record.get('selected_source_composition_set')))}",

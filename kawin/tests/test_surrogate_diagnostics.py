@@ -225,6 +225,8 @@ def _selected_plot_kinetics_records(surrogate):
                 "phase_composition": full,
                 "interdiffusivity": matrix.tolist(),
                 "tracer_diffusivities": [1e-14, 2e-14, 3e-14],
+                "mobilities": [6e-10, 7e-10, 8e-10],
+                "thermodynamic_factors": [[1.0, 0.1], [0.2, 2.0]],
                 "site_fractions": [{
                     "sublattice": 1,
                     "constituents": {"X": float(point[0]), "Y": float(point[1])},
@@ -327,6 +329,10 @@ def test_selected_diffusivity_calculation_plot_has_four_exact_tc_tabs():
     assert list(figure.data[1].marker.symbol[:len(LEFT)]) == ["diamond"] * len(LEFT)
     assert list(figure.data[1].marker.symbol[len(LEFT):]) == ["circle"] * 4
     assert "Interdiffusivity" in figure.data[0].text[0]
+    assert "Mobilities" in figure.data[0].text[0]
+    assert "Z=6e-10" in figure.data[0].text[0]
+    assert "Thermodynamic factors" in figure.data[0].text[0]
+    assert "X: [1, 0.1]" in figure.data[0].text[0]
     assert "Sublattice 1" in figure.data[0].text[0]
     assert "TC calculation type" in figure.data[0].text[0]
 

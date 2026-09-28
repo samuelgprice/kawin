@@ -942,10 +942,12 @@ class _TCPythonBackend:
                 pass
 
     def _kinetics_diagnostics(self, result: Any, phase: str) -> dict[str, Any]:
-        """Read optional phase-state quantities without invalidating a usable matrix.
+        """Read optional kinetic and phase-state quantities from one result.
 
         All values come from the forced single-phase kinetics equilibrium. A
-        failed quantity is represented by ``None`` and named in ``errors``.
+        failed factor, mobility, composition, or site-fraction quantity is
+        represented by ``None`` and named in ``errors`` without invalidating a
+        usable interdiffusivity matrix.
         """
         config = self._require_config()
         tq = self._tq()
@@ -976,6 +978,15 @@ class _TCPythonBackend:
                 for gradient in config.independent_elements
             ]
             for diffusing in config.independent_elements
+        ]
+        mobilities = [
+            optional(
+                f"mobility[{element}]",
+                lambda e=element: float(result.get_value_of(
+                    dq.mobility_of_component_in_phase(phase, tc_element_name(e))
+                )),
+            )
+            for element in config.elements
         ]
         composition = [
             optional(
@@ -1010,6 +1021,7 @@ class _TCPythonBackend:
                 site_fractions.append({"sublattice": index, "constituents": constituents})
         return {
             "thermodynamic_factors": factor,
+            "mobilities": mobilities,
             "stable_composition_sets": stable_phases,
             "phase_composition": composition,
             "site_fractions": site_fractions,
@@ -1468,9 +1480,9 @@ class _TCPythonBackend:
     def _dq(self):
         """Return TC-Python's diffusion-quantity factory.
 
-        Thermodynamic factors are exposed by ``DiffusionQuantity`` in
-        TC-Python 2026a, while phase compositions and Gibbs energies remain on
-        ``ThermodynamicQuantity``.
+        Thermodynamic factors and component mobilities are exposed by
+        ``DiffusionQuantity`` in TC-Python 2026a, while phase compositions and
+        Gibbs energies remain on ``ThermodynamicQuantity``.
         """
         return self._tc_python.DiffusionQuantity
 
@@ -1567,9 +1579,10 @@ class TCPythonThermodynamics:
     def captureKineticsDiagnostics(self, callback):
         """Emit ordered records for interdiffusivity queries within this scope.
 
-        Cached queries also emit records. Optional phase-state values come from
-        the same forced kinetics equilibrium as the returned diffusivity; a
-        cached result without those values is refreshed on first use.
+        Cached queries also emit records. Optional tracer diffusivities,
+        mobilities, thermodynamic factors, and phase-state values come from the
+        same forced kinetics equilibrium as the returned diffusivity; a cached
+        result missing current diagnostic fields is refreshed on first use.
         """
         if not callable(callback):
             raise TypeError("callback must be callable.")
@@ -1668,6 +1681,7 @@ class TCPythonThermodynamics:
                     "interdiffusivity": np.asarray(kinetics["interdiffusivity"], dtype=np.float64).tolist(),
                     "tracer_diffusivities": [None if value is None else float(value) for value in kinetics["tracer_diffusivity"]],
                     "thermodynamic_factors": diagnostics.get("thermodynamic_factors"),
+                    "mobilities": diagnostics.get("mobilities"),
                     "stable_composition_sets": diagnostics.get("stable_composition_sets"),
                     "phase_composition": diagnostics.get("phase_composition"),
                     "site_fractions": diagnostics.get("site_fractions"),
@@ -1794,10 +1808,17 @@ class TCPythonThermodynamics:
         return result["driving_force"], full_to_independent_composition(result["precipitate_composition"], self.config)
 
     def _get_kinetics_single(self, x: np.ndarray, T: float, phase: str, removeCache: bool, *, diagnostics: bool = False):
-        """Return kinetics and cache status, refreshing missing diagnostic data."""
+        """Return kinetics and cache status, refreshing incomplete diagnostics.
+
+        Diagnostic fields can grow between adapter versions. Cached kinetics
+        results that predate a required field are recalculated so captures do
+        not silently emit a mixture of old and current record schemas.
+        """
         key = ("kinetics", phase, tuple(np.asarray(x, dtype=float)), float(T))
-        if diagnostics and not removeCache and key in self._cache and "diagnostics" not in self._cache[key]:
-            del self._cache[key]
+        if diagnostics and not removeCache and key in self._cache:
+            cached_diagnostics = self._cache[key].get("diagnostics")
+            if not isinstance(cached_diagnostics, dict) or "mobilities" not in cached_diagnostics:
+                del self._cache[key]
         cache_hit = not removeCache and key in self._cache
         if diagnostics:
             callback = lambda: self._backend.calculate_kinetics(x, T, phase, collect_diagnostics=True)
