@@ -278,7 +278,7 @@ def evaluate_tieline_diagnostics(
     truth_endpoints = {phase: np.full((eta_count, 2), np.nan) for phase in phases}
     failures = []
     precipitate_phase = surrogate.metadata.get("precipitate_phase", phases[1])
-    for index, (eta_value, point) in enumerate(zip(eta, probe)):
+    for index, (eta_value, point) in tqdm.tqdm(enumerate(zip(eta, probe)), total=len(eta), desc="Evaluating ground-truth tie-lines"):
         try:
             result = thermodynamics.getInterfacialComposition(
                 point,
@@ -1142,11 +1142,11 @@ def _matrix_predictions(surrogate, compositions, phase, context):
     return values
 
 
-def _truth_matrices(thermodynamics, compositions, temperature, phase, policy, context):
+def _truth_matrices(thermodynamics, compositions, temperature, phase, policy, context, desc):
     """Evaluate truth matrices pointwise so individual backend failures can be recorded."""
     matrices = np.full((len(compositions), 2, 2), np.nan)
     failures = []
-    for index, point in enumerate(compositions):
+    for index, point in tqdm.tqdm(enumerate(compositions), total=len(compositions), desc=desc):
         try:
             matrix = np.asarray(thermodynamics.getInterdiffusivity(point, temperature, phase=phase), dtype=np.float64)
             if matrix.shape != (2, 2) or not np.all(np.isfinite(matrix)):
@@ -1174,6 +1174,7 @@ def _diffusivity_phase_report(
     eigen_imag_tol,
     eigen_real_min,
     eta=None,
+    desc=None,
 ):
     """Evaluate one phase/context and attach coverage, validity, and truth diagnostics."""
     matrices = _matrix_predictions(surrogate, compositions, phase, context)
@@ -1201,7 +1202,7 @@ def _diffusivity_phase_report(
     if thermodynamics is None:
         return report
     truth, failures = _truth_matrices(
-        thermodynamics, compositions, surrogate.temperature, phase, policy, context
+        thermodynamics, compositions, surrogate.temperature, phase, policy, context, desc
     )
     truth_diagnostics = _matrix_validity_diagnostics(
         truth, eigen_imag_tol=eigen_imag_tol, eigen_real_min=eigen_real_min
@@ -1262,7 +1263,7 @@ def evaluate_diffusivity_diagnostics(
             )
             phase_report = _diffusivity_phase_report(
                 surrogate, phase, "interface", compositions, thermodynamics, policy, floor,
-                eigen_imag_tol, eigen_real_min, eta=eta,
+                eigen_imag_tol, eigen_real_min, eta=eta, desc=f"Evaluating ground-truth matrices of tie-line endpoints ({phase})"
             )
             phase_reports[phase] = phase_report
             failures.extend(phase_report["failures"])
@@ -1275,7 +1276,7 @@ def evaluate_diffusivity_diagnostics(
     for phase in selected_phases:
         phase_report = _diffusivity_phase_report(
             surrogate, phase, "general", points, thermodynamics, policy, floor,
-            eigen_imag_tol, eigen_real_min,
+            eigen_imag_tol, eigen_real_min, desc=f"Evaluating ground-truth matrices of bulk points ({phase})"
         )
         bulk_phases[phase] = phase_report
         failures.extend(phase_report["failures"])

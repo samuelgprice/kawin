@@ -2365,6 +2365,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     eta,
                     trial_dt,
                 )
+                if retry!=0:
+                    print(retry)
                 return self._accept_step_result(p, q, s, eta, result, trial_dt, retry_offset + retry), trial_dt, None
             except (RuntimeError, ValueError, ZeroDivisionError) as exc:
                 last_error = exc
