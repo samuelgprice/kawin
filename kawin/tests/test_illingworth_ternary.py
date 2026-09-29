@@ -2367,12 +2367,60 @@ def test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work
 
     assert model._lastImplicitConverged is True
     assert model._lastImplicitIterations == 2
-    assert model._lastImplicitCandidateEvaluations == 5
+    assert model._lastImplicitCandidateEvaluations == 4
     assert model._lastImplicitFunctionEvaluations == model._lastImplicitCandidateEvaluations
     assert model._lastImplicitJacobianEvaluations == 1
     assert model._lastImplicitMotionBranch == "positive"
     assert model._lastImplicitFailureReason is None
     assert np.isclose(model._lastImplicitResidual, 4.499427273822066e-15, rtol=0.0, atol=1.0e-27)
+
+
+@pytest.mark.parametrize("flip_branch", [False, True])
+def test_ternary_interface_reuses_accepted_trial_only_on_same_branch(monkeypatch, flip_branch):
+    model = _make_length_scaled_illingworth_model(1.0)
+    model.setup()
+    p, q, s, eta = model.getCurrentX()
+    model.residualTolerance = -1.0
+    evaluations = []
+    original_evaluate = model._evaluate_interface_candidate
+    original_step = model._least_squares_step_2xN
+    step_count = 0
+    branch_count = 0
+
+    def evaluate_spy(*args, **kwargs):
+        evaluations.append((kwargs["x_hat"].copy(), kwargs["motion_branch"]))
+        return original_evaluate(*args, **kwargs)
+
+    def stop_after_second_candidate(jacobian, residual):
+        nonlocal step_count
+        step_count += 1
+        if step_count == 2:
+            raise RuntimeError("stop after second candidate")
+        return original_step(jacobian, residual)
+
+    def select_branch(s_arg, old_s_arg, future_s_arg):
+        nonlocal branch_count
+        branch_count += 1
+        branch = _select_interface_motion_branch(s_arg, old_s_arg, future_s_arg)
+        return ("negative" if branch == "positive" else "positive") if flip_branch and branch_count == 2 else branch
+
+    monkeypatch.setattr(model, "_evaluate_interface_candidate", evaluate_spy)
+    monkeypatch.setattr(model, "_least_squares_step_2xN", stop_after_second_candidate)
+    monkeypatch.setattr(model, "_interface_candidate_improves", lambda candidate, previous_norm: True)
+    monkeypatch.setattr(ternary_fdm, "_select_interface_motion_branch", select_branch)
+
+    with pytest.raises(RuntimeError, match="stop after second candidate"):
+        model._solve_interface_planar(p, q, float(s), float(model._s_old), float(eta), model.timeStep)
+
+    accepted_x, accepted_branch = evaluations[3]
+    repeated = [(x, branch) for x, branch in evaluations if np.array_equal(x, accepted_x)]
+    assert branch_count == 2
+    assert len(repeated) == (2 if flip_branch else 1)
+    assert repeated[0][1] == accepted_branch
+    if flip_branch:
+        assert repeated[1][1] != accepted_branch
+    assert model._lastImplicitCandidateEvaluations == len(evaluations)
+    assert model._lastImplicitFunctionEvaluations == len(evaluations)
 
 
 def test_ternary_interface_failure_diagnostics_record_line_search_failure():

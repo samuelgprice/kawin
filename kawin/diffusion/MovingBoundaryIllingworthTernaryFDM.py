@@ -2159,6 +2159,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         )
 
     def _solve_interface_planar(self, p, q, s, old_s, eta, dt):
+        """Solve the coupled interface step, reusing an accepted trial on the same motion branch."""
         self._reset_implicit_diagnostics()
         self._currentBulkDiffusivityProviderCalls = 0
         self._currentBulkFaceMatricesEvaluated = 0
@@ -2179,6 +2180,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         jacobian_evaluations = 0
         iterations_attempted = 0
         failure_reason = "maximum iterations reached"
+        pending_candidate = None
         lagged_face_cache = (
             {"prepared": False, "matrices": None}
             if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_LAGGED
@@ -2222,7 +2224,13 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             future_s, _ = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
             motion_branch = _select_interface_motion_branch(s, old_s, future_s)
             try:
-                candidate = evaluate_candidate(x_hat, motion_branch)
+                if (pending_candidate is not None
+                        and pending_candidate.motion_branch == motion_branch
+                        and np.array_equal(pending_candidate.x_hat, x_hat)):
+                    candidate = pending_candidate
+                else:
+                    candidate = evaluate_candidate(x_hat, motion_branch)
+                pending_candidate = None
             except Exception:
                 if best_motion_branch is None:
                     best_motion_branch = motion_branch
@@ -2294,6 +2302,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 trial_norm = trial_candidate.scaled_norm
                 if self._interface_candidate_improves(trial_candidate, norm):
                     x_hat = trial
+                    pending_candidate = trial_candidate
                     accepted = True
                     break
             if not accepted:
