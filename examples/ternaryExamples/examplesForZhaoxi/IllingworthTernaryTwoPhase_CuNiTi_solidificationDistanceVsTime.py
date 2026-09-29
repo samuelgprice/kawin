@@ -6,6 +6,7 @@ from contextlib import contextmanager, nullcontext
 import json
 from pathlib import Path
 import sys
+import tempfile
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -45,10 +46,16 @@ if str(REPO_ROOT) not in sys.path:
 from kawin.diffusion import (
     MovingBoundaryIllingworthTernaryFD1DModel,
     TernaryMovingBoundaryThermodynamicsSurrogate,
+    callable_source_sha256,
     evaluate_interface_bulk_diffusivity_consistency,
+    file_sha256,
     plot_selected_diffusivity_calculations,
     plot_surrogate_diagnostics,
+    prepare_surrogate_artifact,
 )
+import kawin.diffusion.MovingBoundarySurrogates as moving_boundary_surrogates_module
+import kawin.diffusion.SurrogateArtifacts as surrogate_artifacts_module
+import kawin.diffusion.SurrogateDiagnostics as surrogate_diagnostics_module
 from kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM import (
     MovingBoundaryIllingworthTernaryThreePhaseFD1DModel,
 )
@@ -56,11 +63,15 @@ from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 from kawin.solver import explicitEulerIterator
 from kawin.thermo import MulticomponentThermodynamics
 from examples.ThermoCalc.tc_python_adapter import TCPythonThermodynamics, ThermoCalcConfig
+import examples.ThermoCalc.tc_python_adapter as tc_python_adapter_module
 from examples.ternaryExamples.pycalphad_default_phase_adapter import create_pycalphad_thermodynamics_source
 from examples.debugInPlace import debugInPlace
 
 OUTPUTS = REPO_ROOT / "examples" / "ThermoCalc" / "outputs"
 OUTPUTS.mkdir(parents=True, exist_ok=True)
+# Rebuilding is intentionally the default. Set this to True only to require an
+# existing bundle that exactly matches the current settings and implementation.
+RELOAD_TIELINE_SURROGATE = False
 # %%
 # Repository paths
 
@@ -537,7 +548,7 @@ def _diffusivity_artifact_stem():
         TC_KINETICS_DISABLE_GLOBAL_MINIMIZATION or TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET
     ))
     hessian_forced = int(not TC_KINETICS_DISABLE_POSITIVE_DEFINITE_HESSIAN)
-    stem = f"wtife_{TEMPERATURE:g}K_global_{global_enabled}_hessian_{hessian_forced}"
+    stem = f"cuniti_{TEMPERATURE:g}K_global_{global_enabled}_hessian_{hessian_forced}"
     if TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET:
         stem += "_single_set_1"
     if TC_KINETICS_MULTISTART_MODE != "off":
@@ -551,7 +562,7 @@ def _diffusivity_artifact_stem():
     return stem
 
 
-def _record_interface_bulk_consistency(surrogate):
+def _record_interface_bulk_consistency(surrogate, *, kinetics_path=None, report_path=None):
     """Persist a compact warning report for discontinuous matrices or site states.
 
     This is a heuristic comparison against independently calculated nearby
@@ -559,7 +570,10 @@ def _record_interface_bulk_consistency(surrogate):
     sublattice site fractions. The report records enough state data to
     investigate every flag without storing the full NumPy arrays in metadata.
     """
-    kinetics_path = OUTPUTS / f"{_diffusivity_artifact_stem()}_kinetics.jsonl"
+    kinetics_path = (
+        OUTPUTS / f"{_diffusivity_artifact_stem()}_kinetics.jsonl"
+        if kinetics_path is None else Path(kinetics_path)
+    )
     report = evaluate_interface_bulk_diffusivity_consistency(
         surrogate,
         matrix_relative_threshold=TC_INTERFACE_BULK_MATRIX_RELATIVE_THRESHOLD,
@@ -583,6 +597,7 @@ def _record_interface_bulk_consistency(surrogate):
         for item in report["site_fraction_flags"]
     ]
     payload = {
+        "schema_version": 1,
         "kind": report["kind"],
         "temperature": report["temperature"],
         "settings": report["settings"],
@@ -609,7 +624,10 @@ def _record_interface_bulk_consistency(surrogate):
         "site_fraction_matching_failures": report["site_fraction_matching_failures"],
     }
     surrogate.metadata["interface_bulk_diffusivity_consistency"] = payload
-    report_path = OUTPUTS / f"{_diffusivity_artifact_stem()}_interface_bulk_consistency.json"
+    report_path = (
+        OUTPUTS / f"{_diffusivity_artifact_stem()}_interface_bulk_consistency.json"
+        if report_path is None else Path(report_path)
+    )
     report_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     if flags or site_fraction_flags or report["site_fraction_matching_failures"]:
         details = []
@@ -649,11 +667,14 @@ def _record_interface_bulk_consistency(surrogate):
 
 
 @contextmanager
-def _capture_surrogate_kinetics(source_thermodynamics):
+def _capture_surrogate_kinetics(source_thermodynamics, path=None):
     """Stream the exact construction-time TC kinetics queries to JSON Lines."""
     if systemStr != "CuNiTi" or not isinstance(source_thermodynamics, TCPythonThermodynamics):
         raise ValueError("Cu-Ni-Ti diffusivity capture requires the direct TC-Python source.")
-    path = OUTPUTS / f"{_diffusivity_artifact_stem()}_kinetics.jsonl"
+    path = (
+        OUTPUTS / f"{_diffusivity_artifact_stem()}_kinetics.jsonl"
+        if path is None else Path(path)
+    )
     config = source_thermodynamics.config
     with path.open("w", encoding="utf-8", newline="\n") as output:
         header = {
@@ -683,7 +704,7 @@ def _capture_surrogate_kinetics(source_thermodynamics):
             yield path
 
 
-def plot_selected_diffusivity_calculations_for_run(surrogate=None, *, renderer="browser"):
+def plot_selected_diffusivity_calculations_for_run(surrogate=None, *, artifact=None, renderer="browser"):
     """Plot only the selected TC records used by all four diffusivity datasets.
 
     Tabs cross both phases with the interface and general training contexts.
@@ -693,23 +714,142 @@ def plot_selected_diffusivity_calculations_for_run(surrogate=None, *, renderer="
     """
     if surrogate is None:
         surrogate = result["surrogate_ab"]
-    sidecar = surrogate.metadata.get("kinetics_diagnostics_sidecar")
-    if not sidecar:
-        raise ValueError("Surrogate metadata does not identify a kinetics diagnostics sidecar.")
-    path = OUTPUTS / sidecar
+    if artifact is None:
+        artifact = globals().get("tieline_surrogate_artifact")
+    if artifact is not None:
+        path = artifact.member_path("kinetics_diagnostics")
+    else:
+        sidecar = surrogate.metadata.get("kinetics_diagnostics_sidecar")
+        if not sidecar:
+            raise ValueError("Surrogate metadata does not identify a kinetics diagnostics sidecar.")
+        path = OUTPUTS / sidecar
     return plot_selected_diffusivity_calculations(surrogate, path, renderer=renderer)
 
 
-def build_tieline_surrogate(source_thermodynamics):
-    """Sample the tie line and optionally capture selected TC kinetics data."""
-    pair_ab = TIELINE_PHASES
-    diffusivity_sampling = (
-        {}
-        if BULK_DIFFUSIVITY_MODE == "phase_uniform"
-        else _surrogate_diffusivity_sampling_kwargs()
+def _surrogate_build_spec(source_thermodynamics, diffusivity_sampling):
+    """Describe every numerical input used to construct the Cu-Ni-Ti surrogate.
+
+    Large sampling arrays are left as arrays for the artifact canonicalizer,
+    which records their dtype, shape, and digest without expanding them into
+    the manifest. Purely locational cache and output paths are excluded.
+    """
+    tc_source = getattr(source_thermodynamics, "thermodynamics", source_thermodynamics)
+    if not isinstance(tc_source, TCPythonThermodynamics):
+        raise ValueError("Safe Cu-Ni-Ti surrogate artifacts currently require the TC-Python source.")
+    runtime_version = tc_source.getRuntimeVersion()
+    if not runtime_version:
+        raise ValueError("Cannot safely identify the installed TC-Python runtime for surrogate reuse.")
+    config = tc_source.config.to_metadata()
+    config.pop("cache_dir", None)
+    config.pop("timeout_seconds", None)
+    user_database_path = config.pop("user_database_path", None)
+    database_identity = {
+        "thermodynamic_database": config.get("thermodynamic_database"),
+        "kinetic_database": config.get("kinetic_database"),
+        "user_database": None,
+    }
+    if user_database_path is not None:
+        database_path = Path(user_database_path)
+        database_identity["user_database"] = {
+            "name": database_path.name,
+            "sha256": file_sha256(database_path),
+        }
+    fixed_matrix = getattr(source_thermodynamics, "diffusivity_matrix", CUNITI_BCC_DIFFUSIVITY_MATRIX)
+    probe_parameters = _tieline_surrogate_probe_kwargs(PROBE_START, PROBE_END, PROBE_POINT)
+    recipe_functions = (
+        _make_tc_config,
+        _tieline_surrogate_probe_kwargs,
+        _surrogate_diffusivity_sampling_kwargs,
+        _record_interface_bulk_consistency,
+        _capture_surrogate_kinetics,
+        _surrogate_build_spec,
+        build_tieline_surrogate,
+        prepare_tieline_surrogate,
     )
+    return {
+        "system": {
+            "name": systemStr,
+            "thermodynamics_engine": THERM_ENGINE,
+            "elements": ELEMENTS,
+            "independent_elements": INDEPENDENT_ELEMENTS,
+            "reference_element": REFERENCE_ELEMENT,
+            "phases": TIELINE_PHASES,
+            "temperature": TEMPERATURE,
+        },
+        "runtime": {
+            "tc_python_version": runtime_version,
+            "databases": database_identity,
+            "thermocalc_config": config,
+            "default_remove_cache": tc_source.default_remove_cache,
+        },
+        "tieline_sampling": {
+            "mode": TIELINE_SURROGATE_BUILD_MODE,
+            "parameters": probe_parameters,
+        },
+        "diffusivity_sampling": {
+            "mode": BULK_DIFFUSIVITY_MODE,
+            "interpolation": DIFFUSIVITY_INTERPOLATION,
+            "parameters": diffusivity_sampling,
+            "fixed_phase": getattr(source_thermodynamics, "fixed_phase", None),
+            "fixed_matrix": fixed_matrix,
+            "fixed_sample_eta": DIFFUSIVITY_SAMPLE_ETA,
+            "skip_failed_bulk_calculations": TC_DROP_FAILED_BULK_CALCULATIONS,
+            "drop_invalid_bulk_matrices": TC_DROP_INVALID_BULK_MATRICES,
+            "validity_policy": "raise",
+            "min_composition": 1.0e-10,
+        },
+        "diagnostics": {
+            "capture_kinetics": TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS,
+            "check_interface_bulk_consistency": TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY,
+            "matrix_relative_threshold": TC_INTERFACE_BULK_MATRIX_RELATIVE_THRESHOLD,
+            "local_outlier_factor": TC_INTERFACE_BULK_LOCAL_OUTLIER_FACTOR,
+            "max_distance_ratio": TC_INTERFACE_BULK_MAX_DISTANCE_RATIO,
+            "site_fraction_absolute_threshold": TC_INTERFACE_BULK_SITE_FRACTION_ABSOLUTE_THRESHOLD,
+        },
+        "implementation_sources": {
+            "moving_boundary_surrogates": file_sha256(moving_boundary_surrogates_module.__file__),
+            "tc_python_adapter": file_sha256(tc_python_adapter_module.__file__),
+            "surrogate_artifacts": file_sha256(surrogate_artifacts_module.__file__),
+            "surrogate_diagnostics": file_sha256(surrogate_diagnostics_module.__file__),
+            "cuniti_recipe": {
+                function.__name__: callable_source_sha256(function)
+                for function in recipe_functions
+            },
+        },
+    }
+
+
+def _required_surrogate_artifact_members():
+    """Return diagnostic member roles required by the current run settings."""
+    roles = []
+    if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS or TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY:
+        roles.append("kinetics_diagnostics")
+    if TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY and BULK_DIFFUSIVITY_MODE != "phase_uniform":
+        roles.append("interface_bulk_consistency")
+    if TC_DROP_FAILED_BULK_CALCULATIONS:
+        roles.append("failed_bulk_points")
+    if TC_DROP_INVALID_BULK_MATRICES:
+        roles.append("invalid_bulk_points")
+    return tuple(roles)
+
+
+def build_tieline_surrogate(source_thermodynamics, *, diffusivity_sampling=None, artifact_directory=None):
+    """Sample the tie line and return its surrogate plus artifact sidecars.
+
+    ``artifact_directory`` receives construction-only diagnostics before the
+    verified bundle publisher copies them into content-addressed members.
+    """
+    pair_ab = TIELINE_PHASES
+    if diffusivity_sampling is None:
+        diffusivity_sampling = (
+            {} if BULK_DIFFUSIVITY_MODE == "phase_uniform" else _surrogate_diffusivity_sampling_kwargs()
+        )
+    artifact_directory = OUTPUTS if artifact_directory is None else Path(artifact_directory)
+    artifact_directory.mkdir(parents=True, exist_ok=True)
+    kinetics_path = artifact_directory / "kinetics.jsonl"
+    members = {}
     capture = (
-        _capture_surrogate_kinetics(source_thermodynamics)
+        _capture_surrogate_kinetics(source_thermodynamics, kinetics_path)
         if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS or TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY
         else nullcontext()
     )
@@ -732,25 +872,31 @@ def build_tieline_surrogate(source_thermodynamics):
             )
     if TC_DROP_FAILED_BULK_CALCULATIONS:
         failures = surrogate_ab.metadata["failed_bulk_points"]
-        report_path = OUTPUTS / f"{_diffusivity_artifact_stem()}_failed_bulk_points.json"
+        report_path = artifact_directory / "failed_bulk_points.json"
         report_path.write_text(json.dumps(failures, indent=2) + "\n", encoding="utf-8")
+        members["failed_bulk_points"] = {"path": report_path, "schema_version": 1}
         print(f"Dropped {len(failures)} bulk phase samples; details: {report_path}")
     if TC_DROP_INVALID_BULK_MATRICES:
         invalid = surrogate_ab.metadata["invalid_bulk_points"]
-        report_path = OUTPUTS / f"{_diffusivity_artifact_stem()}_invalid_bulk_points.json"
+        report_path = artifact_directory / "invalid_bulk_points.json"
         report_path.write_text(json.dumps(invalid, indent=2) + "\n", encoding="utf-8")
+        members["invalid_bulk_points"] = {"path": report_path, "schema_version": 1}
         print(f"Dropped {len(invalid)} bulk samples with invalid matrices; details: {report_path}")
     if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS:
-        surrogate_ab.metadata["thermocalc_config"] = source_thermodynamics.config.to_metadata() | {
-            "default_remove_cache": source_thermodynamics.default_remove_cache,
+        tc_source = getattr(source_thermodynamics, "thermodynamics", source_thermodynamics)
+        surrogate_ab.metadata["thermocalc_config"] = tc_source.config.to_metadata() | {
+            "default_remove_cache": tc_source.default_remove_cache,
         }
-        surrogate_ab.metadata["kinetics_diagnostics_sidecar"] = f"{_diffusivity_artifact_stem()}_kinetics.jsonl"
+        surrogate_ab.metadata["kinetics_diagnostics_sidecar"] = "bundle:kinetics_diagnostics"
+    if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS or TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY:
+        members["kinetics_diagnostics"] = {"path": kinetics_path, "schema_version": 2}
     if TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY and BULK_DIFFUSIVITY_MODE != "phase_uniform":
-        _record_interface_bulk_consistency(surrogate_ab)
-    if (TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS
-            or TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY):
-        surrogate_ab.save(OUTPUTS / f"{_diffusivity_artifact_stem()}.npz")
-    return surrogate_ab
+        consistency_path = artifact_directory / "interface_bulk_consistency.json"
+        _record_interface_bulk_consistency(
+            surrogate_ab, kinetics_path=kinetics_path, report_path=consistency_path
+        )
+        members["interface_bulk_consistency"] = {"path": consistency_path, "schema_version": 1}
+    return surrogate_ab, members
     # return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
     #     thermodynamics=source_thermodynamics,
     #     elements=ELEMENTS,
@@ -767,6 +913,38 @@ def build_tieline_surrogate(source_thermodynamics):
     #     probe_max_search_steps=PROBE_MAX_SEARCH_STEPS,
     #     precipitate_phase=TIELINE_PHASES[1],
     # )
+
+
+def prepare_tieline_surrogate(source_thermodynamics):
+    """Build by default, or strictly reload, the verified Cu-Ni-Ti artifact.
+
+    Reload mode never invokes the builder. Missing, incompatible, or damaged
+    bundles therefore fail before any Thermo-Calc calculation can start.
+    """
+    diffusivity_sampling = (
+        {} if BULK_DIFFUSIVITY_MODE == "phase_uniform" else _surrogate_diffusivity_sampling_kwargs()
+    )
+    build_spec = _surrogate_build_spec(source_thermodynamics, diffusivity_sampling)
+    bundle_path = OUTPUTS / f"{_diffusivity_artifact_stem()}.surrogate"
+
+    with tempfile.TemporaryDirectory(prefix="cuniti-surrogate-", dir=OUTPUTS) as temporary:
+        def builder():
+            return build_tieline_surrogate(
+                source_thermodynamics,
+                diffusivity_sampling=diffusivity_sampling,
+                artifact_directory=temporary,
+            )
+
+        artifact = prepare_surrogate_artifact(
+            bundle_path,
+            build_spec,
+            builder,
+            reload=RELOAD_TIELINE_SURROGATE,
+            required_members=_required_surrogate_artifact_members(),
+        )
+    action = "Reloaded" if RELOAD_TIELINE_SURROGATE else "Built and published"
+    print(f"{action} verified surrogate artifact: {artifact.path}")
+    return artifact
 
 
 def select_fixed_diffusivity_matrices(source_thermodynamics, tieline_surrogate):
@@ -1209,7 +1387,8 @@ if validated_phase_molar_volumes is not None and len(set(validated_phase_molar_v
     )
 
 source_thermodynamics = build_source_thermodynamics()
-tieline_surrogate = build_tieline_surrogate(source_thermodynamics)
+tieline_surrogate_artifact = prepare_tieline_surrogate(source_thermodynamics)
+tieline_surrogate = tieline_surrogate_artifact.surrogate
 
 print(f"Built tie-line surrogate with eta bounds {tieline_surrogate.eta_bounds}.")
 tieline_surrogate.validity_policy='legacy'
@@ -1220,7 +1399,11 @@ construction_diagnostics = plot_surrogate_diagnostics(
 )
 construction_diagnostics["figures"]["construction"].show()
 
-fig = plot_selected_diffusivity_calculations_for_run(surrogate=tieline_surrogate, renderer="browser")
+fig = plot_selected_diffusivity_calculations_for_run(
+    surrogate=tieline_surrogate,
+    artifact=tieline_surrogate_artifact,
+    renderer="browser",
+)
 fig.show()
 if BULK_DIFFUSIVITY_MODE == "phase_uniform":
     fixed_diffusivity_matrices = select_fixed_diffusivity_matrices(
