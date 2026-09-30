@@ -1357,6 +1357,52 @@ def test_ternary_uniform_face_array_matches_phase_uniform_solve():
     assert np.allclose(right_face_array.interface_flux, right_uniform.interface_flux, rtol=1.0e-14, atol=1.0e-15)
 
 
+@pytest.mark.parametrize("phase", ["left", "right"])
+@pytest.mark.parametrize("motion_branch", ["positive", "negative"])
+@pytest.mark.parametrize("phase_uniform", [True, False])
+@pytest.mark.parametrize("nonuniform", [False, True])
+@pytest.mark.parametrize("n_nodes", [3, 11])
+def test_ternary_compiled_planar_assembly_matches_python_fallback(
+    monkeypatch, phase, motion_branch, phase_uniform, nonuniform, n_nodes
+):
+    helper_name = f"_fill_ternary_{phase}_planar_interior"
+    if getattr(ternary_fdm, helper_name) is None:
+        pytest.skip("Numba is unavailable")
+
+    model, _, _ = _make_residual_identity_state()
+    grid = np.linspace(0.0, 1.0, n_nodes)
+    if nonuniform:
+        grid = grid ** 1.5
+    model._u_grid = grid.copy()
+    model._v_grid = grid.copy()
+    profile = np.column_stack((np.linspace(0.2, 0.3, n_nodes), np.linspace(0.08, 0.12, n_nodes)))
+    interface_composition = np.asarray([0.28, 0.11])
+    diffusivity = np.asarray([[1.0e-3, 1.0e-4], [2.0e-4, 8.0e-4]])
+    if phase_uniform:
+        faces = diffusivity
+    else:
+        faces = np.asarray([diffusivity * (1.0 + 0.02 * i) for i in range(n_nodes - 1)])
+    s = 0.45
+    future_s = s + (0.01 if motion_branch == "positive" else -0.01)
+    solve = getattr(model, f"_solve_concentration_{phase}_planar")
+    captured = []
+    original_solver = ternary_fdm.solve_illingworth_block_tridiagonal
+
+    def capture_solver(lower, diagonal, upper, rhs):
+        captured.append(tuple(array.copy() for array in (lower, diagonal, upper, rhs)))
+        return original_solver(lower, diagonal, upper, rhs)
+
+    monkeypatch.setattr(ternary_fdm, "solve_illingworth_block_tridiagonal", capture_solver)
+    compiled = solve(profile, s, future_s, 1.0e-4, interface_composition, faces, motion_branch)
+    monkeypatch.setattr(ternary_fdm, helper_name, None)
+    reference = solve(profile, s, future_s, 1.0e-4, interface_composition, faces, motion_branch)
+
+    for compiled_array, reference_array in zip(captured[0], captured[1]):
+        np.testing.assert_allclose(compiled_array, reference_array, rtol=2.0e-13, atol=1.0e-14)
+    np.testing.assert_allclose(compiled.profile, reference.profile, rtol=2.0e-12, atol=1.0e-14)
+    np.testing.assert_allclose(compiled.interface_flux, reference.interface_flux, rtol=2.0e-12, atol=1.0e-14)
+
+
 def test_ternary_bulk_diffusivity_mode_defaults_to_phase_uniform():
     model = _make_scope_validation_model()
 

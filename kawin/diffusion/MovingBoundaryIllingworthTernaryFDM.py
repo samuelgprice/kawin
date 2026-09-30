@@ -13,6 +13,8 @@ from kawin.diffusion.MovingBoundaryEquilibrium import (
 )
 from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
+    _fill_ternary_left_planar_interior,
+    _fill_ternary_right_planar_interior,
     _solve_illingworth_block_tridiagonal_two_phase as solve_illingworth_block_tridiagonal,
     flatten_1d_coordinates,
     integrate_planar_transformed_profile_components,
@@ -1556,9 +1558,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         ``D_left_faces[j]`` is the 2-by-2 matrix on the face between
         transformed nodes ``j`` and ``j + 1``. The interface-adjacent face is
-        ``D_left_faces[-1]``. Internal callers pass prevalidated matrices from
-        the phase-uniform or face-diffusivity providers; external diagnostic
-        calls validate by default.
+        ``D_left_faces[-1]``. Interior rows use Numba when available and the
+        original Python assembly otherwise; both use neighboring grid spacing.
+        Internal callers pass prevalidated matrices from the phase-uniform or
+        face-diffusivity providers; external diagnostic calls validate by default.
         """
         _validate_motion_branch(motion_branch)
         n = len(p)
@@ -1583,13 +1586,20 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         tmpA_faces = None if phase_uniform else D_left_faces * tmpA_scale
         tmpB = float(future_s) - float(s)
         u = self._u_grid
+        if _fill_ternary_left_planar_interior is not None:
+            scaled_faces = np.broadcast_to(tmpA_uniform, (n - 1, 2, 2)) if phase_uniform else tmpA_faces
+            _fill_ternary_left_planar_interior(
+                lower, diagonal, upper, rhs, p, u, scaled_faces,
+                phase_uniform, motion_branch == "positive", s, future_s,
+            )
+        interior_rows = range(1, n - 1) if _fill_ternary_left_planar_interior is None else ()
 
         if motion_branch == "positive":
             A_right = tmpA_uniform if phase_uniform else tmpA_faces[0]
             diagonal[0] = -A_right / u[1] - I * (future_s * u[1] / 2.0)
             upper[0] = A_right / u[1] + I * (tmpB * u[1] / 2.0)
             rhs[0] = -p[0] * s * u[1] / 2.0
-            for i in range(1, n - 1):
+            for i in interior_rows:
                 left_diff = u[i] - u[i - 1]
                 right_diff = u[i + 1] - u[i]
                 left_sum = u[i] + u[i - 1]
@@ -1610,7 +1620,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             diagonal[0] = -A_right / u[1] + I * (tmpB * u[1] / 2.0 - future_s * u[1] / 2.0)
             upper[0] = A_right / u[1]
             rhs[0] = -p[0] * s * u[1] / 2.0
-            for i in range(1, n - 1):
+            for i in interior_rows:
                 left_diff = u[i] - u[i - 1]
                 right_diff = u[i + 1] - u[i]
                 left_sum = u[i] + u[i - 1]
@@ -1652,9 +1662,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         ``D_right_faces[j]`` is the 2-by-2 matrix on the face between
         transformed nodes ``j`` and ``j + 1``. The interface-adjacent face is
-        ``D_right_faces[0]``. Internal callers pass prevalidated matrices from
-        the phase-uniform or face-diffusivity providers; external diagnostic
-        calls validate by default.
+        ``D_right_faces[0]``. Interior rows use Numba when available and the
+        original Python assembly otherwise; both use neighboring grid spacing.
+        Internal callers pass prevalidated matrices from the phase-uniform or
+        face-diffusivity providers; external diagnostic calls validate by default.
         """
         _validate_motion_branch(motion_branch)
         n = len(q)
@@ -1680,11 +1691,18 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         tmpB = float(future_s) - float(s)
         span = self._R - float(future_s)
         v = self._v_grid
+        if _fill_ternary_right_planar_interior is not None:
+            scaled_faces = np.broadcast_to(tmpA_uniform, (n - 1, 2, 2)) if phase_uniform else tmpA_faces
+            _fill_ternary_right_planar_interior(
+                lower, diagonal, upper, rhs, q, v, scaled_faces,
+                phase_uniform, motion_branch == "positive", self._R - s, span, tmpB,
+            )
+        interior_rows = range(1, n - 1) if _fill_ternary_right_planar_interior is None else ()
 
         diagonal[0] = -I
         rhs[0] = -np.asarray(c_right, dtype=np.float64)
         if motion_branch == "positive":
-            for i in range(1, n - 1):
+            for i in interior_rows:
                 left_diff = v[i] - v[i - 1]
                 right_diff = v[i + 1] - v[i]
                 left_sum = v[i] + v[i - 1]
@@ -1708,7 +1726,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             diagonal[-1] += -I * (tmpB * (1.0 - (1.0 + tmp) / 2.0) + span * (1.0 - tmp) / 2.0)
             rhs[-1] = -q[-1] * (self._R - s) * (1.0 - tmp) / 2.0
         else:
-            for i in range(1, n - 1):
+            for i in interior_rows:
                 left_diff = v[i] - v[i - 1]
                 right_diff = v[i + 1] - v[i]
                 left_sum = v[i] + v[i - 1]

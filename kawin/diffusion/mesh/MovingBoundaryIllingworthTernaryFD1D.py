@@ -575,3 +575,86 @@ def _solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs):
     else:
         cause = _BlockThomasPivotError(f"Block-tridiagonal solve produced a nonfinite 2x2 result at row {row}.")
     return _solve_dense_block_tridiagonal(lower, diagonal, upper, rhs, cause)
+
+
+if njit is not None:
+    @njit(cache=True, fastmath=False)
+    def _fill_ternary_left_planar_interior(lower, diagonal, upper, rhs, p, u, scaled_faces,
+                                           phase_uniform, positive_motion, s, future_s):
+        """Fill left interior rows with the original front-fixed upwind coefficients.
+
+        ``scaled_faces`` contains dt/future_s-scaled 2x2 face matrices. Boundary
+        rows are left untouched; ``phase_uniform`` retains its original diagonal
+        arithmetic even though the matrix is broadcast over faces.
+        """
+        displacement = future_s - s
+        for i in range(1, p.shape[0] - 1):
+            left_diff = u[i] - u[i - 1]
+            right_diff = u[i + 1] - u[i]
+            left_sum = u[i] + u[i - 1]
+            right_sum = u[i + 1] + u[i]
+            cell_width = right_sum - left_sum
+            for component in range(2):
+                rhs[i, component] = -s * p[i, component] * cell_width / 2.0
+                for coupled in range(2):
+                    left = scaled_faces[i - 1, component, coupled]
+                    right = scaled_faces[i, component, coupled]
+                    if phase_uniform:
+                        center = -left * (1.0 / left_diff + 1.0 / right_diff)
+                    else:
+                        center = -left / left_diff - right / right_diff
+                    if positive_motion:
+                        lower[i, component, coupled] = left / left_diff
+                        upper[i, component, coupled] = right / right_diff
+                        if component == coupled:
+                            center += -(displacement * left_sum / 2.0 + future_s * cell_width / 2.0)
+                            upper[i, component, coupled] += displacement * right_sum / 2.0
+                    else:
+                        lower[i, component, coupled] = left / left_diff
+                        upper[i, component, coupled] = right / right_diff
+                        if component == coupled:
+                            lower[i, component, coupled] -= displacement * left_sum / 2.0
+                            center += displacement * right_sum / 2.0 - future_s * cell_width / 2.0
+                    diagonal[i, component, coupled] = center
+
+
+    @njit(cache=True, fastmath=False)
+    def _fill_ternary_right_planar_interior(lower, diagonal, upper, rhs, q, v, scaled_faces,
+                                            phase_uniform, positive_motion, old_span, span, displacement):
+        """Fill right interior rows with the original front-fixed upwind coefficients.
+
+        ``scaled_faces`` contains dt/span-scaled 2x2 face matrices. Boundary
+        rows are left untouched; ``phase_uniform`` retains its original diagonal
+        arithmetic even though the matrix is broadcast over faces.
+        """
+        for i in range(1, q.shape[0] - 1):
+            left_diff = v[i] - v[i - 1]
+            right_diff = v[i + 1] - v[i]
+            left_sum = v[i] + v[i - 1]
+            right_sum = v[i + 1] + v[i]
+            cell_width = right_sum - left_sum
+            for component in range(2):
+                rhs[i, component] = -old_span * q[i, component] * cell_width / 2.0
+                for coupled in range(2):
+                    left = scaled_faces[i - 1, component, coupled]
+                    right = scaled_faces[i, component, coupled]
+                    if phase_uniform:
+                        center = -left * (1.0 / right_diff + 1.0 / left_diff)
+                    else:
+                        center = -right / right_diff - left / left_diff
+                    if positive_motion:
+                        lower[i, component, coupled] = left / left_diff
+                        upper[i, component, coupled] = right / right_diff
+                        if component == coupled:
+                            center += -(displacement * (1.0 - left_sum / 2.0) + span * cell_width / 2.0)
+                            upper[i, component, coupled] += displacement * (1.0 - right_sum / 2.0)
+                    else:
+                        lower[i, component, coupled] = left / left_diff
+                        upper[i, component, coupled] = right / right_diff
+                        if component == coupled:
+                            lower[i, component, coupled] -= displacement * (1.0 - left_sum / 2.0)
+                            center += displacement * (1.0 - right_sum / 2.0) - span * cell_width / 2.0
+                    diagonal[i, component, coupled] = center
+else:
+    _fill_ternary_left_planar_interior = None
+    _fill_ternary_right_planar_interior = None
