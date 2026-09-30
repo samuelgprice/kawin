@@ -198,6 +198,36 @@ class SurrogateArtifactBundle:
         return _safe_member_path(self.path, relative)
 
     @classmethod
+    def load_published(cls, bundle_path: str | Path) -> "SurrogateArtifactBundle":
+        """Load and verify a bundle against its own published build specification.
+
+        This inspection-oriented loader permits comparison of artifacts with
+        different build fingerprints. It still performs every integrity and
+        internal-consistency check used by :meth:`load`; it simply does not
+        claim that either artifact matches the caller's current build settings.
+        Standalone NPZ archives are not accepted.
+        """
+
+        bundle_path = Path(bundle_path)
+        manifest_path = bundle_path / "manifest.json"
+        if not manifest_path.is_file():
+            raise SurrogateArtifactIntegrityError(
+                f"Surrogate bundle manifest does not exist: {manifest_path}"
+            )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SurrogateArtifactIntegrityError(
+                f"Cannot read surrogate bundle manifest: {exc}"
+            ) from exc
+        build_spec = manifest.get("build_spec")
+        if not isinstance(build_spec, dict):
+            raise SurrogateArtifactIntegrityError(
+                "Artifact manifest does not contain a valid published build specification."
+            )
+        return cls.load(bundle_path, build_spec)
+
+    @classmethod
     def publish(
         cls,
         bundle_path: str | Path,
