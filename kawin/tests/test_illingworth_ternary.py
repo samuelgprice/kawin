@@ -1112,6 +1112,74 @@ def test_ternary_diffusivity_validation_rejects_complex_valued_matrix():
         _validate_ternary_diffusivity_matrix(matrix, "ALPHA", context="complex test diffusivity")
 
 
+@pytest.mark.parametrize("n_faces", [1, 100, 200])
+@pytest.mark.parametrize("scale", [1.0e-300, 1.0e-150, 1.0, 1.0e150, 1.0e300])
+def test_ternary_batched_diffusivity_validation_matches_scalar_values(n_faces, scale):
+    base = np.asarray([[2.0, 0.1], [0.2, 3.0]], dtype=np.float64)
+    matrices = base[np.newaxis, :, :] * scale * np.linspace(0.8, 1.2, n_faces)[:, None, None]
+
+    actual = ternary_fdm._validate_ternary_diffusivity_stack(matrices, "ALPHA")
+    expected = np.asarray([
+        _validate_ternary_diffusivity_matrix(matrix, "ALPHA", context=f"bulk face diffusivity face {i}")
+        for i, matrix in enumerate(matrices)
+    ])
+
+    np.testing.assert_array_equal(actual, expected)
+    assert not np.shares_memory(actual, matrices)
+
+
+@pytest.mark.parametrize(
+    "first_invalid, later_invalid",
+    [
+        (np.asarray([[1.0 + 1.0e-8j, 0.0], [0.0, 1.0]]), np.zeros((2, 2))),
+        (np.asarray([[1.0, np.nan], [0.0, 1.0]]), np.zeros((2, 2))),
+        (np.zeros((2, 2)), np.asarray([[1.0, 0.0], [0.0, -1.0]])),
+        (np.asarray([[0.0, -1.0], [1.0, 0.0]]), np.zeros((2, 2))),
+        (np.asarray([[1.0, 0.0], [0.0, -1.0]]), np.zeros((2, 2))),
+        (np.asarray([[1.0, 0.0], [0.0, 1.0e-14 * (1.0 - 1.0e-3)]]), np.zeros((2, 2))),
+    ],
+)
+def test_ternary_batched_diffusivity_validation_reports_first_scalar_failure(first_invalid, later_invalid):
+    matrices = np.repeat(np.eye(2)[np.newaxis, :, :], 4, axis=0).astype(np.result_type(first_invalid, later_invalid))
+    matrices[1] = first_invalid
+    matrices[3] = later_invalid
+
+    with pytest.raises(ValueError) as reference_error:
+        for i, matrix in enumerate(matrices):
+            _validate_ternary_diffusivity_matrix(matrix, "ALPHA", context=f"bulk face diffusivity face {i}")
+    with pytest.raises(ValueError) as batch_error:
+        ternary_fdm._validate_ternary_diffusivity_stack(matrices, "ALPHA")
+
+    assert str(batch_error.value) == str(reference_error.value)
+    assert "face 1" in str(batch_error.value)
+
+
+@pytest.mark.parametrize("matrix", [
+    np.asarray([[1.0, 0.0], [0.0, 1.0e-14 * (1.0 + 1.0e-3)]]),
+    np.asarray([[1.0, -1.0e-12], [1.0e-12, 1.0]]),
+])
+def test_ternary_batched_diffusivity_validation_defers_threshold_adjacent_values(matrix, monkeypatch):
+    calls = []
+    original = ternary_fdm._validate_ternary_diffusivity_matrix
+
+    def count_scalar(value, phase, context="ternary Illingworth diffusivity"):
+        calls.append(context)
+        return original(value, phase, context=context)
+
+    monkeypatch.setattr(ternary_fdm, "_validate_ternary_diffusivity_matrix", count_scalar)
+    matrices = np.asarray([np.eye(2), matrix])
+    actual = ternary_fdm._validate_ternary_diffusivity_stack(matrices, "ALPHA")
+
+    np.testing.assert_array_equal(actual, matrices)
+    assert calls == ["bulk face diffusivity face 0", "bulk face diffusivity face 1"]
+
+
+def test_ternary_batched_diffusivity_validation_handles_empty_stack():
+    actual = ternary_fdm._validate_ternary_diffusivity_stack(np.empty((0, 2, 2)), "ALPHA")
+    assert actual.shape == (0, 2, 2)
+    assert actual.dtype == np.float64
+
+
 def test_ternary_phase_uniform_solve_rejects_complex_diffusivity_before_real_conversion():
     model, p, _ = _make_residual_identity_state()
     s = float(model._s_curr)
@@ -1470,6 +1538,40 @@ def test_ternary_bulk_face_diffusivity_falls_back_to_no_context_scalar_api():
     assert len(thermodynamics.calls) == 3
     assert [call["phase"] for call in thermodynamics.calls] == ["ALPHA", "ALPHA", "ALPHA"]
     assert np.allclose([call["composition"] for call in thermodynamics.calls], face_compositions)
+
+
+def test_ternary_bulk_face_vectorized_validation_keeps_shape_and_counters(monkeypatch):
+    model = _make_scope_validation_model()
+    model.setup()
+    matrix = np.asarray([[1.0e-3, 1.0e-4], [2.0e-4, 8.0e-4]])
+    calls = []
+
+    class VectorizedProvider:
+        def getInterdiffusivity(self, compositions, temperatures, phase=None, query_context=None):
+            calls.append((np.asarray(compositions).shape, phase, query_context))
+            return matrix.copy()
+
+    model.therm = VectorizedProvider()
+    model._bulkDiffusivityCountingActive = True
+    model._currentBulkDiffusivityProviderCalls = 0
+    model._currentBulkFaceMatricesEvaluated = 0
+    monkeypatch.setattr(ternary_fdm, "_validate_ternary_diffusivity_matrix", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected scalar validation")))
+
+    actual = model._bulk_face_diffusivity_matrices(
+        np.asarray([[0.2, 0.1]]), "ALPHA", model.currentTime, np.asarray([0.2])
+    )
+
+    np.testing.assert_array_equal(actual, matrix[np.newaxis, :, :])
+    assert calls == [((1, 2), "ALPHA", "general")]
+    assert model._currentBulkDiffusivityProviderCalls == 1
+    assert model._currentBulkFaceMatricesEvaluated == 1
+    with pytest.raises(ValueError, match="unexpected matrix shape"):
+        model._bulk_face_diffusivity_matrices(
+            np.asarray([[0.2, 0.1], [0.25, 0.12]]), "ALPHA", model.currentTime,
+            np.asarray([0.2, 0.3]),
+        )
+    assert model._currentBulkDiffusivityProviderCalls == 2
+    assert model._currentBulkFaceMatricesEvaluated == 1
 
 
 def test_ternary_lagged_constant_diffusivity_reproduces_phase_uniform_step():

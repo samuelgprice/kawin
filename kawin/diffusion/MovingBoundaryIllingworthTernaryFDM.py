@@ -242,6 +242,49 @@ def _validate_ternary_diffusivity_matrix(D, phase, context="ternary Illingworth 
     return values
 
 
+def _validate_ternary_diffusivity_stack(matrices, phase, context="bulk face diffusivity face"):
+    """Validate 2x2 face matrices in a batch, using scalar checks for exceptional rows.
+
+    The common path applies the scalar validator's scale-invariant spectral
+    thresholds to a stack. A failed or threshold-adjacent batch is checked in
+    face order by the scalar validator to preserve its first error and message.
+    """
+    values = np.asarray(matrices)
+    if values.ndim != 3 or values.shape[1:] != (2, 2):
+        raise ValueError("bulk diffusivity query returned an unexpected matrix shape.")
+    if not len(values):
+        return np.empty(values.shape, dtype=np.float64)
+
+    def scalar_reference():
+        out = np.empty(values.shape, dtype=np.float64)
+        for i, matrix in enumerate(values):
+            out[i] = _validate_ternary_diffusivity_matrix(matrix, phase, context=f"{context} {i}")
+        return out
+
+    if values.dtype.kind not in "biufc":
+        return scalar_reference()
+    if np.iscomplexobj(values) and np.any(np.imag(values) != 0.0):
+        return scalar_reference()
+    real = np.asarray(np.real(values), dtype=np.float64)
+    if not np.all(np.isfinite(real)):
+        return scalar_reference()
+    norms = np.max(np.sum(np.abs(real), axis=2), axis=1)
+    if not np.all(np.isfinite(norms) & (norms > 0.0)):
+        return scalar_reference()
+    try:
+        eigenvalues = np.linalg.eigvals(real / norms[:, None, None])
+    except np.linalg.LinAlgError:
+        return scalar_reference()
+    imaginary = np.abs(np.imag(eigenvalues))
+    positive = np.real(eigenvalues)
+    margin = 64.0 * np.finfo(np.float64).eps
+    if (not np.all(np.isfinite(eigenvalues))
+            or np.any(imaginary >= TERNARY_DIFFUSIVITY_REAL_SPECTRUM_TOL - margin)
+            or np.any(positive <= TERNARY_DIFFUSIVITY_POSITIVE_EIGENVALUE_TOL + margin)):
+        return scalar_reference()
+    return real.copy()
+
+
 def _validate_eta_bounds(interface_equilibrium):
     eta_bounds = getattr(interface_equilibrium, "eta_bounds", None)
     if eta_bounds is None or len(eta_bounds) != 2:
@@ -1310,8 +1353,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         """
         Returns validated general/bulk diffusivity matrices at face compositions.
 
-        Vectorized thermodynamic queries are used when supported. Providers that
-        only accept one composition at a time fall back to a deterministic loop.
+        Vectorized thermodynamic queries use batched face validation. Providers
+        that only accept one composition at a time retain scalar validation and
+        the deterministic scalar query loop.
         """
         face_compositions = np.asarray(face_compositions, dtype=np.float64)
         if face_compositions.ndim != 2 or face_compositions.shape[1] != 2:
@@ -1326,9 +1370,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 matrices = matrices.reshape(1, 2, 2)
             if matrices.shape != (face_compositions.shape[0], 2, 2):
                 raise ValueError("bulk diffusivity query returned an unexpected matrix shape.")
-            out = np.empty(matrices.shape, dtype=np.float64)
-            for i, matrix in enumerate(matrices):
-                out[i] = _validate_ternary_diffusivity_matrix(matrix, phase, context=f"bulk face diffusivity face {i}")
+            out = _validate_ternary_diffusivity_stack(matrices, phase)
             self._record_bulk_face_matrices_evaluated(out.shape[0])
             return out
 
