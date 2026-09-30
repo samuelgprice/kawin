@@ -1,8 +1,9 @@
 import numpy as np
 import pytest
+from scipy.spatial import cKDTree
 
 from kawin.diffusion import DiffusivityDomainError, DiffusivityDomainStatus, InterfaceDiffusivityConstructionError, TernaryMovingBoundaryThermodynamicsSurrogate, merge_phase_diffusivity_surrogates
-from kawin.diffusion._diffusivity_domain import DiffusivityDomain, _same_coordinate, _same_coordinate_mask, classify_source_matrix
+from kawin.diffusion._diffusivity_domain import DiffusivityDomain, _exact_coordinate_indices_many, _same_coordinate, _same_coordinate_mask, classify_source_matrix
 
 
 def _surrogate(validity=None, matrix=None, interface_matrix=None):
@@ -101,6 +102,15 @@ def test_validity_records_round_trip_through_surrogate_archive(tmp_path):
     assert loaded.validity_policy == "raise"
     assert [status.value for status in validity.statuses] == ["VALID", "VALID", "VALID"]
     assert validity.fit_usable.tolist() == [True, True, True]
+    assert validity._exact_tree is not surrogate.diffusivityValidity["general"]["P"]._exact_tree
+    assert loaded._fitSupport["P"]["exact_tree"] is not surrogate._fitSupport["P"]["exact_tree"]
+    query = np.asarray(((0.10, 0.10), (0.20, 0.20)))
+    loaded_statuses, loaded_reasons = validity.classify_many(query)
+    source_statuses, source_reasons = surrogate.diffusivityValidity["general"]["P"].classify_many(query)
+    assert np.array_equal(loaded_statuses, source_statuses)
+    assert np.array_equal(loaded_reasons, source_reasons)
+    assert np.array_equal(loaded._has_general_fit_support_many("P", query),
+                          surrogate._has_general_fit_support_many("P", query))
 
 
 def test_merge_preserves_invalid_validity_ledger_hole():
@@ -167,6 +177,61 @@ def test_vectorized_exact_lookup_matches_scalar_coordinate_equivalence():
     coordinates = np.asarray((point, np.nextafter(point, (1.0, 1.0)), (0.2, 0.3001), (0.4, 0.1)))
     expected = np.asarray([_same_coordinate(candidate, point) for candidate in coordinates])
     assert np.array_equal(_same_coordinate_mask(coordinates, point), expected)
+
+
+def test_indexed_exact_lookup_retains_tolerance_and_first_source_precedence():
+    base = np.asarray((0.2, 0.3))
+    tolerance = 32.0 * np.finfo(np.float64).eps
+    coordinates = np.asarray(((0.7, 0.1), base, (base[0] + 0.25 * tolerance, base[1])))
+    queries = np.asarray((
+        base,
+        (base[0] + 0.99 * tolerance, base[1]),
+        (base[0] + 1.01 * tolerance, base[1]),
+        (0.8, 0.8),
+    ))
+    expected = [next((index for index, point in enumerate(coordinates)
+                      if _same_coordinate(point, query)), -1) for query in queries]
+    assert _exact_coordinate_indices_many(coordinates, cKDTree(coordinates), queries).tolist() == expected
+    assert _exact_coordinate_indices_many(coordinates, cKDTree(coordinates), queries[:0]).size == 0
+
+
+def test_indexed_domain_batch_matches_original_scan_across_chunks():
+    rng = np.random.default_rng(2817)
+    points = rng.uniform(0.05, 0.95, (200, 2))
+    labels = ["KNOWN_INVALID" if index % 13 == 0 else "VALID" for index in range(len(points))]
+    domain = DiffusivityDomain(points, labels)
+    tolerance = 32.0 * np.finfo(np.float64).eps
+    queries = np.vstack((points[:100], points[:100] + (0.99 * tolerance, 0.0),
+                         points[:100] + (1.01 * tolerance, 0.0), rng.uniform(0.0, 1.0, (100, 2))))
+    original_matches = np.asarray([
+        next((index for index, source in enumerate(domain.coordinates)
+              if _same_coordinate(source, query)), -1) for query in queries
+    ])
+    indexed_matches = _exact_coordinate_indices_many(domain.coordinates, domain._exact_tree, queries)
+    np.testing.assert_array_equal(indexed_matches, original_matches)
+    expected = [domain._classify_scalar_reference(point) for point in queries]
+    statuses, reasons = domain.classify_many(queries, chunk_size=17)
+    assert list(statuses) == [status for status, _ in expected]
+    assert list(reasons) == [reason for _, reason in expected]
+    assert domain.classify_many(queries[:0])[0].size == 0
+
+
+def test_indexed_fit_support_batch_matches_original_scan_and_empty_support():
+    surrogate = _surrogate()
+    points = surrogate._fitSupport["P"]["points"]
+    tolerance = 32.0 * np.finfo(np.float64).eps
+    queries = np.asarray((points[0], points[0] + (0.99 * tolerance, 0.0),
+                          points[0] + (1.01 * tolerance, 0.0), (0.8, 0.8)))
+    support = surrogate._fitSupport["P"]
+    triangulation = support["triangulation"]
+    support["triangulation"] = None
+    expected = np.asarray([np.any([_same_coordinate(point, query) for point in points]) for query in queries])
+    np.testing.assert_array_equal(surrogate._has_general_fit_support_many("P", queries, chunk_size=2), expected)
+    support["triangulation"] = triangulation
+    assert surrogate._has_general_fit_support_many("P", queries[:0]).size == 0
+    support["points"] = points[:0]
+    support["exact_tree"] = None
+    assert not surrogate._has_general_fit_support_many("P", queries).any()
 
 
 def test_batched_general_domain_classification_matches_scalar_reference():

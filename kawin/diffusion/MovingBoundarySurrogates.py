@@ -5,17 +5,18 @@ import numpy as np
 from scipy import optimize
 try:
     from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator, PchipInterpolator, RectBivariateSpline
-    from scipy.spatial import Delaunay
+    from scipy.spatial import Delaunay, cKDTree
 except ImportError:  # pragma: no cover - SciPy is a package dependency.
     LinearNDInterpolator = None
     NearestNDInterpolator = None
     PchipInterpolator = None
     RectBivariateSpline = None
     Delaunay = None
+    cKDTree = None
 
 from kawin.thermo import MulticomponentThermodynamics
 from ._spectral_validation import TERNARY_DIFFUSIVITY_POSITIVE_EIGENVALUE_TOL, TERNARY_DIFFUSIVITY_REAL_SPECTRUM_TOL
-from ._diffusivity_domain import DiffusivityDomain, DiffusivityDomainError, DiffusivityDomainStatus, _same_coordinate_mask, classify_source_matrix
+from ._diffusivity_domain import DiffusivityDomain, DiffusivityDomainError, DiffusivityDomainStatus, _exact_coordinate_indices_many, _same_coordinate_mask, classify_source_matrix
 import tqdm
 
 _DIFFUSIVITY_INTERPOLATION_NEAREST = "nearest"
@@ -2410,9 +2411,9 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         """
         Return bulk fit-support flags for a composition batch.
 
-        The exact-match and Delaunay operations mirror the scalar reference
-        method. Nonfinite inputs remain on that reference path so strict
-        validation preserves its historical exception and fallback behavior.
+        Indexed finite exact matches retain the batch tolerance rule; Delaunay
+        handles the remaining queries. Nonfinite inputs remain on the scalar
+        reference path to preserve its exception and fallback behavior.
         """
         values = np.asarray(values, dtype=np.float64)
         if values.ndim != 2 or values.shape[1] != 2:
@@ -2422,7 +2423,6 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         out = np.zeros(values.shape[0], dtype=bool)
         if not len(points):
             return out
-        point_scales = np.max(np.abs(points), axis=1)
         chunk_size = max(1, int(chunk_size))
         triangulation = support["triangulation"]
         for start in range(0, values.shape[0], chunk_size):
@@ -2436,11 +2436,7 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 continue
             local_indices = np.flatnonzero(finite)
             valid = chunk[local_indices]
-            query_scales = np.max(np.abs(valid), axis=1)
-            tolerance = 32.0 * np.finfo(np.float64).eps * np.maximum(
-                1.0, np.maximum(point_scales[None, :], query_scales[:, None])
-            )
-            exact = np.any(np.all(np.abs(points[None, :, :] - valid[:, None, :]) <= tolerance[:, :, None], axis=2), axis=1)
+            exact = _exact_coordinate_indices_many(points, support["exact_tree"], valid) >= 0
             out[start + local_indices[exact]] = True
             unresolved = local_indices[~exact]
             if len(unresolved) and triangulation is not None:
@@ -2448,13 +2444,16 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
         return out
 
     def _rebuild_fit_support_geometry(self):
-        """Cache general solver-usable fit geometry; NPZ load rebuilds it normally."""
+        """Cache general fit geometry and exact-match trees after construction or load."""
         for phase in self.tieline_phases:
             points, matrices = self._fit_diffusivity_samples("general", phase)
             triangulation = None
             if Delaunay is not None and len(points) >= 3 and np.linalg.matrix_rank(points - points[0]) == 2:
                 triangulation = Delaunay(points)
-            self._fitSupport[phase] = {"points": points, "matrices": matrices, "triangulation": triangulation}
+            self._fitSupport[phase] = {
+                "points": points, "matrices": matrices, "triangulation": triangulation,
+                "exact_tree": cKDTree(points) if len(points) else None,
+            }
 
     def _build_simplex_linear_diffusivity_interpolators(self):
         """

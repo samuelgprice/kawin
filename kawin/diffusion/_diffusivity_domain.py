@@ -91,6 +91,29 @@ def _same_coordinate_mask(coordinates, point):
     return np.all(np.abs(coordinates - point) <= tolerances[:, None], axis=1)
 
 
+def _exact_coordinate_indices_many(coordinates, tree, queries):
+    """Find first source matches using a conservative spatial search.
+
+    Queries must be finite. The Chebyshev radius bounds every possible match;
+    the original per-coordinate tolerance decides which candidates match.
+    """
+    indices = np.full(len(queries), -1, dtype=np.int64)
+    if not len(coordinates) or not len(queries):
+        return indices
+    source_scale = float(np.max(np.abs(coordinates)))
+    query_scales = np.max(np.abs(queries), axis=1)
+    radii = np.nextafter(
+        32.0 * np.finfo(np.float64).eps * np.maximum(1.0, np.maximum(source_scale, query_scales)), np.inf
+    )
+    for query_index, candidates in enumerate(tree.query_ball_point(queries, radii, p=np.inf)):
+        if candidates:
+            candidates = np.asarray(candidates, dtype=np.int64)
+            matches = candidates[_same_coordinate_mask(coordinates[candidates], queries[query_index])]
+            if len(matches):
+                indices[query_index] = np.min(matches)
+    return indices
+
+
 class DiffusivityDomain:
     """Labeled geometric domain and independent solver-usable fit support."""
 
@@ -113,6 +136,7 @@ class DiffusivityDomain:
         valid_mask = np.asarray([status is DiffusivityDomainStatus.VALID for status in self.statuses], dtype=bool)
         self.fit_usable &= valid_mask
         self._canonicalize_duplicates()
+        self._exact_tree = cKDTree(self.coordinates)
         self._triangulation = self._make_triangulation(self.coordinates)
         self._fit_triangulation = self._make_triangulation(self.coordinates[self.fit_usable])
 
@@ -207,17 +231,16 @@ class DiffusivityDomain:
         """
         Classify a batch while preserving :meth:`classify` label precedence.
 
-        Exact-coordinate matching and Delaunay lookup are batched to avoid an
-        archive-wide coordinate scan for every bulk face. Nonfinite queries use
-        the scalar reference path so unusual SciPy error behavior remains
-        identical to the historical one-point implementation.
+        A spatial index narrows finite exact-coordinate candidates before the
+        original tolerance check; Delaunay lookup handles remaining queries.
+        Nonfinite queries use the scalar reference path so unusual SciPy error
+        behavior remains identical to the historical one-point implementation.
         """
         values = np.asarray(points, dtype=np.float64)
         if values.ndim != 2 or values.shape[1] != 2:
             raise ValueError("points must have shape (n, 2).")
         statuses = np.empty(values.shape[0], dtype=object)
         reasons = np.empty(values.shape[0], dtype=object)
-        coordinate_scales = np.max(np.abs(self.coordinates), axis=1)
         chunk_size = max(1, int(chunk_size))
 
         for start in range(0, values.shape[0], chunk_size):
@@ -232,13 +255,10 @@ class DiffusivityDomain:
                 continue
             local_indices = np.flatnonzero(finite)
             valid = chunk[local_indices]
-            point_scales = np.max(np.abs(valid), axis=1)
-            scales = np.maximum(1.0, np.maximum(coordinate_scales[None, :], point_scales[:, None]))
-            tolerances = 32.0 * np.finfo(np.float64).eps * scales
-            matches = np.all(np.abs(self.coordinates[None, :, :] - valid[:, None, :]) <= tolerances[:, :, None], axis=2)
-            exact_mask = np.any(matches, axis=1)
+            exact_indices = _exact_coordinate_indices_many(self.coordinates, self._exact_tree, valid)
+            exact_mask = exact_indices >= 0
             if np.any(exact_mask):
-                exact_indices = np.argmax(matches[exact_mask], axis=1)
+                exact_indices = exact_indices[exact_mask]
                 output_indices = start + local_indices[exact_mask]
                 statuses[output_indices] = self.statuses[exact_indices]
                 reasons[output_indices] = [str(self.reasons[index] or "exact_labeled_coordinate") for index in exact_indices]
