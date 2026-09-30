@@ -3,6 +3,11 @@ import math
 
 import numpy as np
 
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover - exercised when optional numba is unavailable
+    njit = None
+
 
 @dataclass(frozen=True)
 class TernaryIllingworthFDState:
@@ -435,3 +440,138 @@ def solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs):
         return solution
     except _BlockThomasPivotError as exc:
         return _solve_dense_block_tridiagonal(lower, diagonal, upper, rhs, exc)
+
+
+if njit is not None:
+    @njit(cache=True, fastmath=False)
+    def _solve_illingworth_block_tridiagonal_numba(lower, diagonal, upper, rhs):
+        """Sweep one two-component RHS with scaled pivot checks and diagonal-block division."""
+        n_nodes = diagonal.shape[0]
+        modified_upper = np.zeros_like(upper)
+        modified_rhs = np.zeros_like(rhs)
+        solution = np.zeros_like(rhs)
+
+        for node in range(n_nodes):
+            if node == 0:
+                a = diagonal[node, 0, 0]
+                b = diagonal[node, 0, 1]
+                c = diagonal[node, 1, 0]
+                d = diagonal[node, 1, 1]
+                rhs0 = rhs[node, 0]
+                rhs1 = rhs[node, 1]
+            else:
+                l00 = lower[node, 0, 0]
+                l01 = lower[node, 0, 1]
+                l10 = lower[node, 1, 0]
+                l11 = lower[node, 1, 1]
+                u00 = modified_upper[node - 1, 0, 0]
+                u01 = modified_upper[node - 1, 0, 1]
+                u10 = modified_upper[node - 1, 1, 0]
+                u11 = modified_upper[node - 1, 1, 1]
+                a = diagonal[node, 0, 0] - (l00 * u00 + l01 * u10)
+                b = diagonal[node, 0, 1] - (l00 * u01 + l01 * u11)
+                c = diagonal[node, 1, 0] - (l10 * u00 + l11 * u10)
+                d = diagonal[node, 1, 1] - (l10 * u01 + l11 * u11)
+                rhs0 = rhs[node, 0] - (l00 * modified_rhs[node - 1, 0] + l01 * modified_rhs[node - 1, 1])
+                rhs1 = rhs[node, 1] - (l10 * modified_rhs[node - 1, 0] + l11 * modified_rhs[node - 1, 1])
+
+            if not (math.isfinite(a) and math.isfinite(b) and math.isfinite(c) and math.isfinite(d)):
+                return solution, node, 1, 0.0
+            scale = max(abs(a), abs(b), abs(c), abs(d))
+            if scale <= 0.0:
+                return solution, node, 2, 0.0
+            raw_a = a
+            raw_b = b
+            raw_c = c
+            raw_d = d
+            a /= scale
+            b /= scale
+            c /= scale
+            d /= scale
+            determinant = a * d - b * c
+            matrix_norm = max(abs(a) + abs(b), abs(c) + abs(d))
+            inverse_adjugate_norm = max(abs(d) + abs(b), abs(c) + abs(a))
+            denominator = matrix_norm * inverse_adjugate_norm
+            if denominator <= 0.0 or not math.isfinite(denominator):
+                return solution, node, 2, 0.0
+            rcond = abs(determinant) / denominator
+            if not math.isfinite(rcond) or rcond <= 0.0:
+                return solution, node, 2, 0.0
+            if rcond < _BLOCK_PIVOT_RCOND_LIMIT:
+                return solution, node, 3, rcond
+
+            if raw_b == 0.0 and raw_c == 0.0:
+                # Direct division preserves the uncoupled reference solve's rounding.
+                modified_upper[node, 0, 0] = upper[node, 0, 0] / raw_a
+                modified_upper[node, 0, 1] = upper[node, 0, 1] / raw_a
+                modified_upper[node, 1, 0] = upper[node, 1, 0] / raw_d
+                modified_upper[node, 1, 1] = upper[node, 1, 1] / raw_d
+                modified_rhs[node, 0] = rhs0 / raw_a
+                modified_rhs[node, 1] = rhs1 / raw_d
+            else:
+                upper00 = upper[node, 0, 0] / scale
+                upper01 = upper[node, 0, 1] / scale
+                upper10 = upper[node, 1, 0] / scale
+                upper11 = upper[node, 1, 1] / scale
+                row_rhs0 = rhs0 / scale
+                row_rhs1 = rhs1 / scale
+                modified_upper[node, 0, 0] = (d * upper00 - b * upper10) / determinant
+                modified_upper[node, 0, 1] = (d * upper01 - b * upper11) / determinant
+                modified_upper[node, 1, 0] = (a * upper10 - c * upper00) / determinant
+                modified_upper[node, 1, 1] = (a * upper11 - c * upper01) / determinant
+                modified_rhs[node, 0] = (d * row_rhs0 - b * row_rhs1) / determinant
+                modified_rhs[node, 1] = (a * row_rhs1 - c * row_rhs0) / determinant
+            if not (math.isfinite(modified_upper[node, 0, 0])
+                    and math.isfinite(modified_upper[node, 0, 1])
+                    and math.isfinite(modified_upper[node, 1, 0])
+                    and math.isfinite(modified_upper[node, 1, 1])
+                    and math.isfinite(modified_rhs[node, 0])
+                    and math.isfinite(modified_rhs[node, 1])):
+                return solution, node, 4, rcond
+
+        solution[-1] = modified_rhs[-1]
+        for node in range(n_nodes - 2, -1, -1):
+            solution[node, 0] = modified_rhs[node, 0] - (
+                modified_upper[node, 0, 0] * solution[node + 1, 0]
+                + modified_upper[node, 0, 1] * solution[node + 1, 1]
+            )
+            solution[node, 1] = modified_rhs[node, 1] - (
+                modified_upper[node, 1, 0] * solution[node + 1, 0]
+                + modified_upper[node, 1, 1] * solution[node + 1, 1]
+            )
+            if not (math.isfinite(solution[node, 0]) and math.isfinite(solution[node, 1])):
+                return solution, node, 4, 0.0
+        return solution, -1, 0, 0.0
+else:
+    _solve_illingworth_block_tridiagonal_numba = None
+
+
+def _solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs):
+    """
+    Solve one two-component RHS with optional compiled block elimination.
+
+    Input validation and the dense full-system fallback match the public Python
+    solver. Numba is used only for a single RHS; other shapes and installations
+    without Numba retain the Python implementation.
+    """
+    if _solve_illingworth_block_tridiagonal_numba is None:
+        return solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+    lower, diagonal, upper, rhs = _validate_block_tridiagonal_system(lower, diagonal, upper, rhs)
+    if rhs.ndim != 2:
+        return solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+    solution, row, status, rcond = _solve_illingworth_block_tridiagonal_numba(lower, diagonal, upper, rhs)
+    if status == 0:
+        return solution
+    if status == 1:
+        cause = _BlockThomasPivotError(f"Block-tridiagonal solve encountered a nonfinite 2x2 pivot at row {row}.")
+    elif status == 2:
+        cause = _BlockThomasPivotError(f"Block-tridiagonal solve encountered a singular 2x2 pivot at row {row}.")
+    elif status == 3:
+        cause = _BlockThomasPivotError(
+            "Block-tridiagonal solve encountered an ill-conditioned 2x2 pivot "
+            f"at row {row}; estimated reciprocal condition={rcond:.3e}, "
+            f"minimum={_BLOCK_PIVOT_RCOND_LIMIT:.3e}."
+        )
+    else:
+        cause = _BlockThomasPivotError(f"Block-tridiagonal solve produced a nonfinite 2x2 result at row {row}.")
+    return _solve_dense_block_tridiagonal(lower, diagonal, upper, rhs, cause)

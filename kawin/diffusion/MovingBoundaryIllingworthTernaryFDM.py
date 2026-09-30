@@ -13,10 +13,10 @@ from kawin.diffusion.MovingBoundaryEquilibrium import (
 )
 from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
+    _solve_illingworth_block_tridiagonal_two_phase as solve_illingworth_block_tridiagonal,
     flatten_1d_coordinates,
     integrate_planar_transformed_profile_components,
     reconstruct_planar_transformed_profile_components,
-    solve_illingworth_block_tridiagonal,
 )
 from kawin.solver import explicitEulerIterator
 from kawin.thermo.Mobility import interstitials

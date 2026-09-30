@@ -5,6 +5,8 @@ import pytest
 
 import kawin.diffusion.MovingBoundarySurrogates as surrogate_module
 import kawin.diffusion.MovingBoundaryIllingworthTernaryFDM as ternary_fdm
+import kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM as ternary_three_phase_fdm
+import kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D as ternary_mesh
 from kawin.diffusion import (
     MovingBoundaryIllingworthTernaryFD1DModel,
     MovingBoundaryIllingworthTernaryThreePhaseFD1DModel,
@@ -912,6 +914,78 @@ def test_ternary_block_solve_supports_multiple_right_hand_sides():
     actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs.reshape(4, 2, 3))
 
     assert np.allclose(actual, expected)
+
+
+@pytest.mark.parametrize("n_nodes", [4, 100, 200])
+@pytest.mark.parametrize("scale", [1.0e-200, 1.0, 1.0e200])
+def test_ternary_compiled_block_solve_matches_python_reference(n_nodes, scale):
+    lower = np.repeat(np.asarray([[[-0.4, 0.02], [0.01, -0.3]]]), n_nodes, axis=0) * scale
+    diagonal = np.repeat(np.asarray([[[3.0, 0.2], [0.1, 2.5]]]), n_nodes, axis=0) * scale
+    upper = np.repeat(np.asarray([[[-0.3, -0.01], [0.02, -0.2]]]), n_nodes, axis=0) * scale
+    rhs = np.column_stack((np.linspace(0.1, 0.3, n_nodes), np.linspace(-0.2, 0.1, n_nodes))) * scale
+
+    actual = ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs)
+    expected = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+
+    np.testing.assert_allclose(actual, expected, rtol=5.0e-12, atol=5.0e-14)
+    assert np.all(np.isfinite(actual))
+    residual = np.einsum("nij,nj->ni", diagonal, actual) - rhs
+    residual[1:] += np.einsum("nij,nj->ni", lower[1:], actual[:-1])
+    residual[:-1] += np.einsum("nij,nj->ni", upper[:-1], actual[1:])
+    assert np.max(np.abs(residual)) / np.max(np.abs(rhs)) < 1.0e-12
+
+
+def test_ternary_compiled_block_solve_preserves_dense_fallback_and_singular_error():
+    identity = np.eye(2, dtype=np.float64)
+    lower = np.zeros((3, 2, 2), dtype=np.float64)
+    diagonal = np.repeat(identity[np.newaxis, :, :], 3, axis=0)
+    upper = np.zeros((3, 2, 2), dtype=np.float64)
+    upper[0] = upper[1] = identity
+    lower[1] = lower[2] = identity
+    rhs = np.asarray([[0.2, -0.1], [0.4, 0.6], [-0.3, 0.7]])
+
+    actual = ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs)
+    expected = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+    np.testing.assert_allclose(actual, expected, rtol=5.0e-12, atol=5.0e-14)
+
+    with pytest.raises(np.linalg.LinAlgError, match="full block-tridiagonal system is singular"):
+        ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(
+            np.zeros((2, 2, 2)), np.zeros((2, 2, 2)), np.zeros((2, 2, 2)), np.ones((2, 2))
+        )
+
+
+def test_ternary_compiled_block_solve_rejects_illconditioned_full_system():
+    lower = np.zeros((1, 2, 2), dtype=np.float64)
+    diagonal = np.asarray([[[1.0, 0.0], [0.0, 1.0e-13]]], dtype=np.float64)
+    upper = np.zeros_like(lower)
+    rhs = np.asarray([[1.0, 1.0e-13]])
+
+    with pytest.raises(np.linalg.LinAlgError, match="numerically unusable"):
+        ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs)
+
+
+def test_ternary_compiled_block_solve_validates_inputs_and_preserves_other_paths(monkeypatch):
+    lower, diagonal, upper = _representative_block_tridiagonal_system()
+    rhs = np.ones((4, 2), dtype=np.float64)
+    bad_diagonal = diagonal.copy()
+    bad_diagonal[0, 0, 0] = np.nan
+    with pytest.raises(ValueError, match="coefficients must be finite"):
+        ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(lower, bad_diagonal, upper, rhs)
+    with pytest.raises(ValueError, match="matching shapes"):
+        ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(lower[:-1], diagonal, upper, rhs)
+
+    multi_rhs = np.stack((rhs, 2.0 * rhs), axis=2)
+    np.testing.assert_allclose(
+        ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, multi_rhs),
+        solve_illingworth_block_tridiagonal(lower, diagonal, upper, multi_rhs),
+    )
+    assert ternary_fdm.solve_illingworth_block_tridiagonal is ternary_mesh._solve_illingworth_block_tridiagonal_two_phase
+    assert ternary_three_phase_fdm.solve_illingworth_block_tridiagonal is ternary_mesh.solve_illingworth_block_tridiagonal
+
+    expected = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+    monkeypatch.setattr(ternary_mesh, "_solve_illingworth_block_tridiagonal_numba", None)
+    actual = ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs)
+    np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
 
 
 @pytest.mark.parametrize("scale", [1.0e-200, 1.0e-120, 1.0, 1.0e120, 1.0e200])
@@ -2372,7 +2446,7 @@ def test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work
     assert model._lastImplicitJacobianEvaluations == 1
     assert model._lastImplicitMotionBranch == "positive"
     assert model._lastImplicitFailureReason is None
-    assert np.isclose(model._lastImplicitResidual, 4.499427273822066e-15, rtol=0.0, atol=1.0e-27)
+    assert np.isclose(model._lastImplicitResidual, 4.499427273822066e-15, rtol=0.0, atol=1.0e-21)
 
 
 @pytest.mark.parametrize("flip_branch", [False, True])
