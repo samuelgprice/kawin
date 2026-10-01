@@ -46,12 +46,27 @@ class _FakeWrappedThermodynamics:
     def clearCache(self):
         pass
 
+    def captureKineticsDiagnostics(self, callback):
+        self.capture_callback = callback
+        return _CaptureScope(self)
+
     def getEq(self, x, T, gExtra=0, precPhase=None):
         return _FakeWorkspace(self.composition_sets)
 
     def getInterdiffusivity(self, x, T, phase=None, **kwargs):
         scale = 1.0 if phase == "FCC_A1" else 2.0
         return scale * np.asarray([[1.0, 0.1], [0.2, 1.5]], dtype=np.float64)
+
+
+class _CaptureScope:
+    def __init__(self, thermodynamics):
+        self.thermodynamics = thermodynamics
+
+    def __enter__(self):
+        return self.thermodynamics
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
 
 
 def _fake_adapter(composition_sets):
@@ -144,6 +159,14 @@ def test_factory_selects_default_or_restricted_pycalphad_phase_universe():
     assert isinstance(restricted_zero_source, MulticomponentThermodynamics)
     assert restricted_zero_source.phases == ["FCC_A1", "LIQUID"]
     assert restricted_zero_source.gOffset == 0.0
+
+
+def test_default_phase_adapter_delegates_kinetics_capture():
+    adapter = _fake_adapter([])
+    callback = lambda record: None
+
+    with adapter.captureKineticsDiagnostics(callback):
+        assert adapter.thermodynamics.capture_callback is callback
 
 
 def test_default_phase_equilibrium_is_interface_order_independent():

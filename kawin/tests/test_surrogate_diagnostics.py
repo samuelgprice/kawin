@@ -334,7 +334,7 @@ def test_selected_diffusivity_calculation_plot_has_four_exact_tc_tabs():
     assert "Thermodynamic factors" in figure.data[0].text[0]
     assert "X: [1, 0.1]" in figure.data[0].text[0]
     assert "Sublattice 1" in figure.data[0].text[0]
-    assert "TC calculation type" in figure.data[0].text[0]
+    assert "Source calculation type" in figure.data[0].text[0]
 
 
 def test_selected_diffusivity_calculation_plot_rejects_missing_selected_record():

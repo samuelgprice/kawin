@@ -1,5 +1,6 @@
 import copy
 from collections import namedtuple
+from contextlib import contextmanager
 
 import numpy as np
 from tinydb import where
@@ -12,7 +13,7 @@ from pycalphad.core.utils import extract_parameters
 from kawin.thermo.utils import _process_xT_arrays, _getMatrixPhase, _getPrecipitatePhase, _process_x
 from kawin.thermo.LocalEquilibrium import local_equilibrium
 from kawin.thermo.FreeEnergyHessian import dMudX
-from kawin.thermo.Mobility import MobilityModel, inverseMobility, inverseMobility_from_diffusivity, tracer_diffusivity, tracer_diffusivity_from_diff
+from kawin.thermo.Mobility import MobilityModel, inverseMobility, inverseMobility_from_diffusivity, mobility_from_composition_set, tracer_diffusivity, tracer_diffusivity_from_diff
 
 SampledPointsCache = namedtuple('SampledPointsCache', 
                                ['temperature', 'samples', 'ordered_samples'],
@@ -97,6 +98,8 @@ class GeneralThermodynamics:
 
         self.setDrivingForceMethod(drivingForceMethod)
         self._buildMobilityModels()
+        self._kinetics_diagnostic_callback = None
+        self._kinetics_diagnostic_index = 0
         self.clearCache()
 
     def clearCache(self):
@@ -109,6 +112,27 @@ class GeneralThermodynamics:
         self._matrix_cs = None
         self._points_cache = {}          #Stored samples for precipitate phases at defined temperature
         self._diffusivity_cache = {}
+
+    @contextmanager
+    def captureKineticsDiagnostics(self, callback):
+        """Emit ordered records for interdiffusivity queries in this scope.
+
+        Records are assembled from the same single-phase local equilibrium used
+        for the returned matrix, so enabling capture does not add equilibrium
+        calculations. Optional phase-state quantities are reported as ``None``
+        with diagnostic error text when they cannot be evaluated.
+        """
+        if not callable(callback):
+            raise TypeError("callback must be callable.")
+        previous_callback = self._kinetics_diagnostic_callback
+        previous_index = self._kinetics_diagnostic_index
+        self._kinetics_diagnostic_callback = callback
+        self._kinetics_diagnostic_index = 0
+        try:
+            yield self
+        finally:
+            self._kinetics_diagnostic_callback = previous_callback
+            self._kinetics_diagnostic_index = previous_index
 
     def _buildThermoModels(self):
         '''
@@ -497,13 +521,40 @@ class GeneralThermodynamics:
         interdiffusivity - will return array if T is an array
             For binary case - float or array of floats
             For multicomponent - matrix or array of matrices
+
+        Notes
+        -----
+        An active :meth:`captureKineticsDiagnostics` scope emits one record per
+        scalar query. Optional provenance is taken from the same local
+        equilibrium used for the returned matrix.
         '''
-        dnkj = []
         x, T = _process_xT_arrays(x, T, self.numElements == 2)
-        dnkj = [self._interdiffusivitySingle(xi, Ti, removeCache, phase) for xi, Ti in zip(x, T)]
+        dnkj = []
+        for xi, Ti in zip(x, T):
+            if self._kinetics_diagnostic_callback is None:
+                dnkj.append(self._interdiffusivitySingle(xi, Ti, removeCache, phase))
+                continue
+            matrix, diagnostics = self._interdiffusivitySingle(
+                xi, Ti, removeCache, phase, returnDiagnostics=True
+            )
+            dnkj.append(matrix)
+            record = {
+                "record_type": "kinetics",
+                "query_index": self._kinetics_diagnostic_index,
+                "cache_hit": diagnostics.pop("cache_hit"),
+                "requested_phase": diagnostics.pop("requested_phase"),
+                "temperature": float(Ti),
+                "input_composition": np.asarray(xi, dtype=np.float64).reshape(-1).tolist(),
+                "interdiffusivity": np.asarray(matrix, dtype=np.float64).tolist(),
+                **diagnostics,
+            }
+            self._kinetics_diagnostic_callback(record)
+            self._kinetics_diagnostic_index += 1
         return np.squeeze(dnkj)
 
-    def _interdiffusivitySingle(self, x, T, removeCache = True, phase = None):
+    def _interdiffusivitySingle(
+        self, x, T, removeCache=True, phase=None, returnDiagnostics=False
+    ):
         '''
         Gets interdiffusivity at unique composition and temperature
 
@@ -515,15 +566,20 @@ class GeneralThermodynamics:
             Temperature
         removeCache : boolean
         phase : str
+        returnDiagnostics : bool
+            Return the calculation record fields with the matrix. This reuses
+            the same local equilibrium and is intended for diagnostic capture.
 
         Returns
         -------
-        Interdiffusivity as a matrix (will return float in binary case)
+        Interdiffusivity as a matrix (will return float in binary case), or a
+        ``(matrix, diagnostics)`` tuple when ``returnDiagnostics`` is true.
         '''
         # Compute local equilibrium on phase
         #phase = self.phases[0] if phase is None else phase
         phase = _getMatrixPhase(self.phases, phase)
         comp_sets = self._diffusivity_cache.get(phase, None)
+        cache_hit = comp_sets is not None
         result, comp_sets = self.getLocalEq(x, T, 0, [phase], composition_sets=comp_sets)
         cs_matrix = comp_sets[0]
         chemical_potentials = result.chemical_potentials
@@ -531,16 +587,17 @@ class GeneralThermodynamics:
         # Get interdiffusivity from mobility or diffusivity models whichever is available
         # If both mobility and diffusivity models exist, then favor the mobility model
         if self.mobCallables[phase] is None:
-            Dnkj, _, _ = inverseMobility_from_diffusivity(chemical_potentials, cs_matrix, 
-                                                          self.elements[0], self.diffCallables[phase],
-                                                          diffusivity_correction=self.mobility_correction,
-                                                          parameters = self._parameters)
+            Dnkj, thermodynamic_factors, _ = inverseMobility_from_diffusivity(
+                chemical_potentials, cs_matrix, self.elements[0], self.diffCallables[phase],
+                diffusivity_correction=self.mobility_correction, parameters=self._parameters
+            )
         else:
-            Dnkj, _, _ = inverseMobility(chemical_potentials, cs_matrix, 
-                                         self.elements[0], self.mobCallables[phase],
-                                         mobility_correction=self.mobility_correction,
-                                         vacancy_poor_interstitial_sublattice=self.vacancyPoorInterstitialSublattice.get(phase, False),
-                                         parameters=self._parameters)
+            Dnkj, thermodynamic_factors, _ = inverseMobility(
+                chemical_potentials, cs_matrix, self.elements[0], self.mobCallables[phase],
+                mobility_correction=self.mobility_correction,
+                vacancy_poor_interstitial_sublattice=self.vacancyPoorInterstitialSublattice.get(phase, False),
+                parameters=self._parameters
+            )
 
         # Sort Dnkj from alphabetical to the input order of the elements
         if self.numElements != 2:
@@ -548,9 +605,135 @@ class GeneralThermodynamics:
             unsortIndices = np.argsort(sortIndices)
             Dnkj = Dnkj[unsortIndices,:]
             Dnkj = Dnkj[:,unsortIndices]
+            thermodynamic_factors = thermodynamic_factors[unsortIndices, :]
+            thermodynamic_factors = thermodynamic_factors[:, unsortIndices]
 
         self._diffusivity_cache[phase] = None if removeCache else comp_sets
-        return np.squeeze(Dnkj)
+        Dnkj = np.squeeze(Dnkj)
+        if not returnDiagnostics:
+            return Dnkj
+        diagnostics = self._pycalphad_kinetics_diagnostics(
+            phase, cs_matrix, thermodynamic_factors, cache_hit
+        )
+        return Dnkj, diagnostics
+
+    def _pycalphad_kinetics_diagnostics(
+        self, phase, composition_set, thermodynamic_factors, cache_hit
+    ):
+        """Extract optional kinetics provenance from an existing composition set.
+
+        PyCalphad orders non-vacant elements alphabetically. Returned vectors
+        and matrices are reordered to ``self.elements`` so they align with the
+        public interdiffusivity API and the surrogate diagnostics schema.
+        """
+        errors = {}
+        nonvacant_input = [str(element) for element in self.elements if str(element) != "VA"]
+        phase_elements = [str(element) for element in composition_set.phase_record.nonvacant_elements]
+        try:
+            input_order = np.asarray(
+                [phase_elements.index(element) for element in nonvacant_input], dtype=np.int64
+            )
+        except ValueError as exc:
+            input_order = None
+            errors["element_order"] = str(exc)
+
+        def optional(label, calculation):
+            try:
+                values = np.asarray(calculation(), dtype=np.float64)
+                if not np.all(np.isfinite(values)):
+                    raise ValueError("quantity contains non-finite values")
+                return values
+            except Exception as exc:
+                errors[label] = f"{type(exc).__name__}: {exc}"
+                return None
+
+        phase_composition = optional(
+            "phase_composition",
+            lambda: np.asarray(composition_set.X, dtype=np.float64)[input_order],
+        ) if input_order is not None else None
+        if self.mobCallables[phase] is None:
+            tracer_values = optional(
+                "tracer_diffusivities",
+                lambda: tracer_diffusivity_from_diff(
+                    composition_set, self.diffCallables[phase],
+                    diffusivity_correction=self.mobility_correction,
+                    parameters=self._parameters,
+                ),
+            )
+            mobility_values = optional(
+                "mobilities",
+                lambda: tracer_values / (
+                    8.3145 * float(composition_set.dof[
+                        composition_set.phase_record.state_variables.index(v.T)
+                    ])
+                ),
+            ) if tracer_values is not None else None
+        else:
+            tracer_values = optional(
+                "tracer_diffusivities",
+                lambda: tracer_diffusivity(
+                    composition_set, self.mobCallables[phase],
+                    mobility_correction=self.mobility_correction,
+                    parameters=self._parameters,
+                ),
+            )
+            mobility_values = optional(
+                "mobilities",
+                lambda: mobility_from_composition_set(
+                    composition_set, self.mobCallables[phase],
+                    mobility_correction=self.mobility_correction,
+                    parameters=self._parameters,
+                ),
+            )
+
+        def ordered(values):
+            if values is None or input_order is None:
+                return None
+            return np.asarray(values, dtype=np.float64)[input_order].tolist()
+
+        site_fractions = None
+        try:
+            offset = len(composition_set.phase_record.state_variables)
+            grouped = {}
+            for variable, value in zip(
+                composition_set.phase_record.variables,
+                composition_set.dof[offset:offset + len(composition_set.phase_record.variables)],
+            ):
+                if not np.isfinite(value):
+                    raise ValueError("site fractions contain non-finite values")
+                sublattice = int(variable.sublattice_index) + 1
+                grouped.setdefault(sublattice, {})[str(variable.species.name)] = float(value)
+            site_fractions = [
+                {"sublattice": index, "constituents": grouped[index]}
+                for index in sorted(grouped)
+            ]
+        except Exception as exc:
+            errors["site_fractions"] = f"{type(exc).__name__}: {exc}"
+
+        factors = optional(
+            "thermodynamic_factors", lambda: thermodynamic_factors
+        )
+        stable_phase = str(getattr(composition_set.phase_record, "phase_name", phase))
+        return {
+            "cache_hit": bool(cache_hit),
+            "requested_phase": str(phase),
+            "tracer_diffusivities": ordered(tracer_values),
+            "thermodynamic_factors": None if factors is None else factors.tolist(),
+            "mobilities": ordered(mobility_values),
+            "stable_composition_sets": [stable_phase],
+            "phase_composition": None if phase_composition is None else phase_composition.tolist(),
+            "site_fractions": site_fractions,
+            "kinetics_strategy": "pycalphad_local_single_phase",
+            "scout_seed_count": None,
+            "unique_seed_count": None,
+            "converged_candidate_count": 1,
+            "selected_seed_index": None,
+            "selected_source_composition_set": stable_phase,
+            "selected_gibbs_energy": None,
+            "selected_gibbs_energy_units": None,
+            "multistart_candidates": None,
+            "diagnostic_errors": errors,
+        }
 
     def getTracerDiffusivity(self, x, T, removeCache = True, phase = None):
         '''

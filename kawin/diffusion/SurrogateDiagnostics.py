@@ -2902,7 +2902,7 @@ def plot_selected_diffusivity_calculations(
     hover_format=".6g",
     renderer="browser",
 ):
-    """Plot only selected TC calculations stored in a diffusivity surrogate.
+    """Plot only source calculations stored in a diffusivity surrogate.
 
     The four phase/context tabs are built from the exact composition and matrix
     rows stored under ``interface`` and ``general``. Each row is matched to a
@@ -2948,7 +2948,7 @@ def plot_selected_diffusivity_calculations(
                 indices = [failure["sample_index"] for failure in missing[:10]]
                 suffix = "..." if len(missing) > 10 else ""
                 raise ValueError(
-                    f"Could not match {len(missing)} selected TC records for {phase} "
+                    f"Could not match {len(missing)} selected source records for {phase} "
                     f"{context} rows {indices}{suffix}."
                 )
             if context == "general":
@@ -3025,7 +3025,7 @@ def plot_selected_diffusivity_calculations(
                     )
             lines = [
                 f"<b>{escape(tab['phase'])} · {escape(tab['context'])} row {row_index}</b>",
-                f"TC calculation type: {escape(str(sample_type))}",
+                f"Source calculation type: {escape(str(sample_type))}",
                 f"Selected kinetics query: {escape(str(record.get('query_index')))}",
                 "Input: " + ", ".join(
                     f"{escape(str(element))}={format_value(value)}"

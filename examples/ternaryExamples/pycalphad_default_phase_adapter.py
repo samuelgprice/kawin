@@ -144,6 +144,10 @@ class PycalphadDefaultPhaseThermodynamics:
         """Clear the wrapped pycalphad thermodynamics cache."""
         self.thermodynamics.clearCache()
 
+    def captureKineticsDiagnostics(self, callback):
+        """Capture wrapped PyCalphad diffusivity records without recalculation."""
+        return self.thermodynamics.captureKineticsDiagnostics(callback)
+
     def getEquilibriumData(self, x, T, removeCache=True):
         """Return active phases, amounts, compositions, and chemical potentials."""
         wks = self.thermodynamics.getEq(x, T, 0, list(self.equilibrium_phases))

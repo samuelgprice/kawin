@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
+import importlib.metadata
 import json
 from pathlib import Path
 import sys
@@ -56,6 +57,9 @@ from kawin.diffusion import (
 import kawin.diffusion.MovingBoundarySurrogates as moving_boundary_surrogates_module
 import kawin.diffusion.SurrogateArtifacts as surrogate_artifacts_module
 import kawin.diffusion.SurrogateDiagnostics as surrogate_diagnostics_module
+import kawin.thermo.FreeEnergyHessian as free_energy_hessian_module
+import kawin.thermo.Mobility as mobility_module
+import kawin.thermo.Thermodynamics as pycalphad_thermodynamics_module
 from kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM import (
     MovingBoundaryIllingworthTernaryThreePhaseFD1DModel,
 )
@@ -65,13 +69,14 @@ from kawin.thermo import MulticomponentThermodynamics
 from examples.ThermoCalc.tc_python_adapter import TCPythonThermodynamics, ThermoCalcConfig
 import examples.ThermoCalc.tc_python_adapter as tc_python_adapter_module
 from examples.ternaryExamples.pycalphad_default_phase_adapter import create_pycalphad_thermodynamics_source
+import examples.ternaryExamples.pycalphad_default_phase_adapter as pycalphad_adapter_module
 from examples.debugInPlace import debugInPlace
 
 OUTPUTS = REPO_ROOT / "examples" / "ThermoCalc" / "outputs"
 OUTPUTS.mkdir(parents=True, exist_ok=True)
 # Rebuilding is intentionally the default. Set this to True only to require an
 # existing bundle that exactly matches the current settings and implementation.
-RELOAD_TIELINE_SURROGATE = False
+RELOAD_TIELINE_SURROGATE = True
 # %%
 # Repository paths
 
@@ -111,8 +116,8 @@ if systemStr =="FeCrNi":
 
 
 if systemStr =="FeCrNi":
-    PHASE_A = "FCC_A1"
-    PHASE_B = "BCC_A2"
+    PHASE_A = "BCC_A2"
+    PHASE_B = "FCC_A1"
 
 
 TIELINE_PHASES = (PHASE_A, PHASE_B)
@@ -146,9 +151,9 @@ INITIAL_VELOCITY_GUESS_3PHASE = None
 # Two-phase geometry: [0, HALF_LENGTH].
 multiplier=8
 stepDT_multiplier = multiplier#/4
-HALF_LENGTH = np.round(1500e-6+5000e-6, 16) #200.0e-6 * multiplier
-TWO_PHASE_NODES = 201 * multiplier
-B_PHASE_LENGTH = 1500e-6 #100e-6 * multiplier
+HALF_LENGTH = np.round(30e-6, 16) #200.0e-6 * multiplier
+TWO_PHASE_NODES = 61
+B_PHASE_LENGTH = 18e-6 #100e-6 * multiplier
 if systemStr =="FeCrNi":
     INTERFACE_POSITION = (HALF_LENGTH-(B_PHASE_LENGTH) + 1.0e-12) 
 
@@ -199,7 +204,7 @@ SEMI_LOG_BASE_TIME_STEP = 1.0
 
 SEMI_LOG_T0 = 1.0e-6
 if systemStr =="FeCrNi":
-    SEMI_LOG_DT = 0.25 / (20.0) # 0.25 / 10.0
+    SEMI_LOG_DT = 0.25 / (20.0 * 2) # 0.25 / 10.0
     SOLVE_TIME = 1e3*3600
 
 TOLERANCE = 1.0e-12 #1.0e-12
@@ -218,6 +223,12 @@ TIME_SCALE = 1
 TIME_LABEL = "s"
 SAVE_FIGURES = False
 FIGURE_DIR = THIS_DIR / "illingworth_two_vs_three_phase_figures"
+PLOT_LEE_OH_FIG9_COMPARISON = True
+LEE_OH_FIG9_LOWER_CR_PATH = EXAMPLES_DIR / "leeAndOh1996_data" / "fig9_lowerCurve_Cr.csv"
+LEE_OH_FIG9_UPPER_NI_PATH = EXAMPLES_DIR / "leeAndOh1996_data" / "fig9_upperCurve_Ni.csv"
+LEE_OH_FIG9_TIME_UNIT_SECONDS = 3600.0
+LEE_OH_FIG9_XLIMS_HOURS = (1.0e-3, 1.0e3)
+LEE_OH_FIG9_EQUILIBRIUM_NORMALIZED_ALPHA = 0.5
 
 # For an exact reduction test, explicitly match the transformed-grid physical
 # resolution.  The three-phase B interval has twice the physical width of
@@ -225,8 +236,8 @@ FIGURE_DIR = THIS_DIR / "illingworth_two_vs_three_phase_figures"
 #
 # The values below reproduce the node counts that the 31-node, 30 um
 # two-phase physical mesh would naturally give near a 12 um interface.
-PHASE_A_NODES_2 = 100 * 4
-PHASE_B_NODES_2 = 50 * 4
+PHASE_A_NODES_2 = 200
+PHASE_B_NODES_2 = 200
 
 
 U_A_2 = np.linspace(0.0, 1.0, PHASE_A_NODES_2)
@@ -276,6 +287,8 @@ class FixedPhaseDiffusivityThermodynamics:
         self.diffusivity_matrix = _validate_positive_2x2_matrix(diffusivity_matrix, "diffusivity_matrix")
         self.elements = list(getattr(thermodynamics, "elements", ELEMENTS))
         self.phases = list(getattr(thermodynamics, "phases", ()))
+        self._kinetics_diagnostic_callback = None
+        self._kinetics_diagnostic_index = 0
 
     def __enter__(self):
         """Enters the wrapped context manager when it has one, otherwise no-ops."""
@@ -297,6 +310,31 @@ class FixedPhaseDiffusivityThermodynamics:
         if clear_cache is not None:
             clear_cache()
 
+    @contextmanager
+    def captureKineticsDiagnostics(self, callback):
+        """Capture delegated and fixed-matrix diffusivity queries in one order."""
+        if not callable(callback):
+            raise TypeError("callback must be callable.")
+        previous_callback = self._kinetics_diagnostic_callback
+        previous_index = self._kinetics_diagnostic_index
+        self._kinetics_diagnostic_callback = callback
+        self._kinetics_diagnostic_index = 0
+
+        def forward(record):
+            forwarded = dict(record)
+            forwarded["query_index"] = self._kinetics_diagnostic_index
+            callback(forwarded)
+            self._kinetics_diagnostic_index += 1
+
+        capture = getattr(self.thermodynamics, "captureKineticsDiagnostics", None)
+        scope = capture(forward) if capture is not None else nullcontext()
+        try:
+            with scope:
+                yield self
+        finally:
+            self._kinetics_diagnostic_callback = previous_callback
+            self._kinetics_diagnostic_index = previous_index
+
     def getInterfacialComposition(self, *args, **kwargs):
         """Delegates tie-line equilibrium queries to the wrapped thermodynamics object."""
         return self.thermodynamics.getInterfacialComposition(*args, **kwargs)
@@ -312,6 +350,33 @@ class FixedPhaseDiffusivityThermodynamics:
         """Returns the fixed matrix for ``fixed_phase`` and delegates all other phases."""
         if str(phase) == self.fixed_phase:
             values = np.asarray(x, dtype=np.float64)
+            rows = np.atleast_2d(values)
+            if self._kinetics_diagnostic_callback is not None:
+                for row in rows:
+                    full_composition = [1.0 - float(np.sum(row)), *row.tolist()]
+                    self._kinetics_diagnostic_callback({
+                        "record_type": "kinetics",
+                        "query_index": self._kinetics_diagnostic_index,
+                        "cache_hit": False,
+                        "requested_phase": self.fixed_phase,
+                        "temperature": None if T is None else float(T),
+                        "input_composition": row.tolist(),
+                        "interdiffusivity": self.diffusivity_matrix.tolist(),
+                        "tracer_diffusivities": None,
+                        "thermodynamic_factors": None,
+                        "mobilities": None,
+                        "stable_composition_sets": [self.fixed_phase],
+                        "phase_composition": full_composition,
+                        "site_fractions": None,
+                        "kinetics_strategy": "fixed_matrix",
+                        "selected_seed_index": None,
+                        "selected_source_composition_set": self.fixed_phase,
+                        "selected_gibbs_energy": None,
+                        "diagnostic_errors": {
+                            "phase_state": "Fixed matrix does not require a kinetics equilibrium."
+                        },
+                    })
+                    self._kinetics_diagnostic_index += 1
             if values.ndim == 2:
                 return np.broadcast_to(self.diffusivity_matrix, (values.shape[0], 2, 2)).copy()
             return self.diffusivity_matrix.copy()
@@ -450,7 +515,7 @@ def build_source_thermodynamics():
                 use_default_phases=PYCALPHAD_USE_DEFAULT_PHASES,
                 equilibrium_phases=PYCALPHAD_EQUILIBRIUM_PHASES,
                 g_offset=G_OFFSET,
-            ),
+            )
 
     elif THERM_ENGINE=="TC":
         if FECRNI_BCC_DIFFUSIVITY_MATRIX is not None:
@@ -465,6 +530,39 @@ def build_source_thermodynamics():
     else:
         raise ValueError(f"THERM_ENGINE should be one of above options. Instead got: {THERM_ENGINE}")
     return therm_ab
+
+
+def _thermodynamics_backend(source_thermodynamics):
+    """Return the supported backend name for a possibly wrapped source."""
+    if isinstance(source_thermodynamics, TCPythonThermodynamics):
+        return "tc_python"
+    wrapped = getattr(source_thermodynamics, "thermodynamics", None)
+    if isinstance(wrapped, TCPythonThermodynamics):
+        return "tc_python"
+    if isinstance(source_thermodynamics, MulticomponentThermodynamics):
+        return "pycalphad"
+    if isinstance(wrapped, MulticomponentThermodynamics):
+        return "pycalphad"
+    raise TypeError(
+        "Fe-Cr-Ni surrogate artifacts require a TC-Python or PyCalphad thermodynamics source."
+    )
+
+
+def _calculation_capture_source(source_thermodynamics):
+    """Return the object that emits exact interdiffusivity calculation records."""
+    if hasattr(source_thermodynamics, "captureKineticsDiagnostics"):
+        return source_thermodynamics
+    wrapped = getattr(source_thermodynamics, "thermodynamics", None)
+    if wrapped is not None and hasattr(wrapped, "captureKineticsDiagnostics"):
+        return wrapped
+    raise TypeError("The selected thermodynamics source does not support kinetics diagnostics capture.")
+
+
+def _thermodynamics_context(source_thermodynamics):
+    """Use a source context manager when available and otherwise no-op."""
+    if hasattr(source_thermodynamics, "__enter__") and hasattr(source_thermodynamics, "__exit__"):
+        return source_thermodynamics
+    return nullcontext(source_thermodynamics)
 
 def _tieline_surrogate_probe_kwargs(probe_start, probe_end, probe_point):
     """Returns from_database probe arguments for line or seed-point surrogate builds."""
@@ -545,21 +643,29 @@ def _surrogate_diffusivity_sampling_kwargs():
 
 
 def _diffusivity_artifact_stem():
-    """Name surrogate artifacts by temperature, kinetics strategy, and grid."""
-    global_enabled = int(not (
-        TC_KINETICS_DISABLE_GLOBAL_MINIMIZATION or TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET
-    ))
-    hessian_forced = int(not TC_KINETICS_DISABLE_POSITIVE_DEFINITE_HESSIAN)
-    stem = f"{systemStr}_{TEMPERATURE:g}K_global_{global_enabled}_hessian_{hessian_forced}"
-    if TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET:
-        stem += "_single_set_1"
-    if TC_KINETICS_MULTISTART_MODE != "off":
-        stem += f"_multistart_{TC_KINETICS_MULTISTART_MODE}"
-        phase_tag = "-".join(
-            str(phase).replace("#", "set").lower()
-            for phase in TC_KINETICS_MULTISTART_PHASES
-        )
-        stem += f"_phases_{phase_tag}"
+    """Name surrogate artifacts by backend, temperature, strategy, and grid."""
+    backend = str(THERM_ENGINE).strip().lower().replace("-", "_")
+    if backend not in {"tc", "pycalphad"}:
+        raise ValueError(f"Unsupported THERM_ENGINE for surrogate artifacts: {THERM_ENGINE!r}.")
+    stem = f"{systemStr}_{backend}_{TEMPERATURE:g}K"
+    if backend == "tc":
+        global_enabled = int(not (
+            TC_KINETICS_DISABLE_GLOBAL_MINIMIZATION or TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET
+        ))
+        hessian_forced = int(not TC_KINETICS_DISABLE_POSITIVE_DEFINITE_HESSIAN)
+        stem += f"_global_{global_enabled}_hessian_{hessian_forced}"
+        if TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET:
+            stem += "_single_set_1"
+        if TC_KINETICS_MULTISTART_MODE != "off":
+            stem += f"_multistart_{TC_KINETICS_MULTISTART_MODE}"
+            phase_tag = "-".join(
+                str(phase).replace("#", "set").lower()
+                for phase in TC_KINETICS_MULTISTART_PHASES
+            )
+            stem += f"_phases_{phase_tag}"
+    else:
+        stem += f"_default_phases_{int(PYCALPHAD_USE_DEFAULT_PHASES)}"
+        stem += f"_g_offset_{str(G_OFFSET).replace('.', 'p')}"
     stem += f"_bulk_{str(BULK_DIFFUSIVITY_GRID_SPACING).replace('.', 'p')}"
     return stem
 
@@ -670,30 +776,64 @@ def _record_interface_bulk_consistency(surrogate, *, kinetics_path=None, report_
 
 @contextmanager
 def _capture_surrogate_kinetics(source_thermodynamics, path=None):
-    """Stream the exact construction-time TC kinetics queries to JSON Lines."""
-    if systemStr != "FeCrNi" or not isinstance(source_thermodynamics, TCPythonThermodynamics):
-        raise ValueError("Fe-Cr-Ni diffusivity capture requires the direct TC-Python source.")
+    """Stream exact construction-time source diffusivity queries to JSON Lines."""
+    if systemStr != "FeCrNi":
+        raise ValueError("This diagnostics writer is configured for Fe-Cr-Ni.")
     path = (
         OUTPUTS / f"{_diffusivity_artifact_stem()}_kinetics.jsonl"
         if path is None else Path(path)
     )
-    config = source_thermodynamics.config
+    backend = _thermodynamics_backend(source_thermodynamics)
+    capture_source = _calculation_capture_source(source_thermodynamics)
+    if backend == "tc_python":
+        tc_source = (
+            source_thermodynamics
+            if isinstance(source_thermodynamics, TCPythonThermodynamics)
+            else source_thermodynamics.thermodynamics
+        )
+        backend_version = tc_source.getRuntimeVersion()
+        config = tc_source.config.to_metadata()
+        mobility_definition = "mobility_of_component_in_phase"
+    else:
+        pycalphad_source = (
+            source_thermodynamics
+            if isinstance(source_thermodynamics, MulticomponentThermodynamics)
+            else source_thermodynamics.thermodynamics
+        )
+        backend_version = importlib.metadata.version("pycalphad")
+        config = {
+            "source_type": type(source_thermodynamics).__name__,
+            "phases": list(getattr(source_thermodynamics, "phases", pycalphad_source.phases)),
+            "g_offset": float(pycalphad_source.gOffset),
+            "equilibrium_sampling_density": int(pycalphad_source.pDens),
+            "local_sampling_density": int(pycalphad_source.local_pDens),
+        }
+        mobility_definition = (
+            "mobility_from_composition_set when mobility parameters are available; "
+            "otherwise tracer_diffusivity/(R*T)"
+        )
     with path.open("w", encoding="utf-8", newline="\n") as output:
         header = {
             "record_type": "metadata",
             "schema_version": 2,
-            "tc_python_version": source_thermodynamics.getRuntimeVersion(),
-            "config": config.to_metadata(),
+            "backend": backend,
+            "backend_version": backend_version,
+            "tc_python_version": backend_version if backend == "tc_python" else None,
+            "config": config,
             "temperature_unit": "K",
             "composition_unit": "mole_fraction",
             "diffusivity_unit": "m^2/s",
             "mobility_unit": "m^2/(J*s)",
+            "mobility_definition": mobility_definition,
             "factor_unit": "J/mol",
             "factor_definition": "d(mu_i - mu_reference)/d(x_j)",
-            "matrix_elements": list(config.independent_elements),
-            "tracer_and_phase_composition_elements": list(config.elements),
-            "mobility_elements": list(config.elements),
-            "stable_phase_scope": "forced_kinetics_equilibrium",
+            "matrix_elements": list(INDEPENDENT_ELEMENTS),
+            "tracer_and_phase_composition_elements": list(ELEMENTS),
+            "mobility_elements": list(ELEMENTS),
+            "stable_phase_scope": (
+                "forced_kinetics_equilibrium"
+                if backend == "tc_python" else "pycalphad_local_single_phase_equilibrium"
+            ),
         }
         output.write(json.dumps(header, allow_nan=False) + "\n")
         output.flush()
@@ -702,12 +842,12 @@ def _capture_surrogate_kinetics(source_thermodynamics, path=None):
             output.write(json.dumps(record, allow_nan=False) + "\n")
             output.flush()
 
-        with source_thermodynamics.captureKineticsDiagnostics(write_record):
+        with capture_source.captureKineticsDiagnostics(write_record):
             yield path
 
 
 def plot_selected_diffusivity_calculations_for_run(surrogate=None, *, artifact=None, renderer="browser"):
-    """Plot only the selected TC records used by all four diffusivity datasets.
+    """Plot selected source records used by all four diffusivity datasets.
 
     Tabs cross both phases with the interface and general training contexts.
     Hover includes the stored matrix and selected sublattice state; surrogate
@@ -728,6 +868,20 @@ def plot_selected_diffusivity_calculations_for_run(surrogate=None, *, artifact=N
     return plot_selected_diffusivity_calculations(surrogate, path, renderer=renderer)
 
 
+def _finite_numeric_mapping(values, label):
+    """Return a stable string-to-float mapping for strict artifact identity."""
+    output = {}
+    for key, value in dict(values).items():
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Cannot safely fingerprint {label} value {key!s}={value!r}.") from exc
+        if not np.isfinite(numeric):
+            raise ValueError(f"Cannot safely fingerprint non-finite {label} value {key!s}.")
+        output[str(key)] = numeric
+    return output
+
+
 def _surrogate_build_spec(source_thermodynamics, diffusivity_sampling):
     """Describe every numerical input used to construct the Fe-Cr-Ni surrogate.
 
@@ -735,35 +889,114 @@ def _surrogate_build_spec(source_thermodynamics, diffusivity_sampling):
     which records their dtype, shape, and digest without expanding them into
     the manifest. Purely locational cache and output paths are excluded.
     """
-    tc_source = getattr(source_thermodynamics, "thermodynamics", source_thermodynamics)
-    if not isinstance(tc_source, TCPythonThermodynamics):
-        raise ValueError("Safe Fe-Cr-Ni surrogate artifacts currently require the TC-Python source.")
-    runtime_version = tc_source.getRuntimeVersion()
-    if not runtime_version:
-        raise ValueError("Cannot safely identify the installed TC-Python runtime for surrogate reuse.")
-    config = tc_source.config.to_metadata()
-    config.pop("cache_dir", None)
-    config.pop("timeout_seconds", None)
-    user_database_path = config.pop("user_database_path", None)
-    database_identity = {
-        "thermodynamic_database": config.get("thermodynamic_database"),
-        "kinetic_database": config.get("kinetic_database"),
-        "user_database": None,
+    backend = _thermodynamics_backend(source_thermodynamics)
+    configured_engine = str(THERM_ENGINE).strip().upper()
+    configured_backends = {"PYCALPHAD": "pycalphad", "TC": "tc_python"}
+    if configured_engine not in configured_backends:
+        raise ValueError(f"Unsupported THERM_ENGINE for surrogate artifacts: {THERM_ENGINE!r}.")
+    configured_backend = configured_backends[configured_engine]
+    if backend != configured_backend:
+        raise ValueError(
+            f"THERM_ENGINE selects {configured_backend!r}, but the source uses {backend!r}."
+        )
+    implementation_sources = {
+        "moving_boundary_surrogates": file_sha256(moving_boundary_surrogates_module.__file__),
+        "surrogate_artifacts": file_sha256(surrogate_artifacts_module.__file__),
+        "surrogate_diagnostics": file_sha256(surrogate_diagnostics_module.__file__),
     }
-    if user_database_path is not None:
-        database_path = Path(user_database_path)
-        database_identity["user_database"] = {
-            "name": database_path.name,
-            "sha256": file_sha256(database_path),
+    if backend == "tc_python":
+        tc_source = (
+            source_thermodynamics
+            if isinstance(source_thermodynamics, TCPythonThermodynamics)
+            else source_thermodynamics.thermodynamics
+        )
+        runtime_version = tc_source.getRuntimeVersion()
+        if not runtime_version:
+            raise ValueError("Cannot safely identify the installed TC-Python runtime for surrogate reuse.")
+        config = tc_source.config.to_metadata()
+        config.pop("cache_dir", None)
+        config.pop("timeout_seconds", None)
+        user_database_path = config.pop("user_database_path", None)
+        database_identity = {
+            "thermodynamic_database": config.get("thermodynamic_database"),
+            "kinetic_database": config.get("kinetic_database"),
+            "user_database": None,
         }
+        if user_database_path is not None:
+            database_path = Path(user_database_path)
+            database_identity["user_database"] = {
+                "name": database_path.name,
+                "sha256": file_sha256(database_path),
+            }
+        runtime_identity = {
+            "backend": backend,
+            "tc_python_version": runtime_version,
+            "databases": database_identity,
+            "thermocalc_config": config,
+            "default_remove_cache": tc_source.default_remove_cache,
+        }
+        implementation_sources["tc_python_adapter"] = file_sha256(
+            tc_python_adapter_module.__file__
+        )
+    else:
+        if not TDB_PATH.is_file():
+            raise ValueError(f"Cannot fingerprint missing PyCalphad database: {TDB_PATH}")
+        pycalphad_source = (
+            source_thermodynamics
+            if isinstance(source_thermodynamics, MulticomponentThermodynamics)
+            else source_thermodynamics.thermodynamics
+        )
+        try:
+            runtime_version = importlib.metadata.version("pycalphad")
+        except importlib.metadata.PackageNotFoundError as exc:
+            raise ValueError("Cannot safely identify the installed PyCalphad runtime.") from exc
+        runtime_identity = {
+            "backend": backend,
+            "pycalphad_version": runtime_version,
+            "database": {"name": TDB_PATH.name, "sha256": file_sha256(TDB_PATH)},
+            "source_type": (
+                f"{type(source_thermodynamics).__module__}."
+                f"{type(source_thermodynamics).__qualname__}"
+            ),
+            "use_default_phases": bool(PYCALPHAD_USE_DEFAULT_PHASES),
+            "equilibrium_phases": list(
+                getattr(source_thermodynamics, "equilibrium_phases", pycalphad_source.phases)
+            ),
+            "phase_amount_tolerance": getattr(
+                source_thermodynamics, "phase_amount_tolerance", None
+            ),
+            "g_offset": float(pycalphad_source.gOffset),
+            "equilibrium_sampling_density": int(pycalphad_source.pDens),
+            "local_sampling_density": int(pycalphad_source.local_pDens),
+            "driving_force_sampling_density": int(pycalphad_source.sampling_pDens),
+            "mobility_correction": _finite_numeric_mapping(
+                pycalphad_source.mobility_correction, "mobility correction"
+            ),
+            "parameters": _finite_numeric_mapping(
+                pycalphad_source._parameters, "symbolic parameter"
+            ),
+        }
+        implementation_sources.update({
+            "pycalphad_adapter": file_sha256(pycalphad_adapter_module.__file__),
+            "pycalphad_thermodynamics": file_sha256(pycalphad_thermodynamics_module.__file__),
+            "mobility": file_sha256(mobility_module.__file__),
+            "free_energy_hessian": file_sha256(free_energy_hessian_module.__file__),
+        })
     fixed_matrix = getattr(source_thermodynamics, "diffusivity_matrix", FECRNI_BCC_DIFFUSIVITY_MATRIX)
     probe_parameters = _tieline_surrogate_probe_kwargs(PROBE_START, PROBE_END, PROBE_POINT)
     recipe_functions = (
         _make_tc_config,
+        build_source_thermodynamics,
+        FixedPhaseDiffusivityThermodynamics.getInterdiffusivity,
+        FixedPhaseDiffusivityThermodynamics.captureKineticsDiagnostics,
         _tieline_surrogate_probe_kwargs,
         _surrogate_diffusivity_sampling_kwargs,
+        _thermodynamics_backend,
+        _calculation_capture_source,
+        _thermodynamics_context,
         _record_interface_bulk_consistency,
         _capture_surrogate_kinetics,
+        _finite_numeric_mapping,
         _surrogate_build_spec,
         build_tieline_surrogate,
         prepare_tieline_surrogate,
@@ -779,10 +1012,7 @@ def _surrogate_build_spec(source_thermodynamics, diffusivity_sampling):
             "temperature": TEMPERATURE,
         },
         "runtime": {
-            "tc_python_version": runtime_version,
-            "databases": database_identity,
-            "thermocalc_config": config,
-            "default_remove_cache": tc_source.default_remove_cache,
+            **runtime_identity,
         },
         "tieline_sampling": {
             "mode": TIELINE_SURROGATE_BUILD_MODE,
@@ -808,11 +1038,7 @@ def _surrogate_build_spec(source_thermodynamics, diffusivity_sampling):
             "max_distance_ratio": TC_INTERFACE_BULK_MAX_DISTANCE_RATIO,
             "site_fraction_absolute_threshold": TC_INTERFACE_BULK_SITE_FRACTION_ABSOLUTE_THRESHOLD,
         },
-        "implementation_sources": {
-            "moving_boundary_surrogates": file_sha256(moving_boundary_surrogates_module.__file__),
-            "tc_python_adapter": file_sha256(tc_python_adapter_module.__file__),
-            "surrogate_artifacts": file_sha256(surrogate_artifacts_module.__file__),
-            "surrogate_diagnostics": file_sha256(surrogate_diagnostics_module.__file__),
+        "implementation_sources": implementation_sources | {
             "fecrni_recipe": {
                 function.__name__: callable_source_sha256(function)
                 for function in recipe_functions
@@ -855,23 +1081,23 @@ def build_tieline_surrogate(source_thermodynamics, *, diffusivity_sampling=None,
         if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS or TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY
         else nullcontext()
     )
-    with source_thermodynamics, capture:
-            kwargs_ab = {}
-            # if CASE_NAME in [CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC]:
-            #     kwargs_ab["validation_database"] = TDB_PATH
-            surrogate_ab = TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
-                thermodynamics=source_thermodynamics,
-                elements=ELEMENTS,
-                phases=pair_ab,
-                tieline_phases=pair_ab,
-                temperature=TEMPERATURE,
-                **_tieline_surrogate_probe_kwargs(PROBE_START, PROBE_END, PROBE_POINT),
-                precipitate_phase=pair_ab[1],
-                skip_failed_bulk_calculations=TC_DROP_FAILED_BULK_CALCULATIONS,
-                drop_invalid_bulk_matrices=TC_DROP_INVALID_BULK_MATRICES,
-                **diffusivity_sampling,
-                **kwargs_ab,
-            )
+    with _thermodynamics_context(source_thermodynamics), capture:
+        kwargs_ab = {}
+        # if CASE_NAME in [CASE_FE_CR_NI_PYCALPHAD, CASE_FE_CR_NI_TC]:
+        #     kwargs_ab["validation_database"] = TDB_PATH
+        surrogate_ab = TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
+            thermodynamics=source_thermodynamics,
+            elements=ELEMENTS,
+            phases=pair_ab,
+            tieline_phases=pair_ab,
+            temperature=TEMPERATURE,
+            **_tieline_surrogate_probe_kwargs(PROBE_START, PROBE_END, PROBE_POINT),
+            precipitate_phase=pair_ab[1],
+            skip_failed_bulk_calculations=TC_DROP_FAILED_BULK_CALCULATIONS,
+            drop_invalid_bulk_matrices=TC_DROP_INVALID_BULK_MATRICES,
+            **diffusivity_sampling,
+            **kwargs_ab,
+        )
     if TC_DROP_FAILED_BULK_CALCULATIONS:
         failures = surrogate_ab.metadata["failed_bulk_points"]
         report_path = artifact_directory / "failed_bulk_points.json"
@@ -885,10 +1111,22 @@ def build_tieline_surrogate(source_thermodynamics, *, diffusivity_sampling=None,
         members["invalid_bulk_points"] = {"path": report_path, "schema_version": 1}
         print(f"Dropped {len(invalid)} bulk samples with invalid matrices; details: {report_path}")
     if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS:
-        tc_source = getattr(source_thermodynamics, "thermodynamics", source_thermodynamics)
-        surrogate_ab.metadata["thermocalc_config"] = tc_source.config.to_metadata() | {
-            "default_remove_cache": tc_source.default_remove_cache,
-        }
+        backend = _thermodynamics_backend(source_thermodynamics)
+        wrapped_source = getattr(source_thermodynamics, "thermodynamics", source_thermodynamics)
+        if backend == "tc_python":
+            surrogate_ab.metadata["thermocalc_config"] = wrapped_source.config.to_metadata() | {
+                "default_remove_cache": wrapped_source.default_remove_cache,
+            }
+        else:
+            surrogate_ab.metadata["pycalphad_config"] = {
+                "version": importlib.metadata.version("pycalphad"),
+                "database": {"name": TDB_PATH.name, "sha256": file_sha256(TDB_PATH)},
+                "source_type": type(source_thermodynamics).__name__,
+                "phases": list(getattr(source_thermodynamics, "phases", wrapped_source.phases)),
+                "g_offset": float(wrapped_source.gOffset),
+                "equilibrium_sampling_density": int(wrapped_source.pDens),
+                "local_sampling_density": int(wrapped_source.local_pDens),
+            }
         surrogate_ab.metadata["kinetics_diagnostics_sidecar"] = "bundle:kinetics_diagnostics"
     if TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS or TC_CHECK_INTERFACE_BULK_DIFFUSIVITY_CONSISTENCY:
         members["kinetics_diagnostics"] = {"path": kinetics_path, "schema_version": 2}
@@ -1131,6 +1369,220 @@ def _save_or_show(fig, filename):
         fig.savefig(path, dpi=180, bbox_inches="tight")
         print(f"Saved {path}")
     return fig
+
+
+def _load_lee_oh_fig9_curve(path):
+    """Load and time-sort one finite two-column Lee and Oh Figure 9 curve."""
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Could not find Lee and Oh Figure 9 data at {path}.")
+    values = np.loadtxt(path, delimiter=",", dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64)
+    if values.ndim == 1:
+        if values.size != 2:
+            raise ValueError(
+                f"Lee and Oh Figure 9 data at {path} must have exactly two columns."
+            )
+        values = values.reshape(1, 2)
+    if values.ndim != 2 or values.shape[1] != 2 or values.shape[0] == 0:
+        raise ValueError(
+            f"Lee and Oh Figure 9 data at {path} must be a non-empty two-column array."
+        )
+    if not np.all(np.isfinite(values)):
+        raise ValueError(f"Lee and Oh Figure 9 data at {path} must contain finite values.")
+    return values[np.argsort(values[:, 0], kind="stable")]
+
+
+def _lee_oh_fig9_curve_metrics(model_time_hours, model_normalized_alpha, reference):
+    """Compare a model history with a reference curve by log-time interpolation.
+
+    Only positive reference times inside the model's positive-time interval are
+    compared. Interpolation in ``log10(time)`` matches the logarithmic Figure 9
+    abscissa without extrapolating either history.
+    """
+    model_time_hours = np.asarray(model_time_hours, dtype=np.float64).reshape(-1)
+    model_normalized_alpha = np.asarray(model_normalized_alpha, dtype=np.float64).reshape(-1)
+    reference = np.asarray(reference, dtype=np.float64)
+    positive_model = model_time_hours > 0.0
+    comparison_time = model_time_hours[positive_model]
+    comparison_values = model_normalized_alpha[positive_model]
+    if comparison_time.size < 2 or np.any(np.diff(comparison_time) <= 0.0):
+        raise ValueError(
+            "The recorded model history must contain at least two strictly increasing positive times."
+        )
+    reference_time = reference[:, 0]
+    overlap = (
+        (reference_time > 0.0)
+        & (reference_time >= comparison_time[0])
+        & (reference_time <= comparison_time[-1])
+    )
+    if np.count_nonzero(overlap) < 2:
+        raise ValueError(
+            "Lee and Oh Figure 9 comparison requires at least two positive reference "
+            "times inside the recorded model interval."
+        )
+    overlap_time = reference_time[overlap]
+    reference_values = reference[overlap, 1]
+    interpolated_model = np.interp(
+        np.log10(overlap_time),
+        np.log10(comparison_time),
+        comparison_values,
+    )
+    error = interpolated_model - reference_values
+    return {
+        "overlap_count": int(error.size),
+        "overlap_time_hours": [float(overlap_time[0]), float(overlap_time[-1])],
+        "mean_absolute_error": float(np.mean(np.abs(error))),
+        "root_mean_square_error": float(np.sqrt(np.mean(error**2))),
+        "maximum_absolute_error": float(np.max(np.abs(error))),
+    }
+
+
+def _print_lee_oh_fig9_metrics(metrics):
+    """Print a compact summary of a Figure 9 comparison report."""
+    model = metrics["model"]
+    print("\nLee and Oh Figure 9 comparison:")
+    print(
+        "  model peak normalized alpha thickness = "
+        f"{model['peak_normalized_alpha_thickness']:.6g} at "
+        f"{model['peak_time_hours']:.6g} h"
+    )
+    print(
+        "  model terminal normalized alpha thickness = "
+        f"{model['terminal_normalized_alpha_thickness']:.6g} at "
+        f"{model['terminal_time_hours']:.6g} h; deviation from "
+        f"{metrics['equilibrium_normalized_alpha_thickness']:.6g} = "
+        f"{model['terminal_equilibrium_deviation']:+.6g}"
+    )
+    for key in ("cr_correction", "ni_correction"):
+        reference = metrics["references"][key]
+        comparison = reference["comparison"]
+        print(
+            f"  {reference['label']}: peak={reference['peak_normalized_alpha_thickness']:.6g} "
+            f"at {reference['peak_time_hours']:.6g} h; "
+            f"overlap n={comparison['overlap_count']}, "
+            f"MAE={comparison['mean_absolute_error']:.6g}, "
+            f"RMSE={comparison['root_mean_square_error']:.6g}, "
+            f"max|error|={comparison['maximum_absolute_error']:.6g}"
+        )
+
+
+def plot_lee_oh_fig9_comparison(
+    model,
+    *,
+    cr_path=None,
+    ni_path=None,
+    xlims=None,
+    show=True,
+):
+    """Plot and quantify the model against digitized Lee and Oh Figure 9.
+
+    The left phase must be alpha/BCC. Its physical thickness is the recorded
+    interface position and is normalized by its initial value. The coupled
+    Illingworth trajectory is compared independently with the published Cr-
+    and Ni-correction curves; it is not identified with either correction.
+
+    Returns
+    -------
+    tuple
+        ``(figure, axes, metrics)`` with log-time overlap errors calculated
+        without extrapolation.
+    """
+    phases = [str(phase).split("#", 1)[0].upper() for phase in model.phases]
+    if not phases or phases[0] != "BCC_A2":
+        raise ValueError(
+            "Lee and Oh Figure 9 compares the left alpha/BCC layer; "
+            "the model's first phase must be BCC_A2."
+        )
+    n_history = int(model.interfaceData.N) + 1
+    times_seconds = np.asarray(
+        model.interfaceData._time[:n_history], dtype=np.float64
+    ).reshape(-1)
+    alpha_thickness = np.asarray(
+        model.interfaceData._y[:n_history], dtype=np.float64
+    ).reshape(-1)
+    if (
+        times_seconds.size != alpha_thickness.size
+        or times_seconds.size < 3
+        or not np.all(np.isfinite(times_seconds))
+        or not np.all(np.isfinite(alpha_thickness))
+    ):
+        raise ValueError("The model must provide a finite recorded interface history.")
+    initial_alpha_thickness = float(alpha_thickness[0])
+    if initial_alpha_thickness <= 0.0:
+        raise ValueError("Initial alpha/BCC thickness must be positive for normalization.")
+    if np.any(np.diff(times_seconds) < 0.0):
+        raise ValueError("Recorded model times must be nondecreasing.")
+
+    time_hours = times_seconds / float(LEE_OH_FIG9_TIME_UNIT_SECONDS)
+    normalized_alpha = alpha_thickness / initial_alpha_thickness
+    cr_curve = _load_lee_oh_fig9_curve(
+        LEE_OH_FIG9_LOWER_CR_PATH if cr_path is None else cr_path
+    )
+    ni_curve = _load_lee_oh_fig9_curve(
+        LEE_OH_FIG9_UPPER_NI_PATH if ni_path is None else ni_path
+    )
+    peak_index = int(np.argmax(normalized_alpha))
+    terminal_value = float(normalized_alpha[-1])
+    equilibrium_value = float(LEE_OH_FIG9_EQUILIBRIUM_NORMALIZED_ALPHA)
+
+    references = {}
+    for key, label, curve in (
+        ("cr_correction", "Lee & Oh Figure 9 lower curve (Cr correction)", cr_curve),
+        ("ni_correction", "Lee & Oh Figure 9 upper curve (Ni correction)", ni_curve),
+    ):
+        reference_peak = int(np.argmax(curve[:, 1]))
+        references[key] = {
+            "label": label,
+            "peak_normalized_alpha_thickness": float(curve[reference_peak, 1]),
+            "peak_time_hours": float(curve[reference_peak, 0]),
+            "comparison": _lee_oh_fig9_curve_metrics(
+                time_hours, normalized_alpha, curve
+            ),
+        }
+    metrics = {
+        "time_unit": "hours",
+        "equilibrium_normalized_alpha_thickness": equilibrium_value,
+        "model": {
+            "initial_alpha_thickness_m": initial_alpha_thickness,
+            "peak_normalized_alpha_thickness": float(normalized_alpha[peak_index]),
+            "peak_time_hours": float(time_hours[peak_index]),
+            "terminal_normalized_alpha_thickness": terminal_value,
+            "terminal_time_hours": float(time_hours[-1]),
+            "terminal_equilibrium_deviation": terminal_value - equilibrium_value,
+        },
+        "references": references,
+    }
+
+    positive_time = time_hours > 0.0
+    fig, ax = plt.subplots(figsize=(8.0, 5.0))
+    ax.plot(
+        time_hours[positive_time],
+        normalized_alpha[positive_time],
+        linewidth=1.8,
+        label="Coupled Illingworth calculation",
+    )
+    ax.plot(
+        cr_curve[:, 0], cr_curve[:, 1], color="dimgray", linewidth=1.5,
+        label=references["cr_correction"]["label"],
+    )
+    ax.plot(
+        ni_curve[:, 0], ni_curve[:, 1], color="black", linewidth=1.5,
+        label=references["ni_correction"]["label"],
+    )
+    ax.axhline(equilibrium_value, color="0.6", linestyle="--", linewidth=1.0)
+    ax.set_xscale("log")
+    ax.set_xlabel("Time (hours)")
+    ax.set_ylabel("Normalized alpha/BCC thickness")
+    ax.set_title("Fe-Cr-Ni comparison with Lee and Oh Figure 9")
+    ax.set_xlim(*(LEE_OH_FIG9_XLIMS_HOURS if xlims is None else xlims))
+    ax.grid(True, which="both", alpha=0.25)
+    ax.legend(loc="best", frameon=True)
+    _save_or_show(fig, "lee_oh_figure9_comparison.png")
+    if show and plt.get_backend().lower() != "agg":
+        plt.show(block=False)
+    _print_lee_oh_fig9_metrics(metrics)
+    return fig, ax, metrics
 
 
 def plot_interface_comparison(arrays):
@@ -1390,14 +1842,13 @@ if validated_phase_molar_volumes is not None and len(set(validated_phase_molar_v
     )
 
 source_thermodynamics = build_source_thermodynamics()
-tieline_surrogate = build_tieline_surrogate(source_thermodynamics)
-# tieline_surrogate_artifact = prepare_tieline_surrogate(source_thermodynamics)
-# tieline_surrogate = tieline_surrogate_artifact.surrogate
+tieline_surrogate_artifact = prepare_tieline_surrogate(source_thermodynamics)
+tieline_surrogate = tieline_surrogate_artifact.surrogate
 
 print(f"Built tie-line surrogate with eta bounds {tieline_surrogate.eta_bounds}.")
 tieline_surrogate.validity_policy='legacy'
 # Construction-only dashboard: reads persisted build provenance and does not
-# issue additional Thermo-Calc queries.
+# issue additional source-thermodynamics queries.
 if not RELOAD_TIELINE_SURROGATE:
     construction_diagnostics = plot_surrogate_diagnostics(
         tieline_surrogate, renderer="browser"
@@ -1491,7 +1942,17 @@ print(
     f"  two-phase final time   = {two_phase_model.currentTime:.12g} s"
 )
 
-raise
+lee_oh_fig9_comparison = None
+if PLOT_LEE_OH_FIG9_COMPARISON:
+    comparison_figure, comparison_axes, comparison_metrics = plot_lee_oh_fig9_comparison(
+        two_phase_model
+    )
+    lee_oh_fig9_comparison = {
+        "figure": comparison_figure,
+        "axes": comparison_axes,
+        "metrics": comparison_metrics,
+    }
+
 # %%
 # Plots
 two_phase_model.plot_eta_vs_time()
@@ -1517,6 +1978,7 @@ result = {
     "surrogate_ab": tieline_surrogate,
     "therm_ab": source_thermodynamics,
     "phase_molar_volumes": get_three_phase_molar_volumes(),
+    "lee_oh_fig9_comparison": lee_oh_fig9_comparison,
 }
 import importlib
 
