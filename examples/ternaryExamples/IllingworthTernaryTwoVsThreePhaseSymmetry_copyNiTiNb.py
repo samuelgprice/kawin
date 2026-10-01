@@ -59,7 +59,7 @@ OUTPUTS.mkdir(parents=True, exist_ok=True)
 
 # %%
 # Fe-Cr-Ni case configuration adapted from IllingworthTernaryExamples.py
-THERM_ENGINE = ["PYCALPAHD", "TC"][-1]
+THERM_ENGINE = ["PYCALPHAD", "TC"][-1]
 
 TC_USE_DEFAULT_PHASES = True
 GLOBAL_MINIMIZATION_MAX_GRID_POINTS = 2000
@@ -287,7 +287,7 @@ def build_source_thermodynamics():
                 use_default_phases=PYCALPHAD_USE_DEFAULT_PHASES,
                 equilibrium_phases=PYCALPHAD_EQUILIBRIUM_PHASES,
                 g_offset=G_OFFSET,
-            ),
+            )
             
     elif THERM_ENGINE=="TC":
         therm_ab = TCPythonThermodynamics(_make_tc_config(TIELINE_PHASES))

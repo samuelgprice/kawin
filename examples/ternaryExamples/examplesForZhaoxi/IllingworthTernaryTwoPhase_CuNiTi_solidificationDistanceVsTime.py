@@ -78,7 +78,7 @@ RELOAD_TIELINE_SURROGATE = False
 
 # %%
 # Fe-Cr-Ni case configuration adapted from IllingworthTernaryExamples.py
-THERM_ENGINE = ["PYCALPAHD", "TC"][-1]
+THERM_ENGINE = ["PYCALPHAD", "TC"][-1]
 
 TC_USE_DEFAULT_PHASES = False #True
 DEFAULT_REMOVE_CACHE=False
@@ -448,7 +448,7 @@ def build_source_thermodynamics():
                 use_default_phases=PYCALPHAD_USE_DEFAULT_PHASES,
                 equilibrium_phases=PYCALPHAD_EQUILIBRIUM_PHASES,
                 g_offset=G_OFFSET,
-            ),
+            )
 
     elif THERM_ENGINE=="TC":
         if CUNITI_BCC_DIFFUSIVITY_MATRIX is not None:
