@@ -2594,7 +2594,7 @@ def test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work
     assert model._lastImplicitJacobianEvaluations == 1
     assert model._lastImplicitMotionBranch == "positive"
     assert model._lastImplicitFailureReason is None
-    assert np.isclose(model._lastImplicitResidual, 4.499427273822066e-15, rtol=0.0, atol=1.0e-21)
+    assert np.isclose(model._lastImplicitResidual, 4.4966467399417765e-15, rtol=0.0, atol=1.0e-21)
 
 
 @pytest.mark.parametrize("flip_branch", [False, True])

@@ -1238,11 +1238,49 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             "root_maxiter": self.initialEtaRootMaxiter,
             "bulk_diffusivity_mode": self.bulkDiffusivityMode,
         }
-        self.initialEtaEstimate = estimate_initial_eta_from_instantaneous_balance(
-            **estimate_kwargs,
-            eta_guess=self.initialEtaGuess,
-            velocity_guess=self.initialVelocityGuess,
-        )
+        estimate_kwargs["eta_bracket"] = _coerce_initial_eta_bracket(estimate_kwargs["eta_bracket"], _validate_eta_bounds(estimate_kwargs["interface_equilibrium"]))
+        initialEtaEstimateResults_dict = {}
+        lower, upper = estimate_kwargs["eta_bracket"]
+        initial_eta_guesses = np.linspace(lower, upper, 10)
+        preferred_guess = self.initialEtaGuess
+        if preferred_guess is None:
+            eta0 = 0.5 * (lower + upper)
+            preferred_guess=eta0
+        if not lower <= preferred_guess <= upper:
+            raise ValueError("initial_eta_guess must lie within the initial eta bracket.")
+        initial_eta_guesses = np.append(preferred_guess, initial_eta_guesses)
+        for initialEtaGuess in initial_eta_guesses:
+            try:
+                initialEtaEstimate_result = estimate_initial_eta_from_instantaneous_balance(
+                    **estimate_kwargs,
+                    eta_guess=initialEtaGuess,
+                    velocity_guess=self.initialVelocityGuess,
+                )
+                initialEtaEstimateResults_dict.update({initialEtaGuess:initialEtaEstimate_result})
+            except ValueError as e:
+                print(f"Error occurred for initialEtaGuess {initialEtaGuess}: {e}")
+                initialEtaEstimateResults_dict.update({initialEtaGuess:e})
+        successful_initialEtaResults = {k:(v.eta, v.residual_norm) for k, v in initialEtaEstimateResults_dict.items() if isinstance(v, InitialEtaEstimate)}
+        if not (len(successful_initialEtaResults)>0):
+            debugInPlace()
+            raise ValueError("No successful initial eta estimates found.")
+        successful_ConvergedEtaVals = [r[0] for r in successful_initialEtaResults.values()]
+        successful_residualNorms = [r[1] for r in successful_initialEtaResults.values()]
+        successful_ConvergedEtaVals_min, successful_ConvergedEtaVals_max = min(successful_ConvergedEtaVals), max(successful_ConvergedEtaVals)
+        interfaceComps_ofMinEta = estimate_kwargs["interface_equilibrium"].interface_compositions(float(successful_ConvergedEtaVals_min))
+        interfaceComps_ofMaxEta = estimate_kwargs["interface_equilibrium"].interface_compositions(float(successful_ConvergedEtaVals_max))
+        if (np.linalg.norm(np.array(interfaceComps_ofMaxEta)-np.array(interfaceComps_ofMinEta), axis=1).max()) > 2e-5:
+            debugInPlace()
+            raise ValueError(f"Multiple different minima found for initial eta. Diff between interfaceComps of min/max etas = {np.array(interfaceComps_ofMaxEta)-np.array(interfaceComps_ofMinEta)}")
+        self.initialEtaEstimate = initialEtaEstimateResults_dict[
+            list(successful_initialEtaResults.keys())[np.argmin(successful_residualNorms)]
+        ]
+
+        # self.initialEtaEstimate = estimate_initial_eta_from_instantaneous_balance(
+        #     **estimate_kwargs,
+        #     eta_guess=self.initialEtaGuess,
+        #     velocity_guess=self.initialVelocityGuess,
+        # )
         print(f"initialEtaEstimate: {self.initialEtaEstimate.eta}")
         eta0 = float(self.initialEtaEstimate.eta)
         self.initialEta = eta0
