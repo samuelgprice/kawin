@@ -64,6 +64,7 @@ from kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM import (
     MovingBoundaryIllingworthTernaryThreePhaseFD1DModel,
 )
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
+from kawin.diffusion.mesh.TransformedGrids import two_phase_landau_grids
 from kawin.solver import explicitEulerIterator
 from kawin.thermo import MulticomponentThermodynamics
 from examples.ThermoCalc.tc_python_adapter import TCPythonThermodynamics, ThermoCalcConfig
@@ -240,8 +241,7 @@ PHASE_A_NODES_2 = 200
 PHASE_B_NODES_2 = 200
 
 
-U_A_2 = np.linspace(0.0, 1.0, PHASE_A_NODES_2)
-V_B_2 = np.linspace(0.0, 1.0, PHASE_B_NODES_2)
+U_A_2, V_B_2 = two_phase_landau_grids(PHASE_A_NODES_2, PHASE_B_NODES_2, method="uniform")
 
 
 # %%
