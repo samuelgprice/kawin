@@ -64,7 +64,7 @@ from kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM import (
     MovingBoundaryIllingworthTernaryThreePhaseFD1DModel,
 )
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
-from kawin.diffusion.mesh.TransformedGrids import two_phase_landau_grids
+from kawin.diffusion.mesh.TransformedGrids import two_phase_landau_grids, summarize_landau_grid
 from kawin.solver import explicitEulerIterator
 from kawin.thermo import MulticomponentThermodynamics
 from examples.ThermoCalc.tc_python_adapter import TCPythonThermodynamics, ThermoCalcConfig
@@ -109,6 +109,37 @@ G_OFFSET = 0.0
 TDB_PATH = EXAMPLES_DIR / "FeCrNi_Lee1993_L_style_ternary_checked_withMobility.tdb"
 
 systemStr = "FeCrNi"
+caseStr = "B"
+
+
+def _weight_percent_fe_cr_ni_to_atomic_fraction(weight_percent):
+    """Convert Fe-Cr-Ni weight percentages to atomic fractions in [Fe, Cr, Ni] order.
+
+    Atomic masses match the Lee Fe-Cr-Ni TDB. The last input dimension must
+    contain nonnegative Fe, Cr, and Ni weights with a positive total.
+    """
+    weights = np.asarray(weight_percent, dtype=np.float64)
+    if weights.ndim == 0 or weights.shape[-1] != 3:
+        raise ValueError("Fe-Cr-Ni weight percentages must have a final dimension of three.")
+    if not np.all(np.isfinite(weights)) or np.any(weights < 0):
+        raise ValueError("Fe-Cr-Ni weight percentages must be finite and nonnegative.")
+    moles = weights / np.array([55.847, 51.996, 58.69], dtype=np.float64)
+    totals = np.sum(moles, axis=-1, keepdims=True)
+    if np.any(totals <= 0):
+        raise ValueError("Fe-Cr-Ni weight percentages must have a positive total.")
+    return moles / totals
+
+
+# Table 3 alpha-sheet thicknesses are for the full gamma|alpha|gamma couple.
+# This symmetric alpha|gamma half-domain uses half of each alpha sheet and
+# one complete 2000 um gamma plate.
+case_dict = {
+    "fig9":{"HALF_LENGTH":30e-6, "B_PHASE_LENGTH":18e-6, "A_BULK":np.array([0.38, 0.001], dtype=np.float64), "B_BULK":np.array([0.13, 0.15], dtype=np.float64), "SEMI_LOG_DT": 0.25 / (20.0 * 2), "SOLVE_TIME":1e3*3600, "PHASE_A_NODES_2":200, "PHASE_B_NODES_2":200},
+    "A":{"HALF_LENGTH":2000e-6+(186.9e-6/2), "B_PHASE_LENGTH":2000e-6, "A_BULK":np.array([0.39696, 0.0001], dtype=np.float64), "B_BULK":np.array([0.2881427, 0.264718], dtype=np.float64), "SEMI_LOG_DT": 0.25 / (20.0 * 8), "SOLVE_TIME":1e3*3600, "PHASE_A_NODES_2":100, "PHASE_B_NODES_2":1000},
+    "B":{"HALF_LENGTH":2000e-6+(124.1e-6/2), "B_PHASE_LENGTH":2000e-6, "A_BULK":np.array([0.39696, 0.0001], dtype=np.float64), "B_BULK":np.array([0.139297, 0.142387], dtype=np.float64), "SEMI_LOG_DT": 0.25 / (20.0 * 8), "SOLVE_TIME":1e3*3600, "PHASE_A_NODES_2":100, "PHASE_B_NODES_2":1000},
+    "C":{"HALF_LENGTH":2000e-6+(130.6e-6/2), "B_PHASE_LENGTH":2000e-6, "A_BULK":_weight_percent_fe_cr_ni_to_atomic_fraction([54, 37, 9])[1:], "B_BULK":_weight_percent_fe_cr_ni_to_atomic_fraction([44, 24, 32])[1:], "SEMI_LOG_DT": 0.25 / (20.0 * 8), "SOLVE_TIME":1e3*3600, "PHASE_A_NODES_2":100, "PHASE_B_NODES_2":1000},
+    "D":{"HALF_LENGTH":2000e-6+(71.6e-6/2), "B_PHASE_LENGTH":2000e-6, "A_BULK":_weight_percent_fe_cr_ni_to_atomic_fraction([76, 23, 1])[1:], "B_BULK":_weight_percent_fe_cr_ni_to_atomic_fraction([72, 13, 15])[1:], "SEMI_LOG_DT": 0.25 / (20.0 * 8), "SOLVE_TIME":1e3*3600, "PHASE_A_NODES_2":100, "PHASE_B_NODES_2":1000},
+}
 
 if systemStr =="FeCrNi":
     ELEMENTS = ["FE", "CR", "NI"]
@@ -152,9 +183,9 @@ INITIAL_VELOCITY_GUESS_3PHASE = None
 # Two-phase geometry: [0, HALF_LENGTH].
 multiplier=8
 stepDT_multiplier = multiplier#/4
-HALF_LENGTH = np.round(30e-6, 16) #200.0e-6 * multiplier
+HALF_LENGTH = np.round(case_dict[caseStr]["HALF_LENGTH"], 16) #200.0e-6 * multiplier
 TWO_PHASE_NODES = 61
-B_PHASE_LENGTH = 18e-6 #100e-6 * multiplier
+B_PHASE_LENGTH = np.round(case_dict[caseStr]["B_PHASE_LENGTH"], 16) #100e-6 * multiplier
 if systemStr =="FeCrNi":
     INTERFACE_POSITION = (HALF_LENGTH-(B_PHASE_LENGTH) + 1.0e-12) 
 
@@ -169,8 +200,8 @@ if systemStr =="FeCrNi":
 
 # Initial bulk values: A on the outer regions, B in the middle.
 if systemStr =="FeCrNi":
-    A_BULK = np.array([0.38, 0.001], dtype=np.float64)
-    B_BULK = np.array([0.13, 0.15], dtype=np.float64)
+    A_BULK = case_dict[caseStr]["A_BULK"]
+    B_BULK = case_dict[caseStr]["B_BULK"]
 
 # ``phase_uniform`` freezes one matrix per phase at the sampled tie line.
 # ``composition_dependent_lagged`` samples a phase-specific diffusivity field
@@ -190,7 +221,7 @@ if systemStr =="FeCrNi":
 # Set this to an explicit ``(n, 2)`` array to use custom samples.
 BULK_DIFFUSIVITY_POINTS = None
 BULK_DIFFUSIVITY_GRIDS = None
-BULK_DIFFUSIVITY_GRID_SPACING = 0.02
+BULK_DIFFUSIVITY_GRID_SPACING = 0.01
 
 # Freeze one phase matrix sampled at this tie line when using ``phase_uniform``.
 # Keeping those matrices identical in both solvers supports the original
@@ -205,8 +236,8 @@ SEMI_LOG_BASE_TIME_STEP = 1.0
 
 SEMI_LOG_T0 = 1.0e-6
 if systemStr =="FeCrNi":
-    SEMI_LOG_DT = 0.25 / (20.0 * 2) # 0.25 / 10.0
-    SOLVE_TIME = 1e3*3600
+    SEMI_LOG_DT = case_dict[caseStr]["SEMI_LOG_DT"]
+    SOLVE_TIME = case_dict[caseStr]["SOLVE_TIME"]
 
 TOLERANCE = 1.0e-12 #1.0e-12
 RESIDUAL_TOLERANCE = None
@@ -224,12 +255,36 @@ TIME_SCALE = 1
 TIME_LABEL = "s"
 SAVE_FIGURES = False
 FIGURE_DIR = THIS_DIR / "illingworth_two_vs_three_phase_figures"
-PLOT_LEE_OH_FIG9_COMPARISON = True
+if caseStr=="fig9":
+    PLOT_LEE_OH_FIG9_COMPARISON = True
+else:
+    PLOT_LEE_OH_FIG9_COMPARISON = False
 LEE_OH_FIG9_LOWER_CR_PATH = EXAMPLES_DIR / "leeAndOh1996_data" / "fig9_lowerCurve_Cr.csv"
 LEE_OH_FIG9_UPPER_NI_PATH = EXAMPLES_DIR / "leeAndOh1996_data" / "fig9_upperCurve_Ni.csv"
 LEE_OH_FIG9_TIME_UNIT_SECONDS = 3600.0
 LEE_OH_FIG9_XLIMS_HOURS = (1.0e-3, 1.0e3)
 LEE_OH_FIG9_EQUILIBRIUM_NORMALIZED_ALPHA = 0.5
+LEE_OH_DATA_DIR = EXAMPLES_DIR / "leeAndOh1996_data"
+LEE_OH_FIG11_CASES = ("A", "B", "C", "D")
+LEE_OH_FIG11_COMPARISON_PATH = OUTPUTS / "lee_oh_figure11_all_cases.png"
+LEE_OH_FIG11_CASE_COLORS = {
+    "A": "#1f77b4", "B": "#ff7f0e", "C": "#2ca02c", "D": "#d62728",
+}
+LEE_OH_FIG12B_CURVES = (
+    ("1 h", "fig12b_1hrCurve.csv", "#9467bd", "solid"),
+    ("10 h", "fig12b_10hrCurve.csv", "#ff7f0e", "solid"),
+    ("100 h", "fig12b_100hrCurve.csv", "#2ca02c", "solid"),
+    ("1000 h", "fig12b_1000hrCurve.csv", "#d62728", "solid"),
+    ("highest Cr γ boundary", "fig12b_highestCrGammaCurve.csv", "#636363", "dash"),
+    ("lowest Cr γ boundary", "fig12b_lowestCrGammaCurve.csv", "#252525", "dash"),
+)
+LEE_OH_FIG12B_PHASE_BOUNDARIES = (
+    ("α/BCC phase boundary", "BCClineAt1373FromWPDcsv.csv", "#555555", "-"),
+    ("γ/FCC phase boundary", "FCClineAt1373FromWPDcsv.csv", "#888888", "--"),
+)
+LEE_OH_FIG12B_TARGET_HOURS = (1.0, 10.0, 100.0, 1000.0)
+LEE_OH_FIG12B_TIME_RTOL = 0.0025
+LEE_OH_FIG12B_COMPARISON_PATH = OUTPUTS / "lee_oh_figure12b_case_B.png"
 
 # For an exact reduction test, explicitly match the transformed-grid physical
 # resolution.  The three-phase B interval has twice the physical width of
@@ -237,12 +292,13 @@ LEE_OH_FIG9_EQUILIBRIUM_NORMALIZED_ALPHA = 0.5
 #
 # The values below reproduce the node counts that the 31-node, 30 um
 # two-phase physical mesh would naturally give near a 12 um interface.
-PHASE_A_NODES_2 = 200
-PHASE_B_NODES_2 = 200
+PHASE_A_NODES_2 = case_dict[caseStr]["PHASE_A_NODES_2"]
+PHASE_B_NODES_2 = case_dict[caseStr]["PHASE_B_NODES_2"]
 
 
-U_A_2, V_B_2 = two_phase_landau_grids(PHASE_A_NODES_2, PHASE_B_NODES_2, method="uniform")
-
+U_A_2, V_B_2 = two_phase_landau_grids(PHASE_A_NODES_2, PHASE_B_NODES_2, method="linear", spacing_ratio=0.1)
+summarize_landau_grid(U_A_2, phase="left", name="U_A_2", plot=True)
+summarize_landau_grid(V_B_2, phase="right", name="V_B_2", plot=True)
 
 # %%
 # Small helper objects
@@ -594,7 +650,7 @@ def _surrogate_diffusivity_sampling_kwargs():
         with open(
             EXAMPLES_DIR
             / "ternaryExamples"
-            / f"allValid_3Element_compositions_{BULK_DIFFUSIVITY_GRID_SPACING:g}inc_projTo1eminus4.pkl",
+            / f"allValid_3Element_compositions_{BULK_DIFFUSIVITY_GRID_SPACING:g}inc_projTo1eminus5.pkl",
             "rb",
         ) as bulk_diffusivity_file:
             bulk_points = pickle.load(bulk_diffusivity_file)[:, :-1].copy()
@@ -1371,6 +1427,283 @@ def _save_or_show(fig, filename):
     return fig
 
 
+def _load_lee_oh_two_column_curve(path, figure_name):
+    """Load a finite, nonempty, headerless two-column Lee and Oh CSV."""
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Could not find Lee and Oh {figure_name} data at {path}.")
+    values = np.loadtxt(path, delimiter=",", dtype=np.float64, ndmin=2)
+    if values.ndim != 2 or values.shape[1] != 2 or values.shape[0] == 0:
+        raise ValueError(f"Lee and Oh {figure_name} data at {path} must have two columns.")
+    if not np.all(np.isfinite(values)):
+        raise ValueError(f"Lee and Oh {figure_name} data at {path} must be finite.")
+    return values
+
+
+def _load_lee_oh_fig11_curve(case):
+    """Load Fig. 11 (hours, normalized α thickness), sorted by positive time."""
+    if case not in LEE_OH_FIG11_CASES:
+        raise ValueError(f"Unknown Lee and Oh Figure 11 case: {case!r}.")
+    curve = _load_lee_oh_two_column_curve(
+        LEE_OH_DATA_DIR / f"fig11_curve_{case}.csv", "Figure 11"
+    )
+    if np.any(curve[:, 0] <= 0):
+        raise ValueError(f"Lee and Oh Figure 11 case {case} times must be positive.")
+    return curve[np.argsort(curve[:, 0], kind="stable")]
+
+
+def _lee_oh_fig11_model_history(model):
+    """Return recorded (hours, α thickness / initial thickness) for one run.
+
+    The interface position is the α half-layer width in this symmetric A|B
+    domain; the factor of two cancels when normalizing the full α-layer width.
+    """
+    n_history = int(model.interfaceData.N) + 1
+    times = np.asarray(model.interfaceData._time[:n_history], dtype=np.float64).reshape(-1)
+    alpha_thickness = np.asarray(model.interfaceData._y[:n_history], dtype=np.float64).reshape(-1)
+    if (times.size != alpha_thickness.size or times.size < 2
+            or not np.all(np.isfinite(times)) or not np.all(np.isfinite(alpha_thickness))
+            or times[0] != 0 or np.any(np.diff(times) <= 0)
+            or alpha_thickness[0] <= 0):
+        raise ValueError("The model must provide increasing times and a positive initial α thickness.")
+    return np.column_stack((times / 3600.0, alpha_thickness / alpha_thickness[0]))
+
+
+def _lee_oh_fig11_model_path(case):
+    """Return the persistent model-history CSV path for a Figure 11 case."""
+    if case not in LEE_OH_FIG11_CASES:
+        raise ValueError(f"Unknown Lee and Oh Figure 11 case: {case!r}.")
+    return OUTPUTS / f"lee_oh_figure11_model_case_{case}.csv"
+
+
+def _save_lee_oh_fig11_model_history(case, history):
+    """Replace one case's model history atomically for later script runs."""
+    path = _lee_oh_fig11_model_path(case)
+    temporary_path = path.with_suffix(".tmp")
+    np.savetxt(
+        temporary_path, history, delimiter=",", fmt="%.17g",
+        header="time_hours,normalized_alpha_thickness",
+    )
+    temporary_path.replace(path)
+    print(f"Saved Figure 11 model history: {path}")
+    return path
+
+
+def _load_lee_oh_fig11_model_history(case):
+    """Load a previously saved model history, or return None if absent."""
+    path = _lee_oh_fig11_model_path(case)
+    if not path.is_file():
+        return None
+    history = _load_lee_oh_two_column_curve(path, "Figure 11 model")
+    if (history.shape[0] < 2 or history[0, 0] != 0
+            or np.any(np.diff(history[:, 0]) <= 0)
+            or not np.isclose(history[0, 1], 1.0, rtol=0.0, atol=1e-12)):
+        raise ValueError(f"Saved Figure 11 model history at {path} is invalid.")
+    return history
+
+
+def plot_lee_oh_fig11_comparison(model, case, *, show=True):
+    """Save this case's model history and plot all saved cases with Fig. 11.
+
+    Model histories persist between separate script runs under ``OUTPUTS``;
+    rerunning a case replaces its previous curve. Reference and model times
+    are displayed in hours on a logarithmic axis. The combined PNG is updated
+    after each successful run, even when ``SAVE_FIGURES`` is false.
+    """
+    if case not in LEE_OH_FIG11_CASES:
+        raise ValueError(f"Unknown Lee and Oh Figure 11 case: {case!r}.")
+    _save_lee_oh_fig11_model_history(case, _lee_oh_fig11_model_history(model))
+
+    fig, ax = plt.subplots(figsize=(9.0, 5.5))
+    for reference_case in LEE_OH_FIG11_CASES:
+        curve = _load_lee_oh_fig11_curve(reference_case)
+        selected = reference_case == case
+        ax.plot(
+            curve[:, 0], curve[:, 1],
+            linewidth=2.0 if selected else 1.1,
+            alpha=1.0 if selected else 0.55,
+            color=LEE_OH_FIG11_CASE_COLORS[reference_case],
+            label=f"Lee & Oh {reference_case}",
+        )
+    for model_case in LEE_OH_FIG11_CASES:
+        history = _load_lee_oh_fig11_model_history(model_case)
+        if history is None:
+            continue
+        ax.plot(
+            history[1:, 0], history[1:, 1],
+            color=LEE_OH_FIG11_CASE_COLORS[model_case],
+            linewidth=2.4 if model_case == case else 1.8,
+            linestyle="--", label=f"Illingworth {model_case}",
+        )
+    ax.set_xscale("log")
+    ax.set_xlim(1e-3, 1e4)
+    ax.set_xlabel("Time (hours)")
+    ax.set_ylabel("Normalized α/BCC thickness")
+    ax.set_title("Fe-Cr-Ni comparison with Lee and Oh Figure 11")
+    ax.grid(True, which="both", alpha=0.25)
+    ax.legend(loc="best", frameon=True, fontsize=8, ncol=2)
+    fig.tight_layout()
+    fig.savefig(LEE_OH_FIG11_COMPARISON_PATH, dpi=180, bbox_inches="tight")
+    print(f"Saved combined Figure 11 comparison: {LEE_OH_FIG11_COMPARISON_PATH}")
+    if show and plt.get_backend().lower() != "agg":
+        plt.show(block=False)
+    return fig, ax
+
+
+def _load_lee_oh_fig12b_curve(path):
+    """Load a Ni–Cr reference (wt% Ni, wt% Cr) as [Fe, Cr, Ni] atomic fractions."""
+    curve = _load_lee_oh_two_column_curve(path, "Figure 12b")
+    ni_weight, cr_weight = curve[:, 0], curve[:, 1]
+    fe_weight = 100.0 - ni_weight - cr_weight
+    if np.any(fe_weight < 0):
+        raise ValueError(f"Lee and Oh Figure 12b data at {path} has a negative Fe balance.")
+    weights = np.column_stack((fe_weight, cr_weight, ni_weight))
+    fractions = _weight_percent_fe_cr_ni_to_atomic_fraction(weights)
+    return fractions[np.argsort(ni_weight, kind="stable")]
+
+
+def _select_lee_oh_fig12b_times(model):
+    """Match Fig. 12b target hours to full recorded times within 0.25 percent.
+
+    Returns a mapping from target hours to exact recorded seconds. No profile
+    interpolation is used because the transformed states are recorded only at
+    accepted solver times.
+    """
+    history = model.interfaceData
+    times = np.asarray(history._time[:int(history.N) + 1], dtype=np.float64).reshape(-1)
+    if times.size < 2 or not np.all(np.isfinite(times)) or np.any(np.diff(times) <= 0):
+        raise ValueError("Figure 12b requires a strictly increasing finite recorded time history.")
+    matched = {}
+    for target_hours in LEE_OH_FIG12B_TARGET_HOURS:
+        target_seconds = target_hours * 3600.0
+        nearest = float(times[np.argmin(np.abs(times - target_seconds))])
+        relative_error = abs(nearest - target_seconds) / target_seconds
+        print(f"target time (h): {target_hours}, nearest recorded time (h): {nearest / 3600.0}, relative error: {relative_error}")
+        if relative_error > LEE_OH_FIG12B_TIME_RTOL:
+            raise ValueError(
+                f"Figure 12b target {target_hours:g} h has no recorded state within "
+                f"{100.0 * LEE_OH_FIG12B_TIME_RTOL:g}%; "
+                f"nearest recorded time is {nearest / 3600.0:.9g} h."
+            )
+        matched[target_hours] = nearest
+    return matched
+
+
+def plot_lee_oh_fig12b_comparison(model, *, show=True):
+    """Plot case B simulation and Lee–Oh paths in atomic-fraction Ni–Cr space.
+
+    Four model states are selected from the full recorded history near 1, 10,
+    100, and 1000 hours. Each path follows the α profile, connects only the
+    two interface compositions by a straight tie line, then follows the γ
+    profile. Full model compositions are ordered [Fe, Cr, Ni]. The digitized
+    references and 1373 K phase boundaries are converted from weight
+    percentages to atomic fractions.
+
+    Returns the Matplotlib figure, axes, and target-to-actual time mapping in
+    hours. Missing times raise before any figure is saved.
+    """
+    matched_seconds = _select_lee_oh_fig12b_times(model)
+    model_profiles = {}
+    for target_hours, recorded_seconds in matched_seconds.items():
+        profiles = tuple(model.getPhysicalPhaseProfiles(recorded_seconds))
+        if len(profiles) != 2:
+            raise ValueError("Figure 12b requires α and γ physical phase profiles.")
+        phase_compositions = []
+        for _, composition in profiles:
+            composition = np.asarray(composition, dtype=np.float64)
+            if (composition.ndim != 2 or composition.shape[1] != 3
+                    or composition.shape[0] < 2 or not np.all(np.isfinite(composition))):
+                raise ValueError("Figure 12b requires finite [Fe, Cr, Ni] phase profiles.")
+            phase_compositions.append(composition)
+        model_profiles[target_hours] = tuple(phase_compositions)
+
+    reference_curves = {
+        label: _load_lee_oh_fig12b_curve(LEE_OH_DATA_DIR / filename)
+        for label, filename, _, _ in LEE_OH_FIG12B_CURVES
+    }
+    phase_boundaries = {
+        label: _load_lee_oh_fig12b_curve(LEE_OH_DATA_DIR / filename)
+        for label, filename, _, _ in LEE_OH_FIG12B_PHASE_BOUNDARIES
+    }
+    fig, ax = plt.subplots(figsize=(9.0, 6.0))
+    for target_hours, (label, _, color, _) in zip(
+        LEE_OH_FIG12B_TARGET_HOURS, LEE_OH_FIG12B_CURVES[:4]
+    ):
+        alpha, gamma = model_profiles[target_hours]
+        actual_hours = matched_seconds[target_hours] / 3600.0
+        ax.plot(
+            alpha[:, 2], alpha[:, 1], color=color, linewidth=2.0,
+            label=f"Model {label} (actual {actual_hours:.6g} h)",
+        )
+        ax.plot(
+            [alpha[-1, 2], gamma[0, 2]],
+            [alpha[-1, 1], gamma[0, 1]],
+            color=color, linewidth=1.4, linestyle=":",
+        )
+        ax.plot(gamma[:, 2], gamma[:, 1], color=color, linewidth=2.0)
+        reference = reference_curves[label]
+        ax.plot(
+            reference[:, 2], reference[:, 1], color=color,
+            linewidth=1.5, linestyle="--", label=f"Lee & Oh {label}",
+        )
+    for label, _, color, _ in LEE_OH_FIG12B_CURVES[4:]:
+        boundary = reference_curves[label]
+        ax.plot(
+            boundary[:, 2], boundary[:, 1], color=color,
+            linewidth=1.2, linestyle="-.", label=f"Lee & Oh {label}",
+        )
+    # Preserve the diffusion-path view: the full phase boundaries extend far
+    # beyond the composition range covered by Figure 12b.
+    path_xlim, path_ylim = ax.get_xlim(), ax.get_ylim()
+    for label, _, color, linestyle in LEE_OH_FIG12B_PHASE_BOUNDARIES:
+        boundary = phase_boundaries[label]
+        ax.plot(
+            boundary[:, 2], boundary[:, 1], color=color,
+            linewidth=1.3, linestyle=linestyle, label=label, zorder=1,
+        )
+    ax.set_xlim(path_xlim)
+    ax.set_ylim(path_ylim)
+    ax.set_xlabel("X(Ni)")
+    ax.set_ylabel("X(Cr)")
+    ax.set_title("Fe-Cr-Ni diffusion paths, case B (Lee & Oh Figure 12b)")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best", fontsize=8, ncol=2)
+    fig.tight_layout()
+    fig.savefig(LEE_OH_FIG12B_COMPARISON_PATH, dpi=180, bbox_inches="tight")
+    print(f"Saved Figure 12b comparison: {LEE_OH_FIG12B_COMPARISON_PATH}")
+    if show and plt.get_backend().lower() != "agg":
+        plt.show(block=False)
+    return fig, ax, {target: actual / 3600.0 for target, actual in matched_seconds.items()}
+
+
+def add_lee_oh_fig12b_curves(fig):
+    """Add six static Fig. 12b curves to a Fe-Cr-Ni results ternary subplot.
+
+    Plotly ternary axes use a=Ni, b=Fe, c=Cr; the added traces are outside
+    the result figure's animated trace index list and persist across frames.
+    """
+    import plotly.graph_objects as go
+
+    for label, filename, color, dash in LEE_OH_FIG12B_CURVES:
+        fractions = _load_lee_oh_fig12b_curve(LEE_OH_DATA_DIR / filename)
+        fig.add_trace(
+            go.Scatterternary(
+                a=fractions[:, 2], b=fractions[:, 0], c=fractions[:, 1],
+                mode="lines", name=f"Lee & Oh Fig. 12b: {label}",
+                legendgroup="lee-oh-fig12b",
+                line={"color": color, "dash": dash, "width": 2},
+                customdata=fractions,
+                hovertemplate=(
+                    "X(Fe)=%{customdata[0]:.5f}<br>"
+                    "X(Cr)=%{customdata[1]:.5f}<br>"
+                    "X(Ni)=%{customdata[2]:.5f}<extra>%{fullData.name}</extra>"
+                ),
+            ),
+            row=1, col=1,
+        )
+    return fig
+
+
 def _load_lee_oh_fig9_curve(path):
     """Load and time-sort one finite two-column Lee and Oh Figure 9 curve."""
     path = Path(path)
@@ -1952,6 +2285,15 @@ if PLOT_LEE_OH_FIG9_COMPARISON:
         "axes": comparison_axes,
         "metrics": comparison_metrics,
     }
+lee_oh_fig11_comparison = None
+if caseStr in LEE_OH_FIG11_CASES:
+    comparison_figure, comparison_axes = plot_lee_oh_fig11_comparison(
+        two_phase_model, caseStr
+    )
+    lee_oh_fig11_comparison = {
+        "figure": comparison_figure,
+        "axes": comparison_axes,
+    }
 
 # %%
 # Plots
@@ -1979,6 +2321,8 @@ result = {
     "therm_ab": source_thermodynamics,
     "phase_molar_volumes": get_three_phase_molar_volumes(),
     "lee_oh_fig9_comparison": lee_oh_fig9_comparison,
+    "lee_oh_fig11_comparison": lee_oh_fig11_comparison,
+    "lee_oh_fig12b_comparison": None,
 }
 import importlib
 
@@ -1999,7 +2343,7 @@ plot_two_phase_composition_profile = (
 
 results_plot = plot_two_phase_composition_profile(
     result,
-    time_indices=np.arange(len(result['model'].interfaceData._time))[::100],
+    time_indices=np.arange(len(result['model'].interfaceData._time))[::10],
     show_tielines=True,
     tieline_eta_count=41,
     display_tieline_count=41,
@@ -2012,7 +2356,18 @@ results_plot = plot_two_phase_composition_profile(
     "TC_USE_DEFAULT_PHASES": TC_USE_DEFAULT_PHASES,
     "PYCALPHAD_USE_DEFAULT_PHASES": PYCALPHAD_USE_DEFAULT_PHASES,}
 )
+if caseStr == "B":
+    add_lee_oh_fig12b_curves(results_plot["fig"])
 results_plot["fig"].show()
+if caseStr == "B":
+    comparison_figure, comparison_axes, matched_times = plot_lee_oh_fig12b_comparison(
+        two_phase_model
+    )
+    result["lee_oh_fig12b_comparison"] = {
+        "figure": comparison_figure,
+        "axes": comparison_axes,
+        "matched_times_hours": matched_times,
+    }
 # import plotly
 # plotly.offline.plot(results_plot["fig"], filename = fr"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\examplesForZhaoxi\{''.join([el.capitalize() for el in ELEMENTS])}_{TEMPERATURE}K_200um_varSolidDiff_noDiffRes_results_plot.html", auto_open=False)
 
