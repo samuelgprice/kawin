@@ -72,9 +72,9 @@ TC_USE_DEFAULT_PHASES = False #True
 DEFAULT_REMOVE_CACHE=False
 GLOBAL_MINIMIZATION_MAX_GRID_POINTS = 2000
 TC_EQUILIBRIUM_QTHISS_RETRY_GRID_POINTS = (20_000, 200_000)  # Applies to all global-minimization calculations; set to () to disable.
-TC_KINETICS_DISABLE_GLOBAL_MINIMIZATION = False
-TC_KINETICS_DISABLE_POSITIVE_DEFINITE_HESSIAN = False
-TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET = False  # Requires local kinetics minimization to prevent set splitting.
+TC_KINETICS_DISABLE_GLOBAL_MINIMIZATION = True
+TC_KINETICS_DISABLE_POSITIVE_DEFINITE_HESSIAN = True
+TC_KINETICS_CONSTRAIN_SINGLE_COMPOSITION_SET = True  # Requires local kinetics minimization to prevent set splitting.
 TC_CAPTURE_DIFFUSIVITY_DIAGNOSTICS = True
 TC_CAPTURE_SITE_FRACTIONS = True
 TC_DROP_FAILED_BULK_CALCULATIONS = True
@@ -134,7 +134,7 @@ INITIAL_VELOCITY_GUESS_2PHASE = None
 INITIAL_VELOCITY_GUESS_3PHASE = None
 
 # Two-phase geometry: [0, HALF_LENGTH].
-HALF_LENGTH = 200.0e-6
+HALF_LENGTH = 50.0e-6
 TWO_PHASE_NODES = 201
 if systemStr =="CuVTi":
     INTERFACE_POSITION = HALF_LENGTH-(21.4e-6/2) + 1.0e-12
@@ -179,7 +179,7 @@ elif systemStr =="WTiFe":
 # latter matches the nonconstant-diffusivity option in
 # IllingworthTernaryThreePhaseNiTiNb_TC.py.
 BULK_DIFFUSIVITY_MODE = ["phase_uniform", "composition_dependent_lagged", "composition_dependent_implicit"][1]
-DIFFUSIVITY_INTERPOLATION =  "simplex_linear" #"nearest"
+DIFFUSIVITY_INTERPOLATION =  "simplex_positive_2x2" #"nearest" "simplex_linear"
 
 if systemStr =="CuVTi":
     CUVTI_BCC_DIFFUSIVITY_MATRIX = np.array([[4.07763e-16, -3.70765e-16], [2.80824e-19, 7.78993e-16]]) # np.array([[4e-16, 0.0], [0.0, 8e-16]])
@@ -218,7 +218,7 @@ elif systemStr =="NbNiTi":
     SEMI_LOG_DT = 0.25 / 20.0 # 0.25 / 10.0
     SOLVE_TIME = 400
 elif systemStr =="WTiFe":
-    SEMI_LOG_DT = 0.25 / 20.0 # 0.25 / 10.0
+    SEMI_LOG_DT = 0.25 / 40.0 # 0.25 / 10.0
     SOLVE_TIME = 3600*1.5
 
 TOLERANCE = 1.0e-12 #1.0e-12
@@ -527,7 +527,7 @@ def _surrogate_diffusivity_sampling_kwargs():
     """Returns bulk-diffusivity sampling kwargs for the selected interpolation."""
     interpolation = str(DIFFUSIVITY_INTERPOLATION)
     bulk_points = BULK_DIFFUSIVITY_POINTS
-    if bulk_points is None and interpolation in {"nearest", "simplex_linear"}:
+    if bulk_points is None and interpolation in {"nearest", "simplex_linear", "simplex_positive_2x2"}:
         import pickle
 
         with open(
@@ -957,7 +957,7 @@ def _surrogate_diffusivity_sampling_kwargs():
             "diffusivity_interpolation": interpolation,
             "diffusivity_bulk_points": np.asarray(bulk_points, dtype=np.float64),
         }
-    if interpolation in {"simplex_linear", "continuous_grid"}:
+    if interpolation in {"simplex_linear", "simplex_positive_2x2", "continuous_grid"}:
         grids = (
             None
             if BULK_DIFFUSIVITY_GRIDS is None
@@ -967,14 +967,14 @@ def _surrogate_diffusivity_sampling_kwargs():
             "diffusivity_interpolation": interpolation,
             "diffusivity_bulk_grids": grids,
         }
-        if interpolation == "simplex_linear":
+        if interpolation in ["simplex_linear", "simplex_positive_2x2"]:
             kwargs["diffusivity_bulk_points"] = np.asarray(
                 bulk_points,
                 dtype=np.float64,
             )
         return kwargs
     raise ValueError(
-        "DIFFUSIVITY_INTERPOLATION must be 'nearest', 'continuous_grid', or "
+        "DIFFUSIVITY_INTERPOLATION must be 'nearest', 'continuous_grid', 'simplex_positive_2x2', or "
         "'simplex_linear'."
     )
 
@@ -1910,7 +1910,7 @@ source_thermodynamics = build_source_thermodynamics()
 tieline_surrogate = build_tieline_surrogate(source_thermodynamics)
 
 print(f"Built tie-line surrogate with eta bounds {tieline_surrogate.eta_bounds}.")
-
+tieline_surrogate.validity_policy='legacy'
 # Construction-only dashboard: reads persisted build provenance and does not
 # issue additional Thermo-Calc queries.
 construction_diagnostics = plot_surrogate_diagnostics(
@@ -1932,7 +1932,7 @@ else:
     # The sampled surrogate evaluates phase-specific diffusivity from each
     # bulk composition; the model applies the requested lagged/implicit mode.
     bulk_thermodynamics = tieline_surrogate
-
+tieline_surrogate.validity_policy='raise'
 
 # %%
 # Build matched models
@@ -2011,7 +2011,7 @@ two_phase_model.solve(
     vIt=VERBOSE_INTERVAL,
     minDtFrac=MIN_DT_FRAC,
 )
-
+raise
 print("\nSolving symmetric three-phase A|B|A case...")
 three_phase_model.solve(
     SOLVE_TIME/10,
@@ -2273,4 +2273,10 @@ fig.show()
 
 fig = plot_site_fractions_for_run(PHASE_A, kinds=("equilibrium", "kinetics"))
 fig.show()
+
+phase = report["phase_reports"][PHASE_A]
+
+print(phase["summary"])
+print(np.unique(phase["prediction_status"], return_counts=True))
+print(np.unique(phase["refit_interpolation"], return_counts=True))
 # %%
