@@ -75,7 +75,7 @@ def _bounded_finite_difference_perturbation(x, lower, upper, variable):
 
 
 def _newton_step_2x2(jacobian, residual):
-    """Returns the exact 2x2 Newton step used by the local ternary solves."""
+    """Returns the exact 2x2 Newton step used by the local ternary solves. Essentially solves the equation -Jx=r where J is 2x2 jacobian, 2x1 unknown, and r is 2x1 residual"""
     jacobian = np.asarray(jacobian, dtype=np.float64)
     residual = np.asarray(residual, dtype=np.float64).reshape(2)
     a = float(jacobian[0, 0])
@@ -2564,6 +2564,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         print(f"R-s: {self._R-s}")
         from examples.debugInPlace import debugInPlace
         debugInPlace()
+        print(last_error)
         raise RuntimeError("Ternary Illingworth step failed after timestep retries.") from last_error
 
     def getDt(self, dXdt):
@@ -2789,10 +2790,13 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         ''' Plotting functions for diagnostics '''
     def confirmLastRecordedIndex(self, data):
-        if not ((data._time[data.N]!=0).all() and (data._time[data.N+1]==0).all()):
-            raise ValueError(f"{data._time[data.N]}==0 or {data._time[data.N+1]}!=0")
-        if not ((data._y[data.N]!=0).all() and (data._y[data.N+1]==0).all()):
-            raise ValueError(f"{data._y[data.N]}==0 or {data._y[data.N+1]}!=0")
+        if len(data._time)==len(data._y)==(data.N+1):
+            pass
+        else:
+            if not ((data._time[data.N]!=0).all() and (data._time[data.N+1]==0).all()):
+                raise ValueError(f"{data._time[data.N]}==0 or {data._time[data.N+1]}!=0")
+            if not ((data._y[data.N]!=0).all() and (data._y[data.N+1]==0).all()):
+                raise ValueError(f"{data._y[data.N]}==0 or {data._y[data.N+1]}!=0")
 
     def plot_latestCompProfile(self):
         import matplotlib.pyplot as plt
@@ -2805,20 +2809,26 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             ax.plot(z_um, y[:, i], label=f"X({element})")
         position = self.interfaceData._y[self.interfaceData.N]
         ax.axvline(position * 1.0e6, color="0.35", linestyle="--", linewidth=1)
-        ax.set_xlabel("Distance (um)")
+        ax.set_xlabel("Distance (μm)")
         ax.set_ylabel("Mole fraction")
+        ax.legend()
         plt.show(block=False)
         return fig, ax
 
-    def plot_phaseWidths_vs_time(self):
+    def plot_phaseWidths_vs_time(self, phasesToPlot='all'):
         import matplotlib.pyplot as plt
         self.confirmLastRecordedIndex(self.interfaceData)
         y = self.interfaceData._y[:self.interfaceData.N+1]
-        widths = np.column_stack((y, self._R - y))
+        widths = np.column_stack((y, self._R - y)) / 1e-6
         time=self.interfaceData._time[:self.interfaceData.N+1]
         fig, ax = plt.subplots(figsize=(6, 4))
+        if phasesToPlot == 'all':
+            phasesToPlot = self.phases
         for i, phase in enumerate(self.phases):
-            ax.plot(time, widths[:, i], label=f"{phase} width")
+            if phase in phasesToPlot:
+                ax.plot(time, widths[:, i], label=f"{phase} width")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Phase Width (μm)")
         ax.legend()
         plt.show(block=False)
         return fig, ax
