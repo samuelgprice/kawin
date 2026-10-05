@@ -4,6 +4,13 @@ from pathlib import Path
 import sys
 import types
 
+import matplotlib
+
+# The recipe draws Landau-grid summaries at module level; keep them off the
+# interactive (Tk) backend, which is unreliable in batch test runs.
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
@@ -21,17 +28,29 @@ RECIPE_PATH = (
 )
 
 
-def _load_recipe_definitions():
-    """Load the notebook-style recipe without executing its simulation cells."""
+def _assigns_name(node, name):
+    """Return whether ``node`` is a top-level assignment to ``name``."""
+    return isinstance(node, ast.Assign) and any(
+        isinstance(target, ast.Name) and target.id == name for target in node.targets
+    )
+
+
+def _load_recipe_definitions(case="fig9"):
+    """Load the notebook-style recipe without executing its simulation cells.
+
+    The recipe's ``caseStr`` assignment is replaced with ``case`` so the
+    loaded configuration does not depend on which case the script currently
+    selects. Figures created while loading are closed.
+    """
     source = RECIPE_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(RECIPE_PATH))
     definitions = []
     for node in tree.body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "validated_phase_molar_volumes"
-            for target in node.targets
-        ):
+        if _assigns_name(node, "validated_phase_molar_volumes"):
             break
+        if _assigns_name(node, "caseStr"):
+            node = ast.copy_location(ast.Assign(targets=node.targets, value=ast.Constant(case)), node)
+            ast.fix_missing_locations(node)
         definitions.append(node)
     module_name = "_fecrni_surrogate_recipe_test_module"
     module = types.ModuleType(module_name)
@@ -45,6 +64,8 @@ def _load_recipe_definitions():
     except Exception:
         sys.modules.pop(module_name, None)
         raise
+    finally:
+        plt.close("all")
     return module
 
 
