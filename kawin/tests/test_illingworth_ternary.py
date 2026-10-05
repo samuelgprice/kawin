@@ -1293,15 +1293,19 @@ def test_ternary_bulk_diffusivity_is_phase_uniform_and_evaluated_at_interface_co
 
     model._solve_interface_planar(p, q, model._s_curr, model._s_old, eta, 1.0e-4)
 
+    # Each candidate (the start plus the mandatory Newton update's Jacobian and
+    # trial evaluations) queries one interface matrix per phase.
+    n_candidates = len(thermodynamics.calls) // 2
+    assert n_candidates >= 1
     assert [(call["phase"], call["query_context"]) for call in thermodynamics.calls] == [
         ("ALPHA", "interface"),
         ("BETA", "interface"),
-    ]
+    ] * n_candidates
     assert np.allclose(thermodynamics.calls[0]["composition"], c_left)
     assert np.allclose(thermodynamics.calls[1]["composition"], c_right)
     assert not any(np.allclose(call["composition"], p[0]) for call in thermodynamics.calls)
     assert not any(np.allclose(call["composition"], q[-1]) for call in thermodynamics.calls)
-    assert len(bulk_calls) == 2
+    assert len(bulk_calls) == 2 * n_candidates
     assert bulk_calls[0][0] == "ALPHA"
     assert bulk_calls[0][1].shape == (2, 2)
     assert np.allclose(bulk_calls[0][1], expected_left)

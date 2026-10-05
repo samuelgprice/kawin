@@ -113,7 +113,8 @@ class ThreePhaseInitialEtaEstimate:
     ``etas`` are the selected A|B and B|C tie-line coordinates. ``velocities``
     are instantaneous discrete conservative-balance estimates evaluated with
     initial adjacent-node gradients; they are used only to seed the finite-step
-    discrete nonlinear solve.
+    discrete nonlinear solve. ``residual_scale`` is the balance-term magnitude
+    that the relative convergence tolerance was applied to.
     """
 
     etas: np.ndarray
@@ -128,6 +129,7 @@ class ThreePhaseInitialEtaEstimate:
     converged: bool
     iterations: int
     function_calls: int
+    residual_scale: float = np.nan
 
 
 class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
@@ -138,8 +140,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     sharp interfaces. Each phase is solved on its own Landau grid with two
     independent substitutional ternary components. The two interfaces are
     advanced simultaneously from four nonlinear residual equations: two
-    component balances at ``A|B`` and two at ``B|C``. Phase disappearance is
-    not handled; when exactly one phase is thinner than
+    component balances at ``A|B`` and two at ``B|C``; each step takes at least
+    one Newton update so tiny timesteps cannot leave the interfaces frozen.
+    Startup etas converge relative to the balance-term magnitude
+    (``initial_eta_root_rtol``; ``initial_eta_root_xtol`` is an optional
+    absolute floor), so they do not depend on length units. Phase
+    disappearance is not handled; when exactly one phase is thinner than
     ``terminal_thin_phase_width`` after the normal retry budget is exhausted,
     an optional terminal retry path can keep reducing ``dt`` until one final
     converged step is found and then stop the solve early.
@@ -177,7 +183,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         initial_eta_guess=None,
         initial_eta_method: str = "instantaneous_balance",
         initial_eta_brackets=None,
-        initial_eta_root_xtol: float = 1e-12,
+        initial_eta_root_xtol: float | None = None,
+        initial_eta_root_rtol: float = 1e-10,
         initial_eta_root_maxiter: int = 100,
         initial_velocity_guess=None,
         bulk_diffusivity_mode: str = _BULK_DIFFUSIVITY_PHASE_UNIFORM,
@@ -211,7 +218,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self.initialEtaGuess = None if initial_eta_guess is None else np.asarray(initial_eta_guess, dtype=np.float64).reshape(-1)
         self.initialEtaMethod = str(initial_eta_method)
         self.initialEtaBrackets = initial_eta_brackets
-        self.initialEtaRootXtol = float(initial_eta_root_xtol)
+        self.initialEtaRootXtol = None if initial_eta_root_xtol is None else float(initial_eta_root_xtol)
+        self.initialEtaRootRtol = float(initial_eta_root_rtol)
         self.initialEtaRootMaxiter = int(initial_eta_root_maxiter)
         self.initialVelocityGuess = None if initial_velocity_guess is None else np.asarray(initial_velocity_guess, dtype=np.float64).reshape(-1)
         self.initialEtaEstimate = None
@@ -281,6 +289,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._lastImplicitResidual = np.nan
         self._lastImplicitPhysicalResidual = np.nan
         self._lastImplicitConverged = False
+        self._lastImplicitForcedUpdateSkipped = False
         self._lastImplicitFailureReason = None
         self._lastInterfaceCompositions = None
         self._terminalThinPhaseStop = False
@@ -367,8 +376,10 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             raise ValueError("semiLog_dt and semiLogT0 must be specified when dt_mode is 'semi_log'.")
         if self.initialEtaMethod != "instantaneous_balance":
             raise ValueError("initial_eta_method must be 'instantaneous_balance'.")
-        if self.initialEtaRootXtol <= 0.0:
+        if self.initialEtaRootXtol is not None and not (np.isfinite(self.initialEtaRootXtol) and self.initialEtaRootXtol > 0.0):
             raise ValueError("initial_eta_root_xtol must be positive.")
+        if not (np.isfinite(self.initialEtaRootRtol) and self.initialEtaRootRtol > 0.0):
+            raise ValueError("initial_eta_root_rtol must be positive and finite.")
         if self.initialEtaRootMaxiter < 1:
             raise ValueError("initial_eta_root_maxiter must be at least 1.")
         if self.initialVelocityGuess is not None and self.initialVelocityGuess.shape != (2,):
@@ -666,7 +677,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             return relative_face_velocity * np.asarray(left_value, dtype=np.float64) + diffusive
         return diffusive
 
-    def _initial_discrete_interface_terms(self, interfaces, interface_compositions, adjacent, velocities, *, return_zero_velocity=False):
+    def _initial_discrete_interface_terms(self, interfaces, interface_compositions, adjacent, velocities, *, return_zero_velocity=False, return_face_transfers=False):
         """
         Evaluates the discrete conservative ALE instantaneous interface balance.
 
@@ -675,7 +686,11 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         equilibrium endpoint compositions supplied in ``interface_compositions``.
         When requested, the zero-velocity residual is returned from the same
         face diffusivity evaluation so diagnostics do not repeat thermodynamic
-        work during the nonlinear initial-eta solve.
+        work during the nonlinear initial-eta solve. With
+        ``return_face_transfers`` (requires ``return_zero_velocity``), the four
+        density-weighted zero-velocity face transfers (rows ``A|B`` left/right,
+        ``B|C`` left/right) are also returned; they scale the relative
+        initial-eta convergence test.
         """
         s_ab, s_bc = np.asarray(interfaces, dtype=np.float64).reshape(2)
         v_ab, v_bc = np.asarray(velocities, dtype=np.float64).reshape(2)
@@ -730,12 +745,27 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         zero_ab = density_a * zero_a_right - density_b * zero_b_left
         zero_bc = density_b * zero_b_right - density_c * zero_c_left
         zero_velocity_residual = np.concatenate((zero_ab, zero_bc))
+        if return_face_transfers:
+            face_transfers = np.vstack(
+                (density_a * zero_a_right, density_b * zero_b_left, density_b * zero_b_right, density_c * zero_c_left)
+            )
+            return residual, zero_velocity_residual, face_transfers
         return residual, zero_velocity_residual
 
     def _initial_discrete_interface_residuals(self, interfaces, interface_compositions, adjacent, velocities):
         """Returns the instantaneous residual from ``_initial_discrete_interface_terms``."""
         residual, _ = self._initial_discrete_interface_terms(interfaces, interface_compositions, adjacent, velocities)
         return residual
+
+    def _initial_eta_tolerance(self, residual_scale):
+        """
+        Returns the initial-eta residual threshold ``max(xtol, rtol * residual_scale)``.
+
+        ``initial_eta_root_xtol=None`` disables the absolute floor, so the
+        test is invariant to length units and diffusivity magnitude.
+        """
+        absolute = 0.0 if self.initialEtaRootXtol is None else self.initialEtaRootXtol
+        return max(absolute, self.initialEtaRootRtol * float(residual_scale))
 
     def _estimate_initial_etas(self, composition, interfaces):
         """
@@ -745,24 +775,75 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         interface. Initial phase widths and non-interface transformed profile
         nodes are held fixed, and the residual is the ``dt -> 0`` limit of the
         conservative ALE finite-step interface balance.
+
+        Convergence is tested relative to the balance-term magnitude at the
+        current iterate (see ``_initial_eta_tolerance``): the largest
+        density-weighted individual face transfer, the velocity-proportional
+        part of the residual, or the change of the face transfers across the
+        eta brackets (which keeps the scale non-zero at a stationary
+        equilibrium root). In SI units these terms can be ``~1e-11``, so an
+        absolute test would make the converged etas depend on the starting
+        guess and the length unit.
         """
         brackets = self._initial_eta_brackets()
         eta0 = self._initial_eta_start(brackets)
         adjacent = self._initial_adjacent_compositions(composition, interfaces)
 
+        def face_transfers_at(etas):
+            _, _, face_transfers = self._initial_discrete_interface_terms(
+                interfaces,
+                self._interface_compositions(etas),
+                adjacent,
+                np.zeros(2, dtype=np.float64),
+                return_zero_velocity=True,
+                return_face_transfers=True,
+            )
+            return face_transfers
+
+        sensitivity_scale = None
+
+        def eta_sensitivity_scale():
+            # Change of the face transfers across the eta brackets. It does not
+            # vanish at a stationary equilibrium root, where the transfers and
+            # velocities all go to zero. Evaluated lazily by ``converged_at``.
+            try:
+                return float(
+                    np.max(np.abs(face_transfers_at([brackets[0][1], brackets[1][1]]) - face_transfers_at([brackets[0][0], brackets[1][0]])))
+                )
+            except ValueError:
+                return 0.0
+
+        def converged_at(norm, scale):
+            nonlocal sensitivity_scale
+            if norm <= self._initial_eta_tolerance(scale):
+                return True
+            if sensitivity_scale is None:
+                sensitivity_scale = eta_sensitivity_scale()
+            return norm <= self._initial_eta_tolerance(sensitivity_scale)
+
         def evaluate(velocities, etas):
             interface_compositions = self._interface_compositions(etas)
-            residual, zero_velocity_residual = self._initial_discrete_interface_terms(
+            residual, zero_velocity_residual, face_transfers = self._initial_discrete_interface_terms(
                 interfaces,
                 interface_compositions,
                 adjacent,
                 velocities,
                 return_zero_velocity=True,
+                return_face_transfers=True,
             )
             flux_delta = -zero_velocity_residual
-            return interface_compositions, residual, flux_delta
+            # Relative convergence scale: individual face transfers, the
+            # velocity-proportional (swept-inventory) part of the residual, and
+            # the eta sensitivity of the transfers.
+            scale = max(
+                float(np.max(np.abs(face_transfers))),
+                float(np.max(np.abs(residual - zero_velocity_residual))),
+                0.0 if sensitivity_scale is None else sensitivity_scale,
+                1e-300,
+            )
+            return interface_compositions, residual, flux_delta, scale
 
-        _, residual_at_zero, _ = evaluate(np.zeros(2, dtype=np.float64), eta0)
+        _, residual_at_zero, _, _ = evaluate(np.zeros(2, dtype=np.float64), eta0)
         velocity_columns = np.column_stack(
             [
                 evaluate(np.asarray([1.0, 0.0], dtype=np.float64), eta0)[1] - residual_at_zero,
@@ -793,25 +874,25 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         def residual_unknowns(values):
             velocities = np.asarray(values[:2], dtype=np.float64) * velocity_scales
             etas = np.asarray(values[2:], dtype=np.float64)
-            interface_compositions, residual, flux_delta = evaluate(velocities, etas)
+            interface_compositions, residual, flux_delta, scale = evaluate(velocities, etas)
             if not np.all(np.isfinite(residual)):
                 raise ValueError("Initial eta residual is non-finite.")
-            return residual, flux_delta, interface_compositions
+            return residual, flux_delta, interface_compositions, scale
 
         for iteration in range(1, self.initialEtaRootMaxiter + 1):
-            residual, flux_delta, interface_compositions = residual_unknowns(x)
+            residual, flux_delta, interface_compositions, residual_scale = residual_unknowns(x)
             nfev += 1
             norm_current = float(np.max(np.abs(residual)))
             if best is None or norm_current < best[0]:
-                best = (norm_current, x.copy(), residual.copy(), flux_delta.copy(), interface_compositions)
-            if norm_current <= self.initialEtaRootXtol:
+                best = (norm_current, x.copy(), residual.copy(), flux_delta.copy(), interface_compositions, residual_scale)
+            if converged_at(norm_current, residual_scale):
                 success = True
                 break
 
             jacobian = np.zeros((4, 4), dtype=np.float64)
             for variable in range(4):
                 step, x_perturbed, direction = _bounded_finite_difference_perturbation(x, lower, upper, variable)
-                residual_perturbed, _, _ = residual_unknowns(x_perturbed)
+                residual_perturbed, _, _, _ = residual_unknowns(x_perturbed)
                 nfev += 1
                 if direction == "forward":
                     jacobian[:, variable] = (residual_perturbed - residual) / step
@@ -826,22 +907,24 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             accepted = False
             for scale in (1.0, 0.5, 0.25, 0.125, 0.0625):
                 trial = np.clip(x + scale * step, lower, upper)
-                residual_trial, flux_delta_trial, interface_compositions_trial = residual_unknowns(trial)
+                residual_trial, flux_delta_trial, interface_compositions_trial, residual_scale_trial = residual_unknowns(trial)
                 nfev += 1
                 norm_trial = float(np.max(np.abs(residual_trial)))
                 if np.isfinite(norm_trial) and norm_trial < norm_current:
                     x = trial
                     accepted = True
                     if best is None or norm_trial < best[0]:
-                        best = (norm_trial, trial.copy(), residual_trial.copy(), flux_delta_trial.copy(), interface_compositions_trial)
+                        best = (norm_trial, trial.copy(), residual_trial.copy(), flux_delta_trial.copy(), interface_compositions_trial, residual_scale_trial)
                     break
             if not accepted:
                 break
 
         if best is None:
             raise ValueError("Instantaneous initial eta solve did not produce a finite residual.")
-        residual_norm, x_best, residual, flux_delta, interface_compositions = best
-        if not success and residual_norm > self.initialEtaRootXtol:
+        residual_norm, x_best, residual, flux_delta, interface_compositions, residual_scale = best
+        if sensitivity_scale is not None:
+            residual_scale = max(residual_scale, sensitivity_scale)
+        if not success and not converged_at(residual_norm, residual_scale):
             raise ValueError("Instantaneous three-phase initial eta solve failed to converge.")
         estimate = ThreePhaseInitialEtaEstimate(
             etas=np.asarray(x_best[2:], dtype=np.float64).copy(),
@@ -856,6 +939,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             converged=bool(success),
             iterations=int(iteration),
             function_calls=int(nfev),
+            residual_scale=float(residual_scale),
         )
         self.initialEtaEstimate = estimate
         return estimate.etas.copy()
@@ -1624,6 +1708,20 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         )
 
     def _solve_interface_planar(self, profiles, interfaces, etas, dt):
+        """
+        Solves the coupled two-interface step by damped finite-difference Newton.
+
+        The residual scale (``_residual_scale``) does not depend on ``dt``, so the
+        unmodified old state can meet the tolerance when ``flux * dt`` is tiny,
+        which would accept a step with both interfaces frozen and leave the
+        untransferred solute as an inventory defect. A candidate is therefore
+        accepted only after at least one Newton update. While the start already
+        meets the tolerance, a line-search trial is accepted if it improves the
+        residual or also meets the tolerance. If that mandatory update cannot be
+        carried out (zero step, failed finite-difference perturbation, or no
+        acceptable trial), the converged start is accepted and
+        ``_lastImplicitForcedUpdateSkipped`` is set.
+        """
         lower, upper = self._scaled_bounds()
         x_hat = self._physical_to_scaled(interfaces, etas)
         if not self._scaled_variables_in_bounds(x_hat, lower, upper):
@@ -1631,17 +1729,27 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         residual_scale = self._residual_scale(profiles, interfaces)
         best = None
         failure_reason = "maximum iterations reached"
+        converged_start = None
+        newton_updates = 0
+        iteration = 0
+
+        def accept(candidate, forced_update_skipped=False):
+            self._lastImplicitIterations = iteration
+            self._lastImplicitResidual = candidate.scaled_norm
+            self._lastImplicitPhysicalResidual = candidate.physical_norm
+            self._lastImplicitConverged = True
+            self._lastImplicitForcedUpdateSkipped = bool(forced_update_skipped)
+            self._lastImplicitFailureReason = None
+            return candidate
+
         for iteration in range(1, self.maxIterations + 1):
             candidate = self._evaluate_interface_candidate(profiles, interfaces, x_hat, residual_scale, dt)
             if best is None or candidate.scaled_norm < best.scaled_norm:
                 best = candidate
             if candidate.scaled_norm <= self.residualTolerance:
-                self._lastImplicitIterations = iteration
-                self._lastImplicitResidual = candidate.scaled_norm
-                self._lastImplicitPhysicalResidual = candidate.physical_norm
-                self._lastImplicitConverged = True
-                self._lastImplicitFailureReason = None
-                return candidate
+                if newton_updates > 0:
+                    return accept(candidate)
+                converged_start = candidate
 
             jacobian = np.zeros((4, 4), dtype=np.float64)
             for variable in range(4):
@@ -1695,8 +1803,10 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                         if self._is_infeasible_candidate_error(exc):
                             continue
                         raise
-                    if np.isfinite(trial_candidate.scaled_norm) and trial_candidate.scaled_norm < candidate.scaled_norm:
+                    improves = np.isfinite(trial_candidate.scaled_norm) and trial_candidate.scaled_norm < candidate.scaled_norm
+                    if improves or (converged_start is not None and trial_candidate.scaled_norm <= self.residualTolerance):
                         x_hat = trial
+                        newton_updates += 1
                         accepted = True
                         break
                 if not accepted:
@@ -1705,10 +1815,13 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                 continue
 
             break
+        if converged_start is not None:
+            return accept(converged_start, forced_update_skipped=True)
         self._lastImplicitIterations = self.maxIterations
         self._lastImplicitResidual = np.inf if best is None else best.scaled_norm
         self._lastImplicitPhysicalResidual = np.inf if best is None else best.physical_norm
         self._lastImplicitConverged = False
+        self._lastImplicitForcedUpdateSkipped = False
         self._lastImplicitFailureReason = failure_reason
         self._lastBest = best
         raise RuntimeError(f"Three-phase Illingworth interface solve failed to converge; best residual was {self._lastImplicitResidual:.3e}.")
@@ -2158,6 +2271,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._lastImplicitResidual = np.nan
         self._lastImplicitPhysicalResidual = np.nan
         self._lastImplicitConverged = False
+        self._lastImplicitForcedUpdateSkipped = False
         self._lastImplicitFailureReason = None
         self._lastInterfaceCompositions = None
         self._terminalThinPhaseStop = False

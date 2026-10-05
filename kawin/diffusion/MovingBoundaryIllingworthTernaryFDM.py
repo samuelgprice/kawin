@@ -31,8 +31,9 @@ _SUPPORTED_BULK_DIFFUSIVITY_MODES = {
     _BULK_DIFFUSIVITY_LAGGED,
     _BULK_DIFFUSIVITY_IMPLICIT,
 }
-
-from examples.debugInPlace import debugInPlace
+# Multi-start initial-eta roots whose interface compositions differ by more
+# than this are treated as distinct roots of the startup balance, not round-off.
+_INITIAL_ETA_DISTINCT_ROOT_COMPOSITION_TOL = 2e-5
 
 def _loge_arange(start, stop, log_step):
     """Returns exponentially spaced target times with fixed natural-log spacing."""
@@ -135,6 +136,8 @@ class InitialEtaEstimate:
     interface velocity returned by the initialization strategy. ``method``
     identifies the strategy that produced the estimate. ``branch`` is the
     swept-inventory branch used by branch-aware estimators.
+    ``residual_scale`` is the balance-term magnitude that the relative
+    convergence tolerance was applied to (``nan`` when not provided).
     """
 
     eta: float
@@ -151,6 +154,7 @@ class InitialEtaEstimate:
     iterations: int
     function_calls: int
     branch: str | None = None
+    residual_scale: float = np.nan
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,9 +369,10 @@ def estimate_initial_eta_from_instantaneous_balance(
     eta_bracket=None,
     eta_guess=None,
     velocity_guess=None,
-    root_xtol=1e-12,
+    root_xtol=None,
     root_maxiter=100,
     bulk_diffusivity_mode=_BULK_DIFFUSIVITY_PHASE_UNIFORM,
+    root_rtol=1e-10,
 ):
     """
     Estimates initial eta by solving the instantaneous discrete balance.
@@ -377,6 +382,20 @@ def estimate_initial_eta_from_instantaneous_balance(
     ``V0 * L(eta) - (G_B(eta; s0) - G_A(eta; s0)) = 0``. The branch-specific
     swept-inventory coefficient ``L`` matches the positive- and negative-motion
     branches used by the planar ternary residual in the finite-step solver.
+
+    The residual has units of composition times velocity and, for realistic
+    diffusivities in SI units, can be as small as ``1e-11``. Convergence is
+    therefore tested relative to the size of the balance terms at the current
+    iterate: ``max|residual| <= max(root_xtol, root_rtol * scale)`` with
+    ``scale = max(|G_A|, |G_B|, |V0| * |L|, |G(eta_hi) - G(eta_lo)|)``
+    (componentwise max norms). The individual phase fluxes are used rather
+    than their difference so the scale stays meaningful when the fluxes nearly
+    balance, and the flux change across the eta bracket keeps it non-zero at a
+    stationary equilibrium root, where the fluxes and ``V0`` all vanish. This
+    makes the converged eta independent of the length unit, of the diffusivity
+    magnitude, and of the starting guess. ``root_xtol`` is an optional absolute
+    floor (``None`` disables it); ``residual_scale`` on the returned estimate
+    records ``scale``.
     """
     composition = np.asarray(composition, dtype=np.float64)
     z = np.asarray(z, dtype=np.float64).reshape(-1)
@@ -399,6 +418,12 @@ def estimate_initial_eta_from_instantaneous_balance(
     if thermodynamics is None or not hasattr(thermodynamics, "getInterdiffusivity"):
         raise TypeError("thermodynamics must provide getInterdiffusivity for initial eta estimation.")
     bulk_diffusivity_mode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
+    relative_tolerance = float(root_rtol)
+    if not np.isfinite(relative_tolerance) or relative_tolerance <= 0.0:
+        raise ValueError("root_rtol must be positive and finite.")
+    absolute_tolerance = 0.0 if root_xtol is None else float(root_xtol)
+    if not np.isfinite(absolute_tolerance) or absolute_tolerance < 0.0:
+        raise ValueError("root_xtol must be None or a non-negative finite value.")
 
     s = float(interface_position)
     domain_length = float(z[-1] - z[0])
@@ -465,10 +490,46 @@ def estimate_initial_eta_from_instantaneous_balance(
             raise ValueError("branch must be 'positive' or 'negative'.")
         if not np.all(np.isfinite(flux_delta)) or not np.all(np.isfinite(swept_inventory)):
             raise ValueError("instantaneous balance terms are non-finite at the queried eta.")
-        return swept_inventory, flux_delta, c_left.copy(), c_right.copy()
+        # The individual phase fluxes (not their difference) feed the relative
+        # convergence scale, so it stays non-degenerate when the fluxes balance.
+        side_fluxes = np.vstack((G_left, G_right))
+        return swept_inventory, flux_delta, c_left.copy(), c_right.copy(), side_fluxes
+
+    def eta_sensitivity_scale():
+        # Change of the phase fluxes across the eta bracket. It does not vanish
+        # at a stationary equilibrium root (where the fluxes and V0 all go to
+        # zero) and makes the relative test an eta accuracy of roughly
+        # ``root_rtol`` times the bracket width.
+        try:
+            low = evaluate_terms(bracket[0], "positive")[4]
+            high = evaluate_terms(bracket[1], "positive")[4]
+        except ValueError:
+            return 0.0
+        return float(np.max(np.abs(high - low)))
+
+    def residual_scale_of(velocity, swept_inventory, side_fluxes):
+        return max(
+            float(np.max(np.abs(side_fluxes))),
+            abs(float(velocity)) * float(np.max(np.abs(swept_inventory))),
+            0.0 if sensitivity_scale is None else sensitivity_scale,
+            1e-300,
+        )
+
+    def converged_at(norm, scale):
+        # The bracket-edge sensitivity is evaluated lazily, only when the
+        # cheaper scales do not already accept the iterate; the criterion is
+        # the same either way.
+        nonlocal sensitivity_scale
+        if norm <= max(absolute_tolerance, relative_tolerance * scale):
+            return True
+        if sensitivity_scale is None:
+            sensitivity_scale = eta_sensitivity_scale()
+        return norm <= relative_tolerance * sensitivity_scale
+
+    sensitivity_scale = None
 
     def velocity_scale_for_branch(branch):
-        swept_inventory, flux_delta, _, _ = evaluate_terms(eta0, branch)
+        swept_inventory, flux_delta, _, _, _ = evaluate_terms(eta0, branch)
         scale = float(np.linalg.norm(flux_delta) / max(float(np.linalg.norm(swept_inventory)), 1e-300))
         if not np.isfinite(scale) or scale <= 0.0:
             scale = 1.0
@@ -478,7 +539,7 @@ def estimate_initial_eta_from_instantaneous_balance(
     for branch in ("positive", "negative"):
         velocity_scale = velocity_scale_for_branch(branch)
         if velocity_guess is None:
-            swept_inventory, flux_delta, _, _ = evaluate_terms(eta0, branch)
+            swept_inventory, flux_delta, _, _, _ = evaluate_terms(eta0, branch)
             scaled_velocity0 = float(np.dot(swept_inventory, flux_delta) / max(float(np.dot(swept_inventory, swept_inventory)), 1e-300))
             scaled_velocity0 /= velocity_scale
             if branch == "positive":
@@ -496,8 +557,8 @@ def estimate_initial_eta_from_instantaneous_balance(
         def residual_unknowns(unknowns):
             velocity = float(unknowns[0]) * velocity_scale
             eta = float(unknowns[1])
-            swept_inventory, flux_delta, _, _ = evaluate_terms(eta, branch)
-            return velocity * swept_inventory - flux_delta
+            swept_inventory, flux_delta, _, _, side_fluxes = evaluate_terms(eta, branch)
+            return velocity * swept_inventory - flux_delta, residual_scale_of(velocity, swept_inventory, side_fluxes)
 
         lower = np.asarray([velocity_bounds[0], bracket[0]], dtype=np.float64)
         upper = np.asarray([velocity_bounds[1], bracket[1]], dtype=np.float64)
@@ -506,12 +567,12 @@ def estimate_initial_eta_from_instantaneous_balance(
         success = False
         nfev = 0
         for _ in range(int(root_maxiter)):
-            residual_current = residual_unknowns(x)
+            residual_current, scale_current = residual_unknowns(x)
             nfev += 1
             norm_current = float(np.max(np.abs(residual_current)))
             if best is None or norm_current < best[0]:
                 best = (norm_current, x.copy(), residual_current.copy())
-            if norm_current <= float(root_xtol):
+            if converged_at(norm_current, scale_current):
                 success = True
                 break
 
@@ -519,10 +580,10 @@ def estimate_initial_eta_from_instantaneous_balance(
             for variable in range(2):
                 step, x_perturbed, difference_direction = _bounded_finite_difference_perturbation(x, lower, upper, variable)
                 if difference_direction == "forward":
-                    residual_perturbed = residual_unknowns(x_perturbed)
+                    residual_perturbed, _ = residual_unknowns(x_perturbed)
                     jacobian[:, variable] = (residual_perturbed - residual_current) / step
                 else:
-                    residual_perturbed = residual_unknowns(x_perturbed)
+                    residual_perturbed, _ = residual_unknowns(x_perturbed)
                     jacobian[:, variable] = (residual_current - residual_perturbed) / step
                 nfev += 1
 
@@ -534,7 +595,7 @@ def estimate_initial_eta_from_instantaneous_balance(
             accepted = False
             for scale in (1.0, 0.5, 0.25, 0.125, 0.0625):
                 trial = np.clip(x + scale * step, lower, upper)
-                residual_trial = residual_unknowns(trial)
+                residual_trial, _ = residual_unknowns(trial)
                 nfev += 1
                 norm_trial = float(np.max(np.abs(residual_trial)))
                 if np.isfinite(norm_trial) and norm_trial < norm_current:
@@ -547,7 +608,7 @@ def estimate_initial_eta_from_instantaneous_balance(
             continue
         velocity = float(best[1][0]) * velocity_scale
         eta = float(best[1][1])
-        swept_inventory, flux_delta, c_left, c_right = evaluate_terms(eta, branch)
+        swept_inventory, flux_delta, c_left, c_right, side_fluxes = evaluate_terms(eta, branch)
         residual = velocity * swept_inventory - flux_delta
         branch_results.append(
             (
@@ -561,6 +622,7 @@ def estimate_initial_eta_from_instantaneous_balance(
                 flux_delta.copy(),
                 c_left.copy(),
                 c_right.copy(),
+                residual_scale_of(velocity, swept_inventory, side_fluxes),
             )
         )
 
@@ -568,7 +630,7 @@ def estimate_initial_eta_from_instantaneous_balance(
     if len(branch_results) == 0:
         raise ValueError("Instantaneous initial eta solve did not produce a finite residual.")
     best = min(branch_results, key=lambda record: record[0])
-    residual_norm, branch, success, nfev, velocity, eta, residual, flux_delta, c_left, c_right = best
+    residual_norm, branch, success, nfev, velocity, eta, residual, flux_delta, c_left, c_right, residual_scale = best
     if not success:
         raise ValueError("Instantaneous initial eta solve failed to converge.")
     return InitialEtaEstimate(
@@ -586,6 +648,7 @@ def estimate_initial_eta_from_instantaneous_balance(
         iterations=int(nfev),
         function_calls=int(nfev),
         branch=branch,
+        residual_scale=float(residual_scale),
     )
 
 
@@ -714,7 +777,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     tie-line coordinate is estimated from the instantaneous discrete balance
     that matches the finite-step interface residual, so callers must provide an
     eta-capable interface equilibrium. Only planar Cartesian finite-difference
-    meshes are supported.
+    meshes are supported. That startup solve converges relative to the
+    magnitude of the interface balance terms (``initial_eta_root_rtol``), so
+    the initial eta does not depend on length units or diffusivity magnitude;
+    ``initial_eta_root_xtol`` is an optional absolute floor (``None`` disables
+    it). Each interface step takes at least one Newton update before it is
+    accepted, so tiny timesteps cannot leave the interface frozen.
 
     By default, ``bulk_diffusivity_mode='phase_uniform'`` preserves the legacy
     behavior: one 2-by-2 interdiffusivity matrix is evaluated for each phase at
@@ -749,7 +817,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         initial_eta_bracket=None,
         initial_eta_guess: float | None = None,
         initial_velocity_guess: float | None = None,
-        initial_eta_root_xtol: float = 1e-12,
+        initial_eta_root_xtol: float | None = None,
+        initial_eta_root_rtol: float = 1e-10,
         initial_eta_root_maxiter: int = 100,
         bulk_diffusivity_mode: str = _BULK_DIFFUSIVITY_PHASE_UNIFORM,
         bulk_picard_rtol: float | None = None,
@@ -783,7 +852,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self.initialEtaBracket = initial_eta_bracket
         self.initialEtaGuess = None if initial_eta_guess is None else float(initial_eta_guess)
         self.initialVelocityGuess = None if initial_velocity_guess is None else float(initial_velocity_guess)
-        self.initialEtaRootXtol = float(initial_eta_root_xtol)
+        self.initialEtaRootXtol = None if initial_eta_root_xtol is None else float(initial_eta_root_xtol)
+        self.initialEtaRootRtol = float(initial_eta_root_rtol)
         self.initialEtaRootMaxiter = int(initial_eta_root_maxiter)
         self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
         self.bulkPicardRtol = None if bulk_picard_rtol is None else float(bulk_picard_rtol)
@@ -927,8 +997,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         _validate_eta_bounds(self.interfaceEquilibrium)
         if self.initialEtaMethod != "instantaneous_balance":
             raise ValueError("initial_eta_method must be 'instantaneous_balance'.")
-        if self.initialEtaRootXtol <= 0.0:
+        if self.initialEtaRootXtol is not None and not (np.isfinite(self.initialEtaRootXtol) and self.initialEtaRootXtol > 0.0):
             raise ValueError("initial eta root tolerance must be positive.")
+        if not (np.isfinite(self.initialEtaRootRtol) and self.initialEtaRootRtol > 0.0):
+            raise ValueError("initial_eta_root_rtol must be positive and finite.")
         if self.initialEtaRootMaxiter < 1:
             raise ValueError("initial_eta_root_maxiter must be at least 1.")
         if self.maxIterations < 2:
@@ -1049,6 +1121,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         ``_lastImplicitCandidateEvaluations`` counts attempted complete
         interface-candidate builds. ``_lastImplicitFunctionEvaluations`` is
         retained as a private compatibility alias with the same value.
+        ``_lastImplicitForcedUpdateSkipped`` is true only when a step was
+        accepted at its unchanged starting iterate because the mandatory
+        Newton update could not be carried out.
         """
         self._lastImplicitIterations = 0
         self._lastImplicitResidual = np.nan
@@ -1058,6 +1133,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._lastImplicitJacobianEvaluations = 0
         self._lastImplicitMotionBranch = None
         self._lastImplicitConverged = False
+        self._lastImplicitForcedUpdateSkipped = False
         self._lastImplicitFailureReason = None
         self._lastBulkLeftPicardIterations = 0
         self._lastBulkRightPicardIterations = 0
@@ -1072,14 +1148,17 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._currentBulkFaceMatricesEvaluated = 0
         self._bulkDiffusivityCountingActive = False
 
-    def _record_implicit_success(self, iterations, candidate, candidate_evaluations, jacobian_evaluations):
+    def _record_implicit_success(self, iterations, candidate, candidate_evaluations, jacobian_evaluations, forced_update_skipped=False):
         """
         Records diagnostics for a converged nonlinear interface solve.
 
         Candidate evaluations count attempted full interface-candidate builds.
         One Jacobian evaluation means one complete finite-difference Jacobian
         construction, not one perturbed candidate evaluation.
+        ``forced_update_skipped`` marks a step accepted at its starting iterate
+        because the mandatory Newton update could not be carried out.
         """
+        self._lastImplicitForcedUpdateSkipped = bool(forced_update_skipped)
         self._lastImplicitIterations = int(iterations)
         self._lastImplicitResidual = candidate.scaled_norm
         self._lastImplicitPhysicalResidual = candidate.physical_norm
@@ -1201,6 +1280,53 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if hasattr(self, "mesh") and self.mesh is not None:
             self._validateModelConfiguration()
 
+    def _select_initial_eta_estimate(self, estimate_kwargs):
+        """
+        Runs the instantaneous-balance eta solve from several starts and returns one estimate.
+
+        Starts are the preferred guess (``initial_eta_guess``, or the bracket
+        midpoint) followed by 10 evenly spaced points spanning the bracket.
+        Starts whose solve fails (typically near the bracket edges) are skipped.
+        The converged estimate with the smallest residual norm is returned.
+
+        Because the solve converges relative to the balance-term magnitude,
+        starts that reach the same root agree to round-off. If the converged
+        roots instead give interface compositions that differ by more than
+        ``_INITIAL_ETA_DISTINCT_ROOT_COMPOSITION_TOL``, the startup balance has
+        more than one root (e.g. on opposite motion branches) and a
+        ``ValueError`` is raised rather than picking one silently.
+        """
+        lower, upper = estimate_kwargs["eta_bracket"]
+        preferred_guess = 0.5 * (lower + upper) if self.initialEtaGuess is None else self.initialEtaGuess
+        if not lower <= preferred_guess <= upper:
+            raise ValueError("initial_eta_guess must lie within the initial eta bracket.")
+        estimates = []
+        failures = []
+        for eta_guess in np.append(preferred_guess, np.linspace(lower, upper, 10)):
+            try:
+                estimates.append(
+                    estimate_initial_eta_from_instantaneous_balance(
+                        **estimate_kwargs,
+                        eta_guess=float(eta_guess),
+                        velocity_guess=self.initialVelocityGuess,
+                    )
+                )
+            except ValueError as exc:
+                failures.append(f"eta_guess={float(eta_guess):.6g}: {exc}")
+        if len(estimates) == 0:
+            raise ValueError("No successful initial eta estimates found. " + "; ".join(failures))
+        converged_etas = [estimate.eta for estimate in estimates]
+        compositions_min_eta = np.asarray(self.interfaceEquilibrium.interface_compositions(float(min(converged_etas))), dtype=np.float64)
+        compositions_max_eta = np.asarray(self.interfaceEquilibrium.interface_compositions(float(max(converged_etas))), dtype=np.float64)
+        composition_difference = compositions_max_eta - compositions_min_eta
+        if np.linalg.norm(composition_difference, axis=1).max() > _INITIAL_ETA_DISTINCT_ROOT_COMPOSITION_TOL:
+            raise ValueError(
+                "Multiple different minima found for initial eta "
+                f"(converged etas span [{min(converged_etas):.8g}, {max(converged_etas):.8g}]). "
+                f"Diff between interfaceComps of min/max etas = {composition_difference}"
+            )
+        return min(estimates, key=lambda estimate: estimate.residual_norm)
+
     def setup(self):
         super().setup()
         self._validateModelConfiguration()
@@ -1235,46 +1361,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             "transformed_v_grid": self._v_grid,
             "eta_bracket": self.initialEtaBracket,
             "root_xtol": self.initialEtaRootXtol,
+            "root_rtol": self.initialEtaRootRtol,
             "root_maxiter": self.initialEtaRootMaxiter,
             "bulk_diffusivity_mode": self.bulkDiffusivityMode,
         }
         estimate_kwargs["eta_bracket"] = _coerce_initial_eta_bracket(estimate_kwargs["eta_bracket"], _validate_eta_bounds(estimate_kwargs["interface_equilibrium"]))
-        initialEtaEstimateResults_dict = {}
-        lower, upper = estimate_kwargs["eta_bracket"]
-        initial_eta_guesses = np.linspace(lower, upper, 10)
-        preferred_guess = self.initialEtaGuess
-        if preferred_guess is None:
-            eta0 = 0.5 * (lower + upper)
-            preferred_guess=eta0
-        if not lower <= preferred_guess <= upper:
-            raise ValueError("initial_eta_guess must lie within the initial eta bracket.")
-        initial_eta_guesses = np.append(preferred_guess, initial_eta_guesses)
-        for initialEtaGuess in initial_eta_guesses:
-            try:
-                initialEtaEstimate_result = estimate_initial_eta_from_instantaneous_balance(
-                    **estimate_kwargs,
-                    eta_guess=initialEtaGuess,
-                    velocity_guess=self.initialVelocityGuess,
-                )
-                initialEtaEstimateResults_dict.update({initialEtaGuess:initialEtaEstimate_result})
-            except ValueError as e:
-                print(f"Error occurred for initialEtaGuess {initialEtaGuess}: {e}")
-                initialEtaEstimateResults_dict.update({initialEtaGuess:e})
-        successful_initialEtaResults = {k:(v.eta, v.residual_norm) for k, v in initialEtaEstimateResults_dict.items() if isinstance(v, InitialEtaEstimate)}
-        if not (len(successful_initialEtaResults)>0):
-            debugInPlace()
-            raise ValueError("No successful initial eta estimates found.")
-        successful_ConvergedEtaVals = [r[0] for r in successful_initialEtaResults.values()]
-        successful_residualNorms = [r[1] for r in successful_initialEtaResults.values()]
-        successful_ConvergedEtaVals_min, successful_ConvergedEtaVals_max = min(successful_ConvergedEtaVals), max(successful_ConvergedEtaVals)
-        interfaceComps_ofMinEta = estimate_kwargs["interface_equilibrium"].interface_compositions(float(successful_ConvergedEtaVals_min))
-        interfaceComps_ofMaxEta = estimate_kwargs["interface_equilibrium"].interface_compositions(float(successful_ConvergedEtaVals_max))
-        if (np.linalg.norm(np.array(interfaceComps_ofMaxEta)-np.array(interfaceComps_ofMinEta), axis=1).max()) > 2e-5:
-            debugInPlace()
-            raise ValueError(f"Multiple different minima found for initial eta. Diff between interfaceComps of min/max etas = {np.array(interfaceComps_ofMaxEta)-np.array(interfaceComps_ofMinEta)}")
-        self.initialEtaEstimate = initialEtaEstimateResults_dict[
-            list(successful_initialEtaResults.keys())[np.argmin(successful_residualNorms)]
-        ]
+        self.initialEtaEstimate = self._select_initial_eta_estimate(estimate_kwargs)
 
         # self.initialEtaEstimate = estimate_initial_eta_from_instantaneous_balance(
         #     **estimate_kwargs,
@@ -2066,6 +2158,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         the accepted old inventory or by ``R`` times an O(1) composition scale
         gives a dimensionless residual norm whose tolerance is independent of
         the chosen length units.
+
+        The scale is deliberately independent of ``dt``: the interface residual
+        is the per-step inventory defect, so the tolerance bounds relative
+        solute loss per step. Because ``flux * dt`` can fall below this bound
+        for tiny steps, ``_solve_interface_planar`` never accepts the
+        unmodified starting iterate without first attempting a Newton update.
         """
         old_inventory = integrate_planar_transformed_profile_components(p, q, s, self._R, self._u_grid, self._v_grid)
         composition_scale = 1.0
@@ -2078,7 +2176,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         return not (np.any(x_hat < lower) or np.any(x_hat > upper))
 
     def _interface_candidate_has_converged(self, candidate, lower, upper):
-        """Applies the final nonlinear convergence check without changing tolerance semantics."""
+        """
+        Returns whether a candidate is within bounds and meets the scaled residual tolerance.
+
+        This is the residual test only; the caller additionally requires at
+        least one Newton update per step before accepting a candidate.
+        """
         return self._scaled_interface_variables_in_bounds(candidate.x_hat, lower, upper) and candidate.scaled_norm <= self.residualTolerance
 
     def _interface_candidate_improves(self, candidate, current_norm):
@@ -2257,7 +2360,23 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         )
 
     def _solve_interface_planar(self, p, q, s, old_s, eta, dt):
-        """Solve the coupled interface step, reusing an accepted trial on the same motion branch."""
+        """
+        Solve the coupled interface step, reusing an accepted trial on the same motion branch.
+
+        The Newton iteration starts from the accepted old ``(s, eta)``. Because
+        the residual scale does not depend on ``dt``, that unmodified start can
+        satisfy the tolerance whenever ``|flux imbalance| * dt`` is tiny, which
+        would accept a step with the interface frozen and leave the untransferred
+        solute as an inventory defect. A candidate is therefore accepted only
+        after at least one Newton update. While the start already meets the
+        tolerance, a line-search trial is accepted if it improves the residual
+        or also meets the tolerance, so a start at round-off does not trigger a
+        spurious line-search failure. If that mandatory update cannot be carried
+        out (zero or bound-blocked step, singular Jacobian, failed candidate
+        evaluation, or no acceptable trial), the converged start is accepted
+        and ``_lastImplicitForcedUpdateSkipped`` is set, so no step that meets
+        the tolerance is turned into a retry.
+        """
         self._reset_implicit_diagnostics()
         self._currentBulkDiffusivityProviderCalls = 0
         self._currentBulkFaceMatricesEvaluated = 0
@@ -2279,6 +2398,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         iterations_attempted = 0
         failure_reason = "maximum iterations reached"
         pending_candidate = None
+        converged_start = None
+        newton_updates = 0
         lagged_face_cache = (
             {"prepared": False, "matrices": None}
             if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_LAGGED
@@ -2317,6 +2438,25 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             self._record_completed_bulk_candidate(candidate)
             return candidate
 
+        def accept(candidate, forced_update_skipped=False):
+            self._record_implicit_success(
+                iterations_attempted,
+                candidate,
+                candidate_evaluations,
+                jacobian_evaluations,
+                forced_update_skipped=forced_update_skipped,
+            )
+            return (
+                candidate.p_future,
+                candidate.q_future,
+                candidate.future_s,
+                candidate.future_eta,
+                candidate.c_left,
+                candidate.c_right,
+                candidate.D_left,
+                candidate.D_right,
+            )
+
         for count in range(self.maxIterations):
             iterations_attempted = count + 1
             future_s, _ = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
@@ -2342,17 +2482,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 best_physical_norm = physical_norm
                 best_motion_branch = motion_branch
             if self._interface_candidate_has_converged(candidate, lower, upper):
-                self._record_implicit_success(iterations_attempted, candidate, candidate_evaluations, jacobian_evaluations)
-                return (
-                    candidate.p_future,
-                    candidate.q_future,
-                    candidate.future_s,
-                    candidate.future_eta,
-                    candidate.c_left,
-                    candidate.c_right,
-                    candidate.D_left,
-                    candidate.D_right,
-                )
+                if newton_updates > 0:
+                    return accept(candidate)
+                converged_start = candidate
 
             jacobian = np.zeros((2, len(x_hat)), dtype=np.float64)
             for variable in range(len(x_hat)):
@@ -2361,6 +2493,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     try:
                         residual_perturbed = evaluate_candidate(x_perturbed, motion_branch).scaled_residual
                     except Exception:
+                        if converged_start is not None:
+                            return accept(converged_start, forced_update_skipped=True)
                         if best_motion_branch is None:
                             best_motion_branch = motion_branch
                         record_failure("candidate evaluation failed")
@@ -2370,6 +2504,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     try:
                         residual_perturbed = evaluate_candidate(x_perturbed, motion_branch).scaled_residual
                     except Exception:
+                        if converged_start is not None:
+                            return accept(converged_start, forced_update_skipped=True)
                         if best_motion_branch is None:
                             best_motion_branch = motion_branch
                         record_failure("candidate evaluation failed")
@@ -2381,6 +2517,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 step = self._least_squares_step_2xN(jacobian, scaled_residual)
                 step, alpha_start = self._bounded_scaled_newton_step(x_hat, step, lower, upper)
             except RuntimeError:
+                if converged_start is not None:
+                    return accept(converged_start, forced_update_skipped=True)
                 record_failure("singular or unusable Jacobian/Newton step")
                 raise
             accepted = False
@@ -2393,20 +2531,29 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 try:
                     trial_candidate = evaluate_candidate(trial, motion_branch)
                 except Exception:
+                    if converged_start is not None:
+                        return accept(converged_start, forced_update_skipped=True)
                     if best_motion_branch is None:
                         best_motion_branch = motion_branch
                     record_failure("candidate evaluation failed")
                     raise
                 trial_norm = trial_candidate.scaled_norm
-                if self._interface_candidate_improves(trial_candidate, norm):
+                if self._interface_candidate_improves(trial_candidate, norm) or (
+                    converged_start is not None and self._interface_candidate_has_converged(trial_candidate, lower, upper)
+                ):
                     x_hat = trial
                     pending_candidate = trial_candidate
+                    newton_updates += 1
                     accepted = True
                     break
             if not accepted:
+                if converged_start is not None:
+                    return accept(converged_start, forced_update_skipped=True)
                 failure_reason = "line search failed"
                 break
 
+        if converged_start is not None:
+            return accept(converged_start, forced_update_skipped=True)
         record_failure(failure_reason)
         raise RuntimeError(
             "Ternary Illingworth interface solve failed to converge; "

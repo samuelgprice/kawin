@@ -1728,7 +1728,7 @@ def test_three_phase_initial_etas_are_estimated_from_instantaneous_balance():
 
     assert np.allclose(model.getInterfaceEtas(), target_etas, rtol=0.0, atol=1e-8)
     assert np.allclose(model.initialEtaEstimate.etas, target_etas, rtol=0.0, atol=1e-8)
-    assert model.initialEtaEstimate.residual_norm <= model.initialEtaRootXtol
+    assert model.initialEtaEstimate.residual_norm <= model._initial_eta_tolerance(model.initialEtaEstimate.residual_scale)
 
 
 @pytest.mark.parametrize(
@@ -1762,7 +1762,7 @@ def test_three_phase_initial_eta_solver_converges_to_moving_known_solution(use_a
     )
 
     assert estimate.converged
-    assert estimate.residual_norm <= model.initialEtaRootXtol
+    assert estimate.residual_norm <= model._initial_eta_tolerance(estimate.residual_scale)
     assert np.allclose(estimate.etas, target_etas, rtol=0.0, atol=5.0e-10)
     assert np.allclose(estimate.velocities, target_velocities, rtol=2.0e-10, atol=5.0e-12)
 
@@ -1793,7 +1793,7 @@ def test_three_phase_initial_eta_solver_crosses_ale_donor_switch():
     assert w_b_left_initial < 0.0
     assert w_b_left_final > 0.0
     assert estimate.converged
-    assert estimate.residual_norm <= model.initialEtaRootXtol
+    assert estimate.residual_norm <= model._initial_eta_tolerance(estimate.residual_scale)
     assert np.allclose(estimate.etas, target_etas, rtol=0.0, atol=5.0e-10)
     assert np.allclose(estimate.velocities, target_velocities, rtol=2.0e-10, atol=5.0e-12)
 
