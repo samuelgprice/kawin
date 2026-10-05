@@ -71,7 +71,7 @@ OUTPUTS = REPO_ROOT / "examples" / "ThermoCalc" / "outputs"
 OUTPUTS.mkdir(parents=True, exist_ok=True)
 # Rebuilding is intentionally the default. Set this to True only to require an
 # existing bundle that exactly matches the current settings and implementation.
-RELOAD_TIELINE_SURROGATE = False
+RELOAD_TIELINE_SURROGATE = True
 # %%
 # Repository paths
 
@@ -146,10 +146,13 @@ INITIAL_VELOCITY_GUESS_2PHASE = None
 INITIAL_VELOCITY_GUESS_3PHASE = None
 
 # Two-phase geometry: [0, HALF_LENGTH].
-HALF_LENGTH = 200.0e-6
-TWO_PHASE_NODES = 201
+multiplier=8
+stepDT_multiplier = multiplier#/4
+HALF_LENGTH = np.round(1500e-6+5000e-6, 16) #200.0e-6 * multiplier
+TWO_PHASE_NODES = 201 * multiplier
+B_PHASE_LENGTH = 1500e-6 #100e-6 * multiplier
 if systemStr =="CuNiTi":
-    INTERFACE_POSITION = HALF_LENGTH-(20e-6/2) + 1.0e-12
+    INTERFACE_POSITION = (HALF_LENGTH-(B_PHASE_LENGTH) + 1.0e-12) 
 
 
 # Optional constant molar volumes [A, B, A] in m^3/mol. For example,
@@ -198,8 +201,8 @@ SEMI_LOG_BASE_TIME_STEP = 1.0
 
 SEMI_LOG_T0 = 1.0e-6
 if systemStr =="CuNiTi":
-    SEMI_LOG_DT = 0.25 / 20.0 # 0.25 / 10.0
-    SOLVE_TIME = 100*60
+    SEMI_LOG_DT = 0.25 / (20.0 * stepDT_multiplier) # 0.25 / 10.0
+    SOLVE_TIME = 2000*60
 
 TOLERANCE = 1.0e-12 #1.0e-12
 RESIDUAL_TOLERANCE = None
@@ -209,6 +212,7 @@ if systemStr =="CuNiTi":
 VERBOSE = True
 VERBOSE_INTERVAL = 10
 MIN_DT_FRAC = 1.0e-16
+TERMINAL_THIN_PHASE_WIDTH=1e-7
 TERMINAL_THIN_PHASE_POLICY='continue'
 
 # Plot/output controls
@@ -223,8 +227,8 @@ FIGURE_DIR = THIS_DIR / "illingworth_two_vs_three_phase_figures"
 #
 # The values below reproduce the node counts that the 31-node, 30 um
 # two-phase physical mesh would naturally give near a 12 um interface.
-PHASE_A_NODES_2 = 100
-PHASE_B_NODES_2 = 50
+PHASE_A_NODES_2 = 100 * 4
+PHASE_B_NODES_2 = 50 * 4
 
 
 U_A_2 = np.linspace(0.0, 1.0, PHASE_A_NODES_2)
@@ -1059,6 +1063,7 @@ def build_two_phase_model(tieline_surrogate, bulk_thermodynamics):
         residual_tolerance=RESIDUAL_TOLERANCE,
         max_iterations=MAX_ITERATIONS,
         max_step_retries=MAX_STEP_RETRIES,
+        terminal_thin_phase_width=TERMINAL_THIN_PHASE_WIDTH,
         terminal_thin_phase_policy=TERMINAL_THIN_PHASE_POLICY,
         record=True,
         record_pq_data=True,
@@ -1394,17 +1399,18 @@ print(f"Built tie-line surrogate with eta bounds {tieline_surrogate.eta_bounds}.
 tieline_surrogate.validity_policy='legacy'
 # Construction-only dashboard: reads persisted build provenance and does not
 # issue additional Thermo-Calc queries.
-construction_diagnostics = plot_surrogate_diagnostics(
-    tieline_surrogate, renderer="browser"
-)
-construction_diagnostics["figures"]["construction"].show()
+if not RELOAD_TIELINE_SURROGATE:
+    construction_diagnostics = plot_surrogate_diagnostics(
+        tieline_surrogate, renderer="browser"
+    )
+    construction_diagnostics["figures"]["construction"].show()
 
-fig = plot_selected_diffusivity_calculations_for_run(
-    surrogate=tieline_surrogate,
-    artifact=tieline_surrogate_artifact,
-    renderer="browser",
-)
-fig.show()
+    fig = plot_selected_diffusivity_calculations_for_run(
+        surrogate=tieline_surrogate,
+        artifact=tieline_surrogate_artifact,
+        renderer="browser",
+    )
+    fig.show()
 if BULK_DIFFUSIVITY_MODE == "phase_uniform":
     fixed_diffusivity_matrices = select_fixed_diffusivity_matrices(
         source_thermodynamics,
@@ -1480,66 +1486,45 @@ two_phase_model.solve(
     vIt=VERBOSE_INTERVAL,
     minDtFrac=MIN_DT_FRAC,
 )
-raise
-print("\nSolving symmetric three-phase A|B|A case...")
-three_phase_model.solve(
-    SOLVE_TIME/10,
-    iterator=explicitEulerIterator,
-    verbose=VERBOSE,
-    vIt=VERBOSE_INTERVAL,
-    minDtFrac=MIN_DT_FRAC,
-)
 
 print("\nSolve complete.")
 print(
     f"  two-phase final time   = {two_phase_model.currentTime:.12g} s"
 )
-print(
-    f"  three-phase final time = {three_phase_model.currentTime:.12g} s"
-)
-print(
-    f"  three-phase final right material boundary = "
-    f"{three_phase_model.getRightBoundary():.12g} m"
-)
-if _uses_physical_three_phase_moles(three_phase_model):
-    print("  three-phase physical molar conservation:")
-    for name, value in three_phase_model.getMolarConservationDiagnostics().items():
-        print(f"    {name}: {value}")
-if not _three_phase_reduction_is_valid(three_phase_model):
-    print(
-        "  note: unequal Vm makes the fixed-domain two-phase solver a legacy "
-        "reference, not an exact physical reduction of the moving A|B|A domain."
-    )
 
+raise
+# %%
+import pandas as pd
+import os
+df = pd.DataFrame({'time (s)':two_phase_model.interfaceData._time.copy(), 'y (m)':two_phase_model.interfaceData._y.copy()-two_phase_model.interfaceData._y[0]})
+df['time (min)'] = df['time (s)']/60
+df['y (um)'] = df['y (m)']/1e-6
+df.plot(x='time (min)', y='y (um)')
+df_path = r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\examplesForZhaoxi\CuNiTi_solidification" + \
+    "\\"+ \
+    f"{systemStr}_changeInSolidWidth_{TEMPERATURE}K_{HALF_LENGTH}_{B_PHASE_LENGTH}_{PHASE_A_NODES_2}_{PHASE_B_NODES_2}_{SEMI_LOG_DT}_speedup.h5"
 
- # %%
-# Quantitative comparison
-
-metrics, comparison = compare_models(two_phase_model, three_phase_model)
-print_metrics(metrics)
-
-
+file_exists = os.path.exists(df_path)
+if file_exists:
+    raise ValueError(f"The path already exists!: {df_path}")
+df.to_hdf(df_path, key=df_path.split('\\')[-1].split('.h5')[0], mode='w', index=False)
 # %%
 # Plots
-
-plot_interface_comparison(comparison)
-plot_middle_width_comparison(comparison)
-plot_eta_comparison(comparison)
-plot_final_profiles(comparison)
-plot_discrepancies(comparison)
-plot_inventory_drift(comparison)
-
-plt.show()
+two_phase_model.plot_eta_vs_time()
+two_phase_model.plot_latestCompProfile()
+two_phase_model.plot_phaseWidths_vs_time()
 
 # %%
 indexOfMaxLiq = np.argmax(two_phase_model._R - two_phase_model.interfaceData._y)
 widthOfMaxLiq = (two_phase_model._R - two_phase_model.interfaceData._y)[indexOfMaxLiq]
 timeOfMaxLiq = two_phase_model.interfaceData._time[indexOfMaxLiq]
 etaofMaxLiq = two_phase_model.etaData._y[np.where(two_phase_model.etaData._time==timeOfMaxLiq)[0]]
+lastTime = two_phase_model.interfaceData._time[two_phase_model.interfaceData.N]
 print(f"indexOfMaxLiq: {indexOfMaxLiq}")
 print(f"widthOfMaxLiq: {widthOfMaxLiq/ 1e-6}  um")
 print(f"timeOfMaxLiq: {timeOfMaxLiq}")
 print(f"etaofMaxLiq: {etaofMaxLiq}")
+print(f"lastTime: {lastTime}")
 # %%
 tieline_surrogate.validity_policy='legacy'
 result = {
@@ -1568,6 +1553,7 @@ plot_two_phase_composition_profile = (
 
 results_plot = plot_two_phase_composition_profile(
     result,
+    time_indices=np.arange(len(result['model'].interfaceData._time))[::100],
     show_tielines=True,
     tieline_eta_count=41,
     display_tieline_count=41,
@@ -1679,7 +1665,6 @@ def plot_surrogate_diagnostics_for_run(
         )
     }
 
-
 # Example use from an interactive session:
 surrogate_diagnostics = plot_surrogate_diagnostics_for_run(
     result,
@@ -1694,8 +1679,6 @@ bulk_diff_B_fig = surrogate_diagnostics["ab"]["figures"]["bulk_diffusivity"][PHA
 bulk_diff_B_fig.show()
 interface_diff_fig = surrogate_diagnostics["ab"]["figures"]["interface_diffusivity"]
 interface_diff_fig.show()
-construction_diff_fig = surrogate_diagnostics["ab"]["figures"]["construction"]
-construction_diff_fig.show()
 # import plotly
 # plotly.offline.plot(bulk_diff_fig, filename = fr"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\{''.join([el.capitalize() for el in ELEMENTS])}_{TEMPERATURE}K_bulk_diffusivity_ab_{PHASE_A}_surrDiag.html", auto_open=False)
 
@@ -1721,4 +1704,124 @@ phase = report["phase_reports"][PHASE_B]
 print(phase["summary"])
 print(np.unique(phase["prediction_status"], return_counts=True))
 print(np.unique(phase["refit_interpolation"], return_counts=True))
+# %%
+import pandas as pd
+df1 = pd.read_excel(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\examplesForZhaoxi\CuNiTi_solidification\CuNiTi_1120C_solidification_rawData_cleaned.xlsx", sheet_name="1120C_data")
+df2 = pd.read_excel(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\examplesForZhaoxi\CuNiTi_solidification\CuNiTi_1120C_solidification_rawData_cleaned.xlsx", sheet_name="FitExpCurve1")
+df3 = pd.read_excel(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\examplesForZhaoxi\CuNiTi_solidification\CuNiTi_1120C_solidification_rawData_cleaned.xlsx", sheet_name="FitExpCurve2")
+
+print(df1.columns)
+print(df2.columns)
+print(df3.columns)
+
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(figsize=(12,8))
+df1.plot(x="Time (min)", y="Solidification Distance (μm) 1120 °C", yerr='Solidification Distance Error Bars (μm) 1120 °C', marker='o', linestyle='', color='tab:orange', ax=ax)
+df2.plot(x="Time (min)", y="Solidification Distance (μm) 1120 °C", linestyle='--', color='gray', ax=ax)
+
+
+simNames_lst=[
+    'CuNiTi_changeInSolidWidth_1393.0K_0.0032_0.00016_400_200_0.0015625.h5',
+    'CuNiTi_changeInSolidWidth_1393.0K_0.0064_0.00032_400_200_0.0015625.h5',
+    'CuNiTi_changeInSolidWidth_1393.0K_0.0064_0.00032_200_100_0.0015625_speedup.h5',
+    'CuNiTi_changeInSolidWidth_1393.0K_0.0064_0.0032_200_100_0.0015625_speedup.h5',
+    'CuNiTi_changeInSolidWidth_1393.0K_0.0016_0.0008_200_100_0.0015625_speedup.h5',
+    'CuNiTi_changeInSolidWidth_1393.0K_0.005_0.0015_400_200_0.0015625_speedup.h5',
+    'CuNiTi_changeInSolidWidth_1393.0K_0.0065_0.0015_400_200_0.0015625_speedup.h5',
+
+ ]
+
+for simName in simNames_lst:
+    df_sim = pd.read_hdf(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\examplesForZhaoxi\CuNiTi_solidification"+"\\"+simName, low_memory=False)
+    df_sim['y (um)'] = df_sim['y (um)'] - df_sim['y (um)'].min()
+    print(df_sim.columns)
+    label = simName.split("K_")[-1].split(".h5")[0].split('_speedup')[0]
+    label="_".join([str(float(s)*1e6) if i in [0,1] else s for i,s in enumerate(label.split("_"))])
+    df_sim.plot(x='time (min)', y='y (um)', linestyle='-', label=label, ax=ax)
+
+
+
+import math
+from scipy import optimize
+def K_eq(K, Ω):
+    return (np.sqrt(np.pi) * K*(math.erf(K) + 1)) * np.exp(K**2) - Ω
+    # return (np.sqrt(np.pi) * K*(math.erf(K) + 1)) / np.exp(-(K**2)) - Ω
+def K_eq_alt(K, Ω):
+    return np.sqrt(np.pi) * K * math.erfc(K) * np.exp(K**2) - (-Ω)
+
+def solveForK(Ω, x_left, x_right, alt=True):
+    if alt:
+        eq = K_eq_alt
+    else:
+        eq = K_eq
+    sol = optimize.root_scalar(
+        eq, #K_eq,
+        bracket=[float(x_left), float(x_right)],
+        method='brentq',
+        args=(Ω),
+        maxiter=100,
+        rtol=1e-14,
+        xtol=1e-14,
+    )
+    if sol.converged:
+        if alt:
+            return -float(sol.root)
+        else:
+            return float(sol.root)
+    else:
+        raise ValueError("Root finding did not converge.")
+def split_scientific(number, precision=16):
+    # Format the float to scientific notation string (e.g., "1.234567e+04")
+    sci_str = f"{number:.{precision}e}"
+    # Split the string on 'e'
+    mantissa, exponent = sci_str.split('e')
+    # Convert parts to their numerical types
+    return float(mantissa), int(exponent)
+
+metersSq_to_umSq = 1/(1e-6)**2
+D_guess=2e-12 * metersSq_to_umSq
+Ω_guess=(0.25-0.5)/(0.11-0.25)
+print(solveForK(Ω_guess, x_left=-10, x_right=10, alt=True))
+print(solveForK(Ω_guess, x_left=-10, x_right=10, alt=False))
+K_guess=solveForK(Ω_guess, x_left=-10, x_right=10, alt=True)
+# K_guess=1
+solidificationDist_pred = K_guess * np.sqrt(4 * D_guess * df2["Time (min)"]*60)
+ax.plot(df2["Time (min)"], solidificationDist_pred, color='k', label=f"$K*\sqrt{{4Dt}}$ Pred (D=${split_scientific(D_guess/metersSq_to_umSq)[0]}*10^{{{split_scientific(D_guess/metersSq_to_umSq)[1]}}}$, Ω={Ω_guess:.3})")
+print(f"$K*\sqrt{{D}}$: {K_guess * np.sqrt(D_guess)}")
+
+D_guess=5e-13 * metersSq_to_umSq
+# Ω_guess=(0.35-0.5)/(0.31-0.35)
+Ω_guess=(0.25-0.5)/(0.11-0.25)
+K_guess=solveForK(Ω_guess, x_left=-10, x_right=10, alt=True)
+# K_guess=1
+solidificationDist_pred = K_guess * np.sqrt(4 * D_guess * df2["Time (min)"]*60)
+ax.plot(df2["Time (min)"], solidificationDist_pred, color='k', linestyle='dotted', label=f"$K*\sqrt{{4Dt}}$ Pred (D=${split_scientific(D_guess/metersSq_to_umSq)[0]}*10^{{{split_scientific(D_guess/metersSq_to_umSq)[1]}}}$, Ω={Ω_guess:.3})")
+print(f"$K*\sqrt{{D}}$: {K_guess * np.sqrt(D_guess)}")
+
+D_guess=8e-13 * metersSq_to_umSq
+# Ω_guess=(0.35-0.5)/(0.31-0.35)
+Ω_guess=(0.25-0.5)/(0.11-0.25)
+K_guess=solveForK(Ω_guess, x_left=-10, x_right=10, alt=True)
+# K_guess=1
+solidificationDist_pred = K_guess * np.sqrt(4 * D_guess * df2["Time (min)"]*60)
+ax.plot(df2["Time (min)"], solidificationDist_pred, color='k', linestyle='dashed', label=f"$K*\sqrt{{4Dt}}$ Pred (D=${split_scientific(D_guess/metersSq_to_umSq)[0]}*10^{{{split_scientific(D_guess/metersSq_to_umSq)[1]}}}$, Ω={Ω_guess:.3})")
+print(f"$K*\sqrt{{D}}$: {K_guess * np.sqrt(D_guess)}")
+
+D_guess=3.8e-13 * metersSq_to_umSq
+Ω_guess=(0.35-0.5)/(0.31-0.35)
+# Ω_guess=(0.25-0.5)/(0.11-0.25)
+K_guess=solveForK(Ω_guess, x_left=-10, x_right=10, alt=True)
+# K_guess=1
+solidificationDist_pred = K_guess * np.sqrt(4 * D_guess * df2["Time (min)"]*60)
+ax.plot(df2["Time (min)"], solidificationDist_pred, color='k', linestyle='dashdot', label=f"$K*\sqrt{{4Dt}}$ Pred (D=${split_scientific(D_guess/metersSq_to_umSq)[0]}*10^{{{split_scientific(D_guess/metersSq_to_umSq)[1]}}}$, Ω={Ω_guess:.3})")
+print(f"K * sqrt(D): {K_guess * np.sqrt(D_guess)}")
+
+# ax.set_xscale('function', functions=(np.sqrt, lambda x: x**2))
+ax.legend()
+ax.set_xlim(0, 2000)
+ax.set_ylim(-100, 400)
+# %%
+df_sim = pd.read_hdf(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\examplesForZhaoxi\CuNiTi_solidification\CuNiTi_changeInSolidWidth_1393.0K_0.0064_0.00032_200_100_0.0015625.h5", low_memory=False)
+df_sim_speedup = pd.read_hdf(r"C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\kawin\examples\ternaryExamples\examplesForZhaoxi\CuNiTi_solidification\CuNiTi_changeInSolidWidth_1393.0K_0.0064_0.00032_200_100_0.0015625_speedup.h5", low_memory=False)
+
 # %%
