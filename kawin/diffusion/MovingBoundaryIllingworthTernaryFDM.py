@@ -1328,6 +1328,18 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         return min(estimates, key=lambda estimate: estimate.residual_norm)
 
     def setup(self):
+        """
+        Initializes the two-phase state once and preserves accepted state on continuation.
+
+        ``solve`` calls ``setup`` on every call. Setup replaces the stored
+        physical profile with the reconstruction of the transformed initial
+        state, so re-running it would re-estimate the initial eta from an
+        already-modified profile and restart the histories mid-run. Later calls
+        are therefore no-ops until ``reset`` clears ``isSetup``; call ``reset``
+        after changing model settings that setup consumes.
+        """
+        if self.isSetup:
+            return
         super().setup()
         self._validateModelConfiguration()
         self._getBoundaryConditions()

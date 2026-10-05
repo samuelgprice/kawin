@@ -149,8 +149,6 @@ def test_two_phase_interface_moves_on_every_step_at_physical_scale():
     k_sign = np.sign(roots[0].k)
     assert k_sign != 0.0
 
-    # solve() runs setup() itself; a second setup() would restart from the
-    # already-initialized profile, so the spy is installed on a fresh model.
     model = _two_phase_model()
     skipped = []
     original = model._record_implicit_success
@@ -170,6 +168,44 @@ def test_two_phase_interface_moves_on_every_step_at_physical_scale():
     ds = np.diff(s)
     assert np.all(np.sign(ds) == k_sign), f"{np.count_nonzero(ds == 0.0)} of {ds.size} steps left the interface frozen"
     assert not any(skipped)
+    rel_drift = np.abs(inventory[-1] - inventory[0]) / np.abs(inventory[0])
+    assert np.all(rel_drift < 1.0e-13), rel_drift
+
+
+def test_two_phase_explicit_setup_before_solve_matches_solve_alone():
+    """``solve`` calls ``setup``; an earlier explicit ``setup`` must not re-initialize the state."""
+    implicit = _two_phase_model()
+    implicit.solve(1.0e-3, iterator=explicitEulerIterator)
+
+    explicit = _two_phase_model()
+    explicit.setup()
+    explicit.solve(1.0e-3, iterator=explicitEulerIterator)
+
+    assert explicit.initialEta == implicit.initialEta
+    for name in ("interfaceData", "etaData", "inventoryData"):
+        t_implicit, y_implicit = _recorded(getattr(implicit, name))
+        t_explicit, y_explicit = _recorded(getattr(explicit, name))
+        np.testing.assert_array_equal(t_explicit, t_implicit)
+        np.testing.assert_array_equal(y_explicit, y_implicit)
+
+
+def test_two_phase_second_solve_continues_instead_of_restarting():
+    model = _two_phase_model()
+    model.solve(1.0e-3, iterator=explicitEulerIterator)
+    eta0 = float(model.initialEta)
+    _, inventory_first = _recorded(model.inventoryData)
+    s_first = float(model.getInterfacePosition())
+
+    model.solve(1.0e-3, iterator=explicitEulerIterator)
+
+    t, s = _recorded(model.interfaceData)
+    _, eta = _recorded(model.etaData)
+    _, inventory = _recorded(model.inventoryData)
+    assert np.isclose(model.currentTime, 2.0e-3)
+    assert np.all(np.diff(t) > 0.0)
+    assert float(model.initialEta) == eta0 and eta[0] == eta0
+    np.testing.assert_array_equal(inventory[0], inventory_first[0])
+    assert s[-1] > s_first
     rel_drift = np.abs(inventory[-1] - inventory[0]) / np.abs(inventory[0])
     assert np.all(rel_drift < 1.0e-13), rel_drift
 
