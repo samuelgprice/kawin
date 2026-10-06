@@ -1,9 +1,15 @@
 import warnings
+from dataclasses import dataclass
 
 import numpy as np
 
 from kawin.GenericModel import GenericModel
 from kawin.diffusion.Diffusion import DiffusionModel
+from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import (
+    _BULK_DIFFUSIVITY_IMPLICIT,
+    _BULK_DIFFUSIVITY_PHASE_UNIFORM,
+    _coerce_bulk_diffusivity_mode,
+)
 from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh.MovingBoundaryIllingworthFD1D import (
     flatten_1d_coordinates,
@@ -19,7 +25,31 @@ def _loge_arange(start, stop, log_step):
     logs = np.arange(np.log(start), np.log(stop), log_step)
     return np.exp(logs)
 
-from examples.debugInPlace import debugInPlace
+
+@dataclass(frozen=True)
+class _BinaryBulkSolveResult:
+    """
+    One binary transformed-phase solve and its interface-face diffusivity.
+
+    ``interface_D`` is the diffusivity on the face adjacent to the interface
+    (a scalar in every mode), which the next interface update uses to form the
+    phase-side diffusive flux.
+    """
+
+    profile: np.ndarray
+    interface_D: float
+    inner_iterations: int = 0
+    inner_update_norm: float = 0.0
+
+
+def _validate_binary_diffusivity(values, phase, context="binary Illingworth diffusivity"):
+    """Returns ``values`` as float64 after checking every entry is finite and positive."""
+    values = np.asarray(values, dtype=np.float64)
+    if not np.all(np.isfinite(values)):
+        raise ValueError(f"{context} for phase {phase} must be finite.")
+    if np.any(values <= 0.0):
+        raise ValueError(f"{context} for phase {phase} must be positive.")
+    return values
 
 class _ScalarHistory:
     def __init__(self, record: bool | int = False):
@@ -176,11 +206,38 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     """
     Binary planar moving-boundary model following Illingworth and Golosnoy.
 
-    This v1 implementation ports the planar, constant-diffusivity implicit
-    front-fixing algorithm from the authors' MAP C++ code. Each step solves a
-    fixed-point problem for the future interface position and the two future
-    transformed concentration profiles; the phase solves are tri-diagonal and
-    the interface equation uses the paper's conservative planar balance.
+    This implementation ports the planar implicit front-fixing algorithm from
+    the authors' MAP C++ code. Each step solves a fixed-point problem for the
+    future interface position and the two future transformed concentration
+    profiles; the phase solves are tri-diagonal and the interface equation uses
+    the paper's conservative planar balance.
+
+    Diffusivity is selected with ``bulk_diffusivity_mode``, mirroring the
+    ternary Illingworth model:
+
+    - ``'phase_uniform'`` (default) evaluates one diffusivity per phase at that
+      phase's (fixed) interface composition. For constant-diffusivity
+      thermodynamics this reproduces the MAP-verified recurrence bitwise. When
+      the temperature is constant these values cannot change, so they are
+      evaluated once in ``setup()`` and reused; otherwise they are re-evaluated
+      each step at the interface temperature.
+    - ``'composition_dependent_lagged'`` evaluates one diffusivity per
+      finite-volume face from the accepted old-time profile (face ``j`` uses the
+      arithmetic mean of nodes ``j`` and ``j + 1``) and freezes those values for
+      the whole step. The lag makes the D(c) coupling first-order in ``dt``.
+    - ``'composition_dependent_implicit'`` re-evaluates the face values from a
+      Picard iterate inside each phase solve, seeded from the old profile with
+      the interface Dirichlet value imposed, until the update norm falls below
+      ``bulk_picard_atol + rtol * max|profile|``.
+
+    In every mode the interface balance uses the diffusivity on the
+    interface-adjacent face returned by the most recent phase solve, so the
+    interface flux is consistent with the bulk flux of that face and the
+    transformed inventory remains conserved. A failed implicit step (fixed-point
+    or Picard non-convergence, zero pivot, interface leaving the domain) is
+    retried with ``dt *= retry_factor`` up to ``max_step_retries`` total
+    attempts; the default of one attempt keeps the original raise-on-failure
+    behavior.
     The transformed profile histories ``pData`` and ``qData`` are recorded by
     default, but may be disabled with ``record_pq_data=False`` to reduce
     memory use in long runs. Recording arrays can also be preallocated once the
@@ -214,6 +271,13 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         phase_b_nodes: int | None = None,
         tolerance: float = 1e-8,
         max_iterations: int = 100,
+        bulk_diffusivity_mode: str = _BULK_DIFFUSIVITY_PHASE_UNIFORM,
+        bulk_picard_rtol: float | None = None,
+        bulk_picard_atol: float = 1e-12,
+        bulk_picard_max_iterations: int = 25,
+        bulk_picard_relaxation: float = 1.0,
+        max_step_retries: int = 1,
+        retry_factor: float = 0.5,
         constraints=None,
         record=False,
         record_pq_data: bool = True,
@@ -232,6 +296,13 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self.phaseBNodes = None if phase_b_nodes is None else int(phase_b_nodes)
         self.tolerance = float(tolerance)
         self.maxIterations = int(max_iterations)
+        self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
+        self.bulkPicardRtol = None if bulk_picard_rtol is None else float(bulk_picard_rtol)
+        self.bulkPicardAtol = float(bulk_picard_atol)
+        self.bulkPicardMaxIterations = int(bulk_picard_max_iterations)
+        self.bulkPicardRelaxation = float(bulk_picard_relaxation)
+        self.maxStepRetries = int(max_step_retries)
+        self.retryFactor = float(retry_factor)
         self.recordPqData = bool(record_pq_data)
         self.preallocateRecordings = bool(preallocate_recordings)
         self._inputUGrid = self._validate_transformed_grid(transformed_u_grid, "transformed_u_grid")
@@ -254,6 +325,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._semiLogNextIndex = 0
         self._lastImplicitIterations = 0
         self._lastImplicitError = np.nan
+        self._lastStepRetries = 0
+        self._lastLeftPicardIterations = 0
+        self._lastRightPicardIterations = 0
         self._nearFinalNoop = False
         self._initialInventory = None
 
@@ -267,6 +341,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._s_old = None
         self._D_left = None
         self._D_right = None
+        self._phaseUniformCache = None
 
         super().__init__(
             mesh=mesh,
@@ -325,6 +400,19 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             raise ValueError("tolerance must be a positive finite value.")
         if self.maxIterations < 2:
             raise ValueError("max_iterations must be at least 2.")
+        self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(self.bulkDiffusivityMode)
+        if self.bulkPicardMaxIterations < 1:
+            raise ValueError("bulk_picard_max_iterations must be at least 1.")
+        if not np.isfinite(self.bulkPicardRelaxation) or not (0.0 < self.bulkPicardRelaxation <= 1.0):
+            raise ValueError("bulk_picard_relaxation must lie in (0, 1].")
+        if not np.isfinite(self.bulkPicardAtol) or self.bulkPicardAtol < 0:
+            raise ValueError("bulk_picard_atol must be a non-negative finite value.")
+        if self.bulkPicardRtol is not None and (not np.isfinite(self.bulkPicardRtol) or self.bulkPicardRtol < 0):
+            raise ValueError("bulk_picard_rtol must be a non-negative finite value.")
+        if self.maxStepRetries < 1:
+            raise ValueError("max_step_retries must be at least 1.")
+        if not np.isfinite(self.retryFactor) or not (0.0 < self.retryFactor < 1.0):
+            raise ValueError("retry_factor must lie in (0, 1).")
         if self.phaseANodes is not None and self.phaseANodes < 3:
             raise ValueError("phase_a_nodes must be at least 3 when specified.")
         if self.phaseBNodes is not None and self.phaseBNodes < 3:
@@ -359,6 +447,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._semiLogNextIndex = 0
         self._lastImplicitIterations = 0
         self._lastImplicitError = np.nan
+        self._lastStepRetries = 0
+        self._lastLeftPicardIterations = 0
+        self._lastRightPicardIterations = 0
         self._nearFinalNoop = False
         self._initialInventory = None
         self._z = None
@@ -371,6 +462,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._s_old = None
         self._D_left = None
         self._D_right = None
+        self._phaseUniformCache = None
         if hasattr(self, "mesh") and self.mesh is not None:
             self._validateModelConfiguration()
 
@@ -405,7 +497,12 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._p_curr, self._q_curr = self._initialize_transformed_state(c0, s0)
         self._s_curr = s0
         self._s_old = s0
-        self._D_left, self._D_right = self._constant_phase_diffusivities()
+        self._phaseUniformCache = None
+        D_left, D_right = self._step_diffusivities(self._p_curr, self._q_curr, s0, 0.0)
+        if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM and self._temperature_is_constant():
+            self._phaseUniformCache = (D_left, D_right)
+        self._D_left = self._left_interface_D(D_left)
+        self._D_right = self._right_interface_D(D_right)
         if self.recordPqData:
             self.pData.record(0, self._p_curr)
             self.qData.record(0, self._q_curr)
@@ -498,27 +595,169 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         q[0] = c_right_int
         return p.astype(np.float64), q.astype(np.float64)
 
-    def _constant_phase_diffusivities(self):
-        values = []
-        for phase, c in zip(self.phases, self.interfaceCompositions):
-            x = np.clip(
-                np.asarray([c - 0.05, c, c + 0.05], dtype=np.float64),
-                self.constraints.minComposition,
-                1.0 - self.constraints.minComposition,
+    def _temperatures_at_positions(self, positions, time):
+        """Returns finite temperatures at physical positions, broadcasting a scalar field."""
+        positions = np.asarray(positions, dtype=np.float64).reshape(-1)
+        T = np.asarray(
+            self.temperatureParameters(positions.reshape(-1, 1), float(time)),
+            dtype=np.float64,
+        ).reshape(-1)
+        if T.size == 1 and positions.size != 1:
+            T = np.full(positions.shape, float(T[0]), dtype=np.float64)
+        if T.size != positions.size or not np.all(np.isfinite(T)):
+            raise ValueError("Illingworth temperatures must be finite and match the queried positions.")
+        return T
+
+    def _phase_diffusivity(self, phase, c_interface, time, position):
+        """
+        Returns the scalar ``'phase_uniform'`` diffusivity of ``phase``.
+
+        The diffusivity is evaluated at the phase's fixed interface composition
+        and at the temperature of the interface position, and is reused for
+        every face of that phase's bulk solve. Providers that accept
+        ``query_context`` are asked for the ``'interface'`` context.
+        """
+        temperature = float(self._temperatures_at_positions([position], time)[0])
+        try:
+            D = self.therm.getInterdiffusivity(float(c_interface), temperature, phase=phase, query_context="interface")
+        except TypeError:
+            D = self.therm.getInterdiffusivity(float(c_interface), temperature, phase=phase)
+        D = np.asarray(D, dtype=np.float64).reshape(-1)
+        if D.size != 1:
+            raise ValueError("Phase-uniform diffusivity query must return a single value.")
+        return float(_validate_binary_diffusivity(D, phase, context="phase-uniform diffusivity")[0])
+
+    def _bulk_face_diffusivities(self, face_compositions, phase, time, face_positions):
+        """
+        Returns validated diffusivities, shape ``(n_faces,)``, at face compositions.
+
+        The provider is queried vectorized with ``query_context='general'``,
+        then vectorized without ``query_context`` (for ``Thermodynamics``-style
+        signatures), and finally one face at a time if the vectorized result
+        is unusable.
+        """
+        face_compositions = np.asarray(face_compositions, dtype=np.float64).reshape(-1)
+        temperatures = self._temperatures_at_positions(face_positions, time)
+        if temperatures.size != face_compositions.size:
+            raise ValueError("face_positions must match the face composition count.")
+        n_faces = face_compositions.size
+
+        def vectorized_call(**kwargs):
+            values = self.therm.getInterdiffusivity(face_compositions, temperatures, phase=phase, **kwargs)
+            values = np.asarray(values, dtype=np.float64).reshape(-1)
+            if values.size == 1 and n_faces != 1:
+                values = np.full(n_faces, float(values[0]), dtype=np.float64)
+            if values.size != n_faces:
+                raise ValueError("bulk diffusivity query returned an unexpected shape.")
+            return values
+
+        values = None
+        for kwargs in ({"query_context": "general"}, {}):
+            try:
+                values = vectorized_call(**kwargs)
+                break
+            except TypeError:
+                continue
+            except ValueError:
+                break
+        if values is None:
+            values = np.empty(n_faces, dtype=np.float64)
+            for i, (composition, temperature) in enumerate(zip(face_compositions, temperatures)):
+                try:
+                    D = self.therm.getInterdiffusivity(float(composition), float(temperature), phase=phase, query_context="general")
+                except TypeError:
+                    D = self.therm.getInterdiffusivity(float(composition), float(temperature), phase=phase)
+                values[i] = float(np.asarray(D, dtype=np.float64).reshape(-1)[0])
+        return _validate_binary_diffusivity(values, phase, context="bulk face diffusivity")
+
+    def _left_face_compositions(self, p):
+        """Face ``j`` composition ``0.5*(p[j] + p[j+1])``; the interface face is the last."""
+        p = np.asarray(p, dtype=np.float64)
+        return 0.5 * (p[:-1] + p[1:])
+
+    def _right_face_compositions(self, q):
+        """Face ``j`` composition ``0.5*(q[j] + q[j+1])``; the interface face is the first."""
+        q = np.asarray(q, dtype=np.float64)
+        return 0.5 * (q[:-1] + q[1:])
+
+    def _left_face_positions(self, future_s):
+        u_faces = 0.5 * (self._u_grid[:-1] + self._u_grid[1:])
+        return float(future_s) * u_faces
+
+    def _right_face_positions(self, future_s):
+        v_faces = 0.5 * (self._v_grid[:-1] + self._v_grid[1:])
+        return float(future_s) + (self._R - float(future_s)) * v_faces
+
+    def _left_face_diffusivities(self, p, future_s, time):
+        """Returns left-phase face diffusivities evaluated from profile ``p``."""
+        return self._bulk_face_diffusivities(
+            self._left_face_compositions(p), self.phases[0], time, self._left_face_positions(future_s)
+        )
+
+    def _right_face_diffusivities(self, q, future_s, time):
+        """Returns right-phase face diffusivities evaluated from profile ``q``."""
+        return self._bulk_face_diffusivities(
+            self._right_face_compositions(q), self.phases[1], time, self._right_face_positions(future_s)
+        )
+
+    def _temperature_is_constant(self):
+        """
+        Returns whether the temperature field is demonstrably constant in space and time.
+
+        True for an isothermal scalar temperature and for a temperature array
+        whose values are all identical; False for callables, varying arrays, or
+        unrecognized specifications. Used only to decide whether the
+        ``'phase_uniform'`` diffusivities can be cached: with fixed interface
+        compositions and constant temperature they cannot change during a run.
+        """
+        params = getattr(self.temperatureParameters, "Tparameters", None)
+        if params is None or callable(params):
+            return False
+        if isinstance(params, tuple):
+            if len(params) != 2:
+                return False
+            values = np.asarray(params[1], dtype=np.float64).reshape(-1)
+            return values.size > 0 and bool(np.all(np.isfinite(values))) and bool(np.all(values == values[0]))
+        try:
+            values = np.asarray(params, dtype=np.float64).reshape(-1)
+        except (TypeError, ValueError):
+            return False
+        return values.size == 1 and bool(np.isfinite(values[0]))
+
+    def _step_diffusivities(self, p, q, s, time):
+        """
+        Returns the per-step left/right diffusivity inputs for the bulk solves.
+
+        ``'phase_uniform'`` returns two scalars, taken from the cache built in
+        ``setup()`` when the temperature is constant (see
+        ``_temperature_is_constant``). ``'composition_dependent_lagged'``
+        returns face arrays from the accepted old-time profiles, frozen for the
+        whole step (face temperatures are sampled at the old interface
+        position). ``'composition_dependent_implicit'`` also returns these lagged
+        arrays; they only seed the first interface update, while the bulk solves
+        evaluate their own Picard face values.
+        """
+        if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
+            if self._phaseUniformCache is not None:
+                return self._phaseUniformCache
+            c_left, c_right = self.interfaceCompositions
+            return (
+                self._phase_diffusivity(self.phases[0], c_left, time, s),
+                self._phase_diffusivity(self.phases[1], c_right, time, s),
             )
-            T = np.asarray(self.temperatureParameters(np.zeros((3, 1)), 0), dtype=np.float64).reshape(-1)
-            if T.size == 1:
-                T = np.full(3, float(T[0]), dtype=np.float64)
-            D = np.asarray(self.therm.getInterdiffusivity(x, T, phase=phase), dtype=np.float64)
-            if D.ndim == 0:
-                D = np.full(3, float(D), dtype=np.float64)
-            D = np.ravel(D)
-            if not np.all(np.isfinite(D)):
-                raise ValueError("Illingworth model requires finite constant diffusivities.")
-            if not np.allclose(D, D[0], rtol=1e-12, atol=0.0):
-                raise ValueError("Illingworth model currently supports only constant diffusivity per phase.")
-            values.append(float(D[0]))
-        return values[0], values[1]
+        return self._left_face_diffusivities(p, s, time), self._right_face_diffusivities(q, s, time)
+
+    @staticmethod
+    def _left_interface_D(D_left):
+        """Returns the left interface-face diffusivity (last face) from a scalar or face array."""
+        D_left = np.asarray(D_left, dtype=np.float64)
+        return float(D_left) if D_left.ndim == 0 else float(D_left[-1])
+
+    @staticmethod
+    def _right_interface_D(D_right):
+        """Returns the right interface-face diffusivity (first face) from a scalar or face array."""
+        D_right = np.asarray(D_right, dtype=np.float64)
+        return float(D_right) if D_right.ndim == 0 else float(D_right[0])
 
     def solve(self, simTime, iterator=explicitEulerIterator, verbose=False, vIt=10, minDtFrac=1e-8, maxDtFrac=1):
         """
@@ -526,6 +765,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
 
         Multi-stage iterators are rejected because the implicit Illingworth step
         is not a continuously valid right-hand side for RK intermediate states.
+        When ``max_step_retries > 1``, pass a ``minDtFrac`` small enough that a
+        reduced retry step is not raised to the solver's minimum step, since
+        the returned increment is only valid for the accepted ``dt``.
         """
         if iterator is not explicitEulerIterator:
             raise ValueError("MovingBoundaryIllingworthFD1DModel supports only explicitEulerIterator.")
@@ -581,7 +823,17 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             return np.inf
         return max(1e-15, float(self._semiLogTimes[self._semiLogNextIndex] - float(t)))
 
-    def _new_interface_planar(self, p_future, q_future, s, old_s, future_s, dt, pass_number):
+    def _new_interface_planar(self, p_future, q_future, s, old_s, future_s, dt, pass_number, D_left_int, D_right_int):
+        """
+        Returns the next fixed-point estimate of the future interface position.
+
+        This is the MAP/paper planar conservative interface balance.
+        ``D_left_int`` and ``D_right_int`` are the scalar diffusivities on the
+        interface-adjacent faces (left face ``-1``, right face ``0``) used by
+        the most recent bulk solves, so the interface flux matches the bulk
+        flux through those faces. On pass zero the velocity sign comes from the
+        previous step, and afterwards from the current estimate.
+        """
         c_left_int, c_right_int = self.interfaceCompositions
         if pass_number == 0:
             velocity_sign_probe = s - old_s
@@ -589,9 +841,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             velocity_sign_probe = future_s - s
 
         diff_l = (c_left_int - p_future[-2]) / (1.0 - self._u_grid[-2])
-        diff_l = diff_l * self._D_left / future_s
+        diff_l = diff_l * D_left_int / future_s
         diff_r = (q_future[1] - c_right_int) / self._v_grid[1]
-        diff_r = diff_r * self._D_right / (self._R - future_s)
+        diff_r = diff_r * D_right_int / (self._R - future_s)
         rhs = (diff_r - diff_l) * dt
 
         if velocity_sign_probe >= 0:
@@ -606,20 +858,29 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             raise ZeroDivisionError("Illingworth interface update encountered a zero denominator.")
         return float(s + rhs / lhs)
 
-    def _new_concentration_left_planar(self, p, s, future_s, dt):
+    def _new_concentration_left_planar(self, p, s, future_s, dt, D_left):
         """
         Solves the left transformed concentration profile for one implicit step.
 
         Coefficients are the planar Illingworth finite-volume coefficients from
         the MAP implementation. Interior rows are assembled with vectorized
         slices, but the boundary rows retain the original one-sided forms.
+
+        ``D_left`` is either a scalar phase-uniform diffusivity, assembled with
+        the original MAP expressions so constant-D results are bitwise
+        unchanged, or a face array of shape ``(len(p) - 1,)`` where face ``j``
+        lies between nodes ``j`` and ``j + 1`` and the interface face is
+        ``D_left[-1]``. The upwind and cell-volume terms do not depend on D.
         """
         n = len(p)
         lo = np.zeros(n, dtype=np.float64)
         diag = np.zeros(n, dtype=np.float64)
         up = np.zeros(n, dtype=np.float64)
         rhs = np.zeros(n, dtype=np.float64)
-        tmpA = self._D_left * dt / future_s
+        D_values = np.asarray(D_left, dtype=np.float64)
+        phase_uniform = D_values.ndim == 0
+        if not phase_uniform and D_values.shape != (n - 1,):
+            raise ValueError(f"Left face diffusivities must have shape ({n - 1},); received {D_values.shape}.")
         tmpB = future_s - s
         u = self._u_grid
         left_diff = u[1:-1] - u[:-2]
@@ -627,44 +888,64 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         right_diff = u[2:] - u[1:-1]
         right_sum = u[2:] + u[1:-1]
         cell_width = right_sum - left_sum
+        if phase_uniform:
+            tmpA = float(D_values) * dt / future_s
+            A_first = tmpA
+            A_lo = tmpA / left_diff
+            A_up = tmpA / right_diff
+            A_diag = -tmpA * (1.0 / left_diff + 1.0 / right_diff)
+        else:
+            A_faces = D_values * dt / future_s
+            A_first = A_faces[0]
+            A_lo = A_faces[:-1] / left_diff
+            A_up = A_faces[1:] / right_diff
+            A_diag = -(A_lo + A_up)
 
         if future_s >= s:
-            diag[0] = -tmpA / u[1] - future_s * u[1] / 2.0
-            up[0] = tmpA / u[1] + tmpB * u[1] / 2.0
+            diag[0] = -A_first / u[1] - future_s * u[1] / 2.0
+            up[0] = A_first / u[1] + tmpB * u[1] / 2.0
             rhs[0] = -p[0] * s * u[1] / 2.0
-            lo[1:-1] = tmpA / left_diff
-            diag[1:-1] = -tmpA * (1.0 / left_diff + 1.0 / right_diff) - tmpB * left_sum / 2.0
+            lo[1:-1] = A_lo
+            diag[1:-1] = A_diag - tmpB * left_sum / 2.0
             diag[1:-1] = diag[1:-1] - future_s * cell_width / 2.0
-            up[1:-1] = tmpA / right_diff + tmpB * right_sum / 2.0
+            up[1:-1] = A_up + tmpB * right_sum / 2.0
             rhs[1:-1] = -s * p[1:-1] * cell_width / 2.0
         else:
-            diag[0] = -tmpA / u[1] + tmpB * u[1] / 2.0 - future_s * u[1] / 2.0
-            up[0] = tmpA / u[1]
+            diag[0] = -A_first / u[1] + tmpB * u[1] / 2.0 - future_s * u[1] / 2.0
+            up[0] = A_first / u[1]
             rhs[0] = -p[0] * s * u[1] / 2.0
-            lo[1:-1] = tmpA / left_diff - tmpB * left_sum / 2.0
-            diag[1:-1] = -tmpA * (1.0 / left_diff + 1.0 / right_diff) + tmpB * right_sum / 2.0
+            lo[1:-1] = A_lo - tmpB * left_sum / 2.0
+            diag[1:-1] = A_diag + tmpB * right_sum / 2.0
             diag[1:-1] = diag[1:-1] - future_s * cell_width / 2.0
-            up[1:-1] = tmpA / right_diff
+            up[1:-1] = A_up
             rhs[1:-1] = -s * p[1:-1] * cell_width / 2.0
 
         diag[-1] = -1.0
         rhs[-1] = -self.interfaceCompositions[0]
         return solve_illingworth_tridiagonal(lo, diag, up, rhs)
 
-    def _new_concentration_right_planar(self, q, s, future_s, dt):
+    def _new_concentration_right_planar(self, q, s, future_s, dt, D_right):
         """
         Solves the right transformed concentration profile for one implicit step.
 
         This is the large phase for the Figure-3 setup, so interior coefficient
         assembly is vectorized while preserving the MAP code's boundary rows and
         tridiagonal sign convention.
+
+        ``D_right`` is either a scalar phase-uniform diffusivity (original MAP
+        expressions, bitwise unchanged) or a face array of shape
+        ``(len(q) - 1,)`` where the interface face is ``D_right[0]`` and the
+        zero-flux far-boundary row uses ``D_right[-1]``.
         """
         n = len(q)
         lo = np.zeros(n, dtype=np.float64)
         diag = np.zeros(n, dtype=np.float64)
         up = np.zeros(n, dtype=np.float64)
         rhs = np.zeros(n, dtype=np.float64)
-        tmpA = self._D_right * dt / (self._R - future_s)
+        D_values = np.asarray(D_right, dtype=np.float64)
+        phase_uniform = D_values.ndim == 0
+        if not phase_uniform and D_values.shape != (n - 1,):
+            raise ValueError(f"Right face diffusivities must have shape ({n - 1},); received {D_values.shape}.")
         tmpB = future_s - s
         span = self._R - future_s
         v = self._v_grid
@@ -673,60 +954,170 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         right_diff = v[2:] - v[1:-1]
         right_sum = v[2:] + v[1:-1]
         cell_width = right_sum - left_sum
+        if phase_uniform:
+            tmpA = float(D_values) * dt / (self._R - future_s)
+            A_last = tmpA
+            A_lo = tmpA / left_diff
+            A_up = tmpA / right_diff
+            A_diag = -tmpA * (1.0 / right_diff + 1.0 / left_diff)
+        else:
+            A_faces = D_values * dt / (self._R - future_s)
+            A_last = A_faces[-1]
+            A_lo = A_faces[:-1] / left_diff
+            A_up = A_faces[1:] / right_diff
+            A_diag = -(A_up + A_lo)
 
         diag[0] = -1.0
         rhs[0] = -self.interfaceCompositions[1]
 
         if future_s >= s:
-            lo[1:-1] = tmpA / left_diff
-            diag[1:-1] = -tmpA * (1.0 / right_diff + 1.0 / left_diff) - tmpB * (1.0 - left_sum / 2.0)
+            lo[1:-1] = A_lo
+            diag[1:-1] = A_diag - tmpB * (1.0 - left_sum / 2.0)
             diag[1:-1] = diag[1:-1] - span * cell_width / 2.0
-            up[1:-1] = tmpA / right_diff + tmpB * (1.0 - right_sum / 2.0)
+            up[1:-1] = A_up + tmpB * (1.0 - right_sum / 2.0)
             rhs[1:-1] = -(self._R - s) * q[1:-1] * cell_width / 2.0
 
             tmp = v[-2]
-            lo[-1] = tmpA / (1.0 - tmp)
-            diag[-1] = -tmpA / (1.0 - tmp) - tmpB * (1.0 - (1.0 + tmp) / 2.0)
+            lo[-1] = A_last / (1.0 - tmp)
+            diag[-1] = -A_last / (1.0 - tmp) - tmpB * (1.0 - (1.0 + tmp) / 2.0)
             diag[-1] = diag[-1] - span * (1.0 - tmp) / 2.0
             rhs[-1] = -q[-1] * (self._R - s) * (1.0 - tmp) / 2.0
         else:
-            lo[1:-1] = tmpA / left_diff - tmpB * (1.0 - left_sum / 2.0)
-            diag[1:-1] = -tmpA * (1.0 / right_diff + 1.0 / left_diff) + tmpB * (1.0 - right_sum / 2.0)
+            lo[1:-1] = A_lo - tmpB * (1.0 - left_sum / 2.0)
+            diag[1:-1] = A_diag + tmpB * (1.0 - right_sum / 2.0)
             diag[1:-1] = diag[1:-1] - span * cell_width / 2.0
-            up[1:-1] = tmpA / right_diff
+            up[1:-1] = A_up
             rhs[1:-1] = -(self._R - s) * q[1:-1] * cell_width / 2.0
 
             tmp = v[-2]
-            lo[-1] = tmpA / (1.0 - tmp) - tmpB * (1.0 - (1.0 + tmp) / 2.0)
-            diag[-1] = -tmpA / (1.0 - tmp) - span * (1.0 - tmp) / 2.0
+            lo[-1] = A_last / (1.0 - tmp) - tmpB * (1.0 - (1.0 + tmp) / 2.0)
+            diag[-1] = -A_last / (1.0 - tmp) - span * (1.0 - tmp) / 2.0
             rhs[-1] = -q[-1] * (self._R - s) * (1.0 - tmp) / 2.0
 
         return solve_illingworth_tridiagonal(lo, diag, up, rhs)
 
+    def _bulk_picard_relative_tolerance(self):
+        """Returns the effective relative tolerance for implicit bulk Picard solves."""
+        return float(self.tolerance if self.bulkPicardRtol is None else self.bulkPicardRtol)
+
+    def _bulk_picard_update_has_converged(self, update_norm, profile):
+        """
+        Tests Picard convergence against ``atol + rtol * max|profile|``.
+
+        The update norm is the maximum absolute change from the current
+        coefficient iterate to the unrelaxed linear solve; relaxation only forms
+        the next coefficient iterate.
+        """
+        profile_scale = max(1.0e-12, float(np.max(np.abs(np.asarray(profile, dtype=np.float64)))))
+        threshold = self.bulkPicardAtol + self._bulk_picard_relative_tolerance() * profile_scale
+        return float(update_norm) <= threshold
+
+    def _solve_bulk_picard(self, old_profile, s, future_s, dt, phase_side):
+        """
+        Solves one phase with composition-dependent face diffusivities by Picard iteration.
+
+        The iterate is seeded from the accepted old profile with the fixed
+        interface Dirichlet value imposed. Each iteration evaluates face
+        diffusivities from face averages of the iterate (temperatures at the
+        trial face positions for ``future_s``), performs the linear tridiagonal
+        solve, and checks the update norm. With ``bulk_picard_relaxation == 1``
+        the loop also stops when the re-evaluated face values are unchanged.
+        Non-convergence raises ``RuntimeError`` so the step-retry logic can
+        reduce ``dt``.
+        """
+        if phase_side == "left":
+            interface_index = -1
+            c_interface = self.interfaceCompositions[0]
+            face_diffusivities = self._left_face_diffusivities
+            linear_solve = self._new_concentration_left_planar
+            interface_D = self._left_interface_D
+        else:
+            interface_index = 0
+            c_interface = self.interfaceCompositions[1]
+            face_diffusivities = self._right_face_diffusivities
+            linear_solve = self._new_concentration_right_planar
+            interface_D = self._right_interface_D
+
+        iterate = np.asarray(old_profile, dtype=np.float64).copy()
+        iterate[interface_index] = c_interface
+        update_norm = np.inf
+        D_faces = face_diffusivities(iterate, future_s, self.currentTime)
+        for iteration in range(1, self.bulkPicardMaxIterations + 1):
+            profile = linear_solve(old_profile, s, future_s, dt, D_faces)
+            update_norm = float(np.max(np.abs(profile - iterate)))
+            if self._bulk_picard_update_has_converged(update_norm, profile):
+                return _BinaryBulkSolveResult(profile, interface_D(D_faces), iteration, update_norm)
+            next_iterate = iterate + self.bulkPicardRelaxation * (profile - iterate)
+            next_iterate[interface_index] = c_interface
+            D_next = face_diffusivities(next_iterate, future_s, self.currentTime)
+            if self.bulkPicardRelaxation == 1.0 and np.array_equal(D_next, D_faces):
+                return _BinaryBulkSolveResult(profile, interface_D(D_faces), iteration, 0.0)
+            iterate = next_iterate
+            D_faces = D_next
+
+        raise RuntimeError(
+            f"{phase_side} bulk Picard solve failed to converge after "
+            f"{self.bulkPicardMaxIterations} iterations; final update norm was {update_norm:.3e}."
+        )
+
+    def _solve_bulk_phases(self, p, q, s, future_s, dt, D_left, D_right):
+        """
+        Solves both transformed phases for one interface trial.
+
+        In ``'phase_uniform'`` and ``'composition_dependent_lagged'`` modes the
+        supplied per-step ``D_left`` and ``D_right`` (scalars or frozen face
+        arrays) are used directly; in ``'composition_dependent_implicit'`` mode
+        each phase runs its own Picard iteration and they are ignored.
+        """
+        if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_IMPLICIT:
+            return (
+                self._solve_bulk_picard(p, s, future_s, dt, "left"),
+                self._solve_bulk_picard(q, s, future_s, dt, "right"),
+            )
+        return (
+            _BinaryBulkSolveResult(self._new_concentration_left_planar(p, s, future_s, dt, D_left), self._left_interface_D(D_left)),
+            _BinaryBulkSolveResult(self._new_concentration_right_planar(q, s, future_s, dt, D_right), self._right_interface_D(D_right)),
+        )
+
     def _take_implicit_step_planar(self, p, q, s, old_s, dt):
+        """
+        Performs one implicit Illingworth step by fixed-point iteration on ``s``.
+
+        Each pass updates the interface from the latest profiles and
+        interface-face diffusivities, then re-solves both phases at that trial
+        position. Convergence requires at least two passes and
+        ``|delta s| <= tolerance``. Per-step diffusivities are evaluated once at
+        the old state (see ``_step_diffusivities``); in implicit mode they only
+        provide the pass-zero interface-face values.
+
+        Returns ``(p_future, q_future, s_future, D_left_int, D_right_int)``.
+        """
         p_future = np.asarray(p, dtype=np.float64).copy()
         q_future = np.asarray(q, dtype=np.float64).copy()
         future_s = float(s)
         error = np.inf
+        D_left, D_right = self._step_diffusivities(p, q, s, self.currentTime)
+        D_left_int = self._left_interface_D(D_left)
+        D_right_int = self._right_interface_D(D_right)
 
         for count in range(self.maxIterations):
             previous_future_s = future_s
-            future_s = self._new_interface_planar(p_future, q_future, s, old_s, future_s, dt, count)
+            future_s = self._new_interface_planar(p_future, q_future, s, old_s, future_s, dt, count, D_left_int, D_right_int)
             if not np.isfinite(future_s):
                 raise ValueError("Illingworth interface update produced a non-finite position.")
-            p_future = self._new_concentration_left_planar(p, s, future_s, dt)
-            q_future = self._new_concentration_right_planar(q, s, future_s, dt)
+            left_result, right_result = self._solve_bulk_phases(p, q, s, future_s, dt, D_left, D_right)
+            p_future = left_result.profile
+            q_future = right_result.profile
+            D_left_int = left_result.interface_D
+            D_right_int = right_result.interface_D
             error = abs(previous_future_s - future_s)
             if error <= self.tolerance and count >= 1:
                 self._lastImplicitIterations = count + 1
                 self._lastImplicitError = float(error)
-                return p_future, q_future, self._clipInterfacePosition(future_s, strict=True)
+                self._lastLeftPicardIterations = int(left_result.inner_iterations)
+                self._lastRightPicardIterations = int(right_result.inner_iterations)
+                return p_future, q_future, self._clipInterfacePosition(future_s, strict=True), D_left_int, D_right_int
 
-        print(f"s: {s}")
-        print(f"old_s: {old_s}")
-        print(f"self.currentTime: {self.currentTime}")
-        print(f"dt: {dt}")
-        debugInPlace()
         raise RuntimeError(
             "Illingworth implicit step failed to converge within "
             f"{self.maxIterations} iterations; final interface error was {error:.3e}."
@@ -743,8 +1134,38 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             v=self._v_grid,
         )
 
+    def _try_step_retries(self, p, q, s, dt):
+        """
+        Attempts the implicit step, shrinking ``dt`` by ``retry_factor`` after each failure.
+
+        Up to ``max_step_retries`` attempts are made. ``RuntimeError``,
+        ``ValueError`` and ``ZeroDivisionError`` trigger a retry; the last one
+        is re-raised once attempts are exhausted. On success ``_currdt`` is set
+        to the accepted step so ``getDt`` advances time consistently.
+        """
+        trial_dt = float(dt)
+        last_error = None
+        for retry in range(self.maxStepRetries):
+            try:
+                p_new, q_new, s_new, D_left_int, D_right_int = self._take_implicit_step_planar(p, q, s, self._s_old, trial_dt)
+            except (RuntimeError, ValueError, ZeroDivisionError) as exc:
+                last_error = exc
+                trial_dt *= self.retryFactor
+                continue
+            self._currdt = float(trial_dt)
+            self._lastStepRetries = int(retry)
+            self._D_left = D_left_int
+            self._D_right = D_right_int
+            return p_new, q_new, s_new, trial_dt
+        raise last_error
+
     def getdXdt(self, t, xCurr):
-        # debugInPlace()
+        """
+        Returns the implicit-step increment divided by the accepted ``dt``.
+
+        The complete implicit step (with optional ``dt`` retries) is taken here,
+        so ``getDt`` must be used to advance time by the accepted step.
+        """
         p = np.asarray(xCurr[0], dtype=np.float64).reshape(-1)
         q = np.asarray(xCurr[1], dtype=np.float64).reshape(-1)
         s = self._clipInterfacePosition(float(xCurr[2]), strict=True)
@@ -753,7 +1174,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         dt = self._compute_dt(t)
         if self._nearFinalNoop:
             return [np.zeros_like(p), np.zeros_like(q), 0.0]
-        p_new, q_new, s_new = self._take_implicit_step_planar(p, q, s, self._s_old, dt)
+        p_new, q_new, s_new, dt = self._try_step_retries(p, q, s, dt)
         return [(p_new - p) / dt, (q_new - q) / dt, (s_new - s) / dt]
 
     def getDt(self, dXdt):

@@ -3254,6 +3254,7 @@ def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, *
         "record": True,
         "transformed_u_grid": None,
         "transformed_v_grid": None,
+        "model_kwargs": {},
     }
     params.update(kwargs)
     profile = ProfileBuilder([(StepProfile1D(params["s0"], params["initial_alpha"], params["initial_beta"]), "CR")])
@@ -3280,6 +3281,7 @@ def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, *
         record=params["record"],
         transformed_u_grid=params["transformed_u_grid"],
         transformed_v_grid=params["transformed_v_grid"],
+        **params["model_kwargs"],
     )
 
 
@@ -3290,8 +3292,11 @@ def test_illingworth_moving_boundary_guards():
         _build_illingworth_default_model(time_step=0.0)
     with pytest.raises(ValueError, match="phase_a_nodes"):
         _build_illingworth_default_model(n_alpha=2)
-    with pytest.raises(ValueError, match="constant diffusivity"):
-        _build_illingworth_default_model(therm_class=VariableBinaryThermodynamics).solve(0.1, iterator=explicitEulerIterator)
+    with pytest.raises(ValueError, match="bulk_diffusivity_mode"):
+        _build_illingworth_default_model(model_kwargs={"bulk_diffusivity_mode": "not_a_mode"})
+    variable = _build_illingworth_default_model(therm_class=VariableBinaryThermodynamics)
+    variable.solve(0.1, iterator=explicitEulerIterator)
+    assert variable._D_left == pytest.approx(1.0e-7 * (1.0 + 0.5 * 0.6))
 
     model = _build_illingworth_default_model()
     with pytest.raises(ValueError, match="explicitEulerIterator"):
