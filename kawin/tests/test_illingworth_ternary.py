@@ -954,14 +954,60 @@ def test_ternary_compiled_block_solve_preserves_dense_fallback_and_singular_erro
         )
 
 
-def test_ternary_compiled_block_solve_rejects_illconditioned_full_system():
+def test_ternary_compiled_block_solve_equilibrates_disparate_equation_scales():
+    """A pivot that is only badly scaled (one equation ~1e-13 of the other) is solved after row equilibration."""
     lower = np.zeros((1, 2, 2), dtype=np.float64)
     diagonal = np.asarray([[[1.0, 0.0], [0.0, 1.0e-13]]], dtype=np.float64)
     upper = np.zeros_like(lower)
     rhs = np.asarray([[1.0, 1.0e-13]])
 
-    with pytest.raises(np.linalg.LinAlgError, match="numerically unusable"):
-        ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs)
+    for solver in (ternary_mesh._solve_illingworth_block_tridiagonal_two_phase, solve_illingworth_block_tridiagonal):
+        np.testing.assert_allclose(solver(lower, diagonal, upper, rhs), [[1.0, 1.0]], rtol=1e-14)
+
+
+def test_ternary_compiled_block_solve_rejects_illconditioned_full_system():
+    """Ill-conditioning that survives row equilibration (nearly dependent equations) is still rejected."""
+    lower = np.zeros((1, 2, 2), dtype=np.float64)
+    diagonal = np.asarray([[[1.0, 1.0], [1.0, 1.0 + 1.0e-13]]], dtype=np.float64)
+    upper = np.zeros_like(lower)
+    rhs = np.asarray([[1.0, 1.0]])
+
+    for solver in (ternary_mesh._solve_illingworth_block_tridiagonal_two_phase, solve_illingworth_block_tridiagonal):
+        with pytest.raises(np.linalg.LinAlgError, match="numerically unusable"):
+            solver(lower, diagonal, upper, rhs)
+
+
+def test_ternary_block_solve_equilibrated_retry_matches_dense_solution_for_disparate_rows():
+    """
+    Fast/slow component rows (scales ~1e14 apart) trip the raw pivot check but solve exactly after equilibration.
+
+    Mimics the fast-interstitial / slow-substitutional rows of the ternary
+    Illingworth systems; the equilibrated solution matches an extended-precision
+    reference built from the row-scaled dense system.
+    """
+    n_nodes = 6
+    fast, slow = 1.0e7, 1.0e-7
+    lower = np.zeros((n_nodes, 2, 2))
+    diagonal = np.zeros((n_nodes, 2, 2))
+    upper = np.zeros((n_nodes, 2, 2))
+    for node in range(n_nodes):
+        diagonal[node] = [[2.0 * fast + 1.0, 0.05 * fast], [0.1 * slow, 2.0 * slow + 0.3 * slow]]
+        if node > 0:
+            lower[node] = [[-fast, 0.0], [-0.05 * slow, -slow]]
+        if node < n_nodes - 1:
+            upper[node] = [[-fast, 0.0], [-0.05 * slow, -slow]]
+    rhs = np.column_stack((np.linspace(1.0, 2.0, n_nodes) * fast, np.linspace(0.5, 1.5, n_nodes) * slow))
+    rcond, _ = _estimate_2x2_rcond(diagonal[0])
+    assert rcond < _BLOCK_PIVOT_RCOND_LIMIT  # the raw sweep must take the fallback path
+
+    actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+    compiled = ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs)
+
+    row_scale = np.tile(np.asarray([1.0 / fast, 1.0 / slow]), n_nodes)  # rows are interleaved (C, X) per node
+    dense = _assemble_test_block_tridiagonal(lower, diagonal, upper) * row_scale[:, None]
+    expected = np.linalg.solve(dense, rhs.reshape(-1) * row_scale).reshape(n_nodes, 2)
+    np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-14)
+    np.testing.assert_allclose(compiled, expected, rtol=1e-10, atol=1e-14)
 
 
 def test_ternary_compiled_block_solve_validates_inputs_and_preserves_other_paths(monkeypatch):
