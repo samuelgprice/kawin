@@ -16,6 +16,7 @@ from examples.ternaryExamples.ternaryTwoPhaseSimilarity import (
     compare_model_to_similarity,
     solve_similarity_roots,
 )
+import kawin.diffusion.MovingBoundaryIllingworthTernaryFDM as ternary_fdm
 from kawin.diffusion import CallableTernaryInterfaceEquilibrium, MovingBoundaryIllingworthTernaryFD1DModel
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 from kawin.diffusion.mesh.TransformedGrids import two_phase_landau_grids
@@ -205,3 +206,27 @@ def test_ternary_similarity_ratio_1e8():
     assert metrics["k_rel_error"] < 1.0e-2
     assert metrics["eta_max_abs_error"] < 1.0e-3
     np.testing.assert_allclose(metrics["inventory_drift"], 0.0, atol=5.0e-9 * DOMAIN_LENGTH)
+
+
+def _branch_record(branch, success, raw_norm, selection_norm, eta=0.25):
+    """Synthetic initial-eta branch record in the layout used by ``_select_converged_branch``."""
+    zeros = np.zeros(2)
+    return (raw_norm, branch, success, 3, 1.0, eta, zeros, zeros, zeros, zeros, 1.0, selection_norm)
+
+
+def test_initial_eta_prefers_converged_branch_over_smaller_raw_residual():
+    """An unconverged branch with a smaller raw residual must not hide a converged branch."""
+    converged = _branch_record("positive", True, raw_norm=1e-6, selection_norm=1e-12, eta=0.3)
+    unconverged = _branch_record("negative", False, raw_norm=1e-9, selection_norm=1e-3, eta=0.7)
+    assert ternary_fdm._select_converged_branch([unconverged, converged]) is converged
+    assert ternary_fdm._select_converged_branch([converged, unconverged]) is converged
+
+
+def test_initial_eta_selects_by_active_norm_and_raises_without_converged_branch():
+    small_raw = _branch_record("positive", True, raw_norm=1e-12, selection_norm=1e-11)
+    small_scaled = _branch_record("negative", True, raw_norm=1e-8, selection_norm=1e-13)
+    assert ternary_fdm._select_converged_branch([small_raw, small_scaled]) is small_scaled
+    with pytest.raises(ValueError, match="failed to converge"):
+        ternary_fdm._select_converged_branch([_branch_record("positive", False, 1e-15, 1e-15)])
+    with pytest.raises(ValueError, match="finite residual"):
+        ternary_fdm._select_converged_branch([_branch_record("positive", True, 1e-15, 1e-15, eta=np.nan)])

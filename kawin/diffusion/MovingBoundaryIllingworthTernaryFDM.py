@@ -330,6 +330,27 @@ def _validate_ternary_diffusivity_stack(matrices, phase, context="bulk face diff
     return real.copy()
 
 
+def _select_converged_branch(branch_results):
+    """
+    Returns the best converged record from the initial-eta motion-branch solves.
+
+    Records are ``(raw_norm, branch, success, nfev, velocity, eta, residual,
+    flux_delta, c_left, c_right, residual_scale, selection_norm)``. Records
+    with a non-finite eta are discarded, then only converged records are
+    considered, and the one with the smallest ``selection_norm`` (the
+    convergence metric of the active scaling mode) is returned. An
+    unconverged branch is therefore never chosen over a converged one, even
+    when its raw residual is smaller.
+    """
+    finite = [record for record in branch_results if np.all(np.isfinite(record[5]))]
+    if len(finite) == 0:
+        raise ValueError("Instantaneous initial eta solve did not produce a finite residual.")
+    converged = [record for record in finite if record[2]]
+    if len(converged) == 0:
+        raise ValueError("Instantaneous initial eta solve failed to converge.")
+    return min(converged, key=lambda record: record[11])
+
+
 def _validate_eta_bounds(interface_equilibrium):
     eta_bounds = getattr(interface_equilibrium, "eta_bounds", None)
     if eta_bounds is None or len(eta_bounds) != 2:
@@ -424,6 +445,11 @@ def estimate_initial_eta_from_instantaneous_balance(
     ``V0 * L(eta) - (G_B(eta; s0) - G_A(eta; s0)) = 0``. The branch-specific
     swept-inventory coefficient ``L`` matches the positive- and negative-motion
     branches used by the planar ternary residual in the finite-step solver.
+
+    Both motion branches are solved; the converged branch with the smallest
+    residual in the active scaling's norm is returned (see
+    ``_select_converged_branch``), and ``ValueError`` is raised only when no
+    branch converges.
 
     The residual has units of composition times velocity and, for realistic
     diffusivities in SI units, can be as small as ``1e-11``. Convergence is
@@ -704,9 +730,12 @@ def estimate_initial_eta_from_instantaneous_balance(
         swept_inventory, flux_delta, c_left, c_right, side_fluxes = evaluate_terms(eta, branch)
         residual = velocity * swept_inventory - flux_delta
         if componentwise_scaling:
-            final_scale = float(np.max(component_scales_of(velocity, swept_inventory, side_fluxes)))
+            component_scales = component_scales_of(velocity, swept_inventory, side_fluxes)
+            final_scale = float(np.max(component_scales))
+            selection_norm = float(np.max(np.abs(residual / component_scales)))
         else:
             final_scale = residual_scale_of(velocity, swept_inventory, side_fluxes)
+            selection_norm = float(np.max(np.abs(residual)))
         branch_results.append(
             (
                 float(np.max(np.abs(residual))),
@@ -720,16 +749,12 @@ def estimate_initial_eta_from_instantaneous_balance(
                 c_left.copy(),
                 c_right.copy(),
                 final_scale,
+                selection_norm,
             )
         )
 
-    branch_results = [record for record in branch_results if np.all(np.isfinite(record[5]))]
-    if len(branch_results) == 0:
-        raise ValueError("Instantaneous initial eta solve did not produce a finite residual.")
-    best = min(branch_results, key=lambda record: record[0])
-    residual_norm, branch, success, nfev, velocity, eta, residual, flux_delta, c_left, c_right, residual_scale = best
-    if not success:
-        raise ValueError("Instantaneous initial eta solve failed to converge.")
+    best = _select_converged_branch(branch_results)
+    residual_norm, branch, success, nfev, velocity, eta, residual, flux_delta, c_left, c_right, residual_scale, _ = best
     return InitialEtaEstimate(
         eta=eta,
         residual_norm=residual_norm,
