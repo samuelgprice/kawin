@@ -84,6 +84,8 @@ class FerriteGrowthCase:
     experiment_label: str = ""
     tie_line_x_c: tuple = (0.0015, 0.025, 16)
     tie_line_x_x_factors: tuple = (0.3, 1.6, 27)
+    table_shape_bcc: tuple = (14, 8)  # (x_C points, x_X points) of the BCC_A2 DC table
+    table_shape_fcc: tuple = (16, 10)  # (x_C points, x_X points) of the FCC_A1 DC table
     notes: dict = field(default_factory=dict)
 
     @property
@@ -259,10 +261,12 @@ def build_tc_inputs(case):
         if len(etas) < 5:
             raise RuntimeError(f"Only {len(etas)} BCC/FCC tie-lines found; widen the sampling grid.")
         _log(f"{len(etas)} tie-lines, eta (ferrite x_{case.solute}) in [{etas.min():.4g}, {etas.max():.4g}]")
-        bcc_c = np.geomspace(1e-6, 1.2 * max(x_alloy[0], left[:, 0].max()), 14)
-        bcc_x = np.linspace(0.5 * min(x_alloy[1], left[:, 1].min()), 1.2 * max(x_alloy[1], left[:, 1].max()), 8)
-        fcc_c = np.linspace(0.8 * min(x_alloy[0], right[:, 0].min()), 1.05 * right[:, 0].max(), 16)
-        fcc_x = np.linspace(0.7 * min(x_alloy[1], right[:, 1].min()), 1.1 * max(x_alloy[1], right[:, 1].max()), 10)
+        n_bcc_c, n_bcc_x = case.table_shape_bcc
+        n_fcc_c, n_fcc_x = case.table_shape_fcc
+        bcc_c = np.geomspace(1e-6, 1.2 * max(x_alloy[0], left[:, 0].max()), int(n_bcc_c))
+        bcc_x = np.linspace(0.5 * min(x_alloy[1], left[:, 1].min()), 1.2 * max(x_alloy[1], left[:, 1].max()), int(n_bcc_x))
+        fcc_c = np.linspace(0.8 * min(x_alloy[0], right[:, 0].min()), 1.05 * right[:, 0].max(), int(n_fcc_c))
+        fcc_x = np.linspace(0.7 * min(x_alloy[1], right[:, 1].min()), 1.1 * max(x_alloy[1], right[:, 1].max()), int(n_fcc_x))
         _log("tabulating BCC_A2 diffusivities")
         bcc = tc_dc_grid(system, case, "BCC_A2", bcc_c, bcc_x)
         _log("tabulating FCC_A1 diffusivities")
