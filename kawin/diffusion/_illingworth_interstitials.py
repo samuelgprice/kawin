@@ -35,13 +35,19 @@ _SUPPORTED_COMPOSITION_BASES = ("x", "u")
 
 
 def independent_interstitial_mask(all_elements):
-    """Returns a boolean mask over the independent elements (``all_elements[1:]``)."""
-    return np.asarray([str(e).upper() in interstitials for e in list(all_elements)[1:]], dtype=bool)
+    """
+    Returns a boolean mask over the independent elements (``all_elements[1:]``).
+
+    Matching is exact (case-sensitive), as everywhere else in kawin
+    (``DiffusionModel``, ``Mobility``), so the Illingworth wrappers and the
+    base-class x/u conversion always agree on which elements are interstitial.
+    """
+    return np.asarray([str(e) in interstitials for e in list(all_elements)[1:]], dtype=bool)
 
 
 def has_interstitials(all_elements):
-    """Returns whether any element of the system is an interstitial."""
-    return any(str(e).upper() in interstitials for e in all_elements)
+    """Returns whether any element of the system is an interstitial (exact, case-sensitive match)."""
+    return any(str(e) in interstitials for e in all_elements)
 
 
 def validate_composition_basis(basis, name="composition_basis"):
@@ -60,8 +66,17 @@ def validate_interstitial_element_order(all_elements):
     ``u_dependent = 1 - sum(substitutional u)``. Independent elements may be in
     any order: kawin's ``Thermodynamics.getInterdiffusivity`` and the
     Thermo-Calc adapter both return matrices in the caller's element order.
+
+    Interstitial symbols must be upper case (``"C"``, not ``"c"``). kawin
+    recognises interstitials by exact match, so a lower-case symbol would
+    silently be treated as substitutional; it is rejected instead.
     """
-    elements = [str(e).upper() for e in all_elements]
+    elements = [str(e) for e in all_elements]
+    noncanonical = [e for e in elements if e not in interstitials and e.upper() in interstitials]
+    if noncanonical:
+        raise ValueError(
+            f"Interstitial element symbols must be upper case ({sorted(interstitials)}); received {noncanonical}."
+        )
     if elements[0] in interstitials:
         raise ValueError(
             f"The dependent (first) element must be substitutional for u-fractions; received {elements[0]!r}."

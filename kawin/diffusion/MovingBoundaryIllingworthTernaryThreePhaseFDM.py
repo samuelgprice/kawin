@@ -2420,7 +2420,14 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return float(values[0] - (float(total_moles) - values[1] - values[2]))
 
     def getAllComponentMoles(self, time=None):
-        """Returns directly integrated ``[N0, N1, N2]`` in mol/m^2."""
+        """
+        Returns directly integrated ``[N0, N1, N2]`` in mol/m^2.
+
+        With interstitial components the profiles are u-fractions and
+        ``phase_molar_volumes`` are volumes per mole of substitutional atoms,
+        so these are still moles of each component; only the substitutional
+        entries add up to ``getTotalSubstitutionalMoles``.
+        """
         self._require_explicit_phase_molar_volumes()
         if time is None:
             return self._get_all_component_moles_from_state(
@@ -2437,7 +2444,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return self.getAllComponentMoles(time=time)[1:]
 
     def getTotalSubstitutionalMoles(self, time=None):
-        """Returns geometric total substitutional inventory in mol/m^2."""
+        """
+        Returns geometric total substitutional inventory in mol/m^2.
+
+        This is the phase widths divided by the phase molar volumes; it counts
+        substitutional atoms only, so interstitial moles are not included.
+        """
         self._require_explicit_phase_molar_volumes()
         if time is None:
             return self._get_total_substitutional_moles_from_geometry(
@@ -2446,7 +2458,14 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return self.totalMolesData.y(time)
 
     def getDependentMoleClosureError(self, time=None):
-        """Returns ``N0_direct - (Ntot - N1 - N2)`` in mol/m^2."""
+        """
+        Returns ``N0_direct - (Ntot - N1 - N2)`` in mol/m^2.
+
+        ``Ntot`` is the substitutional total from ``getTotalSubstitutionalMoles``.
+        With interstitial components only the substitutional independent
+        components are subtracted (e.g. ``N0 - (Ntot - N_Mn)`` for Fe-C-Mn),
+        because interstitial moles are not part of ``Ntot``.
+        """
         self._require_explicit_phase_molar_volumes()
         if time is None:
             return self._dependent_mole_closure_error(
@@ -2459,8 +2478,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         Returns signed and absolute physical-mole conservation diagnostics.
 
         The three component inventories are independently integrated from
-        their mole-fraction fields. Physical units are available only when
-        ``phase_molar_volumes`` was explicitly supplied.
+        their composition fields: mole fractions for substitutional systems,
+        or u-fractions per mole of substitutional atoms when interstitials are
+        present (the results are moles of each component in both cases).
+        ``total_substitutional_moles`` and the dependent-component closure
+        involve substitutional components only. Physical units are available
+        only when ``phase_molar_volumes`` was explicitly supplied.
         """
         self._require_explicit_phase_molar_volumes()
         if self._initialMolarInventories is None or self._initialTotalMoles is None:

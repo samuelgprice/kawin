@@ -17,9 +17,13 @@ from examples.ternaryExamples.ternaryTwoPhaseSimilarity import (
     solve_similarity_roots,
 )
 import kawin.diffusion.MovingBoundaryIllingworthTernaryFDM as ternary_fdm
-from kawin.diffusion import CallableTernaryInterfaceEquilibrium, MovingBoundaryIllingworthTernaryFD1DModel
+from kawin.diffusion import (
+    CallableTernaryInterfaceEquilibrium,
+    MovingBoundaryIllingworthTernaryFD1DModel,
+    estimate_initial_eta_from_instantaneous_balance,
+)
 from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
-from kawin.diffusion.mesh.TransformedGrids import two_phase_landau_grids
+from kawin.diffusion.mesh.TransformedGrids import landau_grid, two_phase_landau_grids
 from kawin.solver import explicitEulerIterator
 
 FE_C_MN = ["FE", "C", "MN"]
@@ -230,3 +234,43 @@ def test_initial_eta_selects_by_active_norm_and_raises_without_converged_branch(
         ternary_fdm._select_converged_branch([_branch_record("positive", False, 1e-15, 1e-15)])
     with pytest.raises(ValueError, match="finite residual"):
         ternary_fdm._select_converged_branch([_branch_record("positive", True, 1e-15, 1e-15, eta=np.nan)])
+
+
+def _componentwise_floor_case():
+    """Fe-C-Mn-like startup balance where the Mn row is ~1e-10 of the carbon row."""
+    z = np.linspace(0.0, DOMAIN_LENGTH, 401)
+    composition = np.where(z[:, None] < 0.2, U_LEFT_FAR, U_RIGHT_FAR)
+    D_left, D_right = _diffusivities(1.0e-10)
+    return dict(
+        composition=composition,
+        z=z,
+        interface_position=0.2,
+        phases=["ALPHA", "BETA"],
+        thermodynamics=FixedMatrixTernaryDiffusivity({"ALPHA": D_left, "BETA": D_right}, ["ALPHA", "BETA"]),
+        temperature=1000.0,
+        interface_equilibrium=_closure(),
+        transformed_u_grid=landau_grid(41, "power", phase="left", exponent=2.0),
+        transformed_v_grid=landau_grid(401, "power", phase="right", exponent=2.0),
+        eta_guess=0.5,
+    )
+
+
+def test_componentwise_initial_eta_converges_when_slow_component_terms_vanish(monkeypatch):
+    """
+    The componentwise scale floor keeps the slow component's test attainable.
+
+    With an eigenvalue ratio of 1e-10 every Mn balance term is ~1e-10 of the
+    carbon terms, so without the round-off floor the per-component criterion
+    cannot be met at the root. With the floor, componentwise scaling finds the
+    same root as the default scaling.
+    """
+    kwargs = _componentwise_floor_case()
+    default = estimate_initial_eta_from_instantaneous_balance(**kwargs)
+    componentwise = estimate_initial_eta_from_instantaneous_balance(**kwargs, componentwise_scaling=True)
+    assert componentwise.converged
+    assert componentwise.eta == pytest.approx(default.eta, abs=1e-9)
+    assert componentwise.branch == default.branch
+
+    monkeypatch.setattr(ternary_fdm, "_COMPONENTWISE_ROUNDOFF_FACTOR", 1e-300)
+    with pytest.raises(ValueError, match="failed to converge"):
+        estimate_initial_eta_from_instantaneous_balance(**kwargs, componentwise_scaling=True)

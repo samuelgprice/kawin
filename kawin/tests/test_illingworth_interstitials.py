@@ -98,6 +98,30 @@ def test_element_order_guard():
         validate_interstitial_element_order(["C", "FE"])
 
 
+def test_interstitial_recognition_is_case_sensitive_like_kawin():
+    """Matching agrees with ``DiffusionModel``/``Mobility`` (exact case), and lower-case interstitials are rejected."""
+    from kawin.diffusion._illingworth_interstitials import has_interstitials
+
+    assert has_interstitials(["FE", "C"])
+    assert not has_interstitials(["FE", "c"])
+    assert independent_interstitial_mask(["FE", "c", "MN"]).tolist() == [False, False]
+    # The base class treats "c" as substitutional too, so the two never disagree...
+    x = np.array([[0.9, 0.1]])
+    np.testing.assert_allclose(x_to_u_frac(x, ["fe", "c"], interstitials), x[0])
+    # ...but a lower-case interstitial symbol is almost certainly a mistake, so the models reject it.
+    with pytest.raises(ValueError, match="upper case"):
+        validate_interstitial_element_order(["FE", "c"])
+    with pytest.raises(ValueError, match="upper case"):
+        validate_interstitial_element_order(["FE", "MN", "n"])
+    validate_interstitial_element_order(["fe", "cr"])  # lower-case substitutionals are not affected
+
+
+def test_binary_model_rejects_lower_case_interstitial_symbol():
+    therm = _ConstantBinaryThermodynamics({"ALPHA": 1.0, "BETA": 0.5})
+    with pytest.raises(ValueError, match="upper case"):
+        _binary_model(["FE", "c"], therm, StepProfile1D(1.0, 0.002, 0.03), (0.001, 0.02))
+
+
 class _SpyThermodynamics:
     def __init__(self):
         self.calls = []

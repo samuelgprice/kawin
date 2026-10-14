@@ -43,6 +43,12 @@ _SUPPORTED_BULK_DIFFUSIVITY_MODES = {
 # Multi-start initial-eta roots whose interface compositions differ by more
 # than this are treated as distinct roots of the startup balance, not round-off.
 _INITIAL_ETA_DISTINCT_ROOT_COMPOSITION_TOL = 2e-5
+# With componentwise initial-eta scaling, each component scale is floored at
+# ``_COMPONENTWISE_ROUNDOFF_FACTOR * eps / root_rtol`` times the largest one.
+# A component whose balance terms all (nearly) vanish, e.g. a non-partitioning
+# slow solute at t = 0, is then required to balance to round-off of the
+# largest terms instead of to a relative tolerance of ~0, which is unattainable.
+_COMPONENTWISE_ROUNDOFF_FACTOR = 64.0
 
 def _loge_arange(start, stop, log_step):
     """Returns exponentially spaced target times with fixed natural-log spacing."""
@@ -466,9 +472,14 @@ def estimate_initial_eta_from_instantaneous_balance(
     records ``scale``.
 
     With ``componentwise_scaling=True`` each residual row is divided by its own
-    scale (the same four terms taken per component, frozen at the current
-    Newton iterate for its Jacobian and line search) and convergence requires
-    ``max|scaled residual| <= root_rtol``. Use it when the two components have
+    scale (the same four terms taken per component, floored at
+    ``64 * eps / root_rtol`` times the largest component scale, and frozen at
+    the current Newton iterate for its Jacobian and line search) and
+    convergence requires ``max|scaled residual| <= root_rtol``. The floor means
+    a component is never asked to balance below round-off of the largest
+    terms (about ``64 * eps`` of them), which keeps the test attainable when
+    every balance term of one component nearly vanishes, e.g. a
+    non-partitioning slow solute with a flat start. Use it when the two components have
     very different diffusivities (e.g. an interstitial and a substitutional
     solute): the shared max-norm scale is then set by the fast component and
     leaves the slow component's balance effectively unconverged.
@@ -601,7 +612,7 @@ def estimate_initial_eta_from_instantaneous_balance(
         return np.max(np.abs(high - low), axis=0)
 
     def component_scales_of(velocity, swept_inventory, side_fluxes):
-        return np.maximum.reduce(
+        scales = np.maximum.reduce(
             [
                 np.max(np.abs(side_fluxes), axis=0),
                 abs(float(velocity)) * np.abs(swept_inventory),
@@ -609,6 +620,7 @@ def estimate_initial_eta_from_instantaneous_balance(
                 np.full(2, 1e-300),
             ]
         )
+        return np.maximum(scales, component_scale_floor * float(np.max(scales)))
 
     def residual_scale_of(velocity, swept_inventory, side_fluxes):
         return max(
@@ -631,6 +643,7 @@ def estimate_initial_eta_from_instantaneous_balance(
 
     sensitivity_scale = None
     component_sensitivity = eta_sensitivity_components() if componentwise_scaling else None
+    component_scale_floor = min(1.0, _COMPONENTWISE_ROUNDOFF_FACTOR * float(np.finfo(np.float64).eps) / relative_tolerance)
 
     def velocity_scale_for_branch(branch):
         swept_inventory, flux_delta, _, _, _ = evaluate_terms(eta0, branch)

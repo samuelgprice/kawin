@@ -76,6 +76,9 @@ and the tie-line closures. One new private module does the conversion:
 - New optional `initial_eta_componentwise_scaling`: per-row scaling of the startup η balance.
   - The scales are frozen within each Newton iterate.
   - An earlier version re-evaluated them at perturbed points; the scaled residual then saturated as |V| grew and Newton stalled. That is fixed.
+  - Each component scale is floored at `64·eps/root_rtol` times the largest one, so a component whose balance terms nearly vanish (a non-partitioning slow solute at t = 0) is required to balance only to round-off of the dominant terms. Without the floor the test was unattainable and the option failed on strongly graded Fe-Ni-C grids.
+- Initial-η branch selection now picks the best *converged* motion branch, compared in the active scaling's norm. Previously the branch with the smallest raw residual was taken and then rejected if unconverged, which could discard a converged branch. That logic predates this work.
+- Interstitial symbols must be upper case. Matching is exact, as in the rest of kawin, and lower-case interstitial symbols such as `"c"` are rejected instead of silently being treated as substitutional.
 - New diagnostics after each accepted step, all computed in closed form for 2×2 matrices without LAPACK:
   - `_lastImplicitResidualComponents`
   - `_lastImplicitJacobianCond`
@@ -139,8 +142,8 @@ All Python runs go through the conda activation wrapper (see AGENTS.md).
 | Test file | What it checks | Runtime |
 |---|---|---|
 | `test_illingworth_substitutional_baseline.py` (+ `illingworth_baseline_cases.py`, `make_illingworth_substitutional_baseline.py`, `data/illingworth_substitutional_baseline.npz`) | Binary in all three D modes, two-phase ternary (uniform/lagged/implicit, both motion directions) and three-phase (uniform/lagged). Every recorded history is **bitwise equal** (NaN-aware) to the pre-change code. | ~7 s |
-| `test_illingworth_interstitials.py` | Shared module: u↔x round trips vs `Mobility` (1e-14), bounds identical to the legacy simplex, wrappers. Binary Fe-C: u after `__init__` and after `reset()`, providers receive x in all three D modes, Fe-C vs Ni-Cr label invariance, and an analytic u-fraction **Zener** test. | ~5 s |
-| `test_illingworth_interstitials_ternary.py` | Fe-C-Mn-like plumbing (x and u closures, queries in x, mole-fraction outputs, diagnostics, bounds, dependent-element guard). **Disparate-eigenvalue similarity tests** at Mn/C ratios 1e-2, 1e-4, 1e-6. A 1e-8 case is gated by `KAWIN_RUN_SLOW=1` and has not been run. | ~50 s |
+| `test_illingworth_interstitials.py` | Shared module: u↔x round trips vs `Mobility` (1e-14), bounds identical to the legacy simplex, wrappers. Exact-case interstitial matching and rejection of lower-case interstitial symbols. Binary Fe-C: u after `__init__` and after `reset()`, providers receive x in all three D modes, Fe-C vs Ni-Cr label invariance, and an analytic u-fraction **Zener** test. | ~5 s |
+| `test_illingworth_interstitials_ternary.py` | Fe-C-Mn-like plumbing (x and u closures, queries in x, mole-fraction outputs, diagnostics, bounds, dependent-element guard). **Disparate-eigenvalue similarity tests** at Mn/C ratios 1e-2, 1e-4, 1e-6. A 1e-8 case is gated by `KAWIN_RUN_SLOW=1` and has not been run. Initial-η branch selection (converged branch preferred over a smaller raw residual) and the per-component scale floor (ratio 1e-10, with a floor-disabled negative control). | ~50 s |
 | `test_illingworth_interstitials_three_phase.py` | Masked molar inventory vs hand integration. Fe-C-Mn three-phase: u state, queries in x, conservation of component moles, substitutional-only total-moles closure, mole-fraction outputs. | ~6 s |
 
 **Full suite:** 1020 passed, 2 skipped (6 min 49 s). The existing Illingworth
@@ -373,7 +376,7 @@ Outputs: `outputs/fe_mn_c_ferrite_le_n801_comparison.json` and `_thickness.png`.
 ## 5. Problems found along the way
 
 1. **`reset()` returned the state to mole fractions** (all Illingworth models). It was harmless before because u = x for substitutional systems. Fixed.
-2. **Per-component η scaling** first saturated (fixed by freezing the scales per iterate). It still fails on the most strongly graded ternary grids, so it is opt-in in the examples (`--eta-componentwise`).
+2. **Per-component η scaling** first saturated (fixed by freezing the scales per iterate), then failed when one component's balance terms nearly vanished (fixed with a round-off scale floor). Both scalings now find the same root on the Fe-Ni-C 401/p3.5 and 801/p3.5 grids. It remains opt-in in the examples (`--eta-componentwise`). These fixes only affect the t = 0 η estimate; the first-step failures of the finer Fe-Ni-C grids (item 8) remain.
 3. **DICTRA's default time-step control under-predicts growth** by 10–15% in Fe-C and Fe-Ni-C. Use tightened `TimestepControl` for references.
 4. **DICTRA's start-up jump** to about 0.6 µm from a 1e-9 m seed. Compare growth rates from about 100 s (Fe-C), or compare k(t), not early thicknesses.
 5. **Strict DICTRA settings can make a run impractical** (interface checking with nm-scale first cells pins dt).

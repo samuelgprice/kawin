@@ -23,8 +23,8 @@ of width about D_X / v (sub-nanometre here) forms in austenite at the
 interface. The austenite transformed grid is a strong power law at the
 interface and the interface residual can be tightened for X with
 ``--x-residual-scale``. The startup eta balance uses the default (max-norm)
-scaling; ``--eta-componentwise`` switches to per-component scaling, which
-failed to converge on the most strongly graded grids here. The t = 0 balance
+scaling; ``--eta-componentwise`` switches to per-component scaling (both
+converge to the same root on the grids used here). The t = 0 balance
 starts from a step profile and depends on the first cell size (it can even pick
 a negative-velocity root); the first steps re-solve eta, so growth after
 ~1e-5 s is unaffected.
