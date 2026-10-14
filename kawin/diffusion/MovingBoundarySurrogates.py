@@ -1720,6 +1720,14 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
     By default, ``validity_policy='raise'`` checks labeled domain evidence
     before evaluation and separately requires solver-usable fit support;
     ``legacy`` retains the historical fallback and clamping behavior.
+
+    Compositions (sample points, tie-line endpoints and query inputs) are
+    independent mole fractions on the ternary simplex. The stored matrices are
+    whatever the source thermodynamics returns, which for kawin and
+    Thermo-Calc is the volume-fixed reduced diffusivity in the u-fraction
+    basis. With interstitial elements the Illingworth models keep this
+    surrogate in mole fractions and convert their u-fraction state at the
+    query boundary (``kawin.diffusion._illingworth_interstitials``).
     """
 
     def __init__(

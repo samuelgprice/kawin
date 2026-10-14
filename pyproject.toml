@@ -62,3 +62,8 @@ source = [
 source_pkgs = [
     "kawin"
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: long-running checks (over a few minutes); run with KAWIN_RUN_SLOW=1",
+]

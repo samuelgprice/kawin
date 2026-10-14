@@ -1763,7 +1763,6 @@ class TCPythonThermodynamics:
             }
         else:
             # from examples.debugInPlace import debugInPlace
-            print(x)
             # debugInPlace()
             x_alpha = -1.0 * np.ones(len(self.independent_elements), dtype=np.float64)
             x_beta = -1.0 * np.ones(len(self.independent_elements), dtype=np.float64)

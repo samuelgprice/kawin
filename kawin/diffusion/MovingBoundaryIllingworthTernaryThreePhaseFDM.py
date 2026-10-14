@@ -3,6 +3,16 @@ from dataclasses import dataclass
 
 import numpy as np
 from kawin.diffusion.Diffusion import DiffusionModel
+from kawin.diffusion._illingworth_interstitials import (
+    composition_bound_violation,
+    full_mole_fractions,
+    has_interstitials,
+    independent_interstitial_mask,
+    record_initial_u_fractions,
+    resolve_diffusivity_provider,
+    resolve_interface_equilibrium,
+    validate_interstitial_element_order,
+)
 from kawin.diffusion.MovingBoundaryEquilibrium import CallableTernaryInterfaceEquilibrium
 from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import (
     _ArrayHistory,
@@ -27,7 +37,6 @@ from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
     validate_ternary_profile,
 )
 from kawin.solver import explicitEulerIterator
-from kawin.thermo.Mobility import interstitials
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +177,20 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     mesh and length-weighted. Physical conservation uses the explicit molar
     APIs, while ``getPhysicalPhaseProfiles`` is authoritative for the complete
     moving specimen and preserves both sides of interface discontinuities.
+
+    Interstitial solutes (``kawin.thermo.Mobility.interstitials``) are
+    supported as in the two-phase model: the two independent components are
+    stored as u-fractions (``u_k = x_k / sum(substitutional x)``), the dependent
+    (first) element must be substitutional, diffusivities are the volume-fixed
+    u-basis matrices, thermodynamics objects are queried with mole fractions,
+    and tie-line closures return mole fractions unless they declare
+    ``composition_basis = "u"``. ``phase_molar_volumes`` are then volumes per
+    mole of substitutional atoms; the molar APIs return moles of every
+    component, and only the substitutional entries add up to
+    ``getTotalSubstitutionalMoles``. Composition bounds apply to the
+    substitutional u-fractions, with interstitial u-fractions bounded below
+    only. ``getCompositions`` and ``getPhysicalPhaseProfiles`` return mole
+    fractions. For substitutional systems ``u == x`` and results are unchanged.
     """
 
     def __init__(
@@ -364,8 +387,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             raise ValueError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel requires ternary systems with two independent responses.")
         if len(self.phases) != 3:
             raise ValueError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel requires exactly three explicit phases.")
-        if any(e in interstitials for e in self.allElements):
-            raise ValueError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel supports only substitutional systems.")
+        validate_interstitial_element_order(self.allElements)
         if self.geometry != "planar":
             raise NotImplementedError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel currently implements only planar geometry.")
         if not np.isfinite(self.timeStep) or self.timeStep <= 0.0:
@@ -631,13 +653,24 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                 adjacent.append(np.asarray(values, dtype=np.float64))
         return adjacent[0], adjacent[1][0], adjacent[1][1], adjacent[2]
 
+    def _diffusivity_source(self):
+        """
+        Returns the object queried for interdiffusivity matrices.
+
+        With interstitials this wraps ``self.therm`` so u-fraction compositions
+        are converted to mole fractions before each query; otherwise it is
+        ``self.therm`` itself.
+        """
+        return resolve_diffusivity_provider(self.therm, self.allElements)
+
     def _interface_face_diffusivity(self, composition, phase_index, position, context):
         """Returns one validated diffusivity matrix for an initial interface-face estimate."""
         T = np.asarray(self.temperatureParameters(np.asarray([[float(position)]], dtype=np.float64), 0.0), dtype=np.float64).reshape(-1)
+        source = self._diffusivity_source()
         try:
-            D = self.therm.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index], query_context=context)
+            D = source.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index], query_context=context)
         except TypeError:
-            D = self.therm.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index])
+            D = source.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index])
         return _validate_ternary_diffusivity_matrix(D, self.phases[phase_index], context=context)
 
     def _initial_face_diffusivity_matrices(self, interfaces, interface_compositions, adjacent):
@@ -948,19 +981,18 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         etas = np.asarray(etas, dtype=np.float64).reshape(2)
         out = []
         for i, (closure, eta) in enumerate(zip(self.interfaceEquilibria, etas)):
-            left, right = closure.interface_compositions(float(eta))
+            left, right = resolve_interface_equilibrium(closure, self.allElements).interface_compositions(float(eta))
             left = self._validate_composition_vector(left, f"interface {i} left composition")
             right = self._validate_composition_vector(right, f"interface {i} right composition")
             out.append((left, right))
         return tuple(out)
 
     def _validate_composition_vector(self, values, name):
+        """Rejects a non-finite interface composition or one outside ``_profile_composition_violation`` bounds."""
         values = np.asarray(values, dtype=np.float64).reshape(-1)
-        min_comp = float(self.constraints.minComposition)
         if values.shape != (2,) or not np.all(np.isfinite(values)):
             raise ValueError(f"{name} must be a finite two-component vector.")
-        dependent = 1.0 - float(np.sum(values))
-        if np.any(values < min_comp) or dependent < min_comp:
+        if composition_bound_violation(values.reshape(1, 2), independent_interstitial_mask(self.allElements), self.constraints.minComposition) is not None:
             raise ValueError(f"{name} violates ternary composition bounds.")
         return values.copy()
 
@@ -977,20 +1009,13 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         Interval solves are linear solves and are not positivity preserving for
         all coupled diffusivity matrices, timestep sizes, and moving-boundary
         guesses. Candidate profiles must therefore be rejected before their
-        interface residuals are considered converged.
+        interface residuals are considered converged. With interstitials the
+        simplex applies to the substitutional u-fractions only and interstitial
+        u-fractions are bounded below.
         """
-        profile = np.asarray(profile, dtype=np.float64)
-        min_comp = float(self.constraints.minComposition)
-        dependent = 1.0 - np.sum(profile, axis=1)
-        component_bad = np.argwhere(profile < min_comp)
-        if component_bad.size:
-            node, component = component_bad[0]
-            return f"node {int(node)} component {int(component)} = {profile[node, component]:.6g}"
-        dependent_bad = np.flatnonzero(dependent < min_comp)
-        if dependent_bad.size:
-            node = int(dependent_bad[0])
-            return f"node {node} dependent component = {dependent[node]:.6g}"
-        return None
+        return composition_bound_violation(
+            profile, independent_interstitial_mask(self.allElements), self.constraints.minComposition
+        )
 
     def _validate_candidate_profiles(self, profiles):
         """Rejects nonlinear trial states whose transformed profiles leave the ternary simplex."""
@@ -1266,8 +1291,14 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return T
 
     def _bulk_face_diffusivity_matrices(self, face_compositions, phase, time, physical_face_positions):
-        """Returns validated bulk diffusivity matrices for interval faces."""
+        """
+        Returns validated bulk diffusivity matrices for interval faces.
+
+        ``face_compositions`` are in the state basis (u-fractions with
+        interstitials); the provider receives mole fractions.
+        """
         face_compositions = np.asarray(face_compositions, dtype=np.float64)
+        source = self._diffusivity_source()
         if face_compositions.ndim != 2 or face_compositions.shape[1] != 2:
             raise ValueError("face_compositions must have shape (n_faces, 2).")
         temperatures = self._temperatures_at_positions(physical_face_positions, time)
@@ -1284,7 +1315,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             return out
 
         try:
-            values = self.therm.getInterdiffusivity(face_compositions, temperatures, phase=phase, query_context="general")
+            values = source.getInterdiffusivity(face_compositions, temperatures, phase=phase, query_context="general")
         except (TypeError, ValueError):
             pass
         else:
@@ -1293,9 +1324,9 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         out = np.empty((face_compositions.shape[0], 2, 2), dtype=np.float64)
         for i, (composition, temperature) in enumerate(zip(face_compositions, temperatures)):
             try:
-                D = self.therm.getInterdiffusivity(composition, float(temperature), phase=phase, query_context="general")
+                D = source.getInterdiffusivity(composition, float(temperature), phase=phase, query_context="general")
             except TypeError:
-                D = self.therm.getInterdiffusivity(composition, float(temperature), phase=phase)
+                D = source.getInterdiffusivity(composition, float(temperature), phase=phase)
             out[i] = _validate_ternary_diffusivity_matrix(D, phase, context=f"bulk face diffusivity face {i}")
         return out
 
@@ -1310,10 +1341,11 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             composition = interface_compositions[1][1]
             position = interfaces[1]
         T = np.asarray(self.temperatureParameters(np.asarray([[float(position)]], dtype=np.float64), self.currentTime), dtype=np.float64).reshape(-1)
+        source = self._diffusivity_source()
         try:
-            D = self.therm.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index], query_context="interface")
+            D = source.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index], query_context="interface")
         except TypeError:
-            D = self.therm.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index])
+            D = source.getInterdiffusivity(composition, float(T[0]), phase=self.phases[phase_index])
         return _validate_ternary_diffusivity_matrix(D, self.phases[phase_index], context="three-phase phase-uniform diffusivity")
 
     def _face_positions(self, grid, bounds):
@@ -2015,7 +2047,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                 molar_inventories, total_moles
             )
             scale = max(abs(total_moles), 1.0)
-            if not np.isclose(np.sum(molar_inventories), total_moles, rtol=5e-13, atol=5e-15 * scale):
+            if not np.isclose(self._substitutional_mole_sum(molar_inventories), total_moles, rtol=5e-13, atol=5e-15 * scale):
                 raise RuntimeError("Direct component moles do not sum to the geometric substitutional total.")
         else:
             molar_inventories = np.full(3, np.nan, dtype=np.float64)
@@ -2249,6 +2281,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
 
     def reset(self):
         super().reset()
+        if has_interstitials(self.allElements):
+            record_initial_u_fractions(self)
         self.interfaceData.reset()
         self.interfaceData.record(0, self.initialInterfacePositions)
         self.etaData.reset()
@@ -2349,7 +2383,22 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             float(right_boundary),
             self._grids,
             self._phaseMolarVolumes,
+            substitutional_mask=self._substitutional_mask(),
         )
+
+    def _substitutional_mask(self):
+        """Returns the independent-component substitutional mask, or ``None`` without interstitials."""
+        if not has_interstitials(self.allElements):
+            return None
+        return ~independent_interstitial_mask(self.allElements)
+
+    def _substitutional_mole_sum(self, molar_inventories):
+        """Returns the summed moles of the substitutional components (all three without interstitials)."""
+        values = np.asarray(molar_inventories, dtype=np.float64).reshape(3)
+        mask = self._substitutional_mask()
+        if mask is None:
+            return np.sum(molar_inventories)
+        return float(values[0] + np.sum(values[1:][mask]))
 
     def _get_total_substitutional_moles_from_geometry(self, interfaces, right_boundary):
         """Returns total substitutional moles per unit area from phase widths and densities."""
@@ -2358,8 +2407,16 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return float(np.dot(self._phaseMolarDensities, widths))
 
     def _dependent_mole_closure_error(self, molar_inventories, total_moles):
-        """Returns direct dependent moles minus ``Ntot - N1 - N2``."""
+        """
+        Returns direct dependent moles minus ``Ntot - N1 - N2``.
+
+        With interstitials only the substitutional independent components are
+        subtracted, because interstitial moles are not part of ``Ntot``.
+        """
         values = np.asarray(molar_inventories, dtype=np.float64).reshape(3)
+        mask = self._substitutional_mask()
+        if mask is not None:
+            return float(values[0] - (float(total_moles) - np.sum(values[1:][mask])))
         return float(values[0] - (float(total_moles) - values[1] - values[2]))
 
     def getAllComponentMoles(self, time=None):
@@ -2455,11 +2512,16 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         Each phase retains its own interface endpoint, so discontinuous left
         and right equilibrium compositions are not averaged together.
         Historical requests require an exactly recorded transformed state.
+        Compositions are full mole fractions (stored u-fractions are converted
+        when interstitials are present).
         """
         coordinates = self.getPhysicalCoordinates(time=time)
         profiles = self.getTransformedState(time=time)
         out = []
         for phase_coordinates, independent in zip(coordinates, profiles):
+            if has_interstitials(self.allElements):
+                out.append((phase_coordinates.copy(), full_mole_fractions(independent, self.allElements)))
+                continue
             dependent = 1.0 - np.sum(independent, axis=1)
             out.append((phase_coordinates.copy(), np.column_stack((dependent, independent))))
         return tuple(out)
@@ -2494,12 +2556,15 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         """
         Returns full ternary mole fractions paired with the immutable fixed mesh.
 
-        The stored response profile contains the two independent substitutional
-        components. Contracted-out nodes are NaN. For moving unequal-volume
+        The stored response profile contains the two independent components
+        (u-fractions when interstitials are present, converted here to mole
+        fractions). Contracted-out nodes are NaN. For moving unequal-volume
         domains, non-recorded-time interpolation is rejected because a later
         NaN snapshot cannot be safely interpolated at a formerly valid node.
         """
         independent = self._fixed_mesh_profile(time=time)
+        if has_interstitials(self.allElements):
+            return full_mole_fractions(independent, self.allElements)
         dependent = 1.0 - np.sum(independent, axis=1)
         return np.column_stack((dependent, independent))
 

@@ -7,6 +7,16 @@ from ._spectral_validation import TERNARY_DIFFUSIVITY_POSITIVE_EIGENVALUE_TOL, T
 from kawin.GenericModel import GenericModel
 from kawin.diffusion.Diffusion import DiffusionModel
 from kawin.diffusion.DiffusionParameters import TemperatureParameters
+from kawin.diffusion._illingworth_interstitials import (
+    composition_bound_violation,
+    full_mole_fractions,
+    has_interstitials,
+    independent_interstitial_mask,
+    record_initial_u_fractions,
+    resolve_diffusivity_provider,
+    resolve_interface_equilibrium,
+    validate_interstitial_element_order,
+)
 from kawin.diffusion.MovingBoundaryEquilibrium import (
     CallableTernaryInterfaceEquilibrium,
     ThermodynamicTernaryInterfaceEquilibrium,
@@ -21,7 +31,6 @@ from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
     reconstruct_planar_transformed_profile_components,
 )
 from kawin.solver import explicitEulerIterator
-from kawin.thermo.Mobility import interstitials
 
 _BULK_DIFFUSIVITY_PHASE_UNIFORM = "phase_uniform"
 _BULK_DIFFUSIVITY_LAGGED = "composition_dependent_lagged"
@@ -89,6 +98,38 @@ def _newton_step_2x2(jacobian, residual):
     r0 = -float(residual[0])
     r1 = -float(residual[1])
     return np.asarray([(d * r0 - b * r1) / determinant, (-c * r0 + a * r1) / determinant], dtype=np.float64)
+
+
+def _condition_number_2x2(matrix):
+    """
+    Returns the 2-norm condition number of a 2x2 matrix in closed form.
+
+    Used only for diagnostics, so it avoids LAPACK like the rest of the 2x2
+    interface algebra. Singular or non-finite matrices give ``inf``.
+    """
+    a, b = float(matrix[0, 0]), float(matrix[0, 1])
+    c, d = float(matrix[1, 0]), float(matrix[1, 1])
+    frob = a * a + b * b + c * c + d * d
+    det = abs(a * d - b * c)
+    if not np.isfinite(frob) or not np.isfinite(det) or det <= 0.0:
+        return np.inf
+    root = np.sqrt(max(frob * frob - 4.0 * det * det, 0.0))
+    smax2 = 0.5 * (frob + root)
+    smin2 = 0.5 * (frob - root)
+    if smin2 <= 0.0:
+        smin2 = det * det / smax2
+    return float(np.sqrt(smax2 / smin2))
+
+
+def _smallest_real_eigenvalue_2x2(matrix):
+    """Returns the smallest real part of the eigenvalues of a 2x2 matrix (closed form)."""
+    a, b = float(matrix[0, 0]), float(matrix[0, 1])
+    c, d = float(matrix[1, 0]), float(matrix[1, 1])
+    half_trace = 0.5 * (a + d)
+    disc = half_trace * half_trace - (a * d - b * c)
+    if disc < 0.0:
+        return half_trace
+    return half_trace - np.sqrt(disc)
 
 
 def _validate_motion_branch(motion_branch):
@@ -373,6 +414,7 @@ def estimate_initial_eta_from_instantaneous_balance(
     root_maxiter=100,
     bulk_diffusivity_mode=_BULK_DIFFUSIVITY_PHASE_UNIFORM,
     root_rtol=1e-10,
+    componentwise_scaling=False,
 ):
     """
     Estimates initial eta by solving the instantaneous discrete balance.
@@ -396,6 +438,22 @@ def estimate_initial_eta_from_instantaneous_balance(
     magnitude, and of the starting guess. ``root_xtol`` is an optional absolute
     floor (``None`` disables it); ``residual_scale`` on the returned estimate
     records ``scale``.
+
+    With ``componentwise_scaling=True`` each residual row is divided by its own
+    scale (the same four terms taken per component, frozen at the current
+    Newton iterate for its Jacobian and line search) and convergence requires
+    ``max|scaled residual| <= root_rtol``. Use it when the two components have
+    very different diffusivities (e.g. an interstitial and a substitutional
+    solute): the shared max-norm scale is then set by the fast component and
+    leaves the slow component's balance effectively unconverged.
+    ``residual_scale`` on the returned estimate is then the largest
+    component scale.
+
+    ``composition`` and the closure's interface compositions must be in the
+    same basis as the diffusion state (u-fractions when interstitials are
+    present); ``thermodynamics`` is queried with that basis, so callers pass a
+    u-fraction wrapper (see ``kawin.diffusion._illingworth_interstitials``)
+    when the provider expects mole fractions.
     """
     composition = np.asarray(composition, dtype=np.float64)
     z = np.asarray(z, dtype=np.float64).reshape(-1)
@@ -507,6 +565,25 @@ def estimate_initial_eta_from_instantaneous_balance(
             return 0.0
         return float(np.max(np.abs(high - low)))
 
+    def eta_sensitivity_components():
+        # Per-component version of ``eta_sensitivity_scale``.
+        try:
+            low = evaluate_terms(bracket[0], "positive")[4]
+            high = evaluate_terms(bracket[1], "positive")[4]
+        except ValueError:
+            return np.zeros(2, dtype=np.float64)
+        return np.max(np.abs(high - low), axis=0)
+
+    def component_scales_of(velocity, swept_inventory, side_fluxes):
+        return np.maximum.reduce(
+            [
+                np.max(np.abs(side_fluxes), axis=0),
+                abs(float(velocity)) * np.abs(swept_inventory),
+                component_sensitivity,
+                np.full(2, 1e-300),
+            ]
+        )
+
     def residual_scale_of(velocity, swept_inventory, side_fluxes):
         return max(
             float(np.max(np.abs(side_fluxes))),
@@ -527,6 +604,7 @@ def estimate_initial_eta_from_instantaneous_balance(
         return norm <= relative_tolerance * sensitivity_scale
 
     sensitivity_scale = None
+    component_sensitivity = eta_sensitivity_components() if componentwise_scaling else None
 
     def velocity_scale_for_branch(branch):
         swept_inventory, flux_delta, _, _, _ = evaluate_terms(eta0, branch)
@@ -558,7 +636,10 @@ def estimate_initial_eta_from_instantaneous_balance(
             velocity = float(unknowns[0]) * velocity_scale
             eta = float(unknowns[1])
             swept_inventory, flux_delta, _, _, side_fluxes = evaluate_terms(eta, branch)
-            return velocity * swept_inventory - flux_delta, residual_scale_of(velocity, swept_inventory, side_fluxes)
+            residual = velocity * swept_inventory - flux_delta
+            if componentwise_scaling:
+                return residual, component_scales_of(velocity, swept_inventory, side_fluxes)
+            return residual, residual_scale_of(velocity, swept_inventory, side_fluxes)
 
         lower = np.asarray([velocity_bounds[0], bracket[0]], dtype=np.float64)
         upper = np.asarray([velocity_bounds[1], bracket[1]], dtype=np.float64)
@@ -569,10 +650,16 @@ def estimate_initial_eta_from_instantaneous_balance(
         for _ in range(int(root_maxiter)):
             residual_current, scale_current = residual_unknowns(x)
             nfev += 1
+            if componentwise_scaling:
+                # Freeze this iterate's component scales for the Jacobian and
+                # line search; re-evaluating them at perturbed points would
+                # make the scaled residual saturate as |V| grows.
+                weights = scale_current
+                residual_current = residual_current / weights
             norm_current = float(np.max(np.abs(residual_current)))
             if best is None or norm_current < best[0]:
                 best = (norm_current, x.copy(), residual_current.copy())
-            if converged_at(norm_current, scale_current):
+            if (norm_current <= relative_tolerance) if componentwise_scaling else converged_at(norm_current, scale_current):
                 success = True
                 break
 
@@ -581,9 +668,13 @@ def estimate_initial_eta_from_instantaneous_balance(
                 step, x_perturbed, difference_direction = _bounded_finite_difference_perturbation(x, lower, upper, variable)
                 if difference_direction == "forward":
                     residual_perturbed, _ = residual_unknowns(x_perturbed)
+                    if componentwise_scaling:
+                        residual_perturbed = residual_perturbed / weights
                     jacobian[:, variable] = (residual_perturbed - residual_current) / step
                 else:
                     residual_perturbed, _ = residual_unknowns(x_perturbed)
+                    if componentwise_scaling:
+                        residual_perturbed = residual_perturbed / weights
                     jacobian[:, variable] = (residual_current - residual_perturbed) / step
                 nfev += 1
 
@@ -597,6 +688,8 @@ def estimate_initial_eta_from_instantaneous_balance(
                 trial = np.clip(x + scale * step, lower, upper)
                 residual_trial, _ = residual_unknowns(trial)
                 nfev += 1
+                if componentwise_scaling:
+                    residual_trial = residual_trial / weights
                 norm_trial = float(np.max(np.abs(residual_trial)))
                 if np.isfinite(norm_trial) and norm_trial < norm_current:
                     x = trial
@@ -610,6 +703,10 @@ def estimate_initial_eta_from_instantaneous_balance(
         eta = float(best[1][1])
         swept_inventory, flux_delta, c_left, c_right, side_fluxes = evaluate_terms(eta, branch)
         residual = velocity * swept_inventory - flux_delta
+        if componentwise_scaling:
+            final_scale = float(np.max(component_scales_of(velocity, swept_inventory, side_fluxes)))
+        else:
+            final_scale = residual_scale_of(velocity, swept_inventory, side_fluxes)
         branch_results.append(
             (
                 float(np.max(np.abs(residual))),
@@ -622,7 +719,7 @@ def estimate_initial_eta_from_instantaneous_balance(
                 flux_delta.copy(),
                 c_left.copy(),
                 c_right.copy(),
-                residual_scale_of(velocity, swept_inventory, side_fluxes),
+                final_scale,
             )
         )
 
@@ -799,6 +896,31 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     retry budget is exhausted, an optional terminal retry path can keep
     reducing ``dt`` until one final converged step is found and then stop the
     solve early.
+
+    Interstitial solutes (``kawin.thermo.Mobility.interstitials``, e.g. C in
+    Fe-C-Mn) are supported. The two independent components may then be
+    substitutional or interstitial and are stored as u-fractions,
+    ``u_k = x_k / sum(substitutional x)``; profiles, inventories and the
+    interface balance ``v [u_k] = [J_k]`` are in u, and the dependent
+    (first) element must be substitutional. Diffusion is in the volume-fixed
+    frame in which only substitutional atoms carry volume, with a constant
+    molar volume per mole of substitutional atoms that is equal in both phases;
+    ``D`` is the reduced volume-fixed u-basis matrix returned by
+    ``kawin.thermo.Mobility.interdiffusivity`` and by Thermo-Calc's ``DC``.
+    Thermodynamics objects are still queried with mole fractions, and tie-line
+    closures return mole fractions unless they declare
+    ``composition_basis = "u"``; the model converts at both boundaries.
+    Composition bounds then apply to the substitutional u-fractions (each and
+    the dependent one at least ``minComposition``) and to interstitial
+    u-fractions from below only. ``getCompositions`` and
+    ``getPhysicalPhaseProfiles`` return mole fractions. For substitutional
+    systems ``u == x`` and every result is unchanged.
+
+    ``interface_residual_composition_scale`` (default ``None``, i.e. ``1.0``)
+    sets the composition scale of the per-step interface residual; a smaller
+    value per component tightens the balance of a dilute or slow component.
+    ``initial_eta_componentwise_scaling`` scales each row of the startup eta
+    balance separately (see ``estimate_initial_eta_from_instantaneous_balance``).
     """
 
     def __init__(
@@ -844,9 +966,17 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         record_pq_data: bool = True,
         transformed_u_grid=None,
         transformed_v_grid=None,
+        interface_residual_composition_scale=None,
+        initial_eta_componentwise_scaling: bool = False,
     ):
         self.initialInterfacePosition = float(interfacePosition)
         self.timeStep = float(time_step)
+        self.interfaceResidualCompositionScale = (
+            None
+            if interface_residual_composition_scale is None
+            else np.broadcast_to(np.asarray(interface_residual_composition_scale, dtype=np.float64), (2,)).copy()
+        )
+        self.initialEtaComponentwiseScaling = bool(initial_eta_componentwise_scaling)
         self.initialEta = np.nan
         self.initialEtaMethod = str(initial_eta_method)
         self.initialEtaBracket = initial_eta_bracket
@@ -973,8 +1103,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             raise ValueError("MovingBoundaryIllingworthTernaryFD1DModel requires ternary systems with two independent responses.")
         self._validate_external_boundary_conditions()
         self._validate_isothermal_temperature()
-        if any(e in interstitials for e in self.allElements):
-            raise ValueError("MovingBoundaryIllingworthTernaryFD1DModel supports only substitutional systems.")
+        validate_interstitial_element_order(self.allElements)
+        if self.interfaceResidualCompositionScale is not None and not (
+            np.all(np.isfinite(self.interfaceResidualCompositionScale)) and np.all(self.interfaceResidualCompositionScale > 0.0)
+        ):
+            raise ValueError("interface_residual_composition_scale must be positive and finite.")
         if len(self.phases) != 2:
             raise ValueError("MovingBoundaryIllingworthTernaryFD1DModel requires exactly two explicit phases.")
         if self.geometry != "planar":
@@ -1118,6 +1251,13 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         """
         Resets diagnostics for the most recent nonlinear interface solve.
 
+        ``_lastImplicitResidualComponents`` holds the accepted per-component
+        scaled interface residual, ``_lastImplicitJacobianCond`` the 2-norm
+        condition number of the last scaled Newton Jacobian, and
+        ``_lastInterfacePeclet`` the interface Peclet numbers
+        ``|v| * dz_interface / lambda_min(D_interface)`` of the left and right
+        phases (values well above one mean the interface cell does not resolve
+        the slow component's boundary layer).
         ``_lastImplicitCandidateEvaluations`` counts attempted complete
         interface-candidate builds. ``_lastImplicitFunctionEvaluations`` is
         retained as a private compatibility alias with the same value.
@@ -1135,6 +1275,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._lastImplicitConverged = False
         self._lastImplicitForcedUpdateSkipped = False
         self._lastImplicitFailureReason = None
+        self._lastImplicitResidualComponents = np.full(2, np.nan)
+        self._lastImplicitJacobianCond = np.nan
+        self._lastInterfacePeclet = np.full(2, np.nan)
         self._lastBulkLeftPicardIterations = 0
         self._lastBulkRightPicardIterations = 0
         self._lastBulkLeftUpdateNorm = np.nan
@@ -1248,6 +1391,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
     def reset(self):
         super().reset()
+        if has_interstitials(self.allElements):
+            record_initial_u_fractions(self)
         self.interfaceData.reset()
         self.interfaceData.record(0, self.initialInterfacePosition)
         self.etaData.reset()
@@ -1316,8 +1461,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if len(estimates) == 0:
             raise ValueError("No successful initial eta estimates found. " + "; ".join(failures))
         converged_etas = [estimate.eta for estimate in estimates]
-        compositions_min_eta = np.asarray(self.interfaceEquilibrium.interface_compositions(float(min(converged_etas))), dtype=np.float64)
-        compositions_max_eta = np.asarray(self.interfaceEquilibrium.interface_compositions(float(max(converged_etas))), dtype=np.float64)
+        closure = estimate_kwargs["interface_equilibrium"]
+        compositions_min_eta = np.asarray(closure.interface_compositions(float(min(converged_etas))), dtype=np.float64)
+        compositions_max_eta = np.asarray(closure.interface_compositions(float(max(converged_etas))), dtype=np.float64)
         composition_difference = compositions_max_eta - compositions_min_eta
         if np.linalg.norm(composition_difference, axis=1).max() > _INITIAL_ETA_DISTINCT_ROOT_COMPOSITION_TOL:
             raise ValueError(
@@ -1366,9 +1512,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             "z": self._z,
             "interface_position": s0,
             "phases": self.phases,
-            "thermodynamics": self.therm,
+            "thermodynamics": self._diffusivity_source(),
             "temperature": self.temperatureParameters,
-            "interface_equilibrium": self.interfaceEquilibrium,
+            "interface_equilibrium": self._interface_equilibrium_source(),
             "transformed_u_grid": self._u_grid,
             "transformed_v_grid": self._v_grid,
             "eta_bracket": self.initialEtaBracket,
@@ -1376,6 +1522,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             "root_rtol": self.initialEtaRootRtol,
             "root_maxiter": self.initialEtaRootMaxiter,
             "bulk_diffusivity_mode": self.bulkDiffusivityMode,
+            "componentwise_scaling": self.initialEtaComponentwiseScaling,
         }
         estimate_kwargs["eta_bracket"] = _coerce_initial_eta_bracket(estimate_kwargs["eta_bracket"], _validate_eta_bounds(estimate_kwargs["interface_equilibrium"]))
         self.initialEtaEstimate = self._select_initial_eta_estimate(estimate_kwargs)
@@ -1418,22 +1565,46 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._initialInventory = self.getTotalInventoryFromState(self._p_curr, self._q_curr, self._s_curr)
         self.inventoryData.record(0, self._initialInventory)
 
+    def _diffusivity_source(self):
+        """
+        Returns the object queried for interdiffusivity matrices.
+
+        With interstitials this wraps ``self.therm`` so u-fraction compositions
+        are converted to mole fractions before each query; otherwise it is
+        ``self.therm`` itself.
+        """
+        return resolve_diffusivity_provider(self.therm, self.allElements)
+
+    def _interface_equilibrium_source(self):
+        """
+        Returns the tie-line closure in the model's composition basis.
+
+        With interstitials, closure endpoints are converted from mole fractions
+        to u-fractions (unless the closure declares ``composition_basis='u'``);
+        otherwise this is ``self.interfaceEquilibrium`` itself.
+        """
+        return resolve_interface_equilibrium(self.interfaceEquilibrium, self.allElements)
+
     def _interface_compositions(self, eta):
         if isinstance(self.interfaceEquilibrium, ThermodynamicTernaryInterfaceEquilibrium) and self.interfaceEquilibrium.thermodynamics is None:
             self.interfaceEquilibrium.thermodynamics = self.therm
             self.interfaceEquilibrium.phases = self.phases
-        c_left, c_right = self.interfaceEquilibrium.interface_compositions(float(eta))
+        c_left, c_right = self._interface_equilibrium_source().interface_compositions(float(eta))
         self._validate_composition_vector(c_left, "left interface composition")
         self._validate_composition_vector(c_right, "right interface composition")
         return c_left, c_right
 
     def _validate_composition_vector(self, values, name):
+        """
+        Rejects a non-finite interface composition or one outside the composition bounds.
+
+        Bounds are those of ``_profile_composition_violation`` (substitutional
+        simplex in u-fractions; interstitial u-fractions bounded below only).
+        """
         values = np.asarray(values, dtype=np.float64).reshape(-1)
-        min_comp = float(self.constraints.minComposition)
         if values.shape != (2,) or not np.all(np.isfinite(values)):
             raise ValueError(f"{name} must be a finite two-component vector.")
-        dependent = 1.0 - float(np.sum(values))
-        if np.any(values < min_comp) or dependent < min_comp:
+        if composition_bound_violation(values.reshape(1, 2), independent_interstitial_mask(self.allElements), self.constraints.minComposition) is not None:
             raise ValueError(f"{name} violates the ternary composition bounds.")
 
     def _initialize_transformed_state(self, composition, interface_position, eta):
@@ -1463,19 +1634,21 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         Returns the phase-uniform 2x2 matrix used by one transformed bulk solve.
 
         ``composition`` is expected to be the interface composition for
-        ``phase``. The resulting matrix may depend on that interface state,
-        temperature, and time, but it is not re-evaluated at bulk nodes or
-        faces inside the implicit phase solve.
+        ``phase`` (in the state basis, i.e. u-fractions with interstitials;
+        the provider receives mole fractions). The resulting matrix may depend
+        on that interface state, temperature, and time, but it is not
+        re-evaluated at bulk nodes or faces inside the implicit phase solve.
         """
         composition = np.asarray(composition, dtype=np.float64).reshape(2)
         T = np.asarray(self.temperatureParameters(np.asarray([[float(position)]], dtype=np.float64), float(time)), dtype=np.float64).reshape(-1)
         temperature = float(T[0])
+        source = self._diffusivity_source()
         try:
             self._record_bulk_diffusivity_provider_call()
-            D = self.therm.getInterdiffusivity(composition, temperature, phase=phase, query_context="interface")
+            D = source.getInterdiffusivity(composition, temperature, phase=phase, query_context="interface")
         except TypeError:
             self._record_bulk_diffusivity_provider_call()
-            D = self.therm.getInterdiffusivity(composition, temperature, phase=phase)
+            D = source.getInterdiffusivity(composition, temperature, phase=phase)
         return _validate_ternary_diffusivity_matrix(D, phase, context="transient diffusivity")
 
     def _temperatures_at_positions(self, positions, time):
@@ -1497,9 +1670,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         Vectorized thermodynamic queries use batched face validation. Providers
         that only accept one composition at a time retain scalar validation and
-        the deterministic scalar query loop.
+        the deterministic scalar query loop. ``face_compositions`` are in the
+        state basis (u-fractions with interstitials); the provider receives
+        mole fractions.
         """
         face_compositions = np.asarray(face_compositions, dtype=np.float64)
+        source = self._diffusivity_source()
         if face_compositions.ndim != 2 or face_compositions.shape[1] != 2:
             raise ValueError("face_compositions must have shape (n_faces, 2).")
         temperatures = self._temperatures_at_positions(physical_face_positions, time)
@@ -1518,7 +1694,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         try:
             self._record_bulk_diffusivity_provider_call()
-            values = self.therm.getInterdiffusivity(face_compositions, temperatures, phase=phase, query_context="general")
+            values = source.getInterdiffusivity(face_compositions, temperatures, phase=phase, query_context="general")
         except TypeError:
             pass
         except ValueError:
@@ -1530,10 +1706,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         for i, (composition, temperature) in enumerate(zip(face_compositions, temperatures)):
             try:
                 self._record_bulk_diffusivity_provider_call()
-                D = self.therm.getInterdiffusivity(composition, float(temperature), phase=phase, query_context="general")
+                D = source.getInterdiffusivity(composition, float(temperature), phase=phase, query_context="general")
             except TypeError:
                 self._record_bulk_diffusivity_provider_call()
-                D = self.therm.getInterdiffusivity(composition, float(temperature), phase=phase)
+                D = source.getInterdiffusivity(composition, float(temperature), phase=phase)
             out[i] = _validate_ternary_diffusivity_matrix(D, phase, context=f"bulk face diffusivity face {i}")
         self._record_bulk_face_matrices_evaluated(out.shape[0])
         return out
@@ -2176,9 +2352,15 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         solute loss per step. Because ``flux * dt`` can fall below this bound
         for tiny steps, ``_solve_interface_planar`` never accepts the
         unmodified starting iterate without first attempting a Newton update.
+
+        The O(1) composition scale defaults to ``1.0`` for both components.
+        ``interface_residual_composition_scale`` replaces it (per component),
+        which tightens the balance of a component whose inventory change per
+        step is small compared with ``R``, such as a slow substitutional solute
+        next to a fast interstitial.
         """
         old_inventory = integrate_planar_transformed_profile_components(p, q, s, self._R, self._u_grid, self._v_grid)
-        composition_scale = 1.0
+        composition_scale = 1.0 if self.interfaceResidualCompositionScale is None else self.interfaceResidualCompositionScale
         floor = 1e-300
         return np.maximum(np.maximum(np.abs(old_inventory), self._R * composition_scale), floor)
 
@@ -2417,6 +2599,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_LAGGED
             else None
         )
+        last_jacobian_cond = np.nan
 
         def record_failure(reason):
             self._record_implicit_failure(
@@ -2458,6 +2641,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 jacobian_evaluations,
                 forced_update_skipped=forced_update_skipped,
             )
+            self._record_interface_diagnostics(candidate, s, dt, last_jacobian_cond)
             return (
                 candidate.p_future,
                 candidate.q_future,
@@ -2524,6 +2708,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                         raise
                     jacobian[:, variable] = (scaled_residual - residual_perturbed) / step
             jacobian_evaluations += 1
+            if jacobian.shape == (2, 2):
+                last_jacobian_cond = _condition_number_2x2(jacobian)
 
             try:
                 step = self._least_squares_step_2xN(jacobian, scaled_residual)
@@ -2571,6 +2757,19 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             "Ternary Illingworth interface solve failed to converge; "
             f"best residual was {best_scaled_norm:.3e}."
         )
+
+    def _record_interface_diagnostics(self, candidate, s, dt, jacobian_cond):
+        """Stores per-component residuals, Jacobian conditioning and interface Peclet numbers."""
+        self._lastImplicitResidualComponents = np.asarray(candidate.scaled_residual, dtype=np.float64).copy()
+        self._lastImplicitJacobianCond = float(jacobian_cond)
+        velocity = abs(float(candidate.future_s) - float(s)) / float(dt)
+        dz_left = float(candidate.future_s) * (1.0 - float(self._u_grid[-2]))
+        dz_right = (self._R - float(candidate.future_s)) * float(self._v_grid[1])
+        peclet = []
+        for D, dz in ((candidate.D_left, dz_left), (candidate.D_right, dz_right)):
+            lam = _smallest_real_eigenvalue_2x2(np.asarray(D, dtype=np.float64))
+            peclet.append(velocity * dz / lam if lam > 0.0 else np.inf)
+        self._lastInterfacePeclet = np.asarray(peclet, dtype=np.float64)
 
     def _least_squares_step_2xN(self, jacobian, residual):
         """
@@ -2778,19 +2977,17 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             raise ValueError(f"{name} violates ternary composition bounds: {violation}.")
 
     def _profile_composition_violation(self, profile):
-        """Return the first node and component that leaves the ternary simplex."""
-        profile = np.asarray(profile, dtype=np.float64)
-        min_comp = float(self.constraints.minComposition)
-        dependent = 1.0 - np.sum(profile, axis=1)
-        component_bad = np.argwhere(profile < min_comp)
-        if component_bad.size:
-            node, component = component_bad[0]
-            return f"node {int(node)} component {int(component)} = {profile[node, component]:.6g}"
-        dependent_bad = np.flatnonzero(dependent < min_comp)
-        if dependent_bad.size:
-            node = int(dependent_bad[0])
-            return f"node {node} dependent component = {dependent[node]:.6g}"
-        return None
+        """
+        Return the first node and component that leaves the composition bounds.
+
+        Without interstitials this is the ternary simplex. With interstitials
+        the substitutional u-fractions (including the dependent one,
+        ``1 - sum(substitutional u)``) must be at least ``minComposition`` and
+        interstitial u-fractions are bounded below only.
+        """
+        return composition_bound_violation(
+            profile, independent_interstitial_mask(self.allElements), self.constraints.minComposition
+        )
 
     def _validate_candidate_profiles(self, profiles):
         """Reject nonlinear trial profiles before residual convergence or acceptance."""
@@ -2865,8 +3062,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         The returned ``((x_left, c_left), (x_right, c_right))`` preserves the
         sharp interface: both coordinate arrays include the interface endpoint,
-        while each composition array has columns ordered as the dependent
-        component followed by the two stored independent mole fractions.
+        while each composition array holds full mole fractions with columns
+        ordered as the dependent component followed by the two independent
+        components (the stored u-fractions are converted when interstitials
+        are present).
         Historical queries require ``record_pq_data=True`` because they are
         reconstructed from the recorded transformed ``p`` and ``q`` profiles.
         """
@@ -2877,6 +3076,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         right_coordinates = interface + (right_boundary - interface) * np.asarray(
             self._v_grid, dtype=np.float64
         )
+        if has_interstitials(self.allElements):
+            return (
+                (left_coordinates, full_mole_fractions(p, self.allElements)),
+                (right_coordinates, full_mole_fractions(q, self.allElements)),
+            )
         return (
             (left_coordinates, np.column_stack((1.0 - np.sum(p, axis=1), p))),
             (right_coordinates, np.column_stack((1.0 - np.sum(q, axis=1), q))),
@@ -2904,11 +3108,14 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         """
         Returns full ternary mole fractions on the physical mesh.
 
-        This model supports only substitutional ternaries, so the stored
-        independent responses are already mole fractions and the dependent
-        component is reconstructed as ``1 - x_1 - x_2``.
+        For substitutional ternaries the stored independent responses are
+        already mole fractions and the dependent component is reconstructed as
+        ``1 - x_1 - x_2``. With interstitials the stored u-fractions are
+        converted to mole fractions.
         """
         independent = np.asarray(self.data.y(time), dtype=np.float64)
+        if has_interstitials(self.allElements):
+            return full_mole_fractions(independent, self.allElements)
         dependent = 1.0 - np.sum(independent, axis=1)
         return np.column_stack((dependent, independent))
 
@@ -2964,12 +3171,13 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         y = self.data._y[self.interfaceData.N]
         z_um = self._z * 1.0e6
         fig, ax = plt.subplots(figsize=(6, 4))
+        symbol, axis_label = ("u", "u-fraction") if has_interstitials(self.allElements) else ("X", "Mole fraction")
         for i, element in enumerate(self.elements):
-            ax.plot(z_um, y[:, i], label=f"X({element})")
+            ax.plot(z_um, y[:, i], label=f"{symbol}({element})")
         position = self.interfaceData._y[self.interfaceData.N]
         ax.axvline(position * 1.0e6, color="0.35", linestyle="--", linewidth=1)
         ax.set_xlabel("Distance (μm)")
-        ax.set_ylabel("Mole fraction")
+        ax.set_ylabel(axis_label)
         ax.legend()
         plt.show(block=False)
         return fig, ax

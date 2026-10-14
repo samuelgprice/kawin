@@ -152,13 +152,22 @@ def integrate_planar_transformed_profile_sequence(profiles, interfaces, domain_l
     return inventory
 
 
-def integrate_planar_transformed_molar_inventories(profiles, interfaces, domain_length: float, grids, phase_molar_volumes):
+def integrate_planar_transformed_molar_inventories(profiles, interfaces, domain_length: float, grids, phase_molar_volumes, substitutional_mask=None):
     """
     Directly integrates all ternary component moles per unit planar area.
 
     ``phase_molar_volumes`` must supply one positive physical molar volume per
     phase. The dependent fraction is integrated directly as
     ``x0 = 1 - x1 - x2``; it is not obtained by inventory closure.
+
+    With interstitial components the profiles are u-fractions and
+    ``substitutional_mask`` (one boolean per independent component, ``True``
+    for substitutional) selects the components that share the substitutional
+    sum: the dependent u-fraction is ``1 - sum(substitutional u)`` and each
+    ``phase_molar_volumes`` entry is the volume per mole of substitutional
+    atoms, so the returned values are moles of each component and only the
+    substitutional entries add up to the substitutional total. ``None`` keeps
+    the all-substitutional form above.
     """
     profiles, interfaces, domain_length, grids = _validate_transformed_sequence(profiles, interfaces, domain_length, grids)
     molar_volumes = np.asarray(phase_molar_volumes, dtype=np.float64).reshape(-1)
@@ -169,7 +178,10 @@ def integrate_planar_transformed_molar_inventories(profiles, interfaces, domain_
     boundaries = np.concatenate(([0.0], interfaces, [domain_length]))
     inventory = np.zeros(3, dtype=np.float64)
     for profile, grid, left, right, molar_volume in zip(profiles, grids, boundaries[:-1], boundaries[1:], molar_volumes):
-        dependent = 1.0 - np.sum(profile, axis=1)
+        if substitutional_mask is None:
+            dependent = 1.0 - np.sum(profile, axis=1)
+        else:
+            dependent = 1.0 - np.sum(profile[:, np.asarray(substitutional_mask, dtype=bool)], axis=1)
         full_profile = np.column_stack((dependent, profile))
         inventory += (float(right) - float(left)) * np.trapezoid(full_profile, grid, axis=0) / float(molar_volume)
     return inventory
