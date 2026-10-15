@@ -340,7 +340,7 @@ def tie_line_closure(data):
     return CallableTernaryInterfaceEquilibrium(interface, eta_bounds=(float(eta[0]), float(eta[-1])), composition_basis="x")
 
 
-def run_kawin(case, data, *, n_left=41, n_right=401, power=3.0, semi_log_dt=0.02, mode="composition_dependent_lagged", x_residual_scale=1.0, eta_componentwise=False, semi_log_t0=1.0e-7):
+def run_kawin(case, data, *, n_left=41, n_right=401, power=3.0, semi_log_dt=0.02, mode="composition_dependent_lagged", x_residual_scale=1.0, eta_componentwise=False, semi_log_t0=1.0e-7, newton_start="extrapolated"):
     x_alloy = np.asarray(data["x_alloy"])
     R = case.ferrite_width + case.austenite_width
     mesh = CartesianFD1D(["C", case.solute], [0.0, R], 2001)
@@ -370,6 +370,7 @@ def run_kawin(case, data, *, n_left=41, n_right=401, power=3.0, semi_log_dt=0.02
         transformed_v_grid=v_grid,
         interface_residual_composition_scale=(1.0, x_residual_scale),
         initial_eta_componentwise_scaling=eta_componentwise,
+        interface_newton_start=newton_start,
     )
     diagnostics = []
     original_post = model.postProcess
@@ -460,6 +461,7 @@ def main(case, description=None):
     parser.add_argument("--x-residual-scale", type=float, default=1.0)
     parser.add_argument("--eta-componentwise", action="store_true", help="per-component scaling of the startup eta balance")
     parser.add_argument("--semi-log-t0", type=float, default=1.0e-7, help="first semi-log target time (s)")
+    parser.add_argument("--newton-start", choices=("old_state", "extrapolated"), default="extrapolated", help="interface Newton starting point per step")
     parser.add_argument("--dictra-sim-time", type=float, default=2.0, help="simulated time of the DICTRA reference (s)")
     parser.add_argument("--tag", default="", help="suffix for kawin output files (e.g. a grid label)")
     parser.add_argument(
@@ -493,6 +495,7 @@ def main(case, description=None):
         x_residual_scale=args.x_residual_scale,
         eta_componentwise=args.eta_componentwise,
         semi_log_t0=args.semi_log_t0,
+        newton_start=args.newton_start,
     )
     report, histories = compare(case, model, data)
     report["kawin_runtime_s"] = wallclock.perf_counter() - start

@@ -2671,10 +2671,15 @@ def test_ternary_interface_reuses_accepted_trial_only_on_same_branch(monkeypatch
         return original_step(jacobian, residual)
 
     def select_branch(s_arg, old_s_arg, future_s_arg):
+        # Flip only the next-iteration selection made right after the accepted
+        # line-search trial (the fourth candidate) was evaluated.
         nonlocal branch_count
-        branch_count += 1
         branch = _select_interface_motion_branch(s_arg, old_s_arg, future_s_arg)
-        return ("negative" if branch == "positive" else "positive") if flip_branch and branch_count == 2 else branch
+        if len(evaluations) == 4:
+            branch_count += 1
+            if flip_branch and branch_count == 1:
+                return "negative" if branch == "positive" else "positive"
+        return branch
 
     monkeypatch.setattr(model, "_evaluate_interface_candidate", evaluate_spy)
     monkeypatch.setattr(model, "_least_squares_step_2xN", stop_after_second_candidate)
@@ -2686,11 +2691,11 @@ def test_ternary_interface_reuses_accepted_trial_only_on_same_branch(monkeypatch
 
     accepted_x, accepted_branch = evaluations[3]
     repeated = [(x, branch) for x, branch in evaluations if np.array_equal(x, accepted_x)]
-    assert branch_count == 2
+    assert branch_count >= 1
     assert len(repeated) == (2 if flip_branch else 1)
-    assert repeated[0][1] == accepted_branch
-    if flip_branch:
-        assert repeated[1][1] != accepted_branch
+    # Candidates are always evaluated on the branch of their own displacement,
+    # so a re-evaluation forced by a branch mismatch reproduces that branch.
+    assert all(branch == accepted_branch for _, branch in repeated)
     assert model._lastImplicitCandidateEvaluations == len(evaluations)
     assert model._lastImplicitFunctionEvaluations == len(evaluations)
 
@@ -2812,14 +2817,19 @@ def test_ternary_solver_uses_consistent_fallback_branch_when_future_position_is_
     assert {branch for _, _, branch in first_evaluation} == {expected_branch}
 
 
-def test_ternary_solver_freezes_upwind_branch_for_finite_difference_jacobian_near_zero_motion():
+def test_ternary_solver_keeps_finite_difference_jacobian_on_iterate_side_near_zero_motion():
+    """At zero motion after a receding step, the s perturbation stays on the negative side and every trial matches its own branch."""
     s, records = _record_solve_interface_branches(-1.0e-3)
-    perturbed_records = [
-        item for item in records if item[0] in {"left", "right", "residual"} and item[1] > s + 1.0e-10
-    ]
+    s_perturbation = records[3:6]
 
-    assert perturbed_records
-    assert {branch for _, _, branch in perturbed_records} == {"negative"}
+    assert [name for name, _, _ in s_perturbation] == ["left", "right", "residual"]
+    assert all(future_s < s - 1.0e-10 for _, future_s, _ in s_perturbation)
+    assert {branch for _, _, branch in s_perturbation} == {"negative"}
+    for _, future_s, branch in records:
+        if future_s > s + 1.0e-10:
+            assert branch == "positive"
+        elif future_s < s - 1.0e-10:
+            assert branch == "negative"
 
 
 @pytest.mark.parametrize("future_s", [0.47, 0.43])
@@ -4463,3 +4473,79 @@ def test_ternary_illingworth_accepts_surrogate_for_thermo_and_equilibrium():
     assert np.isclose(model.getInterfacePosition(), 0.5)
     assert np.isclose(model.getInterfaceEta(), 0.0)
     assert np.allclose(model.checkConservation(1e-12), np.zeros(2))
+
+
+def test_interface_newton_evaluates_every_trial_on_its_own_motion_branch(monkeypatch):
+    """A receding interface starts Newton at the kink with the positive-side Jacobian and must cross to the negative side."""
+    from kawin.tests.illingworth_baseline_cases import _CoupledTernaryThermodynamics, _ternary_model
+
+    model = _ternary_model("phase_uniform", _CoupledTernaryThermodynamics(), np.asarray([0.16, 0.12]), np.asarray([0.56, 0.25]))
+    evaluated = []
+    original = MovingBoundaryIllingworthTernaryFD1DModel._evaluate_interface_candidate
+
+    def spy(self, **kwargs):
+        future_s, _ = self._interface_scaled_to_physical(kwargs["x_hat"], kwargs["eta_lower"], kwargs["eta_span"])
+        evaluated.append((future_s - kwargs["s"], kwargs["motion_branch"]))
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(MovingBoundaryIllingworthTernaryFD1DModel, "_evaluate_interface_candidate", spy)
+    model.solve(3.0e-4, minDtFrac=1.0e-10)
+
+    assert model.getInterfacePosition() < 0.45
+    assert model._lastStepRetries == 0
+    assert any(displacement < -1e-15 for displacement, _ in evaluated)
+    for displacement, branch in evaluated:
+        if displacement > 1e-15:
+            assert branch == "positive"
+        elif displacement < -1e-15:
+            assert branch == "negative"
+
+
+@pytest.mark.parametrize("left, right", [([0.16, 0.06], [0.3261538461538461, 0.193]), ([0.16, 0.12], [0.56, 0.25])])
+def test_extrapolated_newton_start_matches_old_state_start_without_extra_evaluations(monkeypatch, left, right):
+    """
+    The extrapolated start changes only where Newton begins, for growing and receding interfaces.
+
+    These smooth cases already converge in the minimum one Newton update per
+    step from the old state, so the start can only match that cost here; its
+    savings show up on sharp fronts (see examples/Interstitials).
+    """
+    from kawin.tests.illingworth_baseline_cases import _CoupledTernaryThermodynamics, _ternary_model
+
+    original = MovingBoundaryIllingworthTernaryFD1DModel._evaluate_interface_candidate
+    counter = {"evaluations": 0}
+
+    def counting(self, **kwargs):
+        counter["evaluations"] += 1
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(MovingBoundaryIllingworthTernaryFD1DModel, "_evaluate_interface_candidate", counting)
+    results = {}
+    for start in ("old_state", "extrapolated"):
+        model = _ternary_model("phase_uniform", _CoupledTernaryThermodynamics(), np.asarray(left), np.asarray(right))
+        model.interfaceNewtonStart = start
+        counter["evaluations"] = 0
+        model.solve(1.0e-3, minDtFrac=1.0e-10)
+        results[start] = (model.getInterfacePosition(), model.getInterfaceEta(), counter["evaluations"], model.checkConservation(1e-12))
+
+    old_s, old_eta, old_evaluations, _ = results["old_state"]
+    new_s, new_eta, new_evaluations, new_conservation = results["extrapolated"]
+    assert np.isclose(new_s, old_s, rtol=0.0, atol=1e-9)
+    assert np.isclose(new_eta, old_eta, rtol=0.0, atol=1e-8)
+    assert new_evaluations <= old_evaluations
+    assert np.allclose(new_conservation, np.zeros(2))
+
+
+def test_interface_newton_start_rejects_unknown_option():
+    with pytest.raises(ValueError, match="interface_newton_start"):
+        MovingBoundaryIllingworthTernaryFD1DModel(
+            mesh=CartesianFD1D(["X", "Y"], [0.0, 1.0], 21),
+            elements=["Z", "X", "Y"],
+            phases=["ALPHA", "BETA"],
+            thermodynamics=_ConstantTernaryThermodynamics(),
+            temperature=1000.0,
+            interfacePosition=0.5,
+            time_step=1.0e-4,
+            interface_compositions=(np.asarray([0.2, 0.1]), np.asarray([0.3, 0.2])),
+            interface_newton_start="predicted",
+        )

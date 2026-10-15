@@ -153,7 +153,10 @@ def _allocate_ternary_block_system(n):
     return lower, diagonal, upper, rhs
 
 
-def _select_interface_motion_branch(s, old_s, future_s, atol=1e-15):
+_MOTION_BRANCH_ATOL = 1e-15
+
+
+def _select_interface_motion_branch(s, old_s, future_s, atol=_MOTION_BRANCH_ATOL):
     """
     Selects the conservative interface upwind branch for one residual evaluation.
 
@@ -959,6 +962,15 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     value per component tightens the balance of a dilute or slow component.
     ``initial_eta_componentwise_scaling`` scales each row of the startup eta
     balance separately (see ``estimate_initial_eta_from_instantaneous_balance``).
+    ``interface_newton_start`` chooses where each step's interface Newton
+    iteration starts: ``'extrapolated'`` (default) at the linear extrapolation
+    of the last accepted step to the new ``dt``, or ``'old_state'`` at the
+    accepted ``(s, eta)`` (the behavior before this option existed). The
+    extrapolated start leaves the converged step and its tolerance unchanged
+    but starts Newton near the answer instead of at zero interface
+    displacement, where the residual is most nonlinear; this avoids most step
+    retries for sharp moving fronts such as Fe-C-X ferrite growth. The first
+    step has no history and always starts from the old state.
     """
 
     def __init__(
@@ -1006,9 +1018,13 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         transformed_v_grid=None,
         interface_residual_composition_scale=None,
         initial_eta_componentwise_scaling: bool = False,
+        interface_newton_start: str = "extrapolated",
     ):
         self.initialInterfacePosition = float(interfacePosition)
         self.timeStep = float(time_step)
+        if interface_newton_start not in {"old_state", "extrapolated"}:
+            raise ValueError("interface_newton_start must be 'old_state' or 'extrapolated'.")
+        self.interfaceNewtonStart = str(interface_newton_start)
         self.interfaceResidualCompositionScale = (
             None
             if interface_residual_composition_scale is None
@@ -1086,6 +1102,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._s_curr = None
         self._s_old = None
         self._eta_curr = None
+        self._eta_old = None
+        self._lastAcceptedDt = None
         self._D_left = None
         self._D_right = None
 
@@ -1458,6 +1476,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._s_curr = None
         self._s_old = None
         self._eta_curr = None
+        self._eta_old = None
+        self._lastAcceptedDt = None
         self._D_left = None
         self._D_right = None
         if hasattr(self, "mesh") and self.mesh is not None:
@@ -1579,6 +1599,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._s_curr = s0
         self._s_old = s0
         self._eta_curr = eta0
+        self._eta_old = eta0
+        self._lastAcceptedDt = None
         c_left, c_right = self._interface_compositions(eta0)
         self._lastInterfaceCompositions = (c_left.copy(), c_right.copy())
         if self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_PHASE_UNIFORM:
@@ -2371,6 +2393,30 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             dtype=np.float64,
         )
 
+    def _extrapolated_interface_start(self, s, old_s, eta, dt, eta_lower, eta_span, lower, upper):
+        """
+        Returns the extrapolated scaled Newton start ``[s_hat, eta_hat]``, or ``None``.
+
+        With ``interface_newton_start='extrapolated'`` the interface position
+        and tie-line coordinate are extrapolated linearly from the last accepted
+        step, ``x + (x - x_old) * dt / dt_last``, and clipped to the solve
+        bounds. This only moves the Newton starting point: the converged step,
+        the residual and the one-Newton-update rule are unchanged. ``None``
+        (start from the unmoved old state) is returned when the option is off,
+        before the first accepted step, or when the extrapolation does not move.
+        """
+        if self.interfaceNewtonStart != "extrapolated" or self._lastAcceptedDt is None or self._eta_old is None:
+            return None
+        ratio = float(dt) / float(self._lastAcceptedDt)
+        if not np.isfinite(ratio) or ratio <= 0.0:
+            return None
+        future_s = float(s) + (float(s) - float(old_s)) * ratio
+        future_eta = float(eta) + (float(eta) - float(self._eta_old)) * ratio
+        if future_s == float(s) and future_eta == float(eta):
+            return None
+        x_hat = self._interface_physical_to_scaled(future_s, future_eta, eta_lower, eta_span)
+        return np.clip(x_hat, lower, upper)
+
     def _interface_scaled_to_physical(self, x_hat, eta_lower, eta_span):
         """Converts scaled nonlinear variables ``[s_hat, eta_hat]`` to physical values."""
         x_hat = np.asarray(x_hat, dtype=np.float64).reshape(2)
@@ -2595,7 +2641,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         """
         Solve the coupled interface step, reusing an accepted trial on the same motion branch.
 
-        The Newton iteration starts from the accepted old ``(s, eta)``. Because
+        The Newton iteration starts from the accepted old ``(s, eta)``, or with
+        ``interface_newton_start='extrapolated'`` from the linear extrapolation
+        of the last accepted step (``_extrapolated_interface_start``); if that
+        start cannot be evaluated the old state is used. Because
         the residual scale does not depend on ``dt``, that unmodified start can
         satisfy the tolerance whenever ``|flux imbalance| * dt`` is tiny, which
         would accept a step with the interface frozen and leave the untransferred
@@ -2608,6 +2657,23 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         evaluation, or no acceptable trial), the converged start is accepted
         and ``_lastImplicitForcedUpdateSkipped`` is set, so no step that meets
         the tolerance is turned into a retry.
+
+        Every candidate, including finite-difference Jacobian perturbations and
+        line-search trials, is evaluated on the upwind motion branch of its own
+        displacement ``future_s - s``. Reusing the current iterate's branch for
+        a trial on the other side of ``future_s = s`` would solve the grid-motion
+        term downwind; with interface cells much smaller than the trial
+        displacement that produces sign-alternating, geometrically growing bulk
+        profiles. The residual is therefore only piecewise smooth, with a kink
+        at ``future_s = s`` where the two branches meet. Each Newton iteration
+        works on one side of that kink: the finite-difference perturbations and
+        the bounded step stay on the iterate's side, so a step that would cross
+        stops at the kink. At the kink (including the unmoved start, whose side
+        is the previous motion direction), a step pointing into the other side
+        is recomputed with an ``s`` Jacobian column measured on that side, and
+        the iteration switches sides only if that step still points there;
+        otherwise ``s`` stays at the kink for that update. Steps that never
+        approach the kink take the same path as a fixed-branch iteration.
         """
         self._reset_implicit_diagnostics()
         self._currentBulkDiffusivityProviderCalls = 0
@@ -2650,9 +2716,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 reason,
             )
 
-        def evaluate_candidate(trial_x_hat, motion_branch):
+        def evaluate_candidate(trial_x_hat):
             nonlocal candidate_evaluations
             candidate_evaluations += 1
+            trial_s, _ = self._interface_scaled_to_physical(trial_x_hat, eta_lower, eta_span)
+            motion_branch = _select_interface_motion_branch(s, old_s, trial_s)
             candidate = self._evaluate_interface_candidate(
                 p=p,
                 q=q,
@@ -2670,6 +2738,30 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             )
             self._record_completed_bulk_candidate(candidate)
             return candidate
+
+        s_hat_kink = float(x_hat[0])
+
+        def side_bounds(branch):
+            """Solve bounds restricted to one side of the kink, widened to contain the iterate."""
+            side_lower = np.array(lower, dtype=np.float64)
+            side_upper = np.array(upper, dtype=np.float64)
+            if branch == "positive":
+                side_lower[0] = max(side_lower[0], min(s_hat_kink, float(x_hat[0])))
+            else:
+                side_upper[0] = min(side_upper[0], max(s_hat_kink, float(x_hat[0])))
+            return side_lower, side_upper
+
+        def finite_difference_column(variable, side_lower, side_upper):
+            """One-sided finite-difference Jacobian column whose perturbation stays inside the side bounds."""
+            step, x_perturbed, difference_direction = _bounded_finite_difference_perturbation(x_hat, side_lower, side_upper, variable)
+            residual_perturbed = evaluate_candidate(x_perturbed).scaled_residual
+            if difference_direction == "forward":
+                return (residual_perturbed - scaled_residual) / step
+            return (scaled_residual - residual_perturbed) / step
+
+        def step_enters_other_side(branch, step):
+            """Returns whether a Newton step moves s out of the given branch's side of the kink."""
+            return step[0] < 0.0 if branch == "positive" else step[0] > 0.0
 
         def accept(candidate, forced_update_skipped=False):
             self._record_implicit_success(
@@ -2691,6 +2783,16 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 candidate.D_right,
             )
 
+        # Optional extrapolated start; the kink above stays at the unmoved
+        # position. A start that cannot be evaluated falls back to the old state.
+        extrapolated_x_hat = self._extrapolated_interface_start(s, old_s, eta, dt, eta_lower, eta_span, lower, upper)
+        if extrapolated_x_hat is not None:
+            try:
+                pending_candidate = evaluate_candidate(extrapolated_x_hat)
+                x_hat = extrapolated_x_hat
+            except Exception:
+                pending_candidate = None
+
         for count in range(self.maxIterations):
             iterations_attempted = count + 1
             future_s, _ = self._interface_scaled_to_physical(x_hat, eta_lower, eta_span)
@@ -2701,7 +2803,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                         and np.array_equal(pending_candidate.x_hat, x_hat)):
                     candidate = pending_candidate
                 else:
-                    candidate = evaluate_candidate(x_hat, motion_branch)
+                    candidate = evaluate_candidate(x_hat)
                 pending_candidate = None
             except Exception:
                 if best_motion_branch is None:
@@ -2720,38 +2822,46 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     return accept(candidate)
                 converged_start = candidate
 
+            # The Jacobian and step are restricted to the iterate's side of the
+            # future_s = s kink. At the kink itself, a step that points into
+            # the other side is recomputed with an s column measured there.
+            branch_lower, branch_upper = side_bounds(motion_branch)
             jacobian = np.zeros((2, len(x_hat)), dtype=np.float64)
-            for variable in range(len(x_hat)):
-                step, x_perturbed, difference_direction = _bounded_finite_difference_perturbation(x_hat, lower, upper, variable)
-                if difference_direction == "forward":
-                    try:
-                        residual_perturbed = evaluate_candidate(x_perturbed, motion_branch).scaled_residual
-                    except Exception:
-                        if converged_start is not None:
-                            return accept(converged_start, forced_update_skipped=True)
-                        if best_motion_branch is None:
-                            best_motion_branch = motion_branch
-                        record_failure("candidate evaluation failed")
-                        raise
-                    jacobian[:, variable] = (residual_perturbed - scaled_residual) / step
-                else:
-                    try:
-                        residual_perturbed = evaluate_candidate(x_perturbed, motion_branch).scaled_residual
-                    except Exception:
-                        if converged_start is not None:
-                            return accept(converged_start, forced_update_skipped=True)
-                        if best_motion_branch is None:
-                            best_motion_branch = motion_branch
-                        record_failure("candidate evaluation failed")
-                        raise
-                    jacobian[:, variable] = (scaled_residual - residual_perturbed) / step
+            try:
+                for variable in range(len(x_hat)):
+                    jacobian[:, variable] = finite_difference_column(variable, branch_lower, branch_upper)
+            except Exception:
+                if converged_start is not None:
+                    return accept(converged_start, forced_update_skipped=True)
+                if best_motion_branch is None:
+                    best_motion_branch = motion_branch
+                record_failure("candidate evaluation failed")
+                raise
             jacobian_evaluations += 1
             if jacobian.shape == (2, 2):
                 last_jacobian_cond = _condition_number_2x2(jacobian)
 
             try:
                 step = self._least_squares_step_2xN(jacobian, scaled_residual)
-                step, alpha_start = self._bounded_scaled_newton_step(x_hat, step, lower, upper)
+                if abs(future_s - s) <= _MOTION_BRANCH_ATOL and step_enters_other_side(motion_branch, step):
+                    other_branch = "negative" if motion_branch == "positive" else "positive"
+                    other_lower, other_upper = side_bounds(other_branch)
+                    other_jacobian = jacobian.copy()
+                    try:
+                        other_jacobian[:, 0] = finite_difference_column(0, other_lower, other_upper)
+                    except Exception:
+                        if converged_start is not None:
+                            return accept(converged_start, forced_update_skipped=True)
+                        record_failure("candidate evaluation failed")
+                        raise
+                    jacobian_evaluations += 1
+                    other_step = self._least_squares_step_2xN(other_jacobian, scaled_residual)
+                    if step_enters_other_side(motion_branch, other_step):
+                        motion_branch = other_branch
+                        branch_lower, branch_upper = other_lower, other_upper
+                        step = other_step
+                        last_jacobian_cond = _condition_number_2x2(other_jacobian)
+                step, alpha_start = self._bounded_scaled_newton_step(x_hat, step, branch_lower, branch_upper)
             except RuntimeError:
                 if converged_start is not None:
                     return accept(converged_start, forced_update_skipped=True)
@@ -2765,7 +2875,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 if not self._scaled_interface_variables_in_bounds(trial, lower, upper):
                     continue
                 try:
-                    trial_candidate = evaluate_candidate(trial, motion_branch)
+                    trial_candidate = evaluate_candidate(trial)
                 except Exception:
                     if converged_start is not None:
                         return accept(converged_start, forced_update_skipped=True)
@@ -2844,6 +2954,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         """Stores diagnostics and returns derivatives for an accepted implicit trial."""
         p_new, q_new, s_new, eta_new, c_left_new, c_right_new, D_left, D_right = result
         self._currdt = float(trial_dt)
+        self._lastAcceptedDt = float(trial_dt)
         self._lastStepRetries = int(retry)
         self._lastInterfaceCompositions = (c_left_new.copy(), c_right_new.copy())
         self._D_left = D_left
@@ -2994,6 +3105,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self.inventoryData.record(time, self.getTotalInventoryFromState(p, q, s))
 
         self._s_old = float(self._s_curr)
+        self._eta_old = float(self._eta_curr)
         self._p_curr = p
         self._q_curr = q
         self._s_curr = float(s)
