@@ -21,6 +21,7 @@ tutorialPictures/
 *.txt
 *.html
 *.npz
+!kawin/tests/data/*.npz
 *.npy
 *.xml
 .coverage
