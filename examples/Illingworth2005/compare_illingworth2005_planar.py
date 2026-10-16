@@ -223,6 +223,8 @@ FIG6_BASE_PARAMS = {
 
 FIG6_VALID_D_ALPHA_CM2_S = (1.4e-8, 2.5e-8)
 
+# The otherPaper_fig3_* curves are digitised from Fig. 3 of Illingworth, Golosnoy,
+# Gergely and Clyne, J. Mater. Sci. 40 (2005) 2505-2511, doi:10.1007/s10853-005-1983-y.
 FIG6_EXTRACTED_DATA_FILES = {
     # ("thick", 1.4e-8): {
     #     "filename": "Olaye2020_fig6_ThickBeta_D1pt4_Illingworth_curve.csv",
@@ -2072,8 +2074,9 @@ def compile_and_run_authors_cpp_with_params(params, source_dir=None, build_dir=N
     Compiles and runs a generated C++ driver with user-provided parameters.
 
     The generated driver is written to the build directory and links against the
-    authors' untouched ``subroutines.cpp``, ``trimatrix.cpp``, and ``InOut.cpp``
-    files. This keeps the original MAP source tree read-only while allowing the
+    authors' MAP ``subroutines.cpp``, ``trimatrix.cpp``, and ``InOut.cpp`` files
+    (unchanged apart from an added attribution comment; see the README in
+    ``illingworth_MAP_code``). This keeps the original MAP source tree read-only while allowing the
     Python run parameters to be mirrored exactly in the C++ reference run.
     """
     source_dir = pathlib.Path(source_dir) if source_dir is not None else AUTHOR_CPP_SOURCE_DIR
