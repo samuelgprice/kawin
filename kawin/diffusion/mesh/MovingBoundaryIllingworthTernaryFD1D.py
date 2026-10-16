@@ -730,6 +730,81 @@ if njit is not None:
                             lower[i, component, coupled] -= displacement * (1.0 - left_sum / 2.0)
                             center += displacement * (1.0 - right_sum / 2.0) - span * cell_width / 2.0
                     diagonal[i, component, coupled] = center
+
+
+    @njit(cache=True, fastmath=False)
+    def _fill_three_phase_interval_system(lower, diagonal, upper, rhs, end_coefficients, profile, grid,
+                                          old_left, old_right, new_left, new_right, phase_frame_displacement,
+                                          dt, D_faces, left_fixed, left_value, right_fixed, right_value):
+        """Assemble one three-phase interval system (ALE upwind + implicit diffusion, face by face).
+
+        Compiled form of the NumPy assembly in the three-phase model's
+        ``_solve_interval_planar``, with the same per-element operations in the
+        same order (including signed zeros), so the solved profiles are
+        bitwise identical. ``lower``, ``diagonal``, ``upper`` and ``rhs`` must
+        be zero on entry. ``end_coefficients[0]`` and ``[1]`` receive the
+        (left, right) node coefficients of the first and last faces, which the
+        caller uses for the interface transfers. Fixed (Dirichlet) end rows
+        get the identity and ``left_value`` / ``right_value``.
+        """
+        n = profile.shape[0]
+        old_length = old_right - old_left
+        new_length = new_right - new_left
+        d_left = new_left - old_left
+        d_right = new_right - old_right
+        for i in range(n):
+            fixed = (i == 0 and left_fixed) or (i == n - 1 and right_fixed)
+            if fixed:
+                value = left_value if (i == 0 and left_fixed) else right_value
+                for a in range(2):
+                    rhs[i, a] = value[a]
+                    for b in range(2):
+                        diagonal[i, a, b] = 1.0 if a == b else 0.0
+                continue
+            face_lo = 0.0 if i == 0 else 0.5 * (grid[i - 1] + grid[i])
+            face_hi = 1.0 if i == n - 1 else 0.5 * (grid[i] + grid[i + 1])
+            dxi = face_hi - face_lo
+            old_width = old_length * dxi
+            new_width = new_length * dxi
+            for a in range(2):
+                rhs[i, a] = old_width * profile[i, a]
+                for b in range(2):
+                    diagonal[i, a, b] = new_width * (1.0 if a == b else 0.0)
+        left_coeff = np.empty((2, 2))
+        right_coeff = np.empty((2, 2))
+        for k in range(n - 1):
+            face_xi = 0.5 * (grid[k] + grid[k + 1])
+            displacement = (1.0 - face_xi) * d_left + face_xi * d_right - phase_frame_displacement
+            dg = grid[k + 1] - grid[k]
+            for a in range(2):
+                for b in range(2):
+                    A = (dt * D_faces[k, a, b]) / (new_length * dg)
+                    eye = 1.0 if a == b else 0.0
+                    left_coeff[a, b] = -A
+                    right_coeff[a, b] = A
+                    if displacement > 0.0:
+                        right_coeff[a, b] = A + displacement * eye
+                    elif displacement < 0.0:
+                        left_coeff[a, b] = -A + displacement * eye
+            if k == 0:
+                end_coefficients[0, 0] = left_coeff
+                end_coefficients[0, 1] = right_coeff
+            if k == n - 2:
+                end_coefficients[1, 0] = left_coeff
+                end_coefficients[1, 1] = right_coeff
+            # Row k + 1 receives this face as its right row, then row k as its
+            # left row (face-ordered, as in the NumPy assembly).
+            if not (k + 1 == n - 1 and right_fixed):
+                for a in range(2):
+                    for b in range(2):
+                        lower[k + 1, a, b] += left_coeff[a, b]
+                        diagonal[k + 1, a, b] += right_coeff[a, b]
+            if not (k == 0 and left_fixed):
+                for a in range(2):
+                    for b in range(2):
+                        diagonal[k, a, b] -= left_coeff[a, b]
+                        upper[k, a, b] -= right_coeff[a, b]
 else:
     _fill_ternary_left_planar_interior = None
     _fill_ternary_right_planar_interior = None
+    _fill_three_phase_interval_system = None

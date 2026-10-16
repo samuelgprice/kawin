@@ -559,9 +559,9 @@ grid has 81 linear-clustered nodes.
 - **Symmetry:** the two interfaces stay mirror images to 5e-11 m, and their
   tie-line coordinates agree to 1.7e-10.
 - **Steps:** both models take 3364 steps with no retries.
-- **Cost:** 52 s for three-phase against 11.5 s for two-phase (4.5×; it
-  was 124 s before the lagged-diffusivity cache and the vectorized row fill
-  in problem 12).
+- **Cost:** 23 s for three-phase against 9 s for two-phase (2.6×). It was
+  124 s before the lagged-diffusivity cache and the vectorized row fill, and
+  about 51 s before the third pass (both in problem 12).
 
 Before the three-phase fixes (problem 12), the same run needed about 1 s per
 step, started retrying at about 1e-4 s, and had reached only 7e-4 s after an
@@ -659,6 +659,20 @@ therefore DICTRA's start-up transient and discretization error.
       The remaining 4.5× is about what the extra work explains: 7 Newton
       candidates per step instead of 4 (four unknowns), 2.2× the nodes, and
       two tie-line evaluations per candidate.
+    - **Third pass (4.5× → 2.6×), results bitwise unchanged:**
+      - the interval systems are assembled by a compiled Numba kernel, with
+        the NumPy assembly as the fallback; the interval solve fell from 29 s
+        to 5.5 s in a profile;
+      - validated tie-line compositions are cached per interface and η within
+        each step attempt, because most Newton candidates repeat an η;
+      - the interstitial mask is computed once, and the duplicate geometry
+        checks in the bulk solve are gone.
+
+      Timed against the previous commit: Fe-Mn-C symmetric check ~51 s →
+      ~26 s, DICTRA exb5 three-phase ~23 s → ~15 s (symmetric and
+      asymmetric). The rest is mostly per-step bookkeeping
+      (`postProcess`), lagged-diffusivity validation and the compiled block
+      solve.
 
 ## 6. Limitations and open items
 
@@ -690,11 +704,8 @@ therefore DICTRA's start-up transient and discretization error.
   - **Removing the limit** would mean solving the bulk profiles as deviations
     from the interface value. That is not planned.
 - **Three-phase model:**
-  - it has no per-component η option;
-  - it is about 4.5× slower per step than the two-phase model, which is
-    roughly the extra work of four unknowns and 2.2× the nodes; compiled
-    assembly, as in the two-phase model, would trim the remaining Python
-    overhead;
+  - it is about 2.6× slower per step than the two-phase model, which is
+    roughly the extra work of four unknowns and 2.2× the nodes;
   - it has been checked on a real-thermodynamics sharp front only in the
     symmetric configuration (section 4.3). With constant D and linear
     tie-lines it now also matches an exact asymmetric similarity solution

@@ -2325,3 +2325,82 @@ def test_three_phase_interface_newton_start_rejects_unknown_option():
             time_step=1e-4,
             interface_newton_start="predicted",
         )
+
+
+@pytest.mark.skipif(
+    __import__("kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D", fromlist=["x"])._fill_three_phase_interval_system is None,
+    reason="Numba is not available",
+)
+@pytest.mark.parametrize("ends", ["left_fixed", "right_fixed", "both_fixed"])
+@pytest.mark.parametrize("motion", [-1.0, 1.0])
+def test_three_phase_compiled_interval_assembly_is_bitwise_numpy(ends, motion):
+    """The compiled interval assembly reproduces the NumPy assembly exactly, signed zeros included."""
+    model, _ = _make_stationary_model(record=False)
+    model.setup()
+    rng = np.random.default_rng(7)
+    n = 17
+    grid = np.concatenate(([0.0], np.sort(rng.uniform(0.0, 1.0, n - 2)), [1.0]))
+    profile = np.column_stack((rng.uniform(0.15, 0.3, n), rng.uniform(0.05, 0.2, n)))
+    D = rng.uniform(0.1, 1.0, (n - 1, 2, 2)) * np.array([[1.0, 0.1], [0.05, 0.5]])
+    D[:, 0, 1] = 0.0  # exact zeros exercise the signed-zero handling
+    left_value = np.array([0.21, 0.11]) if ends in ("left_fixed", "both_fixed") else None
+    right_value = np.array([0.27, 0.16]) if ends in ("right_fixed", "both_fixed") else None
+    old_bounds, new_bounds = (0.30, 0.62), (0.30 + motion * 2e-3, 0.62 + motion * 7e-3)
+    model._currdt = 3.0e-3
+    results = []
+    for compiled in (True, False):
+        model._useCompiledIntervalAssembly = compiled
+        results.append(
+            model._solve_interval_planar(profile, grid, old_bounds, new_bounds, 1, left_value, right_value, D,
+                                         validate_diffusivity=False, phase_frame_displacement=motion * 1e-3)
+        )
+    compiled, reference = results
+    np.testing.assert_array_equal(compiled.profile, reference.profile)
+    np.testing.assert_array_equal(compiled.left_transfer, reference.left_transfer)
+    np.testing.assert_array_equal(compiled.right_transfer, reference.right_transfer)
+
+
+@pytest.mark.parametrize("mode", ["phase_uniform", "composition_dependent_lagged"])
+def test_three_phase_compiled_assembly_run_matches_numpy_run(mode):
+    from kawin.tests.illingworth_baseline_cases import _three_phase_model
+
+    histories = []
+    for compiled in (True, False):
+        model = _three_phase_model(mode)
+        model._useCompiledIntervalAssembly = compiled
+        model.solve(2.0e-3, minDtFrac=1.0e-10)
+        histories.append((model.getInterfacePositions(), model.getInterfaceEtas(), model.getTransformedState()))
+    np.testing.assert_array_equal(histories[0][0], histories[1][0])
+    np.testing.assert_array_equal(histories[0][1], histories[1][1])
+    for compiled_profile, reference_profile in zip(histories[0][2], histories[1][2]):
+        np.testing.assert_array_equal(compiled_profile, reference_profile)
+
+
+def test_three_phase_interface_composition_cache_is_attempt_local():
+    model, _ = _make_stationary_model(record=False)
+    model.setup()
+    calls = []
+    closure = model.interfaceEquilibria[0]
+    original = closure.interface_compositions
+
+    def counting(eta):
+        calls.append(eta)
+        return original(eta)
+
+    closure.interface_compositions = counting
+    etas = np.asarray([0.3, 0.6])
+    uncached = model._interface_compositions(etas)
+    model._interface_compositions(etas)
+    assert len(calls) == 2  # no cache outside a step attempt
+
+    model._interfaceCompositionCache = {}
+    first = model._interface_compositions(etas)
+    second = model._interface_compositions(etas)
+    model._interface_compositions(np.asarray([0.3, 0.61]))  # same A|B eta, new B|C eta
+    assert len(calls) == 3
+    for pair_a, pair_b, pair_c in zip(uncached, first, second):
+        for a, b, c in zip(pair_a, pair_b, pair_c):
+            np.testing.assert_array_equal(a, b)
+            np.testing.assert_array_equal(a, c)
+            assert b is not c  # callers get copies
+    model._interfaceCompositionCache = None
