@@ -1,0 +1,182 @@
+
+
+
+
+
+<!-- Provenance of code -->
+<H3><A name=prov>Provenance of Source Code</A></H3>
+<P>T.C. Illingworth and I.O. Golosnoy
+<BR>Department of Materials Science and Metallurgy
+<BR>University of Cambridge
+<BR>Cambridge
+<BR>CB2 3QZ
+<BR>U.K.</P>
+
+<P>E-mail: <A href="mailto:iog20@cam.ac.uk">iog20@cam.ac.uk</A> </P>
+
+<P>Added to MAP: February 2005. </P>
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#purp">Next</A>
+
+
+</FONT></P><!-- Purpose of code -->
+<H3><A name=purp>Purpose</A></H3>
+<P>To track the position of the interface in a two phase diffusion-controlled moving boundary problem. </P>
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#spec">Next</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#prov">Prev</A> </FONT>
+
+
+
+</P><!-- Specification -->
+<H3><A name=spec>Specification</A></H3>
+<TABLE>
+  <TBODY>
+  <TR>
+    <TD>Language: 
+    <TD>C/C++ 
+  <TR>
+    <TD>Product form: 
+    <TD>Source code. </TR></TBODY></TABLE><BR>
+
+</P>No specific input parameters (change the first few lines of the source code instead).</P>
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#desc">Next</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#purp">Prev</A>
+
+
+</FONT></P><!-- Description of subroutine -->
+<H3><A name=desc>Description</A></H3>
+<P>Even under isothermal conditions, the position of an interface between two different phases of a binary alloy can move 
+if there are concentration gradients present in one (or both) phases. This code models diffusion in either phase and tracks 
+thee way in which the interface moves for conditions where the interfacial concentrations are constant (i.e. time-invariant).</P>
+
+<P>The algorithm can be used for either planar or spherical geometries and relies on an implicit front-fixing (IFF)
+algorithm.  In contrast to some previous models, it has been derived in such a way as to ensure that it conserves solute.</P>
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#refer">Next</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#spec">Prev</A> </FONT></P><!-- References -->
+
+
+<H3><A name=refer>References</A></H3>
+
+<OL>
+  <LI>T.C. Illingworth, I.O. Golosnoy, V. Gergely, T.W. Clyne <I>Numerical Modelling of Transient Liquid Phase Bonding and Other Diffusion Controlled Phase Changes</I>, J. Mat. Sci., <I>in press.</I></LI>
+  <LI>T.C. Illingworth, I.O. Golosnoy <I>Numerical Solutions of Diffusion-Controlled Moving Boundary Problems which Conserve Solute</I> J. Comp. Phys., <I>in press.</I></LI>
+</OL>
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#param">Next</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#desc">Prev</A>
+
+</FONT></P><!-- Parameter descriptions -->
+<H3><A name=param>Parameters</A></H3>
+<H4>Input parameters</H4>
+<P>None.  Simply change the first few lines of the main routine in ConservativeIFF.</P>
+<H4>Output parameters</H4>
+<P>A file called 'results' is generated upon exectution of program; it describes how the position of the interface varies with time.</P>
+
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#error">Next</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#refer">Prev</A>
+
+
+</FONT></P><!-- Description of error indicators -->
+<H3><A name=error>Error Indicators</A></H3>
+<P>None. </P>
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#accur">Next</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#param">Prev</A>
+
+</FONT></P><!-- Accuracy estimate, where appropriate -->
+<H3><A name=accur>Accuracy</A></H3>
+<P>Conserves solute in every case. Results indicate that the algorithm is first order accuracy in both space and time.</P>
+<P> This code constitutes implements a fully implicit algorithm - there is concequently no limitation on the size of 
+timestep that can be used to generate stable solutions. </P>
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#further">Next</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#error">Prev</A>
+
+</FONT></P><!-- Any further information -->
+<H3><A name=further>Further Comments</A></H3>
+<P>Main routine is in ConservativeIFF.cpp.  Other source files contain the subroutines that are called and header files.</P>
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#exam">Next</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#accur">Prev</A>
+
+</FONT></P><!-- Example of code operation -->
+<H3><A name=exam>Example</A></H3>
+<H4>1. Program text</H4>
+<P>Run as supplied.</P>
+
+<H4>2. Program data</H4>
+<P>No input parameters.</P>
+
+<H4>3. Program results</H4>
+<P>Generates a file (results.txt) which contains the following text:</P>
+<TABLE><TBODY>
+  <TR>
+<TD>Time
+<TD>Interface Position 
+  <TR>
+<TD>0 
+<TD>1. 
+  <TR>
+<TD>0.1
+<TD>1.00005
+  <TR>
+<TD>0.2
+<TD>1.0001
+  <TR>
+<TD>0.3
+<TD>1.00015
+  <TR>
+<TD>0.4
+<TD>1.0002
+  <TR>
+<TD>0.5
+<TD>1.00025
+  <TR>
+<TD>0.6
+<TD>1.0003
+  <TR>
+<TD>0.7
+<TD>1.00035
+  <TR>
+<TD>0.8
+<TD>1.0004
+  <TR>
+<TD>0.9
+<TD>1.00045
+  <TR>
+<TD>1
+<TD>1.00049
+</TR>
+</TBODY></TABLE>
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#auxil">Next</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#further">Prev</A>
+
+</FONT></P><!-- Additional utility subroutines required -->
+<H3><A name=auxil>Auxiliary Routines</A></H3>
+<P>None.</P>
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#keyw">Next</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#exam">Prev</A>
+
+</FONT></P><!-- Keywords -->
+<H3><A name=keyw>Keywords</A></H3>
+<P>diffusion, phase-change, kinetics, moving boundary</P>
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#down">Next</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#auxil">Prev</A>
+
+</FONT></P><!-- Download source code -->
+<H3><A name=down>Download</A></H3>
+<P><STRONG><FONT size=+2><A 
+href="http://www.msm.cam.ac.uk/map/???????????">Download source 
+code</A> </FONT></STRONG></P>
+
+
+<P><FONT size=-1><A href="http://www.msm.cam.ac.uk/map/format.html#top">Top</A> | <A href="http://www.msm.cam.ac.uk/map/format.html#keyw">Prev</A>
+
+

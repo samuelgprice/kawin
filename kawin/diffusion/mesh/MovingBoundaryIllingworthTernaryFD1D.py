@@ -152,13 +152,22 @@ def integrate_planar_transformed_profile_sequence(profiles, interfaces, domain_l
     return inventory
 
 
-def integrate_planar_transformed_molar_inventories(profiles, interfaces, domain_length: float, grids, phase_molar_volumes):
+def integrate_planar_transformed_molar_inventories(profiles, interfaces, domain_length: float, grids, phase_molar_volumes, substitutional_mask=None):
     """
     Directly integrates all ternary component moles per unit planar area.
 
     ``phase_molar_volumes`` must supply one positive physical molar volume per
     phase. The dependent fraction is integrated directly as
     ``x0 = 1 - x1 - x2``; it is not obtained by inventory closure.
+
+    With interstitial components the profiles are u-fractions and
+    ``substitutional_mask`` (one boolean per independent component, ``True``
+    for substitutional) selects the components that share the substitutional
+    sum: the dependent u-fraction is ``1 - sum(substitutional u)`` and each
+    ``phase_molar_volumes`` entry is the volume per mole of substitutional
+    atoms, so the returned values are moles of each component and only the
+    substitutional entries add up to the substitutional total. ``None`` keeps
+    the all-substitutional form above.
     """
     profiles, interfaces, domain_length, grids = _validate_transformed_sequence(profiles, interfaces, domain_length, grids)
     molar_volumes = np.asarray(phase_molar_volumes, dtype=np.float64).reshape(-1)
@@ -169,7 +178,10 @@ def integrate_planar_transformed_molar_inventories(profiles, interfaces, domain_
     boundaries = np.concatenate(([0.0], interfaces, [domain_length]))
     inventory = np.zeros(3, dtype=np.float64)
     for profile, grid, left, right, molar_volume in zip(profiles, grids, boundaries[:-1], boundaries[1:], molar_volumes):
-        dependent = 1.0 - np.sum(profile, axis=1)
+        if substitutional_mask is None:
+            dependent = 1.0 - np.sum(profile, axis=1)
+        else:
+            dependent = 1.0 - np.sum(profile[:, np.asarray(substitutional_mask, dtype=bool)], axis=1)
         full_profile = np.column_stack((dependent, profile))
         inventory += (float(right) - float(left)) * np.trapezoid(full_profile, grid, axis=0) / float(molar_volume)
     return inventory
@@ -371,7 +383,14 @@ def _assemble_dense_block_tridiagonal(lower, diagonal, upper):
 
 
 def _solve_dense_block_tridiagonal(lower, diagonal, upper, rhs, cause):
-    """Solves the exact full block-tridiagonal system after block Thomas fails."""
+    """
+    Solves the exact full block-tridiagonal system after block Thomas fails.
+
+    The system is rejected when its 2-norm condition number exceeds
+    ``_BLOCK_PIVOT_CONDITION_LIMIT``. Callers pass the row-equilibrated
+    system (see ``_equilibrate_block_rows``), so the test measures genuine
+    ill-conditioning rather than disparate equation scales.
+    """
     matrix = _assemble_dense_block_tridiagonal(lower, diagonal, upper)
     condition_number = float(np.linalg.cond(matrix))
     if not np.isfinite(condition_number):
@@ -401,6 +420,79 @@ def _solve_dense_block_tridiagonal(lower, diagonal, upper, rhs, cause):
     return solution.reshape(rhs.shape)
 
 
+def _equilibrate_block_rows(lower, diagonal, upper, rhs):
+    """
+    Returns a row-equilibrated copy of a block-tridiagonal system.
+
+    Each scalar equation (one component row of one node, across ``lower``,
+    ``diagonal``, ``upper`` and ``rhs``) is divided by the largest absolute
+    coefficient in that row; all-zero rows are left unchanged. This is an
+    exact transformation: the solution is unchanged up to round-off. It
+    removes ill-conditioning that comes only from the two component equations
+    having very different scales, e.g. a fast interstitial row of order
+    ``D_C dt / (s dxi^2)`` next to a slow substitutional row of order
+    ``s dxi``, which otherwise makes well-posed 2x2 pivots look singular.
+    """
+    row_max = np.maximum.reduce(
+        [np.max(np.abs(lower), axis=2), np.max(np.abs(diagonal), axis=2), np.max(np.abs(upper), axis=2)]
+    )
+    factors = 1.0 / np.where(row_max > 0.0, row_max, 1.0)
+    rhs_factors = factors if rhs.ndim == 2 else factors[:, :, np.newaxis]
+    return (
+        lower * factors[:, :, np.newaxis],
+        diagonal * factors[:, :, np.newaxis],
+        upper * factors[:, :, np.newaxis],
+        rhs * rhs_factors,
+    )
+
+
+def _block_thomas_sweep(lower, diagonal, upper, rhs):
+    """
+    Runs one checked block Thomas elimination and back substitution.
+
+    Raises ``_BlockThomasPivotError`` when a modified 2x2 pivot fails
+    ``_check_block_pivot``; inputs must already be validated.
+    """
+    n_nodes = diagonal.shape[0]
+    modified_upper = np.zeros_like(upper)
+    modified_rhs = np.zeros_like(rhs)
+    first_rhs = np.concatenate((upper[0], np.atleast_2d(rhs[0]).reshape(2, -1)), axis=1)
+    first_solved = _solve_checked_2x2_matrix(diagonal[0], first_rhs, "row 0")
+    modified_upper[0] = first_solved[:, :2]
+    modified_rhs[0] = first_solved[:, 2:].reshape(rhs[0].shape)
+    for node in range(1, n_nodes):
+        pivot = diagonal[node] - _apply_2x2_block(lower[node], modified_upper[node - 1])
+        row_rhs = rhs[node] - _apply_2x2_block(lower[node], modified_rhs[node - 1])
+        solve_rhs = np.concatenate((upper[node], np.atleast_2d(row_rhs).reshape(2, -1)), axis=1)
+        solved = _solve_checked_2x2_matrix(pivot, solve_rhs, f"row {node}")
+        modified_upper[node] = solved[:, :2]
+        modified_rhs[node] = solved[:, 2:].reshape(rhs[node].shape)
+
+    solution = np.zeros_like(rhs)
+    solution[-1] = modified_rhs[-1]
+    for node in range(n_nodes - 2, -1, -1):
+        solution[node] = modified_rhs[node] - _apply_2x2_block(modified_upper[node], solution[node + 1])
+    return solution
+
+
+def _solve_after_pivot_failure(lower, diagonal, upper, rhs, cause):
+    """
+    Solves a validated system whose first block Thomas sweep hit an unusable pivot.
+
+    The system is row-equilibrated (``_equilibrate_block_rows``) and the block
+    sweep is retried; if a pivot of the equilibrated system is still unusable,
+    the exact dense equilibrated system is solved, subject to the same
+    condition-number limit. Equations are never regularized. Because this path
+    runs only after a pivot failure, systems that pass the first sweep are
+    solved exactly as before.
+    """
+    lower, diagonal, upper, rhs = _equilibrate_block_rows(lower, diagonal, upper, rhs)
+    try:
+        return _block_thomas_sweep(lower, diagonal, upper, rhs)
+    except _BlockThomasPivotError:
+        return _solve_dense_block_tridiagonal(lower, diagonal, upper, rhs, cause)
+
+
 def solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs):
     """
     Solves a block-tridiagonal Illingworth system with dense component blocks.
@@ -412,34 +504,16 @@ def solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs):
     implementation untouched. Each modified 2x2 pivot is checked once with a
     scale-invariant reciprocal-condition estimate, then ``upper`` and all RHS
     columns are solved together with :func:`numpy.linalg.solve`. If a block
-    pivot is unusable, the exact dense block-tridiagonal system is assembled and
-    solved directly without regularizing or otherwise changing the equations.
+    pivot is unusable, the system is row-equilibrated (an exact rescaling of
+    each component equation) and the sweep is retried; if that also fails, the
+    exact dense equilibrated system is solved directly, without regularizing
+    the equations, and rejected only if it is genuinely ill-conditioned.
     """
     lower, diagonal, upper, rhs = _validate_block_tridiagonal_system(lower, diagonal, upper, rhs)
-
-    n_nodes = diagonal.shape[0]
-    modified_upper = np.zeros_like(upper)
-    modified_rhs = np.zeros_like(rhs)
     try:
-        first_rhs = np.concatenate((upper[0], np.atleast_2d(rhs[0]).reshape(2, -1)), axis=1)
-        first_solved = _solve_checked_2x2_matrix(diagonal[0], first_rhs, "row 0")
-        modified_upper[0] = first_solved[:, :2]
-        modified_rhs[0] = first_solved[:, 2:].reshape(rhs[0].shape)
-        for node in range(1, n_nodes):
-            pivot = diagonal[node] - _apply_2x2_block(lower[node], modified_upper[node - 1])
-            row_rhs = rhs[node] - _apply_2x2_block(lower[node], modified_rhs[node - 1])
-            solve_rhs = np.concatenate((upper[node], np.atleast_2d(row_rhs).reshape(2, -1)), axis=1)
-            solved = _solve_checked_2x2_matrix(pivot, solve_rhs, f"row {node}")
-            modified_upper[node] = solved[:, :2]
-            modified_rhs[node] = solved[:, 2:].reshape(rhs[node].shape)
-
-        solution = np.zeros_like(rhs)
-        solution[-1] = modified_rhs[-1]
-        for node in range(n_nodes - 2, -1, -1):
-            solution[node] = modified_rhs[node] - _apply_2x2_block(modified_upper[node], solution[node + 1])
-        return solution
+        return _block_thomas_sweep(lower, diagonal, upper, rhs)
     except _BlockThomasPivotError as exc:
-        return _solve_dense_block_tridiagonal(lower, diagonal, upper, rhs, exc)
+        return _solve_after_pivot_failure(lower, diagonal, upper, rhs, exc)
 
 
 if njit is not None:
@@ -550,9 +624,10 @@ def _solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs):
     """
     Solve one two-component RHS with optional compiled block elimination.
 
-    Input validation and the dense full-system fallback match the public Python
-    solver. Numba is used only for a single RHS; other shapes and installations
-    without Numba retain the Python implementation.
+    Input validation and the equilibrated retry and dense full-system fallback
+    after a pivot failure match the public Python solver. Numba is used only
+    for a single RHS; other shapes and installations without Numba retain the
+    Python implementation.
     """
     if _solve_illingworth_block_tridiagonal_numba is None:
         return solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
@@ -574,7 +649,7 @@ def _solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs):
         )
     else:
         cause = _BlockThomasPivotError(f"Block-tridiagonal solve produced a nonfinite 2x2 result at row {row}.")
-    return _solve_dense_block_tridiagonal(lower, diagonal, upper, rhs, cause)
+    return _solve_after_pivot_failure(lower, diagonal, upper, rhs, cause)
 
 
 if njit is not None:
@@ -655,6 +730,81 @@ if njit is not None:
                             lower[i, component, coupled] -= displacement * (1.0 - left_sum / 2.0)
                             center += displacement * (1.0 - right_sum / 2.0) - span * cell_width / 2.0
                     diagonal[i, component, coupled] = center
+
+
+    @njit(cache=True, fastmath=False)
+    def _fill_three_phase_interval_system(lower, diagonal, upper, rhs, end_coefficients, profile, grid,
+                                          old_left, old_right, new_left, new_right, phase_frame_displacement,
+                                          dt, D_faces, left_fixed, left_value, right_fixed, right_value):
+        """Assemble one three-phase interval system (ALE upwind + implicit diffusion, face by face).
+
+        Compiled form of the NumPy assembly in the three-phase model's
+        ``_solve_interval_planar``, with the same per-element operations in the
+        same order (including signed zeros), so the solved profiles are
+        bitwise identical. ``lower``, ``diagonal``, ``upper`` and ``rhs`` must
+        be zero on entry. ``end_coefficients[0]`` and ``[1]`` receive the
+        (left, right) node coefficients of the first and last faces, which the
+        caller uses for the interface transfers. Fixed (Dirichlet) end rows
+        get the identity and ``left_value`` / ``right_value``.
+        """
+        n = profile.shape[0]
+        old_length = old_right - old_left
+        new_length = new_right - new_left
+        d_left = new_left - old_left
+        d_right = new_right - old_right
+        for i in range(n):
+            fixed = (i == 0 and left_fixed) or (i == n - 1 and right_fixed)
+            if fixed:
+                value = left_value if (i == 0 and left_fixed) else right_value
+                for a in range(2):
+                    rhs[i, a] = value[a]
+                    for b in range(2):
+                        diagonal[i, a, b] = 1.0 if a == b else 0.0
+                continue
+            face_lo = 0.0 if i == 0 else 0.5 * (grid[i - 1] + grid[i])
+            face_hi = 1.0 if i == n - 1 else 0.5 * (grid[i] + grid[i + 1])
+            dxi = face_hi - face_lo
+            old_width = old_length * dxi
+            new_width = new_length * dxi
+            for a in range(2):
+                rhs[i, a] = old_width * profile[i, a]
+                for b in range(2):
+                    diagonal[i, a, b] = new_width * (1.0 if a == b else 0.0)
+        left_coeff = np.empty((2, 2))
+        right_coeff = np.empty((2, 2))
+        for k in range(n - 1):
+            face_xi = 0.5 * (grid[k] + grid[k + 1])
+            displacement = (1.0 - face_xi) * d_left + face_xi * d_right - phase_frame_displacement
+            dg = grid[k + 1] - grid[k]
+            for a in range(2):
+                for b in range(2):
+                    A = (dt * D_faces[k, a, b]) / (new_length * dg)
+                    eye = 1.0 if a == b else 0.0
+                    left_coeff[a, b] = -A
+                    right_coeff[a, b] = A
+                    if displacement > 0.0:
+                        right_coeff[a, b] = A + displacement * eye
+                    elif displacement < 0.0:
+                        left_coeff[a, b] = -A + displacement * eye
+            if k == 0:
+                end_coefficients[0, 0] = left_coeff
+                end_coefficients[0, 1] = right_coeff
+            if k == n - 2:
+                end_coefficients[1, 0] = left_coeff
+                end_coefficients[1, 1] = right_coeff
+            # Row k + 1 receives this face as its right row, then row k as its
+            # left row (face-ordered, as in the NumPy assembly).
+            if not (k + 1 == n - 1 and right_fixed):
+                for a in range(2):
+                    for b in range(2):
+                        lower[k + 1, a, b] += left_coeff[a, b]
+                        diagonal[k + 1, a, b] += right_coeff[a, b]
+            if not (k == 0 and left_fixed):
+                for a in range(2):
+                    for b in range(2):
+                        diagonal[k, a, b] -= left_coeff[a, b]
+                        upper[k, a, b] -= right_coeff[a, b]
 else:
     _fill_ternary_left_planar_interior = None
     _fill_ternary_right_planar_interior = None
+    _fill_three_phase_interval_system = None

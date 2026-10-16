@@ -5,6 +5,14 @@ import numpy as np
 
 from kawin.GenericModel import GenericModel
 from kawin.diffusion.Diffusion import DiffusionModel
+from kawin.diffusion._illingworth_interstitials import (
+    has_interstitials,
+    record_initial_u_fractions,
+    resolve_diffusivity_provider,
+    validate_composition_basis,
+    validate_interstitial_element_order,
+    x_to_u_independent,
+)
 from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import (
     _BULK_DIFFUSIVITY_IMPLICIT,
     _BULK_DIFFUSIVITY_PHASE_UNIFORM,
@@ -18,7 +26,6 @@ from kawin.diffusion.mesh.MovingBoundaryIllingworthFD1D import (
     solve_illingworth_tridiagonal,
 )
 from kawin.solver import explicitEulerIterator
-from kawin.thermo.Mobility import interstitials
 
 def _loge_arange(start, stop, log_step):
     """Returns exponentially spaced target times with fixed natural-log spacing."""
@@ -247,10 +254,40 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     validation cases that use nonuniform Landau-coordinate spacing; grids must
     be finite, strictly increasing, and span exactly from 0 to 1.
 
+    Interstitial solutes (``kawin.thermo.Mobility.interstitials``, e.g. Fe-C)
+    are supported through u-fractions, ``u = x / (1 - x_interstitial)``. The
+    transformed state, the recorded profiles and the conserved inventory are
+    then u-fractions, and diffusion is in the volume-fixed frame where only the
+    substitutional element carries volume, with a constant molar volume per mole
+    of substitutional atoms that is equal in both phases. Thermodynamics objects
+    are still queried with mole fractions (the conversion happens at the query
+    boundary), and their diffusivity must be the u-basis volume-fixed value
+    returned by ``kawin.thermo.Mobility.interdiffusivity`` and Thermo-Calc's
+    ``DC``. ``interface_compositions`` are interpreted in
+    ``interface_composition_basis`` (``'x'`` by default, or ``'u'``) and stored
+    in ``interfaceCompositions`` as u-fractions; the caller's values are kept in
+    ``interfaceCompositionsInput``. ``getCompositions()`` returns mole
+    fractions. For substitutional systems ``u == x`` and results are unchanged.
+
     Notes
     -----
-    Only planar geometry is supported. Cylindrical and spherical equations are
-    intentionally excluded until their coefficient paths are separately tested.
+    Limitations:
+
+    - **Geometry:** planar only. Cylindrical and spherical equations are
+      intentionally excluded until their coefficient paths are separately
+      tested.
+    - **Outer boundaries:** homogeneous zero flux only (closed system).
+      Periodic, fixed-composition and nonzero-flux boundary conditions raise
+      ``NotImplementedError``, as in the ternary models.
+    - **Interface:** local equilibrium with fixed interface compositions. There
+      is no interface mobility and no para-equilibrium.
+    - **Molar volume:** constant and equal in both phases (per mole of
+      substitutional atoms with interstitials), volume-fixed frame, no
+      Kirkendall or bulk flow. Interstitial u-fractions have no site-fraction
+      upper cap.
+    - **Phases:** exactly two, one interface. A vanishing phase is not handled;
+      the step fails once the interface would leave the domain.
+    - **Temperature:** may vary; the diffusivities follow it.
     """
 
     def __init__(
@@ -284,9 +321,12 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         preallocate_recordings: bool = False,
         transformed_u_grid=None,
         transformed_v_grid=None,
+        interface_composition_basis: str = "x",
     ):
         self.initialInterfacePosition = float(interfacePosition)
-        self.interfaceCompositions = tuple(float(v) for v in interface_compositions)
+        self.interfaceCompositionBasis = validate_composition_basis(interface_composition_basis, "interface_composition_basis")
+        self.interfaceCompositionsInput = tuple(float(v) for v in interface_compositions)
+        self.interfaceCompositions = self.interfaceCompositionsInput
         self.timeStep = float(time_step)
         self.dtMode = str(dt_mode)
         self.semiLog_dt = None if semiLog_dt is None else float(semiLog_dt)
@@ -353,8 +393,32 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             record=record,
         )
         self._validateModelConfiguration()
+        self.interfaceCompositions = self._interface_compositions_as_u()
         self.interfaceData.currentY = self.initialInterfacePosition
         self.interfaceData._y[0] = self.initialInterfacePosition
+
+    def _interface_compositions_as_u(self):
+        """
+        Returns the fixed interface compositions as u-fractions.
+
+        Mole-fraction inputs are converted with ``u = x / (1 - x)`` when the
+        solute is interstitial; otherwise (substitutional solute, or
+        ``interface_composition_basis='u'``) the input values are returned
+        unchanged.
+        """
+        if self.interfaceCompositionBasis == "u" or not has_interstitials(self.allElements):
+            return self.interfaceCompositionsInput
+        return tuple(float(x_to_u_independent(v, self.allElements)) for v in self.interfaceCompositionsInput)
+
+    def _diffusivity_source(self):
+        """
+        Returns the object queried for interdiffusivities.
+
+        With interstitials this wraps ``self.therm`` so u-fraction compositions
+        are converted to mole fractions before each query; otherwise it is
+        ``self.therm`` itself.
+        """
+        return resolve_diffusivity_provider(self.therm, self.allElements)
 
     def _validate_transformed_grid(self, grid, name):
         """Validates an optional planar Landau-coordinate grid."""
@@ -378,12 +442,10 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             raise TypeError("MovingBoundaryIllingworthFD1DModel requires a CartesianFD1D mesh.")
         if len(self.allElements) != 2 or self.mesh.numResponses != 1:
             raise ValueError("MovingBoundaryIllingworthFD1DModel currently supports only binary systems.")
-        if any(e in interstitials for e in self.allElements):
-            raise ValueError("MovingBoundaryIllingworthFD1DModel supports only substitutional systems.")
+        validate_interstitial_element_order(self.allElements)
         if len(self.phases) != 2:
             raise ValueError("MovingBoundaryIllingworthFD1DModel requires exactly two explicit phases.")
-        if isinstance(getattr(self.mesh, "boundaryConditions", None), PeriodicBoundary1D):
-            raise ValueError("Periodic boundary conditions are not supported.")
+        self._validate_external_boundary_conditions()
         if self.geometry != "planar":
             raise NotImplementedError("MovingBoundaryIllingworthFD1DModel currently implements only planar geometry.")
         if not np.isfinite(self.timeStep) or self.timeStep <= 0:
@@ -419,6 +481,42 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             raise ValueError("phase_b_nodes must be at least 3 when specified.")
         self.initialInterfacePosition = self._clipInterfacePosition(self.initialInterfacePosition, strict=True)
 
+    def _validate_external_boundary_conditions(self):
+        """
+        Validates that the fixed external boundaries are homogeneous zero flux.
+
+        As in the ternary Illingworth models, the discretization is conservative
+        for a closed planar domain: both outer rows are zero-flux rows. Nonzero
+        Neumann fluxes, fixed-composition boundaries, periodic wrapping, or
+        other boundary objects would need extra terms that are not part of this
+        solver, so they are rejected before setup instead of being ignored.
+        """
+        bc = getattr(self.mesh, "boundaryConditions", None)
+        if bc is None:
+            return
+        if isinstance(bc, PeriodicBoundary1D):
+            raise NotImplementedError("Binary Illingworth currently supports only homogeneous zero-flux external boundaries; periodic boundaries are unsupported.")
+        if not isinstance(bc, MixedBoundary1D):
+            raise NotImplementedError("Binary Illingworth currently supports only MixedBoundary1D homogeneous zero-flux external boundaries.")
+
+        expected_shape = (self.mesh.numResponses,)
+        for attr in ("LBCtype", "RBCtype", "LBCvalue", "RBCvalue"):
+            values = np.asarray(getattr(bc, attr, None))
+            if values.shape != expected_shape:
+                raise NotImplementedError("Boundary-condition arrays must match the independent-component count for binary Illingworth.")
+
+        left_type = np.asarray(bc.LBCtype)
+        right_type = np.asarray(bc.RBCtype)
+        if not np.all(left_type == MixedBoundary1D.NEUMANN) or not np.all(right_type == MixedBoundary1D.NEUMANN):
+            raise NotImplementedError("Binary Illingworth currently supports only Neumann zero-flux external boundaries; fixed-composition or mixed boundaries are unsupported.")
+
+        left_value = np.asarray(bc.LBCvalue, dtype=np.float64)
+        right_value = np.asarray(bc.RBCvalue, dtype=np.float64)
+        if not np.all(np.isfinite(left_value)) or not np.all(np.isfinite(right_value)):
+            raise NotImplementedError("Binary Illingworth boundary flux values must be finite zero constants.")
+        if not np.all(left_value == 0.0) or not np.all(right_value == 0.0):
+            raise NotImplementedError("Binary Illingworth currently supports only homogeneous zero-flux external boundaries; nonzero fluxes are unsupported.")
+
     def _clipInterfacePosition(self, interface_position: float, strict: bool = True) -> float:
         z = flatten_1d_coordinates(self.mesh.z)
         eps = max(float(z[-1] - z[0]) * 1e-14, 1e-14)
@@ -437,6 +535,8 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
 
     def reset(self):
         super().reset()
+        if has_interstitials(self.allElements):
+            record_initial_u_fractions(self)
         self.interfaceData.reset()
         self.interfaceData.record(0, self.initialInterfacePosition)
         self.concData.reset()
@@ -467,6 +567,20 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             self._validateModelConfiguration()
 
     def setup(self):
+        """
+        Initializes the transformed two-phase state once; later calls are no-ops.
+
+        ``solve`` calls ``setup`` on every call. Setup builds the transformed
+        state by interpolating the stored physical profile and then replaces
+        that profile with its reconstruction, and it records the reference
+        inventory and starts the p/q histories. Re-running it would therefore
+        re-interpolate an already-reconstructed profile (changing the state),
+        restart the p/q histories and reset the reference inventory on every
+        continued ``solve``. Later calls are no-ops until ``reset`` clears
+        ``isSetup``; call ``reset`` after changing settings that setup consumes.
+        """
+        if self.isSetup:
+            return
         super().setup()
         self._validateModelConfiguration()
         self._z = flatten_1d_coordinates(self.mesh.z).astype(np.float64)
@@ -616,12 +730,14 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         and at the temperature of the interface position, and is reused for
         every face of that phase's bulk solve. Providers that accept
         ``query_context`` are asked for the ``'interface'`` context.
+        ``c_interface`` is a u-fraction; the provider receives the mole fraction.
         """
         temperature = float(self._temperatures_at_positions([position], time)[0])
+        source = self._diffusivity_source()
         try:
-            D = self.therm.getInterdiffusivity(float(c_interface), temperature, phase=phase, query_context="interface")
+            D = source.getInterdiffusivity(float(c_interface), temperature, phase=phase, query_context="interface")
         except TypeError:
-            D = self.therm.getInterdiffusivity(float(c_interface), temperature, phase=phase)
+            D = source.getInterdiffusivity(float(c_interface), temperature, phase=phase)
         D = np.asarray(D, dtype=np.float64).reshape(-1)
         if D.size != 1:
             raise ValueError("Phase-uniform diffusivity query must return a single value.")
@@ -634,8 +750,10 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         The provider is queried vectorized with ``query_context='general'``,
         then vectorized without ``query_context`` (for ``Thermodynamics``-style
         signatures), and finally one face at a time if the vectorized result
-        is unusable.
+        is unusable. ``face_compositions`` are u-fractions; the provider
+        receives mole fractions.
         """
+        source = self._diffusivity_source()
         face_compositions = np.asarray(face_compositions, dtype=np.float64).reshape(-1)
         temperatures = self._temperatures_at_positions(face_positions, time)
         if temperatures.size != face_compositions.size:
@@ -643,7 +761,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         n_faces = face_compositions.size
 
         def vectorized_call(**kwargs):
-            values = self.therm.getInterdiffusivity(face_compositions, temperatures, phase=phase, **kwargs)
+            values = source.getInterdiffusivity(face_compositions, temperatures, phase=phase, **kwargs)
             values = np.asarray(values, dtype=np.float64).reshape(-1)
             if values.size == 1 and n_faces != 1:
                 values = np.full(n_faces, float(values[0]), dtype=np.float64)
@@ -664,9 +782,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             values = np.empty(n_faces, dtype=np.float64)
             for i, (composition, temperature) in enumerate(zip(face_compositions, temperatures)):
                 try:
-                    D = self.therm.getInterdiffusivity(float(composition), float(temperature), phase=phase, query_context="general")
+                    D = source.getInterdiffusivity(float(composition), float(temperature), phase=phase, query_context="general")
                 except TypeError:
-                    D = self.therm.getInterdiffusivity(float(composition), float(temperature), phase=phase)
+                    D = source.getInterdiffusivity(float(composition), float(temperature), phase=phase)
                 values[i] = float(np.asarray(D, dtype=np.float64).reshape(-1)[0])
         return _validate_binary_diffusivity(values, phase, context="bulk face diffusivity")
 

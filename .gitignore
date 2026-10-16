@@ -21,6 +21,17 @@ tutorialPictures/
 *.txt
 *.html
 *.npz
+!kawin/tests/data/*.npz
 *.npy
 *.xml
 .coverage
+
+# Authors' manuscript bundled in the MAP download; not redistributed (see the folder README)
+examples/Illingworth2005/illingworth_MAP_code/IllingworthGolosnoy.pdf
+# MAP reference code (redistributed under MAP terms, see the folder README); overrides *.cpp/*.h/*.html ignores
+!examples/Illingworth2005/illingworth_MAP_code/*.cpp
+!examples/Illingworth2005/illingworth_MAP_code/*.h
+!examples/Illingworth2005/illingworth_MAP_code/ConservativeIFF.html
+# Digitised figure data used by tests (CSVs only; see the folder READMEs)
+!examples/Illingworth2005/figureDataExtraction/*.csv
+!examples/Olaye2020/figureDataExtraction/*.csv

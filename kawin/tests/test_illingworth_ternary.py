@@ -954,14 +954,60 @@ def test_ternary_compiled_block_solve_preserves_dense_fallback_and_singular_erro
         )
 
 
-def test_ternary_compiled_block_solve_rejects_illconditioned_full_system():
+def test_ternary_compiled_block_solve_equilibrates_disparate_equation_scales():
+    """A pivot that is only badly scaled (one equation ~1e-13 of the other) is solved after row equilibration."""
     lower = np.zeros((1, 2, 2), dtype=np.float64)
     diagonal = np.asarray([[[1.0, 0.0], [0.0, 1.0e-13]]], dtype=np.float64)
     upper = np.zeros_like(lower)
     rhs = np.asarray([[1.0, 1.0e-13]])
 
-    with pytest.raises(np.linalg.LinAlgError, match="numerically unusable"):
-        ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs)
+    for solver in (ternary_mesh._solve_illingworth_block_tridiagonal_two_phase, solve_illingworth_block_tridiagonal):
+        np.testing.assert_allclose(solver(lower, diagonal, upper, rhs), [[1.0, 1.0]], rtol=1e-14)
+
+
+def test_ternary_compiled_block_solve_rejects_illconditioned_full_system():
+    """Ill-conditioning that survives row equilibration (nearly dependent equations) is still rejected."""
+    lower = np.zeros((1, 2, 2), dtype=np.float64)
+    diagonal = np.asarray([[[1.0, 1.0], [1.0, 1.0 + 1.0e-13]]], dtype=np.float64)
+    upper = np.zeros_like(lower)
+    rhs = np.asarray([[1.0, 1.0]])
+
+    for solver in (ternary_mesh._solve_illingworth_block_tridiagonal_two_phase, solve_illingworth_block_tridiagonal):
+        with pytest.raises(np.linalg.LinAlgError, match="numerically unusable"):
+            solver(lower, diagonal, upper, rhs)
+
+
+def test_ternary_block_solve_equilibrated_retry_matches_dense_solution_for_disparate_rows():
+    """
+    Fast/slow component rows (scales ~1e14 apart) trip the raw pivot check but solve exactly after equilibration.
+
+    Mimics the fast-interstitial / slow-substitutional rows of the ternary
+    Illingworth systems; the equilibrated solution matches an extended-precision
+    reference built from the row-scaled dense system.
+    """
+    n_nodes = 6
+    fast, slow = 1.0e7, 1.0e-7
+    lower = np.zeros((n_nodes, 2, 2))
+    diagonal = np.zeros((n_nodes, 2, 2))
+    upper = np.zeros((n_nodes, 2, 2))
+    for node in range(n_nodes):
+        diagonal[node] = [[2.0 * fast + 1.0, 0.05 * fast], [0.1 * slow, 2.0 * slow + 0.3 * slow]]
+        if node > 0:
+            lower[node] = [[-fast, 0.0], [-0.05 * slow, -slow]]
+        if node < n_nodes - 1:
+            upper[node] = [[-fast, 0.0], [-0.05 * slow, -slow]]
+    rhs = np.column_stack((np.linspace(1.0, 2.0, n_nodes) * fast, np.linspace(0.5, 1.5, n_nodes) * slow))
+    rcond, _ = _estimate_2x2_rcond(diagonal[0])
+    assert rcond < _BLOCK_PIVOT_RCOND_LIMIT  # the raw sweep must take the fallback path
+
+    actual = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+    compiled = ternary_mesh._solve_illingworth_block_tridiagonal_two_phase(lower, diagonal, upper, rhs)
+
+    row_scale = np.tile(np.asarray([1.0 / fast, 1.0 / slow]), n_nodes)  # rows are interleaved (C, X) per node
+    dense = _assemble_test_block_tridiagonal(lower, diagonal, upper) * row_scale[:, None]
+    expected = np.linalg.solve(dense, rhs.reshape(-1) * row_scale).reshape(n_nodes, 2)
+    np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-14)
+    np.testing.assert_allclose(compiled, expected, rtol=1e-10, atol=1e-14)
 
 
 def test_ternary_compiled_block_solve_validates_inputs_and_preserves_other_paths(monkeypatch):
@@ -980,7 +1026,7 @@ def test_ternary_compiled_block_solve_validates_inputs_and_preserves_other_paths
         solve_illingworth_block_tridiagonal(lower, diagonal, upper, multi_rhs),
     )
     assert ternary_fdm.solve_illingworth_block_tridiagonal is ternary_mesh._solve_illingworth_block_tridiagonal_two_phase
-    assert ternary_three_phase_fdm.solve_illingworth_block_tridiagonal is ternary_mesh.solve_illingworth_block_tridiagonal
+    assert ternary_three_phase_fdm.solve_illingworth_block_tridiagonal is ternary_mesh._solve_illingworth_block_tridiagonal_two_phase
 
     expected = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
     monkeypatch.setattr(ternary_mesh, "_solve_illingworth_block_tridiagonal_numba", None)
@@ -2457,7 +2503,7 @@ def test_ternary_scaled_interface_jacobian_perturbs_eta_with_eta_interval():
     base_eta = float(model._eta_curr)
     eta_span = model.interfaceEquilibrium.eta_bounds[1] - model.interfaceEquilibrium.eta_bounds[0]
     positive_perturbations = eta_calls[eta_calls > base_eta] - base_eta
-    expected_eta_step = eta_span * np.sqrt(np.finfo(float).eps) * max(1.0, abs((base_eta - model.interfaceEquilibrium.eta_bounds[0]) / eta_span))
+    expected_eta_step = eta_span * ternary_fdm._INTERFACE_ETA_FD_STEP
 
     assert positive_perturbations.size > 0
     assert np.isclose(np.min(positive_perturbations), expected_eta_step, rtol=1.0e-6, atol=1.0e-14)
@@ -2598,7 +2644,7 @@ def test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work
     assert model._lastImplicitJacobianEvaluations == 1
     assert model._lastImplicitMotionBranch == "positive"
     assert model._lastImplicitFailureReason is None
-    assert np.isclose(model._lastImplicitResidual, 4.4966467399417765e-15, rtol=0.0, atol=1.0e-21)
+    assert np.isclose(model._lastImplicitResidual, 4.494315292342209e-15, rtol=0.0, atol=1.0e-21)
 
 
 @pytest.mark.parametrize("flip_branch", [False, True])
@@ -2625,10 +2671,15 @@ def test_ternary_interface_reuses_accepted_trial_only_on_same_branch(monkeypatch
         return original_step(jacobian, residual)
 
     def select_branch(s_arg, old_s_arg, future_s_arg):
+        # Flip only the next-iteration selection made right after the accepted
+        # line-search trial (the fourth candidate) was evaluated.
         nonlocal branch_count
-        branch_count += 1
         branch = _select_interface_motion_branch(s_arg, old_s_arg, future_s_arg)
-        return ("negative" if branch == "positive" else "positive") if flip_branch and branch_count == 2 else branch
+        if len(evaluations) == 4:
+            branch_count += 1
+            if flip_branch and branch_count == 1:
+                return "negative" if branch == "positive" else "positive"
+        return branch
 
     monkeypatch.setattr(model, "_evaluate_interface_candidate", evaluate_spy)
     monkeypatch.setattr(model, "_least_squares_step_2xN", stop_after_second_candidate)
@@ -2640,11 +2691,11 @@ def test_ternary_interface_reuses_accepted_trial_only_on_same_branch(monkeypatch
 
     accepted_x, accepted_branch = evaluations[3]
     repeated = [(x, branch) for x, branch in evaluations if np.array_equal(x, accepted_x)]
-    assert branch_count == 2
+    assert branch_count >= 1
     assert len(repeated) == (2 if flip_branch else 1)
-    assert repeated[0][1] == accepted_branch
-    if flip_branch:
-        assert repeated[1][1] != accepted_branch
+    # Candidates are always evaluated on the branch of their own displacement,
+    # so a re-evaluation forced by a branch mismatch reproduces that branch.
+    assert all(branch == accepted_branch for _, branch in repeated)
     assert model._lastImplicitCandidateEvaluations == len(evaluations)
     assert model._lastImplicitFunctionEvaluations == len(evaluations)
 
@@ -2766,14 +2817,19 @@ def test_ternary_solver_uses_consistent_fallback_branch_when_future_position_is_
     assert {branch for _, _, branch in first_evaluation} == {expected_branch}
 
 
-def test_ternary_solver_freezes_upwind_branch_for_finite_difference_jacobian_near_zero_motion():
+def test_ternary_solver_keeps_finite_difference_jacobian_on_iterate_side_near_zero_motion():
+    """At zero motion after a receding step, the s perturbation stays on the negative side and every trial matches its own branch."""
     s, records = _record_solve_interface_branches(-1.0e-3)
-    perturbed_records = [
-        item for item in records if item[0] in {"left", "right", "residual"} and item[1] > s + 1.0e-10
-    ]
+    s_perturbation = records[3:6]
 
-    assert perturbed_records
-    assert {branch for _, _, branch in perturbed_records} == {"negative"}
+    assert [name for name, _, _ in s_perturbation] == ["left", "right", "residual"]
+    assert all(future_s < s - 1.0e-10 for _, future_s, _ in s_perturbation)
+    assert {branch for _, _, branch in s_perturbation} == {"negative"}
+    for _, future_s, branch in records:
+        if future_s > s + 1.0e-10:
+            assert branch == "positive"
+        elif future_s < s - 1.0e-10:
+            assert branch == "negative"
 
 
 @pytest.mark.parametrize("future_s", [0.47, 0.43])
@@ -4417,3 +4473,79 @@ def test_ternary_illingworth_accepts_surrogate_for_thermo_and_equilibrium():
     assert np.isclose(model.getInterfacePosition(), 0.5)
     assert np.isclose(model.getInterfaceEta(), 0.0)
     assert np.allclose(model.checkConservation(1e-12), np.zeros(2))
+
+
+def test_interface_newton_evaluates_every_trial_on_its_own_motion_branch(monkeypatch):
+    """A receding interface starts Newton at the kink with the positive-side Jacobian and must cross to the negative side."""
+    from kawin.tests.illingworth_baseline_cases import _CoupledTernaryThermodynamics, _ternary_model
+
+    model = _ternary_model("phase_uniform", _CoupledTernaryThermodynamics(), np.asarray([0.16, 0.12]), np.asarray([0.56, 0.25]))
+    evaluated = []
+    original = MovingBoundaryIllingworthTernaryFD1DModel._evaluate_interface_candidate
+
+    def spy(self, **kwargs):
+        future_s, _ = self._interface_scaled_to_physical(kwargs["x_hat"], kwargs["eta_lower"], kwargs["eta_span"])
+        evaluated.append((future_s - kwargs["s"], kwargs["motion_branch"]))
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(MovingBoundaryIllingworthTernaryFD1DModel, "_evaluate_interface_candidate", spy)
+    model.solve(3.0e-4, minDtFrac=1.0e-10)
+
+    assert model.getInterfacePosition() < 0.45
+    assert model._lastStepRetries == 0
+    assert any(displacement < -1e-15 for displacement, _ in evaluated)
+    for displacement, branch in evaluated:
+        if displacement > 1e-15:
+            assert branch == "positive"
+        elif displacement < -1e-15:
+            assert branch == "negative"
+
+
+@pytest.mark.parametrize("left, right", [([0.16, 0.06], [0.3261538461538461, 0.193]), ([0.16, 0.12], [0.56, 0.25])])
+def test_extrapolated_newton_start_matches_old_state_start_without_extra_evaluations(monkeypatch, left, right):
+    """
+    The extrapolated start changes only where Newton begins, for growing and receding interfaces.
+
+    These smooth cases already converge in the minimum one Newton update per
+    step from the old state, so the start can only match that cost here; its
+    savings show up on sharp fronts (see examples/Interstitials).
+    """
+    from kawin.tests.illingworth_baseline_cases import _CoupledTernaryThermodynamics, _ternary_model
+
+    original = MovingBoundaryIllingworthTernaryFD1DModel._evaluate_interface_candidate
+    counter = {"evaluations": 0}
+
+    def counting(self, **kwargs):
+        counter["evaluations"] += 1
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(MovingBoundaryIllingworthTernaryFD1DModel, "_evaluate_interface_candidate", counting)
+    results = {}
+    for start in ("old_state", "extrapolated"):
+        model = _ternary_model("phase_uniform", _CoupledTernaryThermodynamics(), np.asarray(left), np.asarray(right))
+        model.interfaceNewtonStart = start
+        counter["evaluations"] = 0
+        model.solve(1.0e-3, minDtFrac=1.0e-10)
+        results[start] = (model.getInterfacePosition(), model.getInterfaceEta(), counter["evaluations"], model.checkConservation(1e-12))
+
+    old_s, old_eta, old_evaluations, _ = results["old_state"]
+    new_s, new_eta, new_evaluations, new_conservation = results["extrapolated"]
+    assert np.isclose(new_s, old_s, rtol=0.0, atol=1e-9)
+    assert np.isclose(new_eta, old_eta, rtol=0.0, atol=1e-8)
+    assert new_evaluations <= old_evaluations
+    assert np.allclose(new_conservation, np.zeros(2))
+
+
+def test_interface_newton_start_rejects_unknown_option():
+    with pytest.raises(ValueError, match="interface_newton_start"):
+        MovingBoundaryIllingworthTernaryFD1DModel(
+            mesh=CartesianFD1D(["X", "Y"], [0.0, 1.0], 21),
+            elements=["Z", "X", "Y"],
+            phases=["ALPHA", "BETA"],
+            thermodynamics=_ConstantTernaryThermodynamics(),
+            temperature=1000.0,
+            interfacePosition=0.5,
+            time_step=1.0e-4,
+            interface_compositions=(np.asarray([0.2, 0.1]), np.asarray([0.3, 0.2])),
+            interface_newton_start="predicted",
+        )

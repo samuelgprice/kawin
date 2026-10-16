@@ -3,6 +3,15 @@ from typing import Callable, Protocol
 
 import numpy as np
 
+_COMPOSITION_BASES = ("x", "u")
+
+
+def _validate_basis(basis) -> str:
+    value = str(basis).lower()
+    if value not in _COMPOSITION_BASES:
+        raise ValueError(f"composition_basis must be 'x' or 'u'; received {basis!r}.")
+    return value
+
 
 class MovingBoundaryEquilibriumClosure(Protocol):
     """
@@ -11,7 +20,13 @@ class MovingBoundaryEquilibriumClosure(Protocol):
     A closure maps a scalar tie-line coordinate ``eta`` to the two independent
     compositions on the phase-A and phase-B sides of the sharp interface. The
     dependent component is not returned because the diffusion models already
-    enforce the substitutional sum constraint.
+    enforce the sum constraint over the substitutional components.
+
+    Compositions are mole fractions unless the closure has a
+    ``composition_basis`` attribute equal to ``"u"``. When the system contains
+    interstitial elements, the Illingworth models store u-fractions
+    (``u_k = x_k / sum(substitutional x)``) and convert mole-fraction endpoints
+    on every query; for substitutional systems the two bases coincide.
     """
 
     eta_bounds: tuple[float, float]
@@ -38,12 +53,17 @@ class FixedTernaryInterfaceEquilibrium:
     This closure is useful for benchmark problems with prescribed phase-end
     compositions. Because the tie-line coordinate is fixed, a valid moving
     interface step must satisfy both component balances at the same interface
-    position.
+    position. ``composition_basis`` (``"x"`` or ``"u"``) states whether
+    ``left`` and ``right`` are mole fractions or u-fractions.
     """
 
     left: np.ndarray
     right: np.ndarray
     eta: float = 0.0
+    composition_basis: str = "x"
+
+    def __post_init__(self):
+        object.__setattr__(self, "composition_basis", _validate_basis(self.composition_basis))
 
     @property
     def eta_bounds(self) -> tuple[float, float]:
@@ -64,13 +84,18 @@ class CallableTernaryInterfaceEquilibrium:
     Callable adapter for ternary interface tie-line closures.
 
     The callable must accept ``eta`` and return ``(c_left, c_right)`` where each
-    composition vector contains the two independent substitutional components.
-    ``eta_bounds`` gives the bounded interval used by the nonlinear interface
-    solve.
+    composition vector contains the two independent components, in
+    ``composition_basis`` (``"x"`` mole fractions by default, or ``"u"``
+    u-fractions). ``eta_bounds`` gives the bounded interval used by the
+    nonlinear interface solve.
     """
 
     func: Callable[[float], tuple[np.ndarray, np.ndarray]]
     eta_bounds: tuple[float, float] = (0.0, 1.0)
+    composition_basis: str = "x"
+
+    def __post_init__(self):
+        object.__setattr__(self, "composition_basis", _validate_basis(self.composition_basis))
 
     def interface_compositions(self, eta: float) -> tuple[np.ndarray, np.ndarray]:
         lower, upper = self.eta_bounds
@@ -88,14 +113,16 @@ class ThermodynamicTernaryInterfaceEquilibrium:
 
     The wrapped object must implement ``getInterfacialComposition(eta, phases=...)``
     or ``getInterfacialComposition(eta)`` and return a pair of independent
-    composition vectors. This class keeps the ternary Illingworth model decoupled
-    from any one thermodynamics API shape.
+    composition vectors in ``composition_basis`` (mole fractions by default).
+    This class keeps the ternary Illingworth model decoupled from any one
+    thermodynamics API shape.
     """
 
-    def __init__(self, thermodynamics, phases=None, eta_bounds=(0.0, 1.0)):
+    def __init__(self, thermodynamics, phases=None, eta_bounds=(0.0, 1.0), composition_basis="x"):
         self.thermodynamics = thermodynamics
         self.phases = phases
         self.eta_bounds = tuple(float(v) for v in eta_bounds)
+        self.composition_basis = _validate_basis(composition_basis)
 
     def interface_compositions(self, eta: float) -> tuple[np.ndarray, np.ndarray]:
         eta = float(np.clip(float(eta), self.eta_bounds[0], self.eta_bounds[1]))
