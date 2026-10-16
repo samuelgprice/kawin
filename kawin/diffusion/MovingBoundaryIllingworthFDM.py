@@ -271,8 +271,23 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
 
     Notes
     -----
-    Only planar geometry is supported. Cylindrical and spherical equations are
-    intentionally excluded until their coefficient paths are separately tested.
+    Limitations:
+
+    - **Geometry:** planar only. Cylindrical and spherical equations are
+      intentionally excluded until their coefficient paths are separately
+      tested.
+    - **Outer boundaries:** homogeneous zero flux only (closed system).
+      Periodic, fixed-composition and nonzero-flux boundary conditions raise
+      ``NotImplementedError``, as in the ternary models.
+    - **Interface:** local equilibrium with fixed interface compositions. There
+      is no interface mobility and no para-equilibrium.
+    - **Molar volume:** constant and equal in both phases (per mole of
+      substitutional atoms with interstitials), volume-fixed frame, no
+      Kirkendall or bulk flow. Interstitial u-fractions have no site-fraction
+      upper cap.
+    - **Phases:** exactly two, one interface. A vanishing phase is not handled;
+      the step fails once the interface would leave the domain.
+    - **Temperature:** may vary; the diffusivities follow it.
     """
 
     def __init__(
@@ -430,8 +445,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         validate_interstitial_element_order(self.allElements)
         if len(self.phases) != 2:
             raise ValueError("MovingBoundaryIllingworthFD1DModel requires exactly two explicit phases.")
-        if isinstance(getattr(self.mesh, "boundaryConditions", None), PeriodicBoundary1D):
-            raise ValueError("Periodic boundary conditions are not supported.")
+        self._validate_external_boundary_conditions()
         if self.geometry != "planar":
             raise NotImplementedError("MovingBoundaryIllingworthFD1DModel currently implements only planar geometry.")
         if not np.isfinite(self.timeStep) or self.timeStep <= 0:
@@ -466,6 +480,42 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         if self.phaseBNodes is not None and self.phaseBNodes < 3:
             raise ValueError("phase_b_nodes must be at least 3 when specified.")
         self.initialInterfacePosition = self._clipInterfacePosition(self.initialInterfacePosition, strict=True)
+
+    def _validate_external_boundary_conditions(self):
+        """
+        Validates that the fixed external boundaries are homogeneous zero flux.
+
+        As in the ternary Illingworth models, the discretization is conservative
+        for a closed planar domain: both outer rows are zero-flux rows. Nonzero
+        Neumann fluxes, fixed-composition boundaries, periodic wrapping, or
+        other boundary objects would need extra terms that are not part of this
+        solver, so they are rejected before setup instead of being ignored.
+        """
+        bc = getattr(self.mesh, "boundaryConditions", None)
+        if bc is None:
+            return
+        if isinstance(bc, PeriodicBoundary1D):
+            raise NotImplementedError("Binary Illingworth currently supports only homogeneous zero-flux external boundaries; periodic boundaries are unsupported.")
+        if not isinstance(bc, MixedBoundary1D):
+            raise NotImplementedError("Binary Illingworth currently supports only MixedBoundary1D homogeneous zero-flux external boundaries.")
+
+        expected_shape = (self.mesh.numResponses,)
+        for attr in ("LBCtype", "RBCtype", "LBCvalue", "RBCvalue"):
+            values = np.asarray(getattr(bc, attr, None))
+            if values.shape != expected_shape:
+                raise NotImplementedError("Boundary-condition arrays must match the independent-component count for binary Illingworth.")
+
+        left_type = np.asarray(bc.LBCtype)
+        right_type = np.asarray(bc.RBCtype)
+        if not np.all(left_type == MixedBoundary1D.NEUMANN) or not np.all(right_type == MixedBoundary1D.NEUMANN):
+            raise NotImplementedError("Binary Illingworth currently supports only Neumann zero-flux external boundaries; fixed-composition or mixed boundaries are unsupported.")
+
+        left_value = np.asarray(bc.LBCvalue, dtype=np.float64)
+        right_value = np.asarray(bc.RBCvalue, dtype=np.float64)
+        if not np.all(np.isfinite(left_value)) or not np.all(np.isfinite(right_value)):
+            raise NotImplementedError("Binary Illingworth boundary flux values must be finite zero constants.")
+        if not np.all(left_value == 0.0) or not np.all(right_value == 0.0):
+            raise NotImplementedError("Binary Illingworth currently supports only homogeneous zero-flux external boundaries; nonzero fluxes are unsupported.")
 
     def _clipInterfacePosition(self, interface_position: float, strict: bool = True) -> float:
         z = flatten_1d_coordinates(self.mesh.z)
@@ -517,6 +567,20 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             self._validateModelConfiguration()
 
     def setup(self):
+        """
+        Initializes the transformed two-phase state once; later calls are no-ops.
+
+        ``solve`` calls ``setup`` on every call. Setup builds the transformed
+        state by interpolating the stored physical profile and then replaces
+        that profile with its reconstruction, and it records the reference
+        inventory and starts the p/q histories. Re-running it would therefore
+        re-interpolate an already-reconstructed profile (changing the state),
+        restart the p/q histories and reset the reference inventory on every
+        continued ``solve``. Later calls are no-ops until ``reset`` clears
+        ``isSetup``; call ``reset`` after changing settings that setup consumes.
+        """
+        if self.isSetup:
+            return
         super().setup()
         self._validateModelConfiguration()
         self._z = flatten_1d_coordinates(self.mesh.z).astype(np.float64)

@@ -225,6 +225,31 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     ``initial_eta_componentwise_scaling`` scales each row of the startup eta
     balance separately (see ``_estimate_initial_etas``). The defaults leave
     results unchanged.
+
+    ``print_diagnostics`` (default ``False``; also settable afterwards as
+    ``printDiagnostics``) prints the last timestep retry of an attempt and the
+    state at a step that fails after all retries.
+
+    Limitations (the first three are enforced and raise):
+
+    - **Geometry:** planar only. The left boundary is fixed and the right
+      boundary is a stress-free material boundary.
+    - **Temperature:** isothermal; a scalar temperature only.
+    - **Outer boundaries:** homogeneous zero flux only.
+    - **Phase order:** fixed ``A | B | C``. A vanishing phase is not handled
+      beyond the optional terminal thin-phase stop; there is no hand-off to
+      the two-phase model.
+    - **Interface:** local equilibrium through one-parameter tie-line closures.
+      Neighbouring tie-lines must not cross (see the two-phase model). There
+      is no interface mobility and no para-equilibrium.
+    - **Molar volume:** constant per phase (per mole of substitutional atoms
+      with interstitials), with no composition dependence or Kirkendall flow.
+      Interstitial u-fractions have no site-fraction upper cap.
+    - **Accuracy:** interface positions converge at first order in the grid
+      spacing, as measured against the exact asymmetric similarity solution
+      (``kawin/tests/test_illingworth_ternary_three_phase_similarity.py``).
+      Use fine interface grids or Richardson extrapolation for benchmark
+      numbers.
     """
 
     def __init__(
@@ -271,8 +296,10 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         interface_newton_start: str = "extrapolated",
         interface_residual_composition_scale=None,
         initial_eta_componentwise_scaling: bool = False,
+        print_diagnostics: bool = False,
     ):
         self.initialInterfacePositions = np.asarray(interfacePositions, dtype=np.float64).reshape(-1)
+        self.printDiagnostics = bool(print_diagnostics)
         self.interfaceResidualCompositionScale = (
             None
             if interface_residual_composition_scale is None
@@ -2164,7 +2191,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             if retry==(int(retry_count)-1):
                 # from examples.debugInPlace import debugInPlace
                 # debugInPlace()
-                print(retry)
+                self._print_diagnostic(f"last timestep retry ({retry}) at dt={trial_dt:.6g}")
             self._currdt = trial_dt
             # One lagged face-diffusivity evaluation per attempt, shared by its
             # Newton candidates (see ``_lagged_interval_face_diffusivity``), and
@@ -2277,13 +2304,18 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                     return dXdt
                 if extra_error is not None:
                     last_error = extra_error
-        print(f"t: {t}")
-        print(f"etas: {etas}")
-        print(f"interfaces: {interfaces}")
-        print(f"self._lastImplicitFailureReason: {self._lastImplicitFailureReason}")
+        self._print_diagnostic(f"t: {t}")
+        self._print_diagnostic(f"etas: {etas}")
+        self._print_diagnostic(f"interfaces: {interfaces}")
+        self._print_diagnostic(f"self._lastImplicitFailureReason: {self._lastImplicitFailureReason}")
         from examples.debugInPlace import debugInPlace
         debugInPlace()
         raise RuntimeError("Three-phase Illingworth step failed after timestep retries.") from last_error
+
+    def _print_diagnostic(self, message):
+        """Prints a solver diagnostic only when ``printDiagnostics`` is enabled."""
+        if self.printDiagnostics:
+            print(message)
 
     def getDt(self, dXdt):
         if np.isfinite(self._currdt) and self._currdt > 0.0:

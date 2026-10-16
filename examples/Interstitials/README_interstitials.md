@@ -706,9 +706,8 @@ therefore DICTRA's start-up transient and discretization error.
 - **Three-phase model:**
   - it is about 2.6× slower per step than the two-phase model, which is
     roughly the extra work of four unknowns and 2.2× the nodes;
-  - it has been checked on a real-thermodynamics sharp front only in the
-    symmetric configuration (section 4.3). With constant D and linear
-    tie-lines it now also matches an exact asymmetric similarity solution
+  - besides the symmetric Fe-Mn-C check (section 4.3), with constant D and
+    linear tie-lines it matches an exact asymmetric similarity solution
     (`examples/ternaryExamples/ternaryThreePhaseSimilarity.md`): first-order
     grid convergence, with Richardson extrapolation within 0.13% of both
     rates. Against DICTRA (Fe-Cr-Ni exb5 and an asymmetric three-region
@@ -718,10 +717,34 @@ therefore DICTRA's start-up transient and discretization error.
 - **Tie-line closure.** It is linear in η. Near the no-partitioning end the
   austenite composition changes quickly with η, and the sampling could be
   refined there.
-- **Out of scope / not enforced:**
-  - para-equilibrium (local equilibrium only);
-  - a site-fraction cap on interstitials;
-  - unequal or varying molar volumes per substitutional mole.
+- **Model limitations.** These are also listed in each class docstring.
+  "Raises" means the model rejects the setting before it runs.
+
+  | | Binary | Ternary two-phase | Ternary three-phase |
+  |---|---|---|---|
+  | Geometry | planar (raises otherwise) | planar `CartesianFD1D` (raises) | planar, fixed left boundary, stress-free right (raises) |
+  | Temperature | may vary | isothermal scalar (raises) | isothermal scalar (raises) |
+  | Outer boundaries | homogeneous zero flux (others raise) | homogeneous zero flux (others raise) | homogeneous zero flux (others raise) |
+  | Interface | LE, fixed compositions | LE, one-parameter tie-line closure | LE, two tie-line closures |
+  | Molar volume | equal, constant | equal, constant | constant per phase |
+  | Vanishing phase | step fails | terminal thin-phase stop only | terminal thin-phase stop only; no hand-off to two-phase |
+
+  **Common to all three models:**
+  - no interface mobility and no para-equilibrium;
+  - no Kirkendall or bulk flow;
+  - no site-fraction cap on interstitials;
+  - molar volumes are per mole of substitutional atoms when interstitials are
+    present.
+
+  **Closures must not have crossing tie-lines.** Crossing tie-lines make the
+  sharp-interface problem ill-posed: η runs to its bound, faster on finer
+  grids. Closures built from real phase diagrams satisfy this; hand-made ones
+  should be checked with `tie_line_crossing_etas`
+  (`examples/ternaryExamples/ternaryThreePhaseSimilarity.py`).
+
+  **Diagnostic printing.** The ternary models are silent by default.
+  `print_diagnostics=True` (or `model.printDiagnostics = True`) prints the
+  startup η, retried steps and the state at a failed step.
 
 ## 7. How to run
 

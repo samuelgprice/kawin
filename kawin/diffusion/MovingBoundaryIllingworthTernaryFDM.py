@@ -986,6 +986,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     retries for sharp moving fronts such as Fe-C-X ferrite growth. The first
     step has no history and always starts from the old state.
 
+    ``print_diagnostics`` (default ``False``; also settable afterwards as
+    ``printDiagnostics``) prints the startup eta estimate, each step that
+    needed retries, and the state at a step that fails after all retries.
+
     Resolution limit: the interface fluxes are difference quotients across the
     interface-adjacent cells, so extremely small cells lose digits to
     cancellation. With an interface cell of ~5e-18 m (3201-node power-law
@@ -1009,6 +1013,24 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     which reaches full Fe-Mn-C equilibrium without this problem. Accepting
     such noise-limited steps instead is not a substitute: on the fine grid the
     noise grows to a large fraction of the per-step inventory change.
+
+    Limitations (the first three are enforced and raise):
+
+    - **Geometry:** planar ``CartesianFD1D`` meshes only.
+    - **Temperature:** isothermal; a scalar temperature only.
+    - **Outer boundaries:** homogeneous zero flux only. Periodic,
+      fixed-composition and nonzero-flux boundaries are rejected.
+    - **Interface:** local equilibrium through a one-parameter tie-line
+      closure ``eta -> (c_left, c_right)``. Neighbouring tie-lines must not
+      cross: crossing tie-lines make the problem ill-posed (see
+      ``examples/ternaryExamples/ternaryThreePhaseSimilarity.md``). There is
+      no interface mobility and no para-equilibrium.
+    - **Molar volume:** constant and equal in both phases (per mole of
+      substitutional atoms with interstitials), volume-fixed frame, no
+      Kirkendall or bulk flow. Interstitial u-fractions have no site-fraction
+      upper cap.
+    - **Phases:** exactly two. A vanishing phase is not handled beyond the
+      optional terminal thin-phase stop.
     """
 
     def __init__(
@@ -1057,8 +1079,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         interface_residual_composition_scale=None,
         initial_eta_componentwise_scaling: bool = False,
         interface_newton_start: str = "extrapolated",
+        print_diagnostics: bool = False,
     ):
         self.initialInterfacePosition = float(interfacePosition)
+        self.printDiagnostics = bool(print_diagnostics)
         self.timeStep = float(time_step)
         if interface_newton_start not in {"old_state", "extrapolated"}:
             raise ValueError("interface_newton_start must be 'old_state' or 'extrapolated'.")
@@ -1628,7 +1652,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         #     eta_guess=self.initialEtaGuess,
         #     velocity_guess=self.initialVelocityGuess,
         # )
-        print(f"initialEtaEstimate: {self.initialEtaEstimate.eta}")
+        self._print_diagnostic(f"initialEtaEstimate: {self.initialEtaEstimate.eta}")
         eta0 = float(self.initialEtaEstimate.eta)
         self.initialEta = eta0
         self.etaData.reset()
@@ -3025,7 +3049,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     trial_dt,
                 )
                 if retry!=0:
-                    print(retry)
+                    self._print_diagnostic(f"step accepted after {retry} retries")
                 return self._accept_step_result(p, q, s, eta, result, trial_dt, retry_offset + retry), trial_dt, None
             except (RuntimeError, ValueError, ZeroDivisionError) as exc:
                 last_error = exc
@@ -3110,14 +3134,19 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     return dXdt
                 if extra_error is not None:
                     last_error = extra_error
-        print(f"t: {t}")
-        print(f"eta: {eta}")
-        print(f"s: {s}")
-        print(f"R-s: {self._R-s}")
+        self._print_diagnostic(f"t: {t}")
+        self._print_diagnostic(f"eta: {eta}")
+        self._print_diagnostic(f"s: {s}")
+        self._print_diagnostic(f"R-s: {self._R-s}")
         from examples.debugInPlace import debugInPlace
         debugInPlace()
-        print(last_error)
+        self._print_diagnostic(last_error)
         raise RuntimeError("Ternary Illingworth step failed after timestep retries.") from last_error
+
+    def _print_diagnostic(self, message):
+        """Prints a solver diagnostic only when ``printDiagnostics`` is enabled."""
+        if self.printDiagnostics:
+            print(message)
 
     def getDt(self, dXdt):
         if np.isfinite(self._currdt) and self._currdt > 0:
