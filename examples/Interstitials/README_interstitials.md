@@ -116,6 +116,15 @@ and the tie-line closures. One new private module does the conversion:
 - `phase_molar_volumes` are now interpreted as volumes per mole of substitutional atoms.
 - The total-moles check and `_dependent_mole_closure_error` sum only the substitutional components.
 - It does **not** have the per-component initial-η option.
+- **Same interface Newton start as the two-phase model.**
+  `interface_newton_start` (default `"extrapolated"`) and the η
+  finite-difference step `_INTERFACE_ETA_FD_STEP`. It already chose the upwind
+  direction per face from each trial's geometry.
+- **Speed.** It now uses the compiled block solver shared with the two-phase
+  model, validates face diffusivity stacks in one batch, and assembles the
+  interval systems vectorized (bitwise identical to the old loop). On the Fe-Mn-C
+  sharp front a step went from about 1 s to about 0.03 s, and retries
+  disappeared.
 
 **`mesh/MovingBoundaryIllingworthTernaryFD1D.py`**
 
@@ -132,10 +141,6 @@ and the tie-line closures. One new private module does the conversion:
 **`examples/ThermoCalc/tc_python_adapter.py`**
 
 - Removed a stray `print(x)`. The file has CRLF line endings, which were preserved even though `.gitattributes` asks for LF.
-
-**`pyproject.toml`**
-
-- Registers a `slow` pytest marker.
 
 **Surrogate and interpolation tables were deliberately not changed.** Their
 sampling, simplex masks and Delaunay/KD-tree validity domains all assume the
@@ -186,7 +191,7 @@ All Python runs go through the conda activation wrapper (see AGENTS.md).
 |---|---|---|
 | `test_illingworth_substitutional_baseline.py` (+ `illingworth_baseline_cases.py`, `make_illingworth_substitutional_baseline.py`, `data/illingworth_substitutional_baseline.npz`) | Binary in all three D modes, two-phase ternary (uniform/lagged/implicit, both motion directions) and three-phase (uniform/lagged). Every recorded history is **bitwise equal** (NaN-aware) to the stored baseline. That baseline is the pre-interstitial code, except for the two documented ternary regenerations below. | ~7 s |
 | `test_illingworth_interstitials.py` | Shared module: u↔x round trips vs `Mobility` (1e-14), bounds identical to the legacy simplex, wrappers. Exact-case interstitial matching and rejection of lower-case interstitial symbols. Binary Fe-C: u after `__init__` and after `reset()`, providers receive x in all three D modes, Fe-C vs Ni-Cr label invariance, and an analytic u-fraction **Zener** test. | ~5 s |
-| `test_illingworth_interstitials_ternary.py` | Fe-C-Mn-like plumbing (x and u closures, queries in x, mole-fraction outputs, diagnostics, bounds, dependent-element guard). **Disparate-eigenvalue similarity tests** at Mn/C ratios 1e-2, 1e-4, 1e-6. A 1e-8 case is gated by `KAWIN_RUN_SLOW=1` and has not been run. Initial-η branch selection (converged branch preferred over a smaller raw residual) and the per-component scale floor (ratio 1e-10, with a floor-disabled negative control). | ~50 s |
+| `test_illingworth_interstitials_ternary.py` | Fe-C-Mn-like plumbing (x and u closures, queries in x, mole-fraction outputs, diagnostics, bounds, dependent-element guard). **Disparate-eigenvalue similarity tests** at Mn/C ratios 1e-2, 1e-4, 1e-6 and 1e-8. The 1e-8 case was gated as slow until the interface-Newton fixes; it now runs by default in about 6 s. Initial-η branch selection (converged branch preferred over a smaller raw residual) and the per-component scale floor (ratio 1e-10, with a floor-disabled negative control). | ~50 s |
 | `test_illingworth_interstitials_three_phase.py` | Masked molar inventory vs hand integration. Fe-C-Mn three-phase: u state, queries in x, conservation of component moles, substitutional-only total-moles closure, mole-fraction outputs. | ~6 s |
 
 **Interface-Newton tests** (in `test_illingworth_ternary.py`):
@@ -199,18 +204,23 @@ All Python runs go through the conda activation wrapper (see AGENTS.md).
 
 The block-solver row equilibration has its own tests.
 
-**Baseline regenerations.** The substitutional baseline was regenerated three
+**Three-phase tests** (in `test_illingworth_ternary_three_phase.py`): the two
+`interface_newton_start` modes agree, and an unknown option is rejected.
+
+**Baseline regenerations.** The substitutional baseline was regenerated four
 times, each time with the reason recorded in
 `make_illingworth_substitutional_baseline.py`:
 - for the upwind-branch fix: only the receding ternary case moved, by 1e-10;
 - for the extrapolated-start default: the four ternary cases moved by at most
   2e-10;
 - for the η finite-difference step: the four ternary cases moved by at most
-  3e-13.
+  3e-13;
+- for the three-phase compiled solver, extrapolated start and η step: only the
+  two three-phase cases moved, by at most 8e-8 (Newton-tolerance level).
 
-Binary and three-phase stay bitwise identical.
+The binary cases stay bitwise identical.
 
-**Full suite:** 1031 passed, 2 skipped (about 5 min).
+**Full suite:** 1035 passed, 1 skipped (about 5 min).
 
 ### Binary Zener (u-fractions, constant D)
 
@@ -299,7 +309,16 @@ thickness follows from a mass balance alone (the lever rule).
 - **kawin convergence:** the lagged and implicit D modes and 4× ferrite nodes all
   agree, so the grid and time-step study above captures the remaining error.
 - **`phase_uniform` mode:** reproduces the analytic Zener k for D at the interface composition exactly (2.140e-6).
-- **pyex_D_02 (30 h, 50-point grid):** this was only run against the default-time-step DICTRA, where kawin was 7% thicker at the end. It has not been rerun with the tight reference.
+- **pyex_D_02 (30 h, 50-point DICTRA grid):** this is the same physical problem
+  as exb1a, run for 30 h on a coarser DICTRA grid.
+  - **Against tight DICTRA:** kawin is +1.4% at 30 h (was +7% against default
+    DICTRA). It is +2.9% at 1e4 s and +3.5% at 1e3 s, where DICTRA's start-up
+    jump dominates.
+  - **Where the 1.4% comes from:** DICTRA's coarse 50-point grid. exb1a's tight
+    DICTRA, on a 100-point grid, is 1.1% higher at the same time (624.6 vs
+    617.6 µm at 1e5 s). kawin's trajectory is the one converged above (627.4 µm
+    at 1e5 s).
+  - **Output:** `outputs/fe_c_pyex_D_02_comparison.json`.
 
 Output: `outputs/fe_c_exb1a_comparison.json`, `outputs/fe_c_exb1a_thickness.png`.
 
@@ -490,6 +509,64 @@ stays constant to 100 s.
 
 Outputs: `outputs/*_convergence.json` and `outputs/*_kawin_only_n1601_dt0p005_comparison.json`.
 
+**Long times, to full equilibrium** (`fe_mn_c_long_time.py`, to 1e10 s on a
+401-node grid with exponent 1.5; 41 s). Two references come from the cached
+tie-lines, in substitutional moles, which is what s/R measures:
+- **No-partitioning plateau:** carbon has spread through the austenite, Mn has
+  not moved yet.
+- **Full equilibrium:** the tie-line through the alloy.
+
+| Stage | Reference | kawin |
+|---|---|---|
+| Carbon-controlled growth, parabolic | — | k = 0.7055 µm/√s to about 1e3 s |
+| No-partitioning plateau | f = 0.5885 | f = 0.5885 at about 4e5 s |
+| Mn partitioning | — | f rises from 0.60 (1e6 s) to 0.72 (1e8 s); η falls from 0.0141 to 0.0116 |
+| Full equilibrium | f = 0.76877, η = 0.010134 | f = 0.76871 and η = 0.010133 at 1e9 s, unchanged to 1e10 s |
+
+Thermo-Calc reports an equilibrium fraction of 0.7655 per mole of atoms; per
+substitutional mole it is 0.7688.
+
+**Grid for long runs.** The steeply graded grids used for the parabolic
+benchmarks (exponent 3 and above, interface cells of about 1e-12 m and below)
+are not suitable for long runs. Semi-log steps grow with time, so D·dt/Δz² for
+the interface cell keeps growing, and their mass balance eventually falls
+below round-off. The interface residual then carries noise of about
+ε·D·Δt·u/(Δz·R). That reaches the 1e-10 tolerance at about 1e6 s on the
+401/p3 grid, and retries then grow without bound. The milder grid reaches
+equilibrium cleanly.
+
+The only remaining retries (955 in this run) come after equilibrium, where the
+interface is stationary and every step starts at zero displacement.
+
+### 4.3 Three-phase model on a sharp front (symmetry check)
+
+Script: `three_phase_symmetric_check.py` (Fe-Mn-C inputs, no Thermo-Calc
+needed, about 2 min).
+
+**Setup.** A 2 nm ferrite seed sits between two 50 µm austenite layers. By
+symmetry each half is the two-phase benchmark problem. Both models use the
+same 401/p3 austenite grid and Δln t = 0.005 to 2 s; the three-phase ferrite
+grid has 81 linear-clustered nodes.
+
+| t (s) | Three-phase k (half-thickness, µm/√s) | Two-phase k | Relative difference |
+|---|---|---|---|
+| 0.01 | 0.709740 | 0.709735 | 7.0e-6 |
+| 0.1 | 0.708232 | 0.708230 | 2.7e-6 |
+| 1 | 0.707220 | 0.707219 | 9.8e-7 |
+| 2 | 0.706981 | 0.706980 | 7.2e-7 |
+
+**Other results:**
+- **Symmetry:** the two interfaces stay mirror images to 5e-11 m, and their
+  tie-line coordinates agree to 1.7e-10.
+- **Steps:** both models take 3364 steps with no retries.
+- **Cost:** 124 s for three-phase against 9 s for two-phase.
+
+Before the three-phase fixes (problem 12), the same run needed about 1 s per
+step, started retrying at about 1e-4 s, and had reached only 7e-4 s after an
+hour.
+
+Output: `outputs/fe_mn_c_three_phase_symmetric_check.json`.
+
 ### Summary of the benchmarks
 
 | System | kawin (dt, h → 0) vs semi-analytical reference | kawin vs tight DICTRA |
@@ -497,6 +574,8 @@ Outputs: `outputs/*_convergence.json` and `outputs/*_kawin_only_n1601_dt0p005_co
 | Fe-C exb1a, 1050 K | final state equals the u-fraction lever rule | +1.2% at 1e3 s (DICTRA start-up), +0.17% at 1e4 s, +0.04% final |
 | Fe-Mn-C, 1000 K | −0.024% / +0.002% (iso-activity / cross term) | within 0.15% from 0.5 s to 1 s, +0.5% at 2 s |
 | Fe-Ni-C, 973 K | +0.010% / −0.001% (iso-activity / cross term) | +2.3% at 2 s, DICTRA still rising |
+| Fe-Mn-C to equilibrium | plateau f = 0.5885 and equilibrium f = 0.7687 both reproduced (to 0.01%) | — |
+| Fe-Mn-C three-phase, symmetric | equals the two-phase result to 7e-7 at 2 s | — |
 
 Where an independent check exists (the reference for the ternaries, the lever
 rule for Fe-C), kawin matches it to within about 0.02%, which is inside the
@@ -544,14 +623,38 @@ therefore DICTRA's start-up transient and discretization error.
       number 1e7) system.
     - **Fix:** a 1e-6 η step (`_INTERFACE_ETA_FD_STEP`) removed every retry at
       Δln t ≤ 0.005, and the grid ratio became 2.06–2.16.
+11. **Long runs on steeply graded grids hit a precision floor** (documented,
+    not fixed in the solver). The interface residual's round-off noise grows
+    as ε·D·Δt·u/(Δz·R). The formula matches the measurements: 1.7e-10
+    predicted vs 3e-10 measured at 1e6 s on 401/p3, and 5e-13 vs 5e-13 at
+    0.04 s on 3201/p3.7.
+    - **A noise-aware convergence test was tried and rejected.** The idea was
+      to accept steps whose residual is below max(tolerance, the predicted
+      noise). On the 401/p3 grid the floor grows to 1e-5–3e-4 at dt ≈ 1e8–1e9
+      s. That let through steps with per-step carbon-balance errors of a few
+      percent, and the ferrite fraction ran past equilibrium (0.79 → 0.94).
+    - **The fix is the grid:** use a mild interface grid for long runs (see
+      the Fe-Mn-C long-time results).
+12. **The three-phase model was about 50× slower than two-phase on a sharp front,
+    and retried** (fixed).
+    - **Cost:** 52% of the time went on validating every face matrix
+      separately on every candidate, and 35% on the pure-Python block solver.
+    - **Retries:** the same zero-displacement Newton start as the old
+      two-phase model.
+    - **Fixes:** batched validation, the compiled solver, vectorized
+      assembly, the extrapolated start and the η step. Together these give
+      about 30× per step and no retries.
 
 ## 6. Limitations and open items
 
 - **Short DICTRA comparison.** The Fe-Ni-C and Fe-Mn-C DICTRA comparison stops
   at 2 s, because a converged 50/100 s DICTRA LE run is projected at many hours
   to days. The semi-analytical reference covers the parabolic regime instead.
-- **Long-time Fe-Mn-C not studied.** Fe-Mn-C beyond 100 s, including any switch
-  to Mn-partitioning growth, has not been run.
+- **Long runs need a mild interface grid** (problem 11). A run that resolves
+  both the sharp early spike and the approach to equilibrium on one grid
+  would need regridding, which the solver does not support. After
+  equilibrium, retries accumulate while the interface is stationary. A run
+  can simply stop there.
 - **First step from 1e-4 s fails.** A first semi-log step of 1e-4 s still fails
   on fine grids: the first step has no motion history for the extrapolated start
   and has to cross zero displacement. A first step of 1e-7 s works and costs
@@ -572,17 +675,15 @@ therefore DICTRA's start-up transient and discretization error.
   - **Removing the limit** would mean solving the bulk profiles as deviations
     from the interface value. That is not planned.
 - **Three-phase model:**
-  - it starts each Newton iteration from the old state (it already chooses the
-    upwind direction per face from each trial's geometry);
   - it has no per-component η option;
-  - it has not been benchmarked with real thermodynamics or a sharp-front case.
+  - it is still about 13× slower per step than the two-phase model (Python
+    assembly and the four-unknown Newton iteration);
+  - it has been checked on a real-thermodynamics sharp front only in the
+    symmetric configuration (section 4.3), not on a genuinely three-phase
+    problem.
 - **Tie-line closure.** It is linear in η. Near the no-partitioning end the
   austenite composition changes quickly with η, and the sampling could be
   refined there.
-- **Untested items:**
-  - the 1e-8 ratio similarity test (`KAWIN_RUN_SLOW=1`) has not been run;
-  - pyex_D_02 has not been rerun against the tight DICTRA reference (only its
-    old v1 TC-input cache exists).
 - **Out of scope / not enforced:**
   - para-equilibrium (local equilibrium only);
   - a site-fraction cap on interstitials;
@@ -616,6 +717,13 @@ python -u -m examples.Interstitials.npl_similarity_reference mn
 python -u -m examples.Interstitials.convergence_study fe-c
 python -u -m examples.Interstitials.convergence_study fe-ni-c
 python -u -m examples.Interstitials.convergence_study fe-mn-c
+
+# Fe-Mn-C to full equilibrium, and the three-phase symmetry check (cached inputs only)
+python -u -m examples.Interstitials.fe_mn_c_long_time
+python -u -m examples.Interstitials.three_phase_symmetric_check
+
+# Fe-C pyex_D_02 (30 h; builds its own TC inputs and DICTRA references on the first run)
+python -u -m examples.Interstitials.fe_c_exb1a --case pyex_D_02
 ```
 
 Start parallel runs a few seconds apart, because simultaneous conda activations

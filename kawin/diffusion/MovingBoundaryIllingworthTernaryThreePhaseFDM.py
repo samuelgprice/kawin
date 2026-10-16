@@ -20,20 +20,24 @@ from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import (
     _BULK_DIFFUSIVITY_IMPLICIT,
     _BULK_DIFFUSIVITY_LAGGED,
     _BULK_DIFFUSIVITY_PHASE_UNIFORM,
+    _INTERFACE_ETA_FD_STEP,
     _SUPPORTED_BULK_DIFFUSIVITY_MODES,
     _bounded_finite_difference_perturbation,
     _coerce_bulk_diffusivity_mode,
     _loge_arange,
     _validate_eta_bounds,
     _validate_ternary_diffusivity_matrix,
+    _validate_ternary_diffusivity_stack,
 )
 from kawin.diffusion.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D
 from kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D import (
+    # Compiled single-RHS block elimination (with the same validation and
+    # pivot-failure fallbacks as the Python solver); the two-phase model uses it too.
+    _solve_illingworth_block_tridiagonal_two_phase as solve_illingworth_block_tridiagonal,
     flatten_1d_coordinates,
     integrate_planar_transformed_molar_inventories,
     integrate_planar_transformed_profile_sequence,
     reconstruct_planar_transformed_profile_sequence,
-    solve_illingworth_block_tridiagonal,
     validate_ternary_profile,
 )
 from kawin.solver import explicitEulerIterator
@@ -191,6 +195,15 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     substitutional u-fractions, with interstitial u-fractions bounded below
     only. ``getCompositions`` and ``getPhysicalPhaseProfiles`` return mole
     fractions. For substitutional systems ``u == x`` and results are unchanged.
+
+    ``interface_newton_start`` chooses where each step's interface Newton
+    iteration starts: ``'extrapolated'`` (default), the linear extrapolation of
+    the last accepted step to the new ``dt``, or ``'old_state'``, the accepted
+    ``(interfaces, etas)``. As in the two-phase model, the extrapolated start
+    leaves the converged step unchanged but avoids most retries on sharp
+    moving fronts. Interval systems use the compiled block-tridiagonal solver
+    shared with the two-phase model, and face diffusivity stacks are
+    validated in one batch.
     """
 
     def __init__(
@@ -234,9 +247,13 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         record_pq_data: bool = True,
         transformed_grids=None,
         phase_molar_volumes=None,
+        interface_newton_start: str = "extrapolated",
     ):
         self.initialInterfacePositions = np.asarray(interfacePositions, dtype=np.float64).reshape(-1)
         self.timeStep = float(time_step)
+        if interface_newton_start not in {"old_state", "extrapolated"}:
+            raise ValueError("interface_newton_start must be 'old_state' or 'extrapolated'.")
+        self.interfaceNewtonStart = str(interface_newton_start)
         self.interfaceEquilibria = self._coerce_interface_equilibria(interface_equilibria)
         self.initialEtaGuess = None if initial_eta_guess is None else np.asarray(initial_eta_guess, dtype=np.float64).reshape(-1)
         self.initialEtaMethod = str(initial_eta_method)
@@ -330,6 +347,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._interfaces_curr = None
         self._interfaces_old = None
         self._etas_curr = None
+        self._etas_old = None
+        self._lastAcceptedDt = None
 
         super().__init__(
             mesh=mesh,
@@ -1060,6 +1079,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._interfaces_curr = interfaces0.copy()
         self._interfaces_old = interfaces0.copy()
         self._etas_curr = etas0.copy()
+        self._etas_old = etas0.copy()
+        self._lastAcceptedDt = None
         self._lastInterfaceCompositions = self._interface_compositions(etas0)
 
         self.interfaceData.reset()
@@ -1295,7 +1316,10 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         Returns validated bulk diffusivity matrices for interval faces.
 
         ``face_compositions`` are in the state basis (u-fractions with
-        interstitials); the provider receives mole fractions.
+        interstitials); the provider receives mole fractions. Vectorized
+        provider results are validated in one batch
+        (``_validate_ternary_diffusivity_stack``); scalar-only providers keep
+        the face-by-face query and validation.
         """
         face_compositions = np.asarray(face_compositions, dtype=np.float64)
         source = self._diffusivity_source()
@@ -1309,10 +1333,9 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                 matrices = matrices.reshape(1, 2, 2)
             if matrices.shape != (face_compositions.shape[0], 2, 2):
                 raise ValueError("bulk diffusivity query returned an unexpected matrix shape.")
-            out = np.empty(matrices.shape, dtype=np.float64)
-            for i, matrix in enumerate(matrices):
-                out[i] = _validate_ternary_diffusivity_matrix(matrix, phase, context=f"bulk face diffusivity face {i}")
-            return out
+            # Batched spectral checks; exceptional stacks fall back to the
+            # face-by-face validator, so accepted matrices and errors are unchanged.
+            return _validate_ternary_diffusivity_stack(matrices, phase)
 
         try:
             values = source.getInterdiffusivity(face_compositions, temperatures, phase=phase, query_context="general")
@@ -1467,24 +1490,25 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             new_bounds,
             phase_frame_displacement=phase_frame_displacement,
         )
-        face_coefficients = []
-        for face in range(n - 1):
-            left_coeff, right_coeff = self._face_transfer_coefficients(
-                face_displacements[face],
-                D_faces[face],
-                float(self._currdt),
-                new_length,
-                grid[face + 1] - grid[face],
-            )
-            face_coefficients.append((left_coeff, right_coeff))
-            left_row = face
-            right_row = face + 1
-            if not fixed_rows[left_row]:
-                diagonal[left_row] -= left_coeff
-                upper[left_row] -= right_coeff
-            if not fixed_rows[right_row]:
-                lower[right_row] += left_coeff
-                diagonal[right_row] += right_coeff
+        # Vectorized form of ``_face_transfer_coefficients`` for every face, with
+        # the same per-element arithmetic. Row ``i`` receives face ``i - 1``
+        # (as its right row) before face ``i`` (as its left row), matching the
+        # face-ordered accumulation of the scalar loop.
+        A = float(self._currdt) * np.asarray(D_faces, dtype=np.float64) / (float(new_length) * np.diff(grid)[:, None, None])
+        left_coeffs = -A
+        right_coeffs = A.copy()
+        face_displacements = np.asarray(face_displacements, dtype=np.float64)
+        positive = face_displacements > 0.0
+        negative = face_displacements < 0.0
+        right_coeffs[positive] = right_coeffs[positive] + face_displacements[positive, None, None] * I
+        left_coeffs[negative] = left_coeffs[negative] + face_displacements[negative, None, None] * I
+        free_right = ~fixed_rows[1:]
+        free_left = ~fixed_rows[:-1]
+        lower[1:][free_right] += left_coeffs[free_right]
+        diagonal[1:][free_right] += right_coeffs[free_right]
+        diagonal[:-1][free_left] -= left_coeffs[free_left]
+        upper[:-1][free_left] -= right_coeffs[free_left]
+        face_coefficients = ((left_coeffs[0], right_coeffs[0]), (left_coeffs[-1], right_coeffs[-1]))
 
         solved = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
         left_matrix = None if left_value is None else D_faces[0]
@@ -1708,6 +1732,30 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             alpha_max = min(alpha_max, max(0.0, float(gap_hat / (step[0] - step[1]))))
         return step, max(0.0, alpha_max * (1.0 - 1e-12))
 
+    def _extrapolated_interface_start(self, interfaces, etas, dt, lower, upper):
+        """
+        Returns the extrapolated scaled Newton start ``[s_AB, s_BC, eta_AB, eta_BC]``, or ``None``.
+
+        With ``interface_newton_start='extrapolated'`` both interfaces and both
+        tie-line coordinates are extrapolated linearly from the last accepted
+        step, ``x + (x - x_old) * dt / dt_last``, and clipped to the solve
+        bounds. Only the Newton starting point changes; ``None`` (start from the
+        unmoved old state) is returned when the option is off, before the first
+        accepted step, or when the extrapolation does not move.
+        """
+        if self.interfaceNewtonStart != "extrapolated" or self._lastAcceptedDt is None or self._etas_old is None or self._interfaces_old is None:
+            return None
+        ratio = float(dt) / float(self._lastAcceptedDt)
+        if not np.isfinite(ratio) or ratio <= 0.0:
+            return None
+        interfaces = np.asarray(interfaces, dtype=np.float64)
+        etas = np.asarray(etas, dtype=np.float64)
+        future_interfaces = interfaces + (interfaces - np.asarray(self._interfaces_old, dtype=np.float64)) * ratio
+        future_etas = etas + (etas - np.asarray(self._etas_old, dtype=np.float64)) * ratio
+        if np.array_equal(future_interfaces, interfaces) and np.array_equal(future_etas, etas):
+            return None
+        return np.clip(self._physical_to_scaled(future_interfaces, future_etas), lower, upper)
+
     def _evaluate_interface_candidate(self, profiles, old_interfaces, x_hat, residual_scale, dt):
         interfaces, etas = self._scaled_to_physical(x_hat)
         kinematics = self._step_kinematics(old_interfaces, interfaces)
@@ -1743,6 +1791,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         """
         Solves the coupled two-interface step by damped finite-difference Newton.
 
+        Newton starts from the accepted old ``(interfaces, etas)``, or with
+        ``interface_newton_start='extrapolated'`` (the default) from the linear
+        extrapolation of the last accepted step (``_extrapolated_interface_start``);
+        a start that cannot be evaluated falls back to the old state. The eta
+        Jacobian columns use ``_INTERFACE_ETA_FD_STEP``.
+
         The residual scale (``_residual_scale``) does not depend on ``dt``, so the
         unmodified old state can meet the tolerance when ``flux * dt`` is tiny,
         which would accept a step with both interfaces frozen and leave the
@@ -1764,6 +1818,16 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         converged_start = None
         newton_updates = 0
         iteration = 0
+        # Optional extrapolated start; a start that cannot be evaluated falls
+        # back to the old state.
+        pending = None
+        extrapolated = self._extrapolated_interface_start(interfaces, etas, dt, lower, upper)
+        if extrapolated is not None and self._scaled_variables_in_bounds(extrapolated, lower, upper):
+            try:
+                pending = self._evaluate_interface_candidate(profiles, interfaces, extrapolated, residual_scale, dt)
+                x_hat = extrapolated
+            except (RuntimeError, ValueError, ZeroDivisionError):
+                pending = None
 
         def accept(candidate, forced_update_skipped=False):
             self._lastImplicitIterations = iteration
@@ -1775,7 +1839,10 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             return candidate
 
         for iteration in range(1, self.maxIterations + 1):
-            candidate = self._evaluate_interface_candidate(profiles, interfaces, x_hat, residual_scale, dt)
+            if pending is not None:
+                candidate, pending = pending, None
+            else:
+                candidate = self._evaluate_interface_candidate(profiles, interfaces, x_hat, residual_scale, dt)
             if best is None or candidate.scaled_norm < best.scaled_norm:
                 best = candidate
             if candidate.scaled_norm <= self.residualTolerance:
@@ -1785,7 +1852,11 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
 
             jacobian = np.zeros((4, 4), dtype=np.float64)
             for variable in range(4):
-                step_size, x_perturbed, direction = _bounded_finite_difference_perturbation(x_hat, lower, upper, variable)
+                # Variables 2 and 3 are the scaled tie-line coordinates; see
+                # ``_INTERFACE_ETA_FD_STEP`` for why they use a larger step.
+                step_size, x_perturbed, direction = _bounded_finite_difference_perturbation(
+                    x_hat, lower, upper, variable, step=_INTERFACE_ETA_FD_STEP if variable >= 2 else None,
+                )
                 if not self._scaled_variables_in_bounds(x_perturbed, lower, upper):
                     x_perturbed = x_hat.copy()
                     x_perturbed[variable] -= step_size
@@ -2154,7 +2225,9 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             self._profiles_curr,
             self._interfaces_old,
             self._interfaces_curr,
+            self._etas_old,
             self._etas_curr,
+            self._lastAcceptedDt,
             self._R,
             self._lastInterfaceCompositions,
             self.currentTime,
@@ -2162,10 +2235,13 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         snapshots = self._record_histories_atomically(time, records)
         try:
             previous_interfaces = self._interfaces_curr.copy()
+            accepted_dt = float(time) - float(self.currentTime)
             self._profiles_curr = tuple(profile.copy() for profile in accepted.profiles)
             self._interfaces_old = previous_interfaces
             self._interfaces_curr = accepted.interfaces.copy()
+            self._etas_old = self._etas_curr.copy()
             self._etas_curr = accepted.etas.copy()
+            self._lastAcceptedDt = accepted_dt if accepted_dt > 0.0 else self._lastAcceptedDt
             self._R = float(accepted.right_boundary)
             self._lastInterfaceCompositions = accepted.interface_compositions
             self.currentTime = float(time)
@@ -2176,7 +2252,9 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                 self._profiles_curr,
                 self._interfaces_old,
                 self._interfaces_curr,
+                self._etas_old,
                 self._etas_curr,
+                self._lastAcceptedDt,
                 self._R,
                 self._lastInterfaceCompositions,
                 self.currentTime,
@@ -2322,6 +2400,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._interfaces_curr = None
         self._interfaces_old = None
         self._etas_curr = None
+        self._etas_old = None
+        self._lastAcceptedDt = None
 
     def getInterfacePositions(self, time=None):
         """Returns the two recorded interface positions ``[s_AB, s_BC]``."""

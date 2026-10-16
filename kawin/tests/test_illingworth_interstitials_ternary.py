@@ -6,8 +6,6 @@ planar similarity solution exact, which separates conditioning problems from
 thermodynamics.
 """
 
-import os
-
 import numpy as np
 import pytest
 
@@ -202,10 +200,13 @@ def test_ternary_similarity_disparate_eigenvalues(ratio):
     assert np.isfinite(model._lastImplicitJacobianCond)
 
 
-@pytest.mark.slow
-@pytest.mark.skipif(os.environ.get("KAWIN_RUN_SLOW") != "1", reason="set KAWIN_RUN_SLOW=1 to run (several minutes)")
 def test_ternary_similarity_ratio_1e8():
-    """Eigenvalue ratio 1e-8 (Fe-C-Mn ferrite growth scale); needs a very fine interface cell."""
+    """
+    Eigenvalue ratio 1e-8 (Fe-C-Mn ferrite growth scale); needs a very fine interface cell.
+
+    Gated as slow until the interface-Newton fixes (per-trial upwind branch,
+    extrapolated start); it now runs in a few seconds.
+    """
     model, solution, metrics = _run_disparate_similarity(1.0e-8, 321, 1.0e-5, 0.0125)
     assert metrics["k_rel_error"] < 1.0e-2
     assert metrics["eta_max_abs_error"] < 1.0e-3

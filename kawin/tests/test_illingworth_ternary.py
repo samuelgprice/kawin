@@ -1026,7 +1026,7 @@ def test_ternary_compiled_block_solve_validates_inputs_and_preserves_other_paths
         solve_illingworth_block_tridiagonal(lower, diagonal, upper, multi_rhs),
     )
     assert ternary_fdm.solve_illingworth_block_tridiagonal is ternary_mesh._solve_illingworth_block_tridiagonal_two_phase
-    assert ternary_three_phase_fdm.solve_illingworth_block_tridiagonal is ternary_mesh.solve_illingworth_block_tridiagonal
+    assert ternary_three_phase_fdm.solve_illingworth_block_tridiagonal is ternary_mesh._solve_illingworth_block_tridiagonal_two_phase
 
     expected = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
     monkeypatch.setattr(ternary_mesh, "_solve_illingworth_block_tridiagonal_numba", None)

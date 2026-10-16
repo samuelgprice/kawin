@@ -998,6 +998,17 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     ~1e-16 m, or smaller steps, avoid this. The eta finite-difference step
     (``_INTERFACE_ETA_FD_STEP``) is sized so this noise does not corrupt the
     Jacobian below that limit.
+
+    The noise follows ``eps * sum_j |D_kj| * |u_j| * dt / dz`` per side of the
+    interface (``dz`` the interface cell): once ``D * dt / dz**2`` is large, the
+    interface cells' own mass balance falls below round-off. Semi-log steps
+    grow with time, so long runs reach this limit on any grid whose interface
+    cell is sized for the early, sharp transient: Fe-Mn-C on a 401-node grid
+    with exponent 3 (~8e-13 m) reaches it at t ~ 1e6 s (dt ~ 5e3 s). For runs
+    to equilibrium use a milder interface grid (e.g. exponent 1.5, ~6e-9 m),
+    which reaches full Fe-Mn-C equilibrium without this problem. Accepting
+    such noise-limited steps instead is not a substitute: on the fine grid the
+    noise grows to a large fraction of the per-step inventory change.
     """
 
     def __init__(

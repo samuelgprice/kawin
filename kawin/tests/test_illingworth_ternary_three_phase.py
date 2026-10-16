@@ -2288,3 +2288,40 @@ def test_three_phase_diffusivity_modes_query_all_phases(mode, expected_context):
     contexts = {call["query_context"] for call in therm.calls}
     assert phases == {"A", "B", "C"}
     assert expected_context in contexts
+
+
+@pytest.mark.parametrize("mode", ["phase_uniform", "composition_dependent_lagged"])
+def test_three_phase_extrapolated_newton_start_matches_old_state_start(mode):
+    """The extrapolated start changes only where each step's Newton iteration begins."""
+    from kawin.tests.illingworth_baseline_cases import _three_phase_model
+
+    results = {}
+    for start in ("old_state", "extrapolated"):
+        model = _three_phase_model(mode)
+        model.interfaceNewtonStart = start
+        model.solve(2.0e-3, minDtFrac=1.0e-10)
+        results[start] = (model.getInterfacePositions(), model.getInterfaceEtas(), model._lastAcceptedDt)
+
+    # Both starts converge each step to the 1e-10 residual tolerance; over ~20
+    # steps the accepted roots differ at that level (~1e-8 in position here).
+    np.testing.assert_allclose(results["extrapolated"][0], results["old_state"][0], rtol=0.0, atol=1e-7)
+    np.testing.assert_allclose(results["extrapolated"][1], results["old_state"][1], rtol=0.0, atol=1e-6)
+    assert results["extrapolated"][2] is not None
+
+
+def test_three_phase_interface_newton_start_rejects_unknown_option():
+    from kawin.tests.illingworth_baseline_cases import _three_phase_model
+
+    model = _three_phase_model("phase_uniform")
+    with pytest.raises(ValueError, match="interface_newton_start"):
+        MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(
+            mesh=model.mesh,
+            elements=["Z", "X", "Y"],
+            phases=["A", "B", "C"],
+            thermodynamics=model.therm,
+            temperature=1000.0,
+            interfacePositions=(0.35, 0.7),
+            interface_equilibria=model.interfaceEquilibria,
+            time_step=1e-4,
+            interface_newton_start="predicted",
+        )
