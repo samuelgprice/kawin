@@ -696,8 +696,14 @@ therefore DICTRA's start-up transient and discretization error.
     assembly, as in the two-phase model, would trim the remaining Python
     overhead;
   - it has been checked on a real-thermodynamics sharp front only in the
-    symmetric configuration (section 4.3), not on a genuinely three-phase
-    problem.
+    symmetric configuration (section 4.3). With constant D and linear
+    tie-lines it now also matches an exact asymmetric similarity solution
+    (`examples/ternaryExamples/ternaryThreePhaseSimilarity.md`): first-order
+    grid convergence, with Richardson extrapolation within 0.13% of both
+    rates. Against DICTRA (Fe-Cr-Ni exb5 and an asymmetric three-region
+    variant, `examples/ternaryExamples/exb5_gamma_alpha_gamma.md`) both
+    interfaces agree within about 1% once DICTRA's grid and simulation
+    horizon are refined.
 - **Tie-line closure.** It is linear in η. Near the no-partitioning end the
   austenite composition changes quickly with η, and the sampling could be
   refined there.

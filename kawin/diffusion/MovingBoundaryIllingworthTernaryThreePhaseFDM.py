@@ -20,6 +20,7 @@ from kawin.diffusion.MovingBoundaryIllingworthTernaryFDM import (
     _BULK_DIFFUSIVITY_IMPLICIT,
     _BULK_DIFFUSIVITY_LAGGED,
     _BULK_DIFFUSIVITY_PHASE_UNIFORM,
+    _COMPONENTWISE_ROUNDOFF_FACTOR,
     _INTERFACE_ETA_FD_STEP,
     _SUPPORTED_BULK_DIFFUSIVITY_MODES,
     _bounded_finite_difference_perturbation,
@@ -127,7 +128,9 @@ class ThreePhaseInitialEtaEstimate:
     are instantaneous discrete conservative-balance estimates evaluated with
     initial adjacent-node gradients; they are used only to seed the finite-step
     discrete nonlinear solve. ``residual_scale`` is the balance-term magnitude
-    that the relative convergence tolerance was applied to.
+    that the relative convergence tolerance was applied to. With
+    ``initial_eta_componentwise_scaling``, ``component_scales`` holds the four
+    per-row scales at the returned iterate (otherwise ``None``).
     """
 
     etas: np.ndarray
@@ -143,6 +146,7 @@ class ThreePhaseInitialEtaEstimate:
     iterations: int
     function_calls: int
     residual_scale: float = np.nan
+    component_scales: np.ndarray | None = None
 
 
 class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
@@ -207,6 +211,15 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     matrices depend only on the accepted profiles (the model is isothermal),
     so, as in the two-phase model, they are evaluated once per step attempt
     and shared by all Newton candidates.
+
+    Two options, as in the two-phase model, keep a slow or dilute component's
+    interface balance converged next to a fast one (e.g. Mn or Ni next to C):
+    ``interface_residual_composition_scale`` (scalar or one value per
+    component; default ``None``, i.e. ``1.0``) sets the composition scale of
+    the per-step interface residual (see ``_residual_scale``), and
+    ``initial_eta_componentwise_scaling`` scales each row of the startup eta
+    balance separately (see ``_estimate_initial_etas``). The defaults leave
+    results unchanged.
     """
 
     def __init__(
@@ -251,8 +264,16 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         transformed_grids=None,
         phase_molar_volumes=None,
         interface_newton_start: str = "extrapolated",
+        interface_residual_composition_scale=None,
+        initial_eta_componentwise_scaling: bool = False,
     ):
         self.initialInterfacePositions = np.asarray(interfacePositions, dtype=np.float64).reshape(-1)
+        self.interfaceResidualCompositionScale = (
+            None
+            if interface_residual_composition_scale is None
+            else np.broadcast_to(np.asarray(interface_residual_composition_scale, dtype=np.float64), (2,)).copy()
+        )
+        self.initialEtaComponentwiseScaling = bool(initial_eta_componentwise_scaling)
         self.timeStep = float(time_step)
         if interface_newton_start not in {"old_state", "extrapolated"}:
             raise ValueError("interface_newton_start must be 'old_state' or 'extrapolated'.")
@@ -425,6 +446,10 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             raise ValueError("initial_eta_root_xtol must be positive.")
         if not (np.isfinite(self.initialEtaRootRtol) and self.initialEtaRootRtol > 0.0):
             raise ValueError("initial_eta_root_rtol must be positive and finite.")
+        if self.interfaceResidualCompositionScale is not None and not (
+            np.all(np.isfinite(self.interfaceResidualCompositionScale)) and np.all(self.interfaceResidualCompositionScale > 0.0)
+        ):
+            raise ValueError("interface_residual_composition_scale must be positive and finite.")
         if self.initialEtaRootMaxiter < 1:
             raise ValueError("initial_eta_root_maxiter must be at least 1.")
         if self.initialVelocityGuess is not None and self.initialVelocityGuess.shape != (2,):
@@ -840,6 +865,18 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         equilibrium root). In SI units these terms can be ``~1e-11``, so an
         absolute test would make the converged etas depend on the starting
         guess and the length unit.
+
+        With ``initial_eta_componentwise_scaling`` each of the four residual
+        rows (two components at each interface) is divided by its own scale:
+        the same three terms taken per row, floored per interface at
+        ``64 * eps / initial_eta_root_rtol`` times that interface's largest
+        row scale, and frozen at the current Newton iterate for its Jacobian
+        and line search. Convergence then requires
+        ``max|scaled residual| <= initial_eta_root_rtol``. Use it when the two
+        components have very different diffusivities: the shared max-norm scale
+        is set by the fast component and leaves the slow component's balance
+        effectively unconverged. ``residual_scale`` on the estimate is then the
+        largest row scale.
         """
         brackets = self._initial_eta_brackets()
         eta0 = self._initial_eta_start(brackets)
@@ -877,6 +914,25 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                 sensitivity_scale = eta_sensitivity_scale()
             return norm <= self._initial_eta_tolerance(sensitivity_scale)
 
+        componentwise = self.initialEtaComponentwiseScaling
+        component_scale_floor = min(1.0, _COMPONENTWISE_ROUNDOFF_FACTOR * float(np.finfo(np.float64).eps) / self.initialEtaRootRtol)
+
+        def interface_rows(face_values):
+            # Face rows are (A right, B left, B right, C left); residual rows are
+            # (A|B component 1, A|B component 2, B|C component 1, B|C component 2).
+            face_values = np.abs(np.asarray(face_values, dtype=np.float64))
+            return np.concatenate((np.max(face_values[:2], axis=0), np.max(face_values[2:], axis=0)))
+
+        component_sensitivity = None
+        if componentwise:
+            # Per-row version of ``eta_sensitivity_scale``.
+            try:
+                component_sensitivity = interface_rows(
+                    face_transfers_at([brackets[0][1], brackets[1][1]]) - face_transfers_at([brackets[0][0], brackets[1][0]])
+                )
+            except ValueError:
+                component_sensitivity = np.zeros(4, dtype=np.float64)
+
         def evaluate(velocities, etas):
             interface_compositions = self._interface_compositions(etas)
             residual, zero_velocity_residual, face_transfers = self._initial_discrete_interface_terms(
@@ -897,9 +953,19 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                 0.0 if sensitivity_scale is None else sensitivity_scale,
                 1e-300,
             )
-            return interface_compositions, residual, flux_delta, scale
+            component_scales = None
+            if componentwise:
+                # The same terms per residual row, floored per interface at
+                # round-off of that interface's largest term (as in the
+                # two-phase estimator).
+                component_scales = np.maximum.reduce(
+                    [interface_rows(face_transfers), np.abs(residual - zero_velocity_residual), component_sensitivity, np.full(4, 1e-300)]
+                )
+                for block in (slice(0, 2), slice(2, 4)):
+                    component_scales[block] = np.maximum(component_scales[block], component_scale_floor * float(np.max(component_scales[block])))
+            return interface_compositions, residual, flux_delta, scale, component_scales
 
-        _, residual_at_zero, _, _ = evaluate(np.zeros(2, dtype=np.float64), eta0)
+        _, residual_at_zero, _, _, _ = evaluate(np.zeros(2, dtype=np.float64), eta0)
         velocity_columns = np.column_stack(
             [
                 evaluate(np.asarray([1.0, 0.0], dtype=np.float64), eta0)[1] - residual_at_zero,
@@ -930,57 +996,77 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         def residual_unknowns(values):
             velocities = np.asarray(values[:2], dtype=np.float64) * velocity_scales
             etas = np.asarray(values[2:], dtype=np.float64)
-            interface_compositions, residual, flux_delta, scale = evaluate(velocities, etas)
+            interface_compositions, residual, flux_delta, scale, component_scales = evaluate(velocities, etas)
             if not np.all(np.isfinite(residual)):
                 raise ValueError("Initial eta residual is non-finite.")
-            return residual, flux_delta, interface_compositions, scale
+            return residual, flux_delta, interface_compositions, scale, component_scales
 
         for iteration in range(1, self.initialEtaRootMaxiter + 1):
-            residual, flux_delta, interface_compositions, residual_scale = residual_unknowns(x)
+            residual, flux_delta, interface_compositions, residual_scale, component_scales = residual_unknowns(x)
             nfev += 1
-            norm_current = float(np.max(np.abs(residual)))
+            # Componentwise scaling freezes this iterate's row scales for the
+            # Jacobian and line search; re-evaluating them at perturbed points
+            # would make the scaled residual saturate as |V| grows. Without it
+            # the weights are exactly 1, which leaves the arithmetic unchanged.
+            weights = component_scales if componentwise else np.ones(4, dtype=np.float64)
+            scaled_residual = residual / weights
+            norm_current = float(np.max(np.abs(scaled_residual)))
             if best is None or norm_current < best[0]:
-                best = (norm_current, x.copy(), residual.copy(), flux_delta.copy(), interface_compositions, residual_scale)
-            if converged_at(norm_current, residual_scale):
+                best = (norm_current, x.copy(), residual.copy(), flux_delta.copy(), interface_compositions, residual_scale, component_scales)
+            if (norm_current <= self.initialEtaRootRtol) if componentwise else converged_at(norm_current, residual_scale):
                 success = True
                 break
 
             jacobian = np.zeros((4, 4), dtype=np.float64)
             for variable in range(4):
                 step, x_perturbed, direction = _bounded_finite_difference_perturbation(x, lower, upper, variable)
-                residual_perturbed, _, _, _ = residual_unknowns(x_perturbed)
+                residual_perturbed = residual_unknowns(x_perturbed)[0] / weights
                 nfev += 1
                 if direction == "forward":
-                    jacobian[:, variable] = (residual_perturbed - residual) / step
+                    jacobian[:, variable] = (residual_perturbed - scaled_residual) / step
                 else:
-                    jacobian[:, variable] = (residual - residual_perturbed) / step
+                    jacobian[:, variable] = (scaled_residual - residual_perturbed) / step
 
             try:
-                step = np.linalg.solve(jacobian, -residual)
+                step = np.linalg.solve(jacobian, -scaled_residual)
             except np.linalg.LinAlgError:
-                step = np.linalg.lstsq(jacobian, -residual, rcond=None)[0]
+                step = np.linalg.lstsq(jacobian, -scaled_residual, rcond=None)[0]
 
             accepted = False
             for scale in (1.0, 0.5, 0.25, 0.125, 0.0625):
                 trial = np.clip(x + scale * step, lower, upper)
-                residual_trial, flux_delta_trial, interface_compositions_trial, residual_scale_trial = residual_unknowns(trial)
+                residual_trial, flux_delta_trial, interface_compositions_trial, residual_scale_trial, component_scales_trial = residual_unknowns(trial)
                 nfev += 1
-                norm_trial = float(np.max(np.abs(residual_trial)))
+                norm_trial = float(np.max(np.abs(residual_trial / weights)))
                 if np.isfinite(norm_trial) and norm_trial < norm_current:
                     x = trial
                     accepted = True
                     if best is None or norm_trial < best[0]:
-                        best = (norm_trial, trial.copy(), residual_trial.copy(), flux_delta_trial.copy(), interface_compositions_trial, residual_scale_trial)
+                        best = (
+                            norm_trial,
+                            trial.copy(),
+                            residual_trial.copy(),
+                            flux_delta_trial.copy(),
+                            interface_compositions_trial,
+                            residual_scale_trial,
+                            component_scales_trial,
+                        )
                     break
             if not accepted:
                 break
 
         if best is None:
             raise ValueError("Instantaneous initial eta solve did not produce a finite residual.")
-        residual_norm, x_best, residual, flux_delta, interface_compositions, residual_scale = best
-        if sensitivity_scale is not None:
-            residual_scale = max(residual_scale, sensitivity_scale)
-        if not success and not converged_at(residual_norm, residual_scale):
+        _, x_best, residual, flux_delta, interface_compositions, residual_scale, component_scales = best
+        residual_norm = float(np.max(np.abs(residual)))
+        if componentwise:
+            residual_scale = float(np.max(component_scales))
+            converged = float(np.max(np.abs(residual / component_scales))) <= self.initialEtaRootRtol
+        else:
+            if sensitivity_scale is not None:
+                residual_scale = max(residual_scale, sensitivity_scale)
+            converged = converged_at(residual_norm, residual_scale)
+        if not success and not converged:
             raise ValueError("Instantaneous three-phase initial eta solve failed to converge.")
         estimate = ThreePhaseInitialEtaEstimate(
             etas=np.asarray(x_best[2:], dtype=np.float64).copy(),
@@ -996,6 +1082,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             iterations=int(iteration),
             function_calls=int(nfev),
             residual_scale=float(residual_scale),
+            component_scales=None if component_scales is None else np.asarray(component_scales, dtype=np.float64).copy(),
         )
         self.initialEtaEstimate = estimate
         return estimate.etas.copy()
@@ -1691,8 +1778,29 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return weight * (float(new_length) * np.asarray(new_value, dtype=np.float64) - float(old_length) * old_value)
 
     def _residual_scale(self, profiles, interfaces):
+        """
+        Returns the four interface-residual scales for one implicit step.
+
+        The residual is a density-weighted inventory defect (composition times
+        length), so it is scaled by the normalized specimen length ``L``
+        (``R0`` with equal molar volumes) times an O(1) composition scale,
+        which makes the tolerance a relative solute loss per step. By default
+        every row uses ``L``. With ``interface_residual_composition_scale``,
+        component ``k`` at both interfaces uses
+        ``max(|old density-weighted inventory_k|, L * scale_k)``, as in the
+        two-phase model: a small ``scale_k`` tightens the balance of a dilute
+        or slow component, down to its own inventory. The scale does not
+        depend on ``dt``.
+        """
         normalized_total = float(self._R0) if self._equalPhaseMolarVolumes else float(self._initialTotalAmount / self._phaseMolarDensities[0])
-        return np.full(4, max(normalized_total, 1e-300), dtype=np.float64)
+        if self.interfaceResidualCompositionScale is None:
+            return np.full(4, max(normalized_total, 1e-300), dtype=np.float64)
+        widths = self._phase_widths(interfaces, right_boundary=self._right_boundary_from_interfaces(interfaces))
+        inventory = np.zeros(2, dtype=np.float64)
+        for density, width, profile, grid in zip(self._normalizedPhaseMolarDensities, widths, profiles, self._grids):
+            inventory += density * width * np.trapezoid(np.asarray(profile, dtype=np.float64), grid, axis=0)
+        component = np.maximum(np.maximum(np.abs(inventory), normalized_total * self.interfaceResidualCompositionScale), 1e-300)
+        return np.tile(component, 2)
 
     def _scaled_bounds(self):
         eps = 1e-14
