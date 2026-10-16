@@ -559,7 +559,9 @@ grid has 81 linear-clustered nodes.
 - **Symmetry:** the two interfaces stay mirror images to 5e-11 m, and their
   tie-line coordinates agree to 1.7e-10.
 - **Steps:** both models take 3364 steps with no retries.
-- **Cost:** 124 s for three-phase against 9 s for two-phase.
+- **Cost:** 52 s for three-phase against 11.5 s for two-phase (4.5×; it
+  was 124 s before the lagged-diffusivity cache and the vectorized row fill
+  in problem 12).
 
 Before the three-phase fixes (problem 12), the same run needed about 1 s per
 step, started retrying at about 1e-4 s, and had reached only 7e-4 s after an
@@ -644,6 +646,19 @@ therefore DICTRA's start-up transient and discretization error.
     - **Fixes:** batched validation, the compiled solver, vectorized
       assembly, the extrapolated start and the η step. Together these give
       about 30× per step and no retries.
+    - **Second pass (13× → 4.5× slower than two-phase).** A profile of the
+      symmetric check showed two things the two-phase model already avoids:
+      - a per-node Python loop still filled the diagonal and right-hand side
+        (47% of the time);
+      - in lagged mode, the face diffusivities were recomputed for every Newton
+        candidate (28%), although they depend only on the accepted profiles.
+        The two-phase model computes them once per step attempt.
+
+      Both are fixed: the row fill is vectorized, and a per-attempt cache
+      evaluates each phase's matrices once. Results are bitwise unchanged.
+      The remaining 4.5× is about what the extra work explains: 7 Newton
+      candidates per step instead of 4 (four unknowns), 2.2× the nodes, and
+      two tie-line evaluations per candidate.
 
 ## 6. Limitations and open items
 
@@ -676,8 +691,10 @@ therefore DICTRA's start-up transient and discretization error.
     from the interface value. That is not planned.
 - **Three-phase model:**
   - it has no per-component η option;
-  - it is still about 13× slower per step than the two-phase model (Python
-    assembly and the four-unknown Newton iteration);
+  - it is about 4.5× slower per step than the two-phase model, which is
+    roughly the extra work of four unknowns and 2.2× the nodes; compiled
+    assembly, as in the two-phase model, would trim the remaining Python
+    overhead;
   - it has been checked on a real-thermodynamics sharp front only in the
     symmetric configuration (section 4.3), not on a genuinely three-phase
     problem.

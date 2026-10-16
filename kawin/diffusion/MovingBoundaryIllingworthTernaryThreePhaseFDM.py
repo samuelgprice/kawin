@@ -203,7 +203,10 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     leaves the converged step unchanged but avoids most retries on sharp
     moving fronts. Interval systems use the compiled block-tridiagonal solver
     shared with the two-phase model, and face diffusivity stacks are
-    validated in one batch.
+    validated in one batch. In ``composition_dependent_lagged`` mode the face
+    matrices depend only on the accepted profiles (the model is isothermal),
+    so, as in the two-phase model, they are evaluated once per step attempt
+    and shared by all Newton candidates.
     """
 
     def __init__(
@@ -349,6 +352,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._etas_curr = None
         self._etas_old = None
         self._lastAcceptedDt = None
+        self._laggedFaceDiffusivityCache = None
 
         super().__init__(
             mesh=mesh,
@@ -1386,6 +1390,28 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             self._face_positions(grid, new_bounds),
         )
 
+    def _lagged_interval_face_diffusivity(self, profile, phase_index, new_bounds):
+        """
+        Returns one phase's lagged face matrices, reused within a step attempt.
+
+        In ``composition_dependent_lagged`` mode the matrices depend only on the
+        accepted old profile: the model is isothermal, so the trial face
+        positions (``new_bounds``) do not change the temperature.
+        ``_try_step_retries`` opens a cache for each attempt so that all Newton
+        candidates share one evaluation per phase; an entry is reused only for
+        the same profile object. Without an open cache every call evaluates
+        afresh.
+        """
+        cache = self._laggedFaceDiffusivityCache
+        if cache is not None:
+            entry = cache.get(phase_index)
+            if entry is not None and entry[0] is profile:
+                return entry[1]
+        D = self._interval_face_diffusivity(profile, self._grids[phase_index], phase_index, new_bounds)
+        if cache is not None:
+            cache[phase_index] = (profile, D)
+        return D
+
     def _internal_face_displacements(self, grid, old_bounds, new_bounds, phase_frame_displacement=0.0):
         """Returns each internal grid-face displacement relative to its phase frame."""
         grid = np.asarray(grid, dtype=np.float64).reshape(-1)
@@ -1476,13 +1502,15 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         if right_value is not None:
             fixed_rows[-1] = True
 
-        for i in range(n):
-            if fixed_rows[i]:
-                diagonal[i] = I
-                rhs[i] = np.asarray(left_value if i == 0 else right_value, dtype=np.float64)
-                continue
-            diagonal[i] = new_widths[i] * I
-            rhs[i] = old_widths[i] * profile[i]
+        free_rows = ~fixed_rows
+        diagonal[free_rows] = new_widths[free_rows, None, None] * I
+        rhs[free_rows] = old_widths[free_rows, None] * profile[free_rows]
+        if right_value is not None:
+            diagonal[-1] = I
+            rhs[-1] = np.asarray(right_value, dtype=np.float64)
+        if left_value is not None:
+            diagonal[0] = I
+            rhs[0] = np.asarray(left_value, dtype=np.float64)
 
         face_displacements = self._internal_face_displacements(
             grid,
@@ -1593,7 +1621,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                     phase_index, left_value, right_value, D, phase_frame_displacement=phase_displacement,
                 )
             elif self.bulkDiffusivityMode == _BULK_DIFFUSIVITY_LAGGED:
-                D = self._interval_face_diffusivity(profiles[phase_index], self._grids[phase_index], phase_index, new_bounds[phase_index])
+                D = self._lagged_interval_face_diffusivity(profiles[phase_index], phase_index, new_bounds[phase_index])
                 result = self._solve_interval_planar(
                     profiles[phase_index], self._grids[phase_index], old_bounds[phase_index], new_bounds[phase_index],
                     phase_index, left_value, right_value, D, validate_diffusivity=False,
@@ -1971,6 +1999,9 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                 # debugInPlace()
                 print(retry)
             self._currdt = trial_dt
+            # One lagged face-diffusivity evaluation per attempt, shared by its
+            # Newton candidates (see ``_lagged_interval_face_diffusivity``).
+            self._laggedFaceDiffusivityCache = {}
             try:
                 candidate = self._solve_interface_planar(profiles, interfaces, etas, trial_dt)
                 return self._accept_step_candidate(
@@ -1985,6 +2016,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             except (RuntimeError, ValueError, ZeroDivisionError) as exc:
                 last_error = exc
                 trial_dt *= self.retryFactor
+            finally:
+                self._laggedFaceDiffusivityCache = None
         return None, trial_dt, last_error
 
     def _confirm_terminal_thin_phase_retries(self, phase_index, width, t, trial_dt):
@@ -2402,6 +2435,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._etas_curr = None
         self._etas_old = None
         self._lastAcceptedDt = None
+        self._laggedFaceDiffusivityCache = None
 
     def getInterfacePositions(self, time=None):
         """Returns the two recorded interface positions ``[s_AB, s_BC]``."""

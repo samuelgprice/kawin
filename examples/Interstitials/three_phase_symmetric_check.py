@@ -10,7 +10,7 @@ models share the austenite grid (power law), the time-step schedule and the
 tie-line and diffusivity tables; the three-phase middle (ferrite) grid is
 linear-clustered at both ends.
 
-Run (repo root, through the conda wrapper in AGENTS.md; ~2 min for 2 s):
+Run (repo root, through the conda wrapper in AGENTS.md; ~1 min for 2 s):
     python -u -m examples.Interstitials.three_phase_symmetric_check
 """
 
