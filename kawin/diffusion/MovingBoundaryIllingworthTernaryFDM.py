@@ -69,17 +69,20 @@ def _matvec_2x2(matrix, vector):
     )
 
 
-def _bounded_finite_difference_perturbation(x, lower, upper, variable):
+def _bounded_finite_difference_perturbation(x, lower, upper, variable, step=None):
     """
     Returns the baseline one-sided finite-difference perturbation for one variable.
 
     The step-size formula and forward/backward bound choice are shared by the
-    initial-eta and finite-step interface Newton loops.
+    initial-eta and finite-step interface Newton loops. ``step`` overrides the
+    default ``sqrt(eps) * max(1, |x|)`` size; it is still limited to a quarter
+    of the bound range.
     """
     x = np.asarray(x, dtype=np.float64)
     lower = np.asarray(lower, dtype=np.float64)
     upper = np.asarray(upper, dtype=np.float64)
-    step = np.sqrt(np.finfo(float).eps) * max(1.0, abs(x[variable]))
+    if step is None:
+        step = np.sqrt(np.finfo(float).eps) * max(1.0, abs(x[variable]))
     if np.isfinite(upper[variable] - lower[variable]):
         step = min(step, 0.25 * max(upper[variable] - lower[variable], 1e-15))
     x_perturbed = x.copy()
@@ -154,6 +157,17 @@ def _allocate_ternary_block_system(n):
 
 
 _MOTION_BRANCH_ATOL = 1e-15
+
+# Finite-difference step for the scaled tie-line coordinate (eta_hat in [0, 1])
+# in the per-step interface Newton. The default sqrt(eps) step is too small
+# when a residual row depends only weakly on eta and carries round-off noise:
+# with interface cells of ~1e-17 m the carbon flux loses ~7 digits, and
+# noise/step then swamps the true derivative (Fe-Mn-C, 3201-node austenite
+# grid). 1e-6 keeps the step well inside one segment of a tabulated tie-line
+# closure (hundreds of segments over eta_hat in [0, 1]), so the truncation error
+# stays negligible. The s step is unchanged: it must stay small relative to the
+# step displacement so it does not cross zero motion.
+_INTERFACE_ETA_FD_STEP = 1.0e-6
 
 
 def _select_interface_motion_branch(s, old_s, future_s, atol=_MOTION_BRANCH_ATOL):
@@ -971,6 +985,19 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     displacement, where the residual is most nonlinear; this avoids most step
     retries for sharp moving fronts such as Fe-C-X ferrite growth. The first
     step has no history and always starts from the old state.
+
+    Resolution limit: the interface fluxes are difference quotients across the
+    interface-adjacent cells, so extremely small cells lose digits to
+    cancellation. With an interface cell of ~5e-18 m (3201-node power-law
+    austenite grid with exponent 3.7 on a 50 um domain) the scaled carbon
+    residual of the Fe-Mn-C benchmark carries round-off noise of ~5e-13 at
+    semi-log steps of dln t <= 0.005, rising to ~1e-10 at dln t = 0.01; the
+    1601-node grid (~7e-17 m) reaches the same limit at dln t = 0.01. Once that
+    noise approaches ``residual_tolerance`` the interface Newton cannot
+    converge and steps are retried at smaller ``dt``. Interface cells above
+    ~1e-16 m, or smaller steps, avoid this. The eta finite-difference step
+    (``_INTERFACE_ETA_FD_STEP``) is sized so this noise does not corrupt the
+    Jacobian below that limit.
     """
 
     def __init__(
@@ -2752,8 +2779,15 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             return side_lower, side_upper
 
         def finite_difference_column(variable, side_lower, side_upper):
-            """One-sided finite-difference Jacobian column whose perturbation stays inside the side bounds."""
-            step, x_perturbed, difference_direction = _bounded_finite_difference_perturbation(x_hat, side_lower, side_upper, variable)
+            """
+            One-sided finite-difference Jacobian column whose perturbation stays inside the side bounds.
+
+            The eta column (variable 1) uses ``_INTERFACE_ETA_FD_STEP``; the s
+            column keeps the default sqrt(eps) step.
+            """
+            step, x_perturbed, difference_direction = _bounded_finite_difference_perturbation(
+                x_hat, side_lower, side_upper, variable, step=_INTERFACE_ETA_FD_STEP if variable == 1 else None,
+            )
             residual_perturbed = evaluate_candidate(x_perturbed).scaled_residual
             if difference_direction == "forward":
                 return (residual_perturbed - scaled_residual) / step

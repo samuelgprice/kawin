@@ -2503,7 +2503,7 @@ def test_ternary_scaled_interface_jacobian_perturbs_eta_with_eta_interval():
     base_eta = float(model._eta_curr)
     eta_span = model.interfaceEquilibrium.eta_bounds[1] - model.interfaceEquilibrium.eta_bounds[0]
     positive_perturbations = eta_calls[eta_calls > base_eta] - base_eta
-    expected_eta_step = eta_span * np.sqrt(np.finfo(float).eps) * max(1.0, abs((base_eta - model.interfaceEquilibrium.eta_bounds[0]) / eta_span))
+    expected_eta_step = eta_span * ternary_fdm._INTERFACE_ETA_FD_STEP
 
     assert positive_perturbations.size > 0
     assert np.isclose(np.min(positive_perturbations), expected_eta_step, rtol=1.0e-6, atol=1.0e-14)
@@ -2644,7 +2644,7 @@ def test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work
     assert model._lastImplicitJacobianEvaluations == 1
     assert model._lastImplicitMotionBranch == "positive"
     assert model._lastImplicitFailureReason is None
-    assert np.isclose(model._lastImplicitResidual, 4.4966467399417765e-15, rtol=0.0, atol=1.0e-21)
+    assert np.isclose(model._lastImplicitResidual, 4.494315292342209e-15, rtol=0.0, atol=1.0e-21)
 
 
 @pytest.mark.parametrize("flip_branch", [False, True])

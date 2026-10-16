@@ -340,13 +340,21 @@ def tie_line_closure(data):
     return CallableTernaryInterfaceEquilibrium(interface, eta_bounds=(float(eta[0]), float(eta[-1])), composition_basis="x")
 
 
-def run_kawin(case, data, *, n_left=41, n_right=401, power=3.0, semi_log_dt=0.02, mode="composition_dependent_lagged", x_residual_scale=1.0, eta_componentwise=False, semi_log_t0=1.0e-7, newton_start="extrapolated"):
+def run_kawin(case, data, *, n_left=41, n_right=401, power=3.0, semi_log_dt=0.02, mode="composition_dependent_lagged", x_residual_scale=1.0, eta_componentwise=False, semi_log_t0=1.0e-7, newton_start="extrapolated", grid_min_interval=None):
+    """
+    Runs the ternary Illingworth model for one Fe-C-X case; returns (model, per-step diagnostics).
+
+    ``grid_min_interval`` (default: ``landau_grid``'s 1e-12) is the smallest
+    relative austenite grid interval allowed; strong power laws on very fine
+    grids (e.g. 3201 nodes with exponent 3.7) need it lowered.
+    """
     x_alloy = np.asarray(data["x_alloy"])
     R = case.ferrite_width + case.austenite_width
     mesh = CartesianFD1D(["C", case.solute], [0.0, R], 2001)
     mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(case.ferrite_width, x_alloy, x_alloy), ["C", case.solute])]))
     u_grid = landau_grid(n_left, "power", phase="left", exponent=1.5)
-    v_grid = landau_grid(n_right, "power", phase="right", exponent=power)
+    grid_kwargs = {} if grid_min_interval is None else {"min_interval": grid_min_interval}
+    v_grid = landau_grid(n_right, "power", phase="right", exponent=power, **grid_kwargs)
     model = MovingBoundaryIllingworthTernaryFD1DModel(
         mesh=mesh,
         elements=["FE", "C", case.solute],
