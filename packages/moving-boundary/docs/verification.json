@@ -1020,8 +1020,9 @@
     }
   },
   "baseline_exact": true,
-  "commit": "659001ccb5c8857c0f2a17cf3e70d905bfc35f6d",
+  "commit": "2fa6094068de4858cfc44cc538a52cbf1dfe6362",
   "baseline_commit": "ae9fb2971a9fd49132f71ddc883a5bd5406644b6",
+  "dependency_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
   "wheel_members": [
     "moving_boundary/__init__.py",
     "moving_boundary/solvers/__init__.py",
@@ -1032,23 +1033,28 @@
     "moving_boundary-0.0.1.dev0.dist-info/top_level.txt",
     "moving_boundary-0.0.1.dev0.dist-info/RECORD"
   ],
-  "wheel_sha256": "0730d9fd88bb600d8117cb2dfcfbd2e783cf2e531902a9b6ab02859aca94db4b",
+  "wheel_sha256": "d0bf7ab861267351f71205e59f9f64c3a8638dd8aa54135e31c116f0632c4aaf",
   "fixture_sha256": "ba0af5d95224d524aea6bbce290afd0f83747d59edd8e1ac6aa1a1b4000e295c",
   "checks": {
     "baseline_capture": "exact",
     "bridge_tests": {
-      "tests": 11,
+      "tests": 12,
       "failures": 0,
       "errors": 0,
       "skipped": 0
     },
     "outside_example": "passed"
   },
-  "dependency_setup": "isolated wheel target plus explicit fork PYTHONPATH",
+  "dependency_setup": "frozen source reference plus separate installed bridge/fork probe",
   "installed_fork": {
-    "import_ok": false,
-    "missing_module": "examples",
-    "baseline_commit": "ae9fb2971a9fd49132f71ddc883a5bd5406644b6",
+    "import_ok": true,
+    "missing_module": null,
+    "binary_parity": true,
+    "arrays_compared": 11,
+    "bridge_origin": "<WHEEL_TARGET>/moving_boundary/__init__.py",
+    "dependency_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "wheel_sha256": "0aab14a346dfa3ffe6f4816d5f0dbfe1a1e158443606a90286e32864e370f815",
+    "kawin_origin": "<FORK_WHEEL_TARGET>/kawin/__init__.py",
     "wheel_contains_examples": false,
     "setup": "pinned Git archive wheel; -I -S; no source/editable paths"
   }
