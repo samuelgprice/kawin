@@ -1020,7 +1020,7 @@
     }
   },
   "baseline_exact": true,
-  "commit": "ae9fb2971a9fd49132f71ddc883a5bd5406644b6",
+  "commit": "659001ccb5c8857c0f2a17cf3e70d905bfc35f6d",
   "baseline_commit": "ae9fb2971a9fd49132f71ddc883a5bd5406644b6",
   "wheel_members": [
     "moving_boundary/__init__.py",
@@ -1032,7 +1032,7 @@
     "moving_boundary-0.0.1.dev0.dist-info/top_level.txt",
     "moving_boundary-0.0.1.dev0.dist-info/RECORD"
   ],
-  "wheel_sha256": "343cb273904533a6d10eed2b9ae73103ea20c65a3064f9e745c76b8e7bdee753",
+  "wheel_sha256": "0730d9fd88bb600d8117cb2dfcfbd2e783cf2e531902a9b6ab02859aca94db4b",
   "fixture_sha256": "ba0af5d95224d524aea6bbce290afd0f83747d59edd8e1ac6aa1a1b4000e295c",
   "checks": {
     "baseline_capture": "exact",
