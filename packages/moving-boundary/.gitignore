@@ -1,0 +1,9 @@
+build/
+dist/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.verification/
+!docs/verification.json
+!docs/git-audit.txt
+!docs/assessment.json

@@ -1,0 +1,133 @@
+Local changes relative to shared ancestor:
+M	kawin/Constants.py
+M	kawin/GenericModel.py
+M	kawin/diffusion/Diffusion.py
+M	kawin/diffusion/DiffusionParameters.py
+A	kawin/diffusion/MovingBoundary.py
+A	kawin/diffusion/MovingBoundaryEquilibrium.py
+A	kawin/diffusion/MovingBoundaryFDM.py
+A	kawin/diffusion/MovingBoundaryIllingworthFDM.py
+A	kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py
+A	kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py
+A	kawin/diffusion/MovingBoundaryOlayeFDM.py
+A	kawin/diffusion/MovingBoundaryOlayeFDM_rework.py
+A	kawin/diffusion/MovingBoundarySurrogates.py
+M	kawin/diffusion/Plot.py
+A	kawin/diffusion/SurrogateArtifacts.py
+A	kawin/diffusion/SurrogateBenchmark.py
+A	kawin/diffusion/SurrogateBenchmarkAnalysis.py
+A	kawin/diffusion/SurrogateBenchmarkExperiment.py
+A	kawin/diffusion/SurrogateBenchmarkPhase2.py
+A	kawin/diffusion/SurrogateComparison.py
+A	kawin/diffusion/SurrogateDiagnostics.py
+M	kawin/diffusion/__init__.py
+A	kawin/diffusion/_diffusivity_domain.py
+A	kawin/diffusion/_illingworth_interstitials.py
+A	kawin/diffusion/_spectral_validation.py
+A	kawin/diffusion/mesh/FDM1D.py
+M	kawin/diffusion/mesh/MeshBase.py
+A	kawin/diffusion/mesh/MovingBoundary1D.py
+A	kawin/diffusion/mesh/MovingBoundaryFD1D.py
+A	kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py
+A	kawin/diffusion/mesh/MovingBoundaryIllingworthTernaryFD1D.py
+A	kawin/diffusion/mesh/MovingBoundaryOlayeFD1D.py
+A	kawin/diffusion/mesh/TransformedGrids.py
+M	kawin/diffusion/mesh/__init__.py
+M	kawin/solver/Solver.py
+A	kawin/tests/data/illingworth_substitutional_baseline.npz
+A	kawin/tests/illingworth_baseline_cases.py
+A	kawin/tests/make_illingworth_substitutional_baseline.py
+A	kawin/tests/test_benchmark_wtife_surrogate_runtime.py
+M	kawin/tests/test_diffusion.py
+A	kawin/tests/test_diffusivity_domain.py
+A	kawin/tests/test_fecrni_surrogate_artifact_recipe.py
+A	kawin/tests/test_illingworth_binary_variable_diffusivity.py
+A	kawin/tests/test_illingworth_interstitials.py
+A	kawin/tests/test_illingworth_interstitials_ternary.py
+A	kawin/tests/test_illingworth_interstitials_three_phase.py
+A	kawin/tests/test_illingworth_setup_and_diagnostics.py
+A	kawin/tests/test_illingworth_substitutional_baseline.py
+A	kawin/tests/test_illingworth_ternary.py
+A	kawin/tests/test_illingworth_ternary_convergence.py
+A	kawin/tests/test_illingworth_ternary_physical_scale.py
+A	kawin/tests/test_illingworth_ternary_similarity.py
+A	kawin/tests/test_illingworth_ternary_three_phase.py
+A	kawin/tests/test_illingworth_ternary_three_phase_similarity.py
+A	kawin/tests/test_mesh_data.py
+M	kawin/tests/test_plotting.py
+A	kawin/tests/test_pycalphad_default_phase_adapter.py
+A	kawin/tests/test_pycalphad_kinetics_capture.py
+A	kawin/tests/test_simplex_positive_2x2.py
+M	kawin/tests/test_solver.py
+A	kawin/tests/test_surrogate_artifacts.py
+A	kawin/tests/test_surrogate_benchmark.py
+A	kawin/tests/test_surrogate_benchmark_analysis.py
+A	kawin/tests/test_surrogate_benchmark_experiment.py
+A	kawin/tests/test_surrogate_benchmark_phase2.py
+A	kawin/tests/test_surrogate_comparison.py
+A	kawin/tests/test_surrogate_diagnostics.py
+A	kawin/tests/test_ternary_plotly_helper.py
+A	kawin/tests/test_thermocalc_examples.py
+A	kawin/tests/test_three_phase_examples.py
+A	kawin/tests/test_transformed_grids.py
+M	kawin/thermo/Mobility.py
+M	kawin/thermo/MultiTherm.py
+M	kawin/thermo/Surrogate.py
+M	kawin/thermo/Thermodynamics.py
+Upstream comparison of relevant infrastructure:
+M	kawin/Constants.py
+M	kawin/GenericModel.py
+M	kawin/diffusion/Diffusion.py
+M	kawin/diffusion/DiffusionParameters.py
+A	kawin/diffusion/MovingBoundary.py
+A	kawin/diffusion/MovingBoundaryEquilibrium.py
+A	kawin/diffusion/MovingBoundaryFDM.py
+A	kawin/diffusion/MovingBoundaryIllingworthFDM.py
+A	kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py
+A	kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py
+A	kawin/diffusion/MovingBoundaryOlayeFDM.py
+A	kawin/diffusion/MovingBoundaryOlayeFDM_rework.py
+A	kawin/diffusion/MovingBoundarySurrogates.py
+M	kawin/diffusion/Plot.py
+A	kawin/diffusion/SurrogateArtifacts.py
+A	kawin/diffusion/SurrogateBenchmark.py
+A	kawin/diffusion/SurrogateBenchmarkAnalysis.py
+A	kawin/diffusion/SurrogateBenchmarkExperiment.py
+A	kawin/diffusion/SurrogateBenchmarkPhase2.py
+A	kawin/diffusion/SurrogateComparison.py
+A	kawin/diffusion/SurrogateDiagnostics.py
+M	kawin/diffusion/__init__.py
+A	kawin/diffusion/_diffusivity_domain.py
+A	kawin/diffusion/_illingworth_interstitials.py
+A	kawin/diffusion/_spectral_validation.py
+A	kawin/diffusion/mesh/FDM1D.py
+M	kawin/diffusion/mesh/MeshBase.py
+A	kawin/diffusion/mesh/MovingBoundary1D.py
+A	kawin/diffusion/mesh/MovingBoundaryFD1D.py
+A	kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py
+A	kawin/diffusion/mesh/MovingBoundaryIllingworthTernaryFD1D.py
+A	kawin/diffusion/mesh/MovingBoundaryOlayeFD1D.py
+A	kawin/diffusion/mesh/TransformedGrids.py
+M	kawin/diffusion/mesh/__init__.py
+M	kawin/solver/Solver.py
+M	kawin/thermo/LocalEquilibrium.py
+M	kawin/thermo/Mobility.py
+M	kawin/thermo/MultiTherm.py
+M	kawin/thermo/Surrogate.py
+M	kawin/thermo/Thermodynamics.py
+Baseline input hashes:
+
+
+Algorithm : SHA256
+Hash      : 2A31C47B5F54E43337B769F5410577795EC796038BFAC18B64B6783DA11C7842
+Path      : C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab 
+            Data\Price\code\moving-boundary-extraction\kawin\tests\illingworth_baseline_cases.py
+
+Algorithm : SHA256
+Hash      : BA0AF5D95224D524AEA6BBCE290AFD0F83747D59EDD8E1AC6AA1A1B4000E295C
+Path      : C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab 
+            Data\Price\code\moving-boundary-extraction\kawin\tests\data\illingworth_substitutional_baseline.npz
+
+
+
+

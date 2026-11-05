@@ -1,0 +1,166 @@
+{
+  "public_release": "0.5.0",
+  "wheel_sha256": "9f7a1497c5dff4314536860ac6fd0b96a68243dd681db8eb106dbe33fe25cbaf",
+  "baseline": "ae9fb2971a9fd49132f71ddc883a5bd5406644b6",
+  "tests": [
+    {
+      "name": "test_u_x_conversion_roundtrip[elements0]",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_u_x_conversion_roundtrip[elements1]",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_u_x_conversion_roundtrip[elements2]",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_u_x_conversion_roundtrip[elements3]",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_u_x_conversion_roundtrip[elements4]",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_binary_conversion_accepts_scalars_and_node_arrays",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_bound_violation_matches_legacy_without_interstitials",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_bound_violation_with_interstitials_allows_large_interstitial_u",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_element_order_guard",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_interstitial_recognition_is_case_sensitive_like_kawin",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_binary_model_rejects_lower_case_interstitial_symbol",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_diffusivity_provider_wrapper_converts_and_forwards",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_interface_equilibrium_wrapper_respects_basis",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_binary_interstitial_initial_state_is_u_after_init_and_reset",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_binary_interstitial_queries_receive_mole_fractions[phase_uniform]",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_binary_interstitial_queries_receive_mole_fractions[composition_dependent_lagged]",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_binary_interstitial_queries_receive_mole_fractions[composition_dependent_implicit]",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_binary_label_invariance",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_binary_interstitial_zener_parabolic_growth",
+      "class": "kawin.tests.test_illingworth_interstitials"
+    },
+    {
+      "name": "test_ternary_interstitial_plumbing[phase_uniform-u]",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_ternary_interstitial_plumbing[phase_uniform-x]",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_ternary_interstitial_plumbing[composition_dependent_lagged-u]",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_ternary_interstitial_plumbing[composition_dependent_lagged-x]",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_ternary_interstitial_bounds_allow_interstitial_above_substitutional_simplex",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_ternary_interstitial_rejects_interstitial_dependent_element",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_ternary_similarity_disparate_eigenvalues[0.01]",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_ternary_similarity_disparate_eigenvalues[0.0001]",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_ternary_similarity_disparate_eigenvalues[1e-06]",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_ternary_similarity_ratio_1e8",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_initial_eta_prefers_converged_branch_over_smaller_raw_residual",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_initial_eta_selects_by_active_norm_and_raises_without_converged_branch",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_componentwise_initial_eta_converges_when_slow_component_terms_vanish",
+      "class": "kawin.tests.test_illingworth_interstitials_ternary"
+    },
+    {
+      "name": "test_masked_molar_inventory_matches_hand_integration",
+      "class": "kawin.tests.test_illingworth_interstitials_three_phase"
+    },
+    {
+      "name": "test_three_phase_interstitial_state_queries_and_conservation[phase_uniform]",
+      "class": "kawin.tests.test_illingworth_interstitials_three_phase"
+    },
+    {
+      "name": "test_three_phase_interstitial_state_queries_and_conservation[composition_dependent_lagged]",
+      "class": "kawin.tests.test_illingworth_interstitials_three_phase"
+    },
+    {
+      "name": "test_failed_step_is_retried_with_smaller_dt",
+      "class": "kawin.tests.test_illingworth_binary_variable_diffusivity"
+    },
+    {
+      "name": "test_retry_exhaustion_reraises_last_error",
+      "class": "kawin.tests.test_illingworth_binary_variable_diffusivity"
+    },
+    {
+      "name": "test_three_phase_failed_retries_do_not_mutate_accepted_boundary_or_histories",
+      "class": "kawin.tests.test_illingworth_ternary_three_phase"
+    },
+    {
+      "name": "test_three_phase_atomic_history_failure_rolls_back_every_history",
+      "class": "kawin.tests.test_illingworth_ternary_three_phase"
+    }
+  ],
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0
+}

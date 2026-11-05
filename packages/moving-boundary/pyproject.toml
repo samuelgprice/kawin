@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moving-boundary"
+version = "0.0.1.dev0"
+description = "Development bridge to the pinned Illingworth research fork of kawin"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+dependencies = [
+  "kawin @ git+https://github.com/samuelgprice/kawin.git@ae9fb2971a9fd49132f71ddc883a5bd5406644b6",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+license-files = ["LICENSE", "NOTICE"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["moving_boundary*"]
+namespaces = false

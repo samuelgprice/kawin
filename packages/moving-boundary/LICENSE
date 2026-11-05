@@ -1,0 +1,9 @@
+Development checkpoint only; no blanket redistribution license is asserted.
+
+The solver remains in the separately supplied research fork. Its binary class
+describes a port of MAP C++ code. Applicable permissions and ownership of local
+extensions must be resolved before a public release. This file is a statement
+of unresolved licensing status, not a new grant covering the fork.
+
+The upstream kawin MIT notice is reproduced in NOTICE for attribution. It does
+not by itself settle the rights to local additions or MAP-derived material.
