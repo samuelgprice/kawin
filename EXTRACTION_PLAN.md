@@ -2,7 +2,8 @@
 
 The current execution list is [NEXT_SESSIONS.md](packages/moving-boundary/docs/NEXT_SESSIONS.md).
 The source-backed Stage 1A bridge and bounded substitutional baseline are verified.
-Stages 0 and 1B remain open; installed-fork import fails on missing examples.
+Stages 0 and 1B remain open. Installed-fork import and binary parity now pass
+with the separately pinned debugger-fix commit; this is not public-kawin compatibility.
 See the package handoff for historical results.
 
 **Recommended sequence:** establish a baseline from local `main`; package the existing implementation with kawin required; make that dependency work against a genuine upstream release; separate surrogate construction and providers; extract numerical state and stepping; replace the host driver and results only after parity is demonstrated. Decide whether to make kawin optional after those steps.
@@ -61,7 +62,13 @@ Before running the final command, check that the branch and destination do not a
 Keep kawin/, required example imports, fixtures and packaging inputs frozen at
 the recorded reference in this extraction worktree. Package-only commits must
 remain verifiable. A selected maintained-fork fix gets a separate source reference;
-do not silently alter the baseline. Numerical fixes are authored once on the
+do not silently alter the baseline. Fork packaging fixes are an explicit
+exception to package-only extraction edits: create a narrow branch from the
+reference, commit the fix/tests there, merge the same commit into local main,
+and pin it in the package. The debugger fix is fix/remove-debugger-imports at
+06dc7b4ab56f67226ceabfde41ebf2690c088841; the numerical reference stays ae9fb29.
+Research branches can receive that fix by deliberately merging main. No push
+is implied by a local merge or package pin. Numerical fixes are authored once on the
 active research branch and deliberately ported with source commit, rationale and
 tests recorded. Baseline refreshes are separately reviewed scientific changes.
 See NEXT_SESSIONS.md for the concurrent-research policy.

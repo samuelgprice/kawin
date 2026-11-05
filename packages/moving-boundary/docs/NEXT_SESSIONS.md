@@ -5,23 +5,24 @@ EXTRACTION_PLAN.md remains background. No driver rewrite is authorized by a
 packaging failure alone.
 
 1. **Verification and bounded host assessment completed.**
-   The summary exposes the installed-fork gate; strict mode exits nonzero.
-   Eleven package/verification tests and all nine substitutional cases pass.
+   The summary exposes the installed-fork gate; strict mode rejects an open gate.
+   Twelve package/verification tests and all nine substitutional cases pass.
    The public 0.5.0 wheel was inspected, not installed. See LEDGERS.md for the
    comparison and source hash. Localized host differences favor retaining the
    host rather than starting a complete driver rewrite.
 
-2. **Remove production debugger dependencies in a narrow, separate fork change.**
-   Keep this reference frozen. Cover all import/reload paths, including surrogates
-   and Olaye, and ternary/three-phase retry exhaustion. Preserve exceptions,
-   exception chaining and accepted state. Verify installed imports with no source
-   tree plus failing-step tests without debugger stubs or notebook waits.
-   Selected interstitial/retry/rollback prerequisites now pass (39 tests);
-   complete public failure-path coverage remains required for this change.
-   Give the maintained fork change a distinct source reference before updating
-   package dependency metadata. Do not replace the driver/results for this fix.
-   Final package identity, audience and any upstream/licensing outreach remain
-   user decisions; no messages have been sent.
+2. **Narrow fork debugger fix completed and integrated.**
+   Branch fix/remove-debugger-imports starts at ae9fb29 and contains
+   commit 06dc7b4ab56f67226ceabfde41ebf2690c088841. Local main has the same
+   commit through a fast-forward merge. The package pins this commit; the
+   extraction checkout's reference source stays at ae9fb29.
+   Production imports/reloads and pauses were removed, including surrogate and
+   Olaye dependencies and ternary/three-phase retry exhaustion.
+   Seventy-six focused tests and three fake-provider cases passed; new public
+   retry tests verify chained errors and unchanged accepted state/histories.
+   Installed import and binary parity now pass without source checkout paths.
+   Explicit terminal-thin-phase prompt policies remain unchanged.
+   No push or upstream/licensing outreach has occurred.
 
 3. **Implement one chosen binary slice.**
    Preserve source mapping, attribution, operation order, constants and units.
@@ -43,7 +44,12 @@ packaging failure alone.
   branch (currently feature/DICTRA-comparison, or its designated successor).
   Port required fixes deliberately to extracted code. Record source commit,
   affected functions, reason, tests and expected numerical changes in a fix
-  ledger. Packaging-only fixes belong to extraction. Never automatically merge
+  ledger. Package metadata/tooling fixes belong to extraction. Fork packaging
+  fixes such as debugger removal live on a narrow branch from the recorded
+  reference, are tested and committed there, and are merged into local main.
+  Pin that exact commit without merging it into the frozen extraction source.
+  Existing research branches receive the shared fix through a deliberate merge
+  from main; they are not rewritten automatically. Never automatically merge
   research HEAD or regenerate fixtures to hide a numerical change.
 - A baseline refresh is a separate reviewed scientific change. After release,
   explicitly transfer numerical authority to the new package and adapt research

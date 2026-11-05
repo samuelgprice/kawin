@@ -132,8 +132,8 @@ can wait for debugger attachment; without examples the import can mask that erro
 The required fix covers all reachable production imports/reloads and calls, with
 explicit exceptions or existing optional diagnostics. It must preserve exception
 chaining and accepted state; merely relocating the helper or making it a no-op
-does not establish appropriate behavior at every call site. Full public retry
-exhaustion without a debugger still needs targeted acceptance after the fix.
+does not establish appropriate behavior at every call site. Public retry exhaustion without a debugger now passes dedicated tests for both
+ternary families in the separate debugger-fix commit; see the integration below.
 The focused rollback tests below exercise internal failure/commit paths; they
 do not prove that all public debugger paths are removed.
 
@@ -156,3 +156,25 @@ under the nested package):
 
 This satisfies the selected interstitial and retry/rollback prerequisites, not
 the entire Stage 0 matrix or independent mathematical validation.
+
+## Fork packaging integration
+
+The baseline mapping above remains at ae9fb29. The installable dependency now
+pins 06dc7b4ab56f67226ceabfde41ebf2690c088841, from fix/remove-debugger-imports
+based directly on ae9fb29 and fast-forwarded into local main. No solver/host code
+was copied into the extension and the extraction reference was not merged forward.
+The change removes production debugger dependencies and adds batch-import and
+public retry-exhaustion tests. An existing fake-provider test now checks absence
+of the debugger symbol and uses tmp_path for clean-checkout isolation.
+
+Checks: 76 focused tests (new tests, substitutional baseline, setup/diagnostics,
+surrogate diagnostics and positive-matrix tests), then 3 affected fake-provider
+cases. No licensed provider run. The installed fork/bridge binary example matches
+the 11 reference arrays exactly using -I -S and no source/import hooks.
+Source/fork origins and separate baseline/dependency SHAs are in verification.json.
+The Git URL pin is not remotely installable from this work until the local commit
+is pushed; no publication or push was performed.
+
+For fork packaging fixes, main integration is explicitly required as well as
+package repinning. Research feature branches take that same fix via deliberate
+main merges; numerical reference refresh is a separate decision.

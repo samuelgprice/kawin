@@ -66,7 +66,7 @@ sys.meta_path.insert(0, BlockKawin())
 try:
     from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel
 except ImportError as exc:
-    assert 'ae9fb297' in str(exc)
+    assert '06dc7b4a' in str(exc)
 else:
     raise AssertionError('missing fork accepted')
 """

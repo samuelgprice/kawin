@@ -1,6 +1,8 @@
 """Probe the pinned fork wheel without source trees or editable-install hooks."""
 
 from pathlib import Path
+import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -11,7 +13,7 @@ import zipfile
 PROJECT = Path(__file__).resolve().parents[1]
 FORK = PROJECT.parents[1]
 OUTPUT = PROJECT / ".verification"
-BASELINE = "ae9fb2971a9fd49132f71ddc883a5bd5406644b6"
+from verify import pinned_fork_commit
 
 
 def run(args, cwd, timeout=120):
@@ -26,14 +28,23 @@ def run(args, cwd, timeout=120):
 def main():
     """Build a Git snapshot and report import compatibility as a separate gate.
 
-    A failed fork import is recorded, not confused with a successful source
-    bridge test. Unexpected missing dependencies fail this diagnostic.
+    The pin comes from package metadata, not the frozen reference. An optional
+    installed-bridge solve compares its histories with the separately captured
+    baseline without adding either checkout to the import path. A failed fork
+    import is recorded separately; unexpected missing dependencies fail.
     """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bridge-target", type=Path)
+    parser.add_argument("--reference", type=Path)
+    args = parser.parse_args()
+    if bool(args.bridge_target) != bool(args.reference):
+        parser.error("--bridge-target and --reference must be supplied together")
+    dependency_commit = pinned_fork_commit()
     OUTPUT.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="fork-probe-", dir=OUTPUT) as scratch:
         scratch = Path(scratch)
         archive = scratch / "source.zip"
-        run(["git", "archive", "--format=zip", "-o", str(archive), BASELINE], FORK)
+        run(["git", "archive", "--format=zip", "-o", str(archive), dependency_commit], FORK)
         source = scratch / "source"
         with zipfile.ZipFile(archive) as z:
             z.extractall(source)
@@ -50,28 +61,68 @@ def main():
         # -I -S excludes PYTHONPATH, current-directory imports and .pth/editable
         # hooks. Add only the wheel and dependency directories, without site.main.
         code = """
-import json, site, sys, traceback
+import importlib.util, json, site, sys, traceback
 from pathlib import Path
-sys.path.insert(0, sys.argv[1])
+target = Path(sys.argv[1])
+sys.path.insert(0, str(target))
+if len(sys.argv) > 2:
+    sys.path.insert(0, sys.argv[2])
 sys.path.extend(site.getsitepackages())
+class NoResearch:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'examples', 'debugpy'}:
+            raise ModuleNotFoundError('Research/debugger module excluded', name=fullname)
+sys.meta_path.insert(0, NoResearch())
 import kawin
-assert Path(kawin.__file__).resolve() == Path(sys.argv[1]) / 'kawin/__init__.py'
+assert Path(kawin.__file__).resolve() == target / 'kawin/__init__.py'
 try:
     import kawin.diffusion
 except ModuleNotFoundError as exc:
     traceback.print_exc(file=sys.stderr)
-    print(json.dumps(dict(import_ok=False, missing_module=exc.name)))
+    report = dict(import_ok=False, missing_module=exc.name)
 else:
-    print(json.dumps(dict(import_ok=True, missing_module=None)))
+    report = dict(import_ok=True, missing_module=None)
+    if len(sys.argv) > 2:
+        import numpy as np
+        import moving_boundary
+        assert Path(moving_boundary.__file__).is_relative_to(Path(sys.argv[2]))
+        spec = importlib.util.spec_from_file_location('installed_example', sys.argv[3])
+        example = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(example)
+        model = example.build_model()
+        model.solve(0.5, minDtFrac=1e-14)
+        assert model.currentTime == 0.5
+        arrays = {'binary_phase_uniform__compositions': model.getCompositions()}
+        for name in ('data', 'interfaceData', 'concData', 'pData', 'qData'):
+            history = getattr(model, name)
+            n = history.N + 1
+            arrays[f'binary_phase_uniform__{name}_time'] = history._time[:n]
+            arrays[f'binary_phase_uniform__{name}_y'] = history._y[:n]
+        with np.load(sys.argv[4]) as reference:
+            keys = {k for k in reference.files if k.startswith('binary_phase_uniform__')}
+            assert keys == arrays.keys()
+            for key, value in arrays.items():
+                np.testing.assert_array_equal(value, reference[key], err_msg=key)
+        assert 'examples' not in sys.modules
+        report.update(binary_parity=True, arrays_compared=len(arrays),
+                      bridge_origin='<WHEEL_TARGET>/moving_boundary/__init__.py')
+print(json.dumps(report))
 """
+        worker_args = [str(target)]
+        if args.bridge_target is not None:
+            worker_args.extend([str(args.bridge_target.resolve()),
+                                str(PROJECT / "examples/binary_constant.py"),
+                                str(args.reference.resolve())])
         result = subprocess.run(
-            [sys.executable, "-I", "-S", "-c", code, str(target)],
+            [sys.executable, "-I", "-S", "-c", code, *worker_args],
             cwd=scratch, capture_output=True, text=True, timeout=60)
         (OUTPUT / "fork-import.log").write_text(
             result.stdout + result.stderr, encoding="utf-8")
         result.check_returncode()
         report = json.loads(result.stdout)
-        report.update(baseline_commit=BASELINE,
+        report.update(dependency_commit=dependency_commit,
+                      wheel_sha256=hashlib.sha256(wheel.read_bytes()).hexdigest(),
+                      kawin_origin="<FORK_WHEEL_TARGET>/kawin/__init__.py",
                       wheel_contains_examples=any(x.startswith("examples/") for x in members),
                       setup="pinned Git archive wheel; -I -S; no source/editable paths")
         (OUTPUT / "fork-probe.json").write_text(

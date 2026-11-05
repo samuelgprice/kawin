@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
 dependencies = [
-  "kawin @ git+https://github.com/samuelgprice/kawin.git@ae9fb2971a9fd49132f71ddc883a5bd5406644b6",
+  "kawin @ git+https://github.com/samuelgprice/kawin.git@06dc7b4ab56f67226ceabfde41ebf2690c088841",
 ]
 
 [tool.setuptools]

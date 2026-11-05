@@ -1,4 +1,34 @@
-# First extraction checkpoint — November 4, 2026
+# Extraction handoff
+
+## Current status
+
+- Numerical reference: ae9fb2971a9fd49132f71ddc883a5bd5406644b6; frozen source/fixtures unchanged.
+- Dependency fix: 06dc7b4ab56f67226ceabfde41ebf2690c088841 on fix/remove-debugger-imports,
+  based directly on the reference and fast-forwarded into local main.
+- Package metadata/runtime pin updated on refactor/package-extraction.
+- Installed fork imports and installed bridge/fork binary parity pass without
+  checkout paths; the nine-case reference capture still matches the fixture.
+- 76 focused fork tests passed in 26.33 seconds; 3 fake-provider tests passed
+  in 3.20 seconds. New public retry exhaustion tests cover both ternary families,
+  exception chaining, reduced timesteps and unchanged accepted state/histories.
+- Provider tests initially failed on an absent generated output directory in the
+  clean worktree; the affected test now uses pytest tmp_path. No production
+  numerical workaround or expected-result update was made.
+- Scope: removed production debugger imports/calls/reload. Existing exceptions,
+  fallback behavior and explicit thin-phase prompt policies remain. Debugger-only
+  legacy branches retain their previous batch no-op behavior; this patch does
+  not repair unrelated numerical or legacy exception-handling behavior.
+- Local main's untracked-file list was verified unchanged. Other research branches
+  were not automatically merged. AGENTS.md is untracked in both new worktrees.
+- Nothing pushed. The dependency commit is local; remote installation cannot be
+  claimed until it is made available remotely. Local Git-archive wheel testing
+  does not require publication or reinstalling the shared Conda environment.
+
+The following sections preserve the historical checkpoint and review record;
+statements about earlier uncommitted state or an open import gate describe those
+earlier runs, not the current state.
+
+## First extraction checkpoint — November 4, 2026
 
 ## State and reproducibility
 

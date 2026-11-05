@@ -9,6 +9,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
+import re
 import time
 import zipfile
 import xml.etree.ElementTree as ET
@@ -17,6 +19,18 @@ PROJECT = Path(__file__).resolve().parents[1]
 FORK = PROJECT.parents[1]
 OUTPUT = PROJECT / ".verification"
 EXPECTED = "ae9fb2971a9fd49132f71ddc883a5bd5406644b6"
+
+
+def pinned_fork_commit():
+    """Read the immutable dependency pin independently of the numerical baseline."""
+    project = tomllib.loads((PROJECT / "pyproject.toml").read_text(encoding="utf-8"))
+    requirements = [r for r in project["project"]["dependencies"] if r.startswith("kawin @ ")]
+    if len(requirements) != 1:
+        raise ValueError("Expected one explicit kawin dependency")
+    commit = requirements[0].rsplit("@", 1)[-1]
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("The fork dependency must use a full immutable commit")
+    return commit
 
 
 def run(label, args, *, cwd, env=None, timeout=600):
@@ -57,6 +71,8 @@ def finish(report, strict=False):
         print(f"OPEN GATE: installed-fork import fails ({installed['missing_module']})")
         return 2 if strict else 0
     print("PASS: installed-fork import")
+    if installed.get("binary_parity"):
+        print("PASS: installed bridge/fork binary parity against frozen reference")
     return 0
 
 
@@ -77,7 +93,7 @@ def inspect_wheel(directory):
         dist_info = metadata_paths[0].rsplit("/", 1)[0] + "/"
         assert all(n.startswith(("moving_boundary/", dist_info)) for n in members)
         assert not any("kawin/" in n or n.endswith(".npz") for n in members)
-        assert any(EXPECTED in req for req in metadata.get_all("Requires-Dist", []))
+        assert any(pinned_fork_commit() in req for req in metadata.get_all("Requires-Dist", []))
     return wheel, members
 
 
@@ -91,8 +107,6 @@ def main(argv=None):
     (FORK / ".pytest_tmp").mkdir(exist_ok=True)
     sha = run("commit", ["git", "rev-parse", "HEAD"], cwd=FORK, timeout=30).strip()
     check_baseline(FORK, EXPECTED)
-    run("installed-fork", [sys.executable, str(PROJECT / "tools/probe_fork.py")],
-        cwd=FORK)
     fixture = FORK / "kawin/tests/data/illingworth_substitutional_baseline.npz"
     assert fixture.is_file(), "Required open baseline fixture is missing"
     wheel_dir = Path(tempfile.mkdtemp(prefix="wheels-", dir=OUTPUT))
@@ -143,6 +157,11 @@ report = dict(
     with tempfile.TemporaryDirectory(prefix="moving-boundary-outside-") as outside:
         run("capture", [sys.executable, "-c", capture, str(target), str(FORK),
                         str(OUTPUT)], cwd=outside, env=env)
+        run("installed-fork", [
+            sys.executable, str(PROJECT / "tools/probe_fork.py"),
+            "--bridge-target", str(target),
+            "--reference", str(OUTPUT / "fresh-baseline.npz")],
+            cwd=outside, env=env)
         run("parity", [sys.executable, "-m", "pytest",
                        str(PROJECT / "tests"), "--import-mode=importlib",
                        "--basetemp", str(FORK / ".pytest_tmp/package_bridge"),
@@ -156,12 +175,13 @@ report = dict(
               for key in ("tests", "failures", "errors", "skipped")}
     if counts["tests"] == 0 or any(counts[k] for k in ("failures", "errors", "skipped")):
         raise RuntimeError(f"Incomplete bridge acceptance: {counts}")
-    report.update(commit=sha, baseline_commit=EXPECTED, wheel_members=members,
+    report.update(commit=sha, baseline_commit=EXPECTED,
+                  dependency_commit=pinned_fork_commit(), wheel_members=members,
                   wheel_sha256=hashlib.sha256(wheel.read_bytes()).hexdigest(),
                   fixture_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest(),
                   checks={"baseline_capture": "exact", "bridge_tests": counts,
                           "outside_example": "passed"},
-                  dependency_setup="isolated wheel target plus explicit fork PYTHONPATH")
+                  dependency_setup="frozen source reference plus separate installed bridge/fork probe")
     report["installed_fork"] = json.loads(
         (OUTPUT / "fork-probe.json").read_text(encoding="utf-8"))
     # Retain full diagnostic paths locally; durable evidence uses stable roles.
