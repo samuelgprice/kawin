@@ -1,8 +1,8 @@
 """Binary Illingworth facade requiring the documented research fork.
 
-The exported class is the original class, with unchanged signatures, docstrings,
-timestep policy, physical conventions and result types. Mesh and material inputs
-still come from that fork. Ternary facades are deferred.
+The exported class inherits the host API and overrides only the two planar bulk
+concentration solves, using an extracted tridiagonal kernel. Mesh, material,
+timestep and result services still come from the fork. Ternary APIs are deferred.
 """
 
 __all__ = ["MovingBoundaryIllingworthFD1DModel"]
@@ -17,7 +17,7 @@ def __getattr__(name):
     if name != "MovingBoundaryIllingworthFD1DModel":
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     try:
-        from kawin.diffusion.MovingBoundaryIllingworthFDM import (
+        from .binary import (
             MovingBoundaryIllingworthFD1DModel,
         )
     except ModuleNotFoundError as exc:
