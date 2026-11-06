@@ -27,27 +27,7 @@ cases pass an explicit policy and input() is prohibited before imports.
 C32 is a configured retry stress case. A small natural physical stop run has
 not been established.
 
-## Installed solving and research-owned generation
-
-The installed package with stock kawin alone supports solving with user-supplied
-analytic providers, saved surrogates, or cached tables supplied through the solver's
-provider interface. Those solves do not require the research checkout once their
-provider inputs are assembled using installed APIs.
-
-The approved pycalphad data-generation workflow still needs the research checkout.
-O05 reads examples/ternaryExamples/pycalphad_default_phase_adapter.py from detached
-06dc7b4 through the acceptance input loader; that adapter is not in the installed
-wheel. Anything importing from examples/ also needs the checkout. This includes
-the research builders/assembly scripts used by the acceptance suite, even when
-their resulting solver can operate entirely on analytic or cached provider data.
-The public thermodynamic engine is installed; the research generation adapter and
-example orchestration have not been extracted.
-
-surrogates.py, surrogate_artifacts.py, _diffusivity_domain.py and equilibrium.py
-were copied whole and unchanged in implementation, apart from required import
-relocations and documented whitespace-only edits. Their presence in the package
-does not complete the Stage 2 provider/surrogate separation. NEXT_SESSIONS.md Stage 2B scopes
-the adapter move; R01 remains a separate research-branch scientific issue.
+See [docs/NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for installed solving and research-owned generation.
 
 ## Local acceptance
 
@@ -93,7 +73,10 @@ Numeric reference outputs, TC inputs, private hashes, logs, build targets and
 environment state stay local/git-ignored. Committed acceptance.json contains only
 sanitized counts/provenance. docs/acceptance-deviations.json records per-run and
 per-quantity deviations, actual tolerances and bit identity, with TC metrics
-redacted to ignored output. See docs/BINARY_SLICE.md, LEDGERS.md and
+redacted to ignored output. Runs write only ignored local reports by default.
+Use `quick --record` or `full --record` to replace the compact committed report
+only after a complete passing public-tolerance gate; per-array detail stays local.
+See docs/BINARY_SLICE.md, LEDGERS.md and
 PUBLIC_KAWIN_MILESTONE.md for ownership, scope and method-level source mapping.
 
 Package identity/audience, publication, pushing, MAP outreach, upstream contribution

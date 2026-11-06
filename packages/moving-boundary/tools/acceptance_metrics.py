@@ -100,7 +100,8 @@ def summarize(cases):
             entry=dict(case=case,quantity=quantity,array=stats["worst_array"],
                 fraction=stats["max_tolerance_fraction"],unbounded=stats["tolerance_fraction_unbounded"],
                 error=stats["worst_error"],allowance=stats["worst_allowed_error"])
-            candidates.append(entry)
+            if entry["unbounded"] or (entry["fraction"] or 0.) > 0. or (entry["error"] or 0.) > 0.:
+                candidates.append(entry)
             if stats["within_10x_of_tolerance"]:
                 near.append(entry)
     worst=max(candidates,key=lambda e:(e["unbounded"],e["fraction"] or 0.)) if candidates else None
@@ -127,20 +128,25 @@ def public_cases(cases):
         if case in PRIVATE_CASES:
             result[case]=dict(private_metrics=True,reason="TC-derived numerical metrics retained only in ignored output")
             continue
-        exported={key:value for key,value in record.items() if key!="quantities"}
-        if "quantities" in record:
-            exported["quantities"]={}
-            for quantity,stats in record["quantities"].items():
-                compact={key:value for key,value in stats.items() if key!="arrays"}
-                tolerances=stats.get("tolerance")
-                if isinstance(tolerances,dict) and tolerances:
-                    unique=[]
-                    for settings in tolerances.values():
-                        if settings not in unique:
-                            unique.append(settings)
-                    if len(unique)==1:
-                        compact["tolerance"]=unique[0]
-                exported["quantities"][quantity]=compact
+        exported=dict(bit_identical=record.get("bit_identical"), quantities={})
+        for quantity,stats in record.get("quantities",{}).items():
+            if not stats.get("applicable"):
+                exported["quantities"][quantity]=dict(applicable=False)
+                continue
+            compact={key:stats.get(key) for key in ("max_absolute_deviation",
+                "max_relative_deviation","max_tolerance_fraction","tolerance")}
+            tolerances=stats.get("tolerance")
+            if isinstance(tolerances,dict) and tolerances:
+                unique=[]
+                for settings in tolerances.values():
+                    if settings not in unique:
+                        unique.append(settings)
+                compact["tolerance"]=unique[0] if len(unique)==1 else unique
+            for key in ("absolute_deviation_unbounded","relative_deviation_unbounded",
+                        "tolerance_fraction_unbounded","structural_error"):
+                if stats.get(key):
+                    compact[key]=stats[key]
+            exported["quantities"][quantity]=compact
         result[case]=exported
     return result
 
@@ -156,6 +162,8 @@ def print_summary(label, summary):
             text+=f" (worst: {worst['case']}/{worst['quantity']}; private numerical metrics in ignored output)"
         else:
             text+=f" (worst: {worst['case']}/{worst['quantity']}, error {worst['error']} vs allowance {worst['allowance']})"
+    else:
+        text+=" (worst: none)"
     print(text,flush=True)
     if safe["within_10x"]:
         print("Within 10x of tolerance: "+", ".join(item['case']+'/'+item['quantity'] for item in safe["within_10x"]),flush=True)

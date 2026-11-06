@@ -221,11 +221,12 @@ def compare(case, package, *, tolerance="exact", require=()):
     return results
 
 
-def report_deviations(action, cases, *, contracts, skipped, started, tolerance):
-    """Persist all local metrics and a path-free committed report with TC metrics redacted.
+def report_deviations(action, cases, *, contracts, skipped, started, tolerance, record=False, evidence=None):
+    """Persist local metrics; export a compact tracked report only when explicitly requested.
 
     Contract comparisons are included separately from the run table. No fixture
     is read or written here; compare() already measured the existing outputs.
+    Recording requires a passing, complete public quick/full gate.
     Only current-run files are eligible, preventing a failed case from silently
     reusing a previous successful measurement.
     """
@@ -246,18 +247,68 @@ def report_deviations(action, cases, *, contracts, skipped, started, tolerance):
     metrics.print_summary("Acceptance",summary)
     if contract_runs:
         metrics.print_summary("Contracts",contract_summary)
-    if tolerance == "public":
-        path=PROJECT / "docs/acceptance-deviations.json"
-        document=json.loads(path.read_text(encoding="utf-8")) if path.exists() else dict(schema=1,tiers={})
-        document.update(reference_commit="06dc7b4ab56f67226ceabfde41ebf2690c088841",host_version="0.5.0",
-            definitions=dict(relative_error="abs(actual-reference)/abs(reference); nonzero error at zero reference is unbounded (null plus flag)",
-                tolerance_fraction="max elementwise abs(error)/(scaled_atol + rtol*abs(reference))",
-                within_10x="tolerance fraction >= 0.1",bit_identical="same shape, dtype and bytes including signed zeros and NaN payloads",
-                privacy="TC-derived numerical metrics are retained only in ignored local output; case coverage is labelled"))
-        document["tiers"][action]=dict(cases=metrics.public_cases(runs),contracts=metrics.public_cases(contract_runs),
-            summary=metrics.public_summary(summary),contract_summary=metrics.public_summary(contract_summary),skipped=skipped)
-        path.write_text(json.dumps(document,indent=2,allow_nan=False)+"\n",encoding="utf-8")
+    if record:
+        record_deviations(action,local,tolerance=tolerance,evidence=evidence)
     return metrics.public_summary(summary)
+
+
+def write_report_json(path, document, *, compact_cases=False):
+    """Write JSON preserving existing line endings; compact exports use one line per case."""
+    newline = b"\r\n" if path.exists() and b"\r\n" in path.read_bytes() else b"\n"
+    if compact_cases:
+        # Keep the case table reviewable without repeating array-level metadata.
+        cases = document["cases"]
+        placeholder = "__CASE_TABLE__"
+        text = json.dumps(dict(document, cases=placeholder), indent=2, allow_nan=False)
+        rows = ["    " + json.dumps(case) + ": " + json.dumps(value, allow_nan=False)
+                for case,value in cases.items()]
+        text = text.replace(json.dumps(placeholder), "{\n" + ",\n".join(rows) + "\n  }")
+    else:
+        text = json.dumps(document, indent=2, allow_nan=False)
+    path.write_bytes((text + "\n").encode("utf-8").replace(b"\n", newline))
+
+
+def record_deviations(action, local, *, tolerance, evidence):
+    """Export only a complete passing public gate, retaining the exact TC redaction.
+
+    The latest recorded tier owns one compact case table (including contracts).
+    Normal runs never call this function. Historical zero-error worst entries in
+    acceptance.json are normalized without changing their recorded measurements.
+    """
+    assert action in {"quick","full"} and tolerance == "public"
+    assert not evidence["failures"] and evidence["pytest"]
+    assert not any(evidence["pytest"][key] for key in ("failures","errors","skipped"))
+    assert evidence["pytest"]["tests"] > 0
+    assert set(local["cases"]) == set(evidence["cases"]), "Incomplete run metrics"
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    assert set(local["contracts"]) == set(manifest["contracts"]), "Incomplete contract metrics"
+    assert all(record["passed"] for record in [*local["cases"].values(),*local["contracts"].values()])
+    metrics = metric_tools()
+    summary = metrics.public_summary(local["summary"])
+    contract_summary = metrics.public_summary(local["contract_summary"])
+    document = dict(schema=2, tier=action, reference_commit=manifest["reference_commit"], host_version="0.5.0",
+        definitions=dict(relative_error="abs(actual-reference)/abs(reference); nonzero error at zero reference is unbounded (null plus flag)",
+            tolerance_fraction="max elementwise abs(error)/(scaled_atol + rtol*abs(reference))",
+            within_10x="tolerance fraction >= 0.1",bit_identical="same shape, dtype and bytes including signed zeros and NaN payloads",
+            privacy="TC-derived numerical metrics are retained only in ignored local output; case coverage is labelled",
+            mixed_tolerances="Distinct applied tolerances are listed once per quantity; array assignments stay local"),
+        run_cases=list(local["cases"]),contract_cases=list(local["contracts"]),
+        summary=summary,contract_summary=contract_summary,skipped=local["skipped"],
+        cases=metrics.public_cases(dict(local["cases"],**local["contracts"])))
+    write_report_json(PROJECT / "docs/acceptance-deviations.json",document,compact_cases=True)
+    path = PROJECT / "docs/acceptance.json"
+    acceptance = json.loads(path.read_text(encoding="utf-8"))
+    for entry in acceptance.get("review_followup",{}).values():
+        if isinstance(entry,dict) and isinstance(entry.get("deviations"),dict):
+            worst = entry["deviations"].get("worst")
+            if worst and not worst.get("unbounded") and worst.get("fraction") == 0 and worst.get("error") == 0:
+                entry["deviations"]["worst"] = None
+    acceptance.setdefault("review_followup",{})[action] = dict(elapsed_seconds=evidence["elapsed_seconds"],
+        pytest=evidence["pytest"],deviations=summary)
+    public = acceptance.setdefault("public_kawin",{})
+    public[action] = dict(elapsed_seconds=evidence["elapsed_seconds"],pytest=evidence["pytest"],skipped=local["skipped"])
+    public[action+"_runs"] = len(local["cases"])
+    write_report_json(path,acceptance)
 
 
 def contract_case(case, state=None, *, reference=REFERENCE, tolerance="exact", require=()):
@@ -291,7 +342,7 @@ assert Path(kawin.__file__).resolve() == Path(sys.argv[2]) / 'kawin/__init__.py'
 import pytest
 raise SystemExit(pytest.main(sys.argv[3:]))
 """
-    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py"]
+    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py", "test_acceptance_reporting.py"]
     args = [sys.executable, "-I", "-S", "-c", code, state["target"], state["host"],
             *[str(PROJECT / "tests" / name) for name in tests],
             str(PROJECT / "tests/test_bridge.py") + "::test_namespace_import_is_lazy",
@@ -319,7 +370,11 @@ def main(argv=None):
     parser.add_argument("--require-family", nargs="*", default=["binary", "ternary", "three_phase"])
     parser.add_argument("--tolerance", choices=("exact", "public"), default="public")
     parser.add_argument("--tier", choices=("quick", "full"), default="quick")
+    parser.add_argument("--record", action="store_true",
+                        help="update committed reports after a passing complete public quick/full run")
     args = parser.parse_args(argv)
+    if args.record and (args.action not in {"quick","full"} or args.tolerance != "public" or args.cases is not None):
+        parser.error("--record requires a complete public-tolerance quick or full run")
     # The parent is invoked after required Conda activation. The cloned runtime
     # inherits those native DLL paths; prepend the clone's equivalent locations.
     if args.action != "capture":
@@ -424,7 +479,8 @@ def main(argv=None):
     if args.action in {"quick","full"}:
         summary["deviations"] = report_deviations(args.action,cases,
             contracts=manifest["contracts"] if tests else (),skipped=skipped,
-            started=started_timestamp,tolerance=args.tolerance)
+            started=started_timestamp,tolerance=args.tolerance,
+            record=args.record and not failures,evidence=summary)
     if state and state.get("repeatability_directory"):
         checks = [json.loads(path.read_text()) for path in Path(state["repeatability_directory"]).glob("*/comparison.json")]
         summary["unseeded_repeatability"] = {entry["case"]:entry for entry in checks}

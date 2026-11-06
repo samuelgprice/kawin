@@ -69,7 +69,7 @@ def test_quantity_retains_different_array_tolerances():
     compact=tool.public_cases({'C04':{'quantities':{'analytic_error':result}}})
     exported=compact['C04']['quantities']['analytic_error']
     assert 'arrays' not in exported
-    assert exported['tolerance']==result['tolerance']
+    assert exported['tolerance']==list(result['tolerance'].values())
     same=tool.quantity_metrics({'first':arrays['interface'],'second':arrays['interface']})
     compact=tool.public_cases({'C01':{'quantities':{'interface':same}}})
     assert compact['C01']['quantities']['interface']['tolerance']['atol']==.01
@@ -95,3 +95,30 @@ def test_overflow_is_explicit_and_serializable():
     result=metrics().array_metrics(np.array([-1e308]),np.array([1e308]),rtol=0.,atol=1e-12)
     assert result['absolute_deviation_unbounded'] and result['tolerance_fraction_unbounded']
     json.dumps(result,allow_nan=False)
+
+
+
+@pytest.mark.parametrize('actual', [0., -0.])
+def test_zero_error_has_no_worst_entry(actual, capsys):
+    """Identical arrays and signed-zero-only differences must both report worst: none."""
+    tool=metrics()
+    measured=tool.array_metrics(np.array([0.]),np.array([actual]),rtol=1e-10,atol=1e-12)
+    summary=tool.summarize({'C01':dict(passed=True,bit_identical=measured['bit_identical'],
+        quantities={'interface':tool.quantity_metrics({'interfaceData/values':measured})})})
+    assert summary['worst'] is None
+    tool.print_summary('Acceptance',summary)
+    assert '(worst: none)' in capsys.readouterr().out
+    assert tool.public_summary(summary)['worst'] is None
+
+
+def test_compact_export_has_one_case_identity_and_no_array_detail():
+    """Quantity exports retain the requested aggregate fields and distinct tolerances only."""
+    tool=metrics()
+    array=tool.array_metrics(np.array([1.]),np.array([1.]),rtol=1e-10,atol=1e-12)
+    record=dict(bit_identical=True,passed=True,case='C01',tolerance_mode='public',
+        quantities={'interface':tool.quantity_metrics({'private_array_name':array})})
+    exported=tool.public_cases({'C01':record})['C01']
+    assert set(exported)=={'bit_identical','quantities'}
+    assert set(exported['quantities']['interface'])=={
+        'max_absolute_deviation','max_relative_deviation','max_tolerance_fraction','tolerance'}
+    assert 'private_array_name' not in json.dumps(exported)

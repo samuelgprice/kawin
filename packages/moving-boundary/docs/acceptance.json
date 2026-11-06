@@ -78,9 +78,9 @@
     "separate_environment": true,
     "shared_environment_unchanged": true,
     "quick": {
-      "elapsed_seconds": 435.73499999998603,
+      "elapsed_seconds": 435.9219999999914,
       "pytest": {
-        "tests": 41,
+        "tests": 56,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -141,9 +141,9 @@
   },
   "review_followup": {
     "quick": {
-      "elapsed_seconds": 435.73499999998603,
+      "elapsed_seconds": 435.9219999999914,
       "pytest": {
-        "tests": 41,
+        "tests": 56,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -152,15 +152,7 @@
         "bit_identical_runs": 29,
         "within_tolerance_not_identical_runs": 0,
         "failed_runs": 0,
-        "worst": {
-          "case": "C01",
-          "quantity": "interface",
-          "array": "interfaceData/values",
-          "fraction": 0.0,
-          "unbounded": false,
-          "error": 0.0,
-          "allowance": 1.05e-10
-        },
+        "worst": null,
         "within_10x": []
       }
     },
@@ -176,15 +168,7 @@
         "bit_identical_runs": 38,
         "within_tolerance_not_identical_runs": 0,
         "failed_runs": 0,
-        "worst": {
-          "case": "C01",
-          "quantity": "interface",
-          "array": "interfaceData/values",
-          "fraction": 0.0,
-          "unbounded": false,
-          "error": 0.0,
-          "allowance": 1.05e-10
-        },
+        "worst": null,
         "within_10x": []
       }
     },

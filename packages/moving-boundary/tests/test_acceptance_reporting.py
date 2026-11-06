@@ -1,0 +1,93 @@
+"""CLI reporting contracts with isolated outputs and no expensive solver jobs."""
+import importlib.util
+import json
+from pathlib import Path
+import sys
+import numpy as np
+import pytest
+
+
+def isolated_runner(tmp_path, monkeypatch, *, failure=False):
+    """Exercise real comparison/report orchestration with tiny generated test arrays."""
+    project=Path(__file__).parents[1]
+    spec=importlib.util.spec_from_file_location('reporting_runner',project/'tools/acceptance.py')
+    tool=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    metrics=tool.metric_tools()
+    monkeypatch.setattr(tool,'metric_tools',lambda:metrics)
+    output=tmp_path/'.verification/acceptance'
+    (tmp_path/'docs').mkdir()
+    (tmp_path/'.verification').mkdir()
+    (tmp_path/'.verification/public-environment.json').write_text(json.dumps({'python':sys.executable}))
+    acceptance={'review_followup':{'full':{'deviations':{'worst':dict(fraction=0.,error=0.,unbounded=False)}}}}
+    (tmp_path/'docs/acceptance.json').write_text(json.dumps(acceptance))
+    (tmp_path/'docs/acceptance-deviations.json').write_text('{"previous": true}')
+    manifest=dict(reference_commit='06dc7b4ab56f67226ceabfde41ebf2690c088841',quick=['C01'],
+        contracts=[],full_drift=[],public_tolerances={'profiles':dict(rtol=1e-10,atol=1e-12)})
+    (tmp_path/'manifest.json').write_text(json.dumps(manifest))
+    monkeypatch.setattr(tool,'PROJECT',tmp_path)
+    monkeypatch.setattr(tool,'OUTPUT',output)
+    monkeypatch.setattr(tool,'MANIFEST',tmp_path/'manifest.json')
+    monkeypatch.setattr(tool,'validate_reference',lambda reference:manifest)
+    monkeypatch.setattr(tool,'setup_targets',lambda:dict(target='test-target',host='test-host'))
+    monkeypatch.setattr(tool,'check_repeatability',lambda *args,**kwargs:None)
+    monkeypatch.setattr(tool,'run_pytest',lambda *args,**kwargs:dict(tests=1,failures=0,errors=0,skipped=0))
+    def worker(case, role, **kwargs):
+        if failure and case=='C01':
+            raise RuntimeError('deliberate test failure')
+        report=dict(status='PASS')
+        for owner in ('reference','package'):
+            folder=output/owner
+            folder.mkdir(exist_ok=True)
+            (folder/(case+'.json')).write_text(json.dumps(report))
+            np.savez(folder/(case+'.npz'),sample=np.array([0.,1.]))
+        return report
+    monkeypatch.setattr(tool,'worker',worker)
+    return tool
+
+
+@pytest.mark.parametrize('action', ['quick','full'])
+@pytest.mark.parametrize('failure', [False,True])
+def test_cli_without_record_leaves_tracked_files_unchanged(tmp_path, monkeypatch, action, failure):
+    """Both passing and failing default gates leave every pre-existing project file intact."""
+    tool=isolated_runner(tmp_path,monkeypatch,failure=failure)
+    tracked={path:path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+    assert tool.main([action])==int(failure)
+    assert {path:path.read_bytes() for path in tracked}==tracked
+    assert (tool.OUTPUT/(action+'-deviations.json')).exists()
+
+
+@pytest.mark.parametrize('action', ['quick','full'])
+def test_record_requires_passing_gate_and_normalizes_zero_worst(tmp_path, monkeypatch, action):
+    """Explicit recording uses fresh public metrics, with one record per case and null worst."""
+    tool=isolated_runner(tmp_path,monkeypatch)
+    assert tool.main([action,'--record'])==0
+    document=json.loads((tmp_path/'docs/acceptance-deviations.json').read_text())
+    assert document['tier']==action and set(document['cases'])=={'C01','C32','LEGACY'}
+    assert document['summary']['worst'] is None
+    encoded=json.dumps(document)
+    assert str(tmp_path) not in encoded and 'arrays' not in encoded
+    evidence=json.loads((tmp_path/'docs/acceptance.json').read_text())
+    assert all(entry['deviations']['worst'] is None for entry in evidence['review_followup'].values())
+
+
+def test_failed_record_run_cannot_replace_committed_report(tmp_path, monkeypatch):
+    """A failure before completion must preserve the previous committed evidence bytes."""
+    tool=isolated_runner(tmp_path,monkeypatch,failure=True)
+    paths=list((tmp_path/'docs').glob('*.json'))
+    before={path:path.read_bytes() for path in paths}
+    assert tool.main(['quick','--record'])==1
+    assert {path:path.read_bytes() for path in paths}==before
+
+
+@pytest.mark.parametrize('argv', [
+    ['capture','--record'],['setup','--record'],
+    ['quick','--tolerance','exact','--record'],['full','--cases','C01','--record'],
+    ['quick','--cases','--record']])
+def test_record_rejects_non_public_or_partial_runs(tmp_path, monkeypatch, argv):
+    """Invalid recording requests fail before environment setup or any report write."""
+    tool=isolated_runner(tmp_path,monkeypatch)
+    with pytest.raises(SystemExit) as error:
+        tool.main(argv)
+    assert error.value.code==2
+    assert not tool.OUTPUT.exists()
