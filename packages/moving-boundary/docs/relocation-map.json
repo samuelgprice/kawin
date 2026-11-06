@@ -1,0 +1,44 @@
+{
+  "solvers/binary.py": {
+    "source_path": "kawin/diffusion/MovingBoundaryIllingworthFDM.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "module placement/imports only",
+    "numerical_ast": "identical"
+  },
+  "numerics/binary.py": {
+    "source_path": "kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "module placement/imports only",
+    "numerical_ast": "identical"
+  },
+  "mesh/FDM1D.py": {
+    "source_path": "kawin/diffusion/mesh/FDM1D.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "module placement/imports only",
+    "numerical_ast": "identical"
+  },
+  "mesh/TransformedGrids.py": {
+    "source_path": "kawin/diffusion/mesh/TransformedGrids.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "module placement/imports only",
+    "numerical_ast": "identical"
+  },
+  "_illingworth_interstitials.py": {
+    "source_path": "kawin/diffusion/_illingworth_interstitials.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "module placement/imports only",
+    "numerical_ast": "identical"
+  },
+  "shared.py": {
+    "source_path": "kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "symbols": [
+      "_BULK_DIFFUSIVITY_IMPLICIT",
+      "_BULK_DIFFUSIVITY_LAGGED",
+      "_BULK_DIFFUSIVITY_PHASE_UNIFORM",
+      "_SUPPORTED_BULK_DIFFUSIVITY_MODES",
+      "_coerce_bulk_diffusivity_mode"
+    ],
+    "changes": "shared helper placement; definitions unchanged"
+  }
+}

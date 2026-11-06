@@ -24,8 +24,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 Local extraction provenance (November 5, 2026)
-Two planar binary bulk methods and the scalar Thomas kernel are copied from
-samuelgprice/kawin at ae9fb2971a9fd49132f71ddc883a5bd5406644b6.
+Complete local Illingworth/numerical/mesh modules are relocated from
+samuelgprice/kawin at 06dc7b4ab56f67226ceabfde41ebf2690c088841.
 See docs/BINARY_SLICE.md and source module headers for function-level mappings.
 The binary scheme identifies MAP C++ provenance. The MIT notice above is retained
 for upstream attribution and does not resolve rights to local/MAP-derived code.

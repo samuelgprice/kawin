@@ -1,8 +1,8 @@
 Development checkpoint only; no blanket redistribution license is asserted.
 
-Two binary bulk-concentration methods and the scalar Thomas kernel are copied
-from the research fork; the remaining solver services stay fork-owned. The
-binary scheme describes a port of MAP C++ code. Applicable permissions and
+Local Illingworth solver and numerical/mesh helper modules are copied from the
+research fork; host services remain dependency-owned. The binary scheme
+describes a port of MAP C++ code. Applicable permissions and
 ownership of local extensions must be resolved before a public release. This file is a statement
 of unresolved licensing status, not a new grant covering the fork.
 

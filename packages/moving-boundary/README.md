@@ -4,10 +4,11 @@ The installable development package currently exposes one binary solver:
 
     from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel
 
-It is an intermediate subclass with package-owned planar bulk solves and a scalar
-Thomas kernel. Remaining solver/driver, mesh, recording and thermodynamic services
-come from the research fork. Whole-module relocation is the authorized next
-implementation, not continued method-by-method inheritance. See
+The complete binary solver, binary kernel/profile helpers, local finite-difference
+mesh additions, transformed grids and interstitial helpers are package-owned.
+The class derives directly from host DiffusionModel; it no longer inherits the
+fork's Illingworth class. Host loop, mesh bases, recording and thermo remain
+dependency-owned. Ternary solver modules are the next mechanical relocations. See
 docs/BINARY_SLICE.md for source mappings and docs/NEXT_SESSIONS.md for the target.
 
 The temporary dependency is samuelgprice/kawin at

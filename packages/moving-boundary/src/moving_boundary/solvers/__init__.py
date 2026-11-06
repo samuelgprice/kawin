@@ -1,32 +1,17 @@
-"""Binary Illingworth facade requiring the documented research fork.
+"""Relocated Illingworth solvers; host loop and mesh bases still come from kawin."""
+import importlib
 
-The exported class inherits the host API and overrides only the two planar bulk
-concentration solves, using an extracted tridiagonal kernel. Mesh, material,
-timestep and result services still come from the fork. Ternary APIs are deferred.
-"""
-
-__all__ = ["MovingBoundaryIllingworthFD1DModel"]
+__all__ = ['MovingBoundaryIllingworthFD1DModel']
 
 
 def __getattr__(name):
-    """Resolve the binary class lazily, with a clear missing-fork error.
-
-    Importing the legacy submodule also executes kawin.diffusion initialization;
-    this bridge does not yet isolate its transitive backend dependencies.
-    """
-    if name != "MovingBoundaryIllingworthFD1DModel":
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    """Load the package-owned solver lazily and report a missing required host."""
+    modules = {'MovingBoundaryIllingworthFD1DModel': 'binary'}
+    if name not in modules:
+        raise AttributeError(name)
     try:
-        from .binary import (
-            MovingBoundaryIllingworthFD1DModel,
-        )
+        return getattr(importlib.import_module('.' + modules[name], __name__), name)
     except ModuleNotFoundError as exc:
-        if exc.name in {"kawin", "kawin.diffusion",
-                        "kawin.diffusion.MovingBoundaryIllingworthFDM"}:
-            raise ImportError(
-                "This development bridge requires samuelgprice/kawin at "
-                "5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e; public kawin "
-                "does not provide this solver. See the package README."
-            ) from exc
+        if exc.name == 'kawin' or (exc.name and exc.name.startswith('kawin.')):
+            raise ImportError('This checkpoint requires the pinned kawin host 5f4ad574; see README.') from exc
         raise
-    return MovingBoundaryIllingworthFD1DModel

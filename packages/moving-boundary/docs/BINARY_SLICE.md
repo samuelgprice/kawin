@@ -1,85 +1,47 @@
-# First binary numerical extraction
+# Complete Illingworth module relocation
 
-November 5, 2026. Numerical reference remains
-ae9fb2971a9fd49132f71ddc883a5bd5406644b6; dependency remains
-06dc7b4ab56f67226ceabfde41ebf2690c088841. No host source or fixture is changed.
+The binary solver is package-owned and directly derives from the host
+DiffusionModel. It no longer inherits the fork's Illingworth class. Complete local
+modules replace the earlier two-method subclass checkpoint. The host model/solver
+loop, mesh bases, MeshData and thermodynamic engine remain dependency-owned.
 
-## Dependency review and boundary
+Every entry below comes from samuelgprice/kawin at
+06dc7b4ab56f67226ceabfde41ebf2690c088841. The older numerical fixture remains
+ae9fb29, and the temporary installed host pin is the test-only cleanup 5f4ad57.
+The detached 06dc7b4 source stays clean. Source files are copied mechanically;
+imports/module placement change, preserving arithmetic, docstrings, exception and
+boundary conventions, temperature-array hours and supported composition bases.
+Copied EOF whitespace is trimmed where needed for Git's whitespace check;
+no numerical AST or surrounding source formatting is changed.
 
-This is the retained intermediate checkpoint. The accepted next strategy is
-whole-module relocation, with shared helpers at package level and no inheritance
-from the fork's Illingworth class. See NEXT_SESSIONS.md. Further relocation waits
-for approval and implementation of the main-reference acceptance suite.
-
-The original binary class imports DiffusionModel/GenericModel, interstitial
-helpers, diffusivity-mode helpers from the ternary module, CartesianFD1D and
-boundary classes, four transformed-profile/kernel helpers, explicitEulerIterator,
-and NumPy. Importing its submodule executes kawin.diffusion initialization.
-The public 0.5.0 host assessment still favors retaining the fork host.
-
-This slice needs only NumPy, the extracted scalar kernel, and inherited
-fields: _u_grid/_v_grid, _R and interfaceCompositions. The package class subclasses
-the pinned fork class and overrides precisely the two bulk-concentration methods.
-Inherited Picard iteration and phase-uniform/lagged paths dispatch to those
-overrides naturally. No import monkeypatch, global replacement or driver copy
-is used. NumPy is declared directly; optional Numba behavior is preserved.
-The exported class now has its own identity and module; it is no longer
-an alias, although its constructor signature and remaining behavior are inherited.
-Previously pickled host-class objects remain host-class objects; no migration or
-restart guarantee is introduced here.
-
-Interface balance, retry/rollback, derivative/step round trips, timestep limits,
-transformed grid validation, x/u conversions, temperature inputs, recording,
-physical-profile reconstruction, inventories and results remain fork-owned.
-No gas constant is used in the extracted slice; inherited conventions, including
-8.3145 where relevant and temperature-array times in hours, are retained.
-
-## Function-level source and ownership mapping
-
-Source repository: https://github.com/samuelgprice/kawin
-Source commit for every copied function: ae9fb2971a9fd49132f71ddc883a5bd5406644b6.
-
-| Package path / functions | Original path / functions | Changes |
+| Package path | Source path / extraction | Changes |
 |---|---|---|
-| solvers/binary.py, MovingBoundaryIllingworthFD1DModel._new_concentration_left_planar and _new_concentration_right_planar | kawin/diffusion/MovingBoundaryIllingworthFDM.py, same class/method names | Bodies and numerical docstrings unchanged; inherited host with package-local kernel import |
-| numerics/tridiagonal.py, _solve_illingworth_tridiagonal_python, _solve_illingworth_tridiagonal_numba, solve_illingworth_tridiagonal | kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py, same function names | Bodies unchanged; compiled helper gains a docstring; optional Numba import preserved |
-| tools/binary_cases.py, run_cases | kawin/tests/illingworth_baseline_cases.py, _binary_model, _BinaryThermodynamics and _collect | Open inputs adapted to injected class and direct history capture; no expected outputs copied |
-| tools/binary_cases.py, run_bulk_cases | New probes | Nonuniform grids, three interface directions, two diffusivity forms, two phase sides |
+| solvers/binary.py | kawin/diffusion/MovingBoundaryIllingworthFDM.py | module placement/imports only |
+| numerics/binary.py | kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py | module placement/imports only |
+| mesh/FDM1D.py | kawin/diffusion/mesh/FDM1D.py | module placement/imports only |
+| mesh/TransformedGrids.py | kawin/diffusion/mesh/TransformedGrids.py | module placement/imports only |
+| _illingworth_interstitials.py | kawin/diffusion/_illingworth_interstitials.py | module placement/imports only |
+| shared.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | shared helper placement; definitions unchanged |
 
-The fork explicitly identifies the scheme as a port of Illingworth and Golosnoy's
-MAP C++ implementation. Existing upstream MIT text remains verbatim in NOTICE;
-it does not establish permission for all local or MAP-derived material. LICENSE
-continues to withhold a blanket grant. No reference C++, PDFs, databases, digitized
-data or surrogate artifacts are included in the wheel. No clearance/outreach is
-claimed, and nothing is published.
+The scalar kernel's old numerics/tridiagonal.py path now re-exports from the whole
+binary helper module, avoiding two independent copies. Shared private helpers
+belong in shared.py instead of being imported from a ternary solver. See
+relocation-map.json for machine-readable source mapping.
 
-The frozen fork remains the numerical authority during this comparison slice.
-Any scientific correction must have one authoritative research commit and an
-explicit recorded port; do not evolve two implementations independently. The
-package maintainer role owns this temporary copy and checks it against the
-recorded source before accepting ports; a named release/update owner is unresolved.
+The mandatory quick gate runs every approved short case, independent analytic
+errors, real pycalphad sampling, old binary fixtures/bulk probes and package
+pytest contracts against privately installed wheels in separate processes.
+Each family under relocation must originate in the installed package. Families
+not yet moved are explicitly reported as host-backed intermediates. Per-stage
+exact parity and counts are in acceptance.json; full is rerun at the public gate.
 
-## Verification contract
+Binary/two-phase unequal molar volumes remain unsupported; three-phase explicit
+volume semantics are retained. C32 tests configured terminal-retry stop under
+continue without a fake solve callback. No topology-transition support is added.
 
-tools/verify.py --require-installed-fork retains the nine-case frozen-fixture
-capture and runs the new class from a privately installed wheel against a privately
-installed dependency wheel built from the exact pinned Git object. The installed
-worker uses -I -S, excludes source/editable paths and research/debugger imports,
-and asserts the solver and kernel originate in the wheel target.
-
-All 33 binary history arrays (three modes, eleven arrays each) must match the
-committed fixture exactly. Twelve additional bulk outputs must match a separate
-frozen-source process exactly: advancing, stationary and receding interface,
-scalar or face-valued diffusivity, left and right phase, nonuniform grids.
-The probes establish extraction fidelity, not independent physical correctness.
-
-Kernel tests compare with an independent dense solve, preserve input arrays and
-existing length/zero-pivot errors, compare accelerated/fallback outputs, and
-exercise import without kawin or Numba in a fresh process. This blocked-import
-test is not a clean dependency-free environment claim. Full fallback solver parity,
-the Stage 0 matrix, upstream compatibility, ternary extraction, licensed provider
-workflows and scientific convergence studies remain open.
-
-Each verification subprocess is bounded (30-600 seconds); normal total runtime
-is expected under five minutes. Shared packages are neither upgraded nor installed.
-Durable measured results are in verification.json; full logs stay in .verification/.
+The fork identifies the binary scheme as a port of the authors' MAP C++ code.
+Upstream MIT text remains verbatim in NOTICE; local/MAP rights remain unresolved.
+No C++ reference source, PDFs, digitized data or TC datasets enter this wheel.
+Scientific fixes must have one authoritative source and an explicitly recorded
+port; the frozen reference is not developed independently to hide discrepancies.
+Package identity/audience, publication and licensing outreach remain user decisions.

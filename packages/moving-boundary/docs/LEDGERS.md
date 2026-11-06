@@ -49,7 +49,7 @@ Git addition status establishes repository history, not independent authorship.
 | Constants.py | Upstream-derived gas constant changed from 8.314 to 8.3145 relative to ancestor; preserve convention |
 | thermo/Thermodynamics.py, MultiTherm.py, Surrogate.py, Mobility.py | Upstream-derived local modifications; metadata/diagnostics/provider differences remain. Binary analytic case does not validate thermodynamic equivalence |
 | thermo/LocalEquilibrium.py | Differs against cached upstream but unchanged relative to common ancestor; do not mislabel subsequent upstream development as local authorship |
-| diffusion/MovingBoundaryIllingworth*FDM.py | Local additions, absent from cached upstream; binary class explicitly describes a port of authors' MAP C++ code. Two binary bulk methods copied; remaining solver services inherited (BINARY_SLICE.md) |
+| diffusion/MovingBoundaryIllingworth*FDM.py | Local additions, absent from cached upstream; binary class explicitly describes a port of authors' MAP C++ code. Complete binary module and immediate local helpers relocated; see BINARY_SLICE.md and relocation-map.json |
 | diffusion/mesh/FDM1D.py (CartesianFD1D), TransformedGrids.py, MovingBoundaryIllingworth*FD1D.py | Local additions absent upstream; scalar tridiagonal kernel extracted; transformed grids and block kernel remain fork-owned |
 | diffusion/_illingworth_interstitials.py, _spectral_validation.py, MovingBoundaryEquilibrium.py | Local helpers retained transitively, not extracted |
 | diffusion/MovingBoundarySurrogates.py, SurrogateArtifacts.py, SurrogateDiagnostics.py and related benchmark/domain modules | Local additions; provider/surrogate stage deferred |
