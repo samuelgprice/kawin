@@ -37,7 +37,7 @@ def run(label, args, *, cwd, env=None, timeout=600):
     """Run a batch subprocess with a wall-time limit and retain its full log."""
     started = time.monotonic()
     result = subprocess.run(args, cwd=cwd, env=env, capture_output=True,
-                            text=True, timeout=timeout)
+                            text=True, timeout=timeout, stdin=subprocess.DEVNULL)
     (OUTPUT / f"{label}.log").write_text(
         result.stdout + result.stderr, encoding="utf-8")
     print(f"{label}: exit={result.returncode}, {time.monotonic()-started:.2f}s",
@@ -125,6 +125,10 @@ def main(argv=None):
     capture = """
 import hashlib, importlib.metadata as md, json, os, platform, sys
 from pathlib import Path
+import runpy
+project = Path(sys.argv[4])
+safety = runpy.run_path(str(project / 'tools/batch_safety.py'))
+safety['forbid_input']()
 import numpy as np
 import kawin, moving_boundary
 from kawin.tests.illingworth_baseline_cases import BASELINE_PATH, run_all_cases
@@ -134,7 +138,8 @@ target, fork, out, project = map(Path, sys.argv[1:])
 assert Path(moving_boundary.__file__).is_relative_to(target)
 assert Path(kawin.__file__).resolve() == fork / 'kawin/__init__.py'
 np.testing.assert_allclose(np.linalg.solve([[2.,1.],[1.,3.]], [1.,2.]), [0.2,0.6], rtol=0, atol=1e-15)
-fresh = run_all_cases()
+safe_cases = safety['load_case_module'](fork / 'kawin/tests/illingworth_baseline_cases.py', 'batch_baseline')
+fresh = safe_cases.run_all_cases()
 with np.load(BASELINE_PATH) as stored:
     assert set(stored.files) == set(fresh)
     for key, value in fresh.items():

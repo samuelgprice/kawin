@@ -64,9 +64,11 @@ def main():
         code = """
 import importlib.util, json, site, sys, traceback
 from pathlib import Path
+import runpy
+runpy.run_path(sys.argv[-1])['forbid_input']()
 target = Path(sys.argv[1])
 sys.path.insert(0, str(target))
-if len(sys.argv) > 2:
+if len(sys.argv) > 3:
     sys.path.insert(0, sys.argv[2])
 sys.path.extend(site.getsitepackages())
 class NoResearch:
@@ -83,7 +85,7 @@ except ModuleNotFoundError as exc:
     report = dict(import_ok=False, missing_module=exc.name)
 else:
     report = dict(import_ok=True, missing_module=None)
-    if len(sys.argv) > 2:
+    if len(sys.argv) > 3:
         import numpy as np
         import moving_boundary
         assert Path(moving_boundary.__file__).is_relative_to(Path(sys.argv[2]))
@@ -121,9 +123,10 @@ print(json.dumps(report))
                                 str(PROJECT / "examples/binary_constant.py"),
                                 str(args.reference.resolve()),
                                 str(PROJECT / "tools/binary_cases.py")])
+        worker_args.append(str(PROJECT / 'tools/batch_safety.py'))
         result = subprocess.run(
             [sys.executable, "-I", "-S", "-c", code, *worker_args],
-            cwd=scratch, capture_output=True, text=True, timeout=60)
+            cwd=scratch, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
         (OUTPUT / "fork-import.log").write_text(
             result.stdout + result.stderr, encoding="utf-8")
         result.check_returncode()

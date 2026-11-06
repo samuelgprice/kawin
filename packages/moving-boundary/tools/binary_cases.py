@@ -73,6 +73,8 @@ def run_bulk_cases(model_class):
 
 if __name__ == "__main__":
     import sys
+    import runpy
+    runpy.run_path(str(Path(__file__).with_name('batch_safety.py')))['forbid_input']()
     if sys.argv[1] == "legacy":
         from kawin.diffusion.MovingBoundaryIllingworthFDM import MovingBoundaryIllingworthFD1DModel as Model
     else:
