@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from moving_boundary.compatibility import DiffusionModel
-from moving_boundary._illingworth_interstitials import (
+from moving_boundary.solvers.illingworth._interstitials import (
     composition_bound_violation,
     full_mole_fractions,
     has_interstitials,
@@ -16,7 +16,7 @@ from moving_boundary._illingworth_interstitials import (
     validate_interstitial_element_order,
 )
 from moving_boundary.equilibrium import CallableTernaryInterfaceEquilibrium
-from moving_boundary.shared import (
+from moving_boundary.solvers.illingworth.shared import (
     _ArrayHistory,
     _ScalarHistory,
     _BULK_DIFFUSIVITY_IMPLICIT,
@@ -33,7 +33,7 @@ from moving_boundary.shared import (
     _validate_ternary_diffusivity_stack,
 )
 from moving_boundary.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D
-from moving_boundary.numerics.ternary import (
+from moving_boundary.solvers.illingworth.numerics.ternary import (
     # Compiled single-RHS block elimination (with the same validation and
     # pivot-failure fallbacks as the Python solver); the two-phase model uses it too.
     _solve_illingworth_block_tridiagonal_two_phase as solve_illingworth_block_tridiagonal,

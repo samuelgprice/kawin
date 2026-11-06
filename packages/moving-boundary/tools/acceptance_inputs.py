@@ -12,14 +12,14 @@ MODELS = {
     "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel": "three_phase",
 }
 MODULES = {
-    "kawin.diffusion.MovingBoundaryIllingworthFDM": "moving_boundary.solvers.binary",
-    "kawin.diffusion.MovingBoundaryIllingworthTernaryFDM": "moving_boundary.solvers.ternary",
-    "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM": "moving_boundary.solvers.three_phase",
-    "kawin.diffusion.mesh.MovingBoundaryIllingworthFD1D": "moving_boundary.numerics.binary",
-    "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D": "moving_boundary.numerics.ternary",
+    "kawin.diffusion.MovingBoundaryIllingworthFDM": "moving_boundary.solvers.illingworth.binary",
+    "kawin.diffusion.MovingBoundaryIllingworthTernaryFDM": "moving_boundary.solvers.illingworth.ternary",
+    "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM": "moving_boundary.solvers.illingworth.three_phase",
+    "kawin.diffusion.mesh.MovingBoundaryIllingworthFD1D": "moving_boundary.solvers.illingworth.numerics.binary",
+    "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D": "moving_boundary.solvers.illingworth.numerics.ternary",
     "kawin.diffusion.mesh.TransformedGrids": "moving_boundary.mesh.TransformedGrids",
     "kawin.diffusion.MovingBoundaryEquilibrium": "moving_boundary.equilibrium",
-    "kawin.diffusion._illingworth_interstitials": "moving_boundary._illingworth_interstitials",
+    "kawin.diffusion._illingworth_interstitials": "moving_boundary.solvers.illingworth._interstitials",
     "kawin.diffusion.MovingBoundarySurrogates": "moving_boundary.surrogates",
     "kawin.diffusion.SurrogateArtifacts": "moving_boundary.surrogate_artifacts",
 }
@@ -96,7 +96,7 @@ class CaseInputs:
             if module in MODULES:
                 choices.append(MODULES[module])
             if module in {"kawin.diffusion", "kawin.diffusion.mesh"}:
-                choices.extend(["moving_boundary", "moving_boundary.mesh", "moving_boundary.shared"])
+                choices.extend(["moving_boundary", "moving_boundary.mesh", "moving_boundary.solvers.illingworth.shared"])
             for choice in choices:
                 try:
                     value = importlib.import_module(choice)

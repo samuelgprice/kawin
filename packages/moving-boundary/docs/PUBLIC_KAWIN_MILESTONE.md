@@ -1,7 +1,7 @@
 # Stage 1B: stock kawin 0.5.0
 
 Status: implemented and acceptance passed after all three exact module relocations.
-Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 550.55 s.
+Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 578.02 s.
 
 Stage 2B adapter relocation is complete for O05 restricted-phase generation and O08 default-phase endpoint/equilibrium sampling; these need no research checkout. See [NEXT_SESSIONS.md](NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for remaining research builders/assembly, the open broader Stage 2 split and research-branch R01.
 

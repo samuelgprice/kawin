@@ -1,4 +1,10 @@
-"""Relocated Illingworth solvers; host loop and mesh bases still come from kawin."""
+"""Package-owned moving-boundary solvers; host loop and mesh bases still come from kawin.
+
+Each solver family lives in its own subpackage (currently only ``illingworth``),
+so other method families can be added beside it without renaming modules. The
+public classes are re-exported here lazily; importing this namespace does not
+load kawin.
+"""
 import importlib
 
 __all__ = ['MovingBoundaryIllingworthFD1DModel', 'MovingBoundaryIllingworthTernaryFD1DModel', 'MovingBoundaryIllingworthTernaryThreePhaseFD1DModel']
@@ -6,7 +12,7 @@ __all__ = ['MovingBoundaryIllingworthFD1DModel', 'MovingBoundaryIllingworthTerna
 
 def __getattr__(name):
     """Load the package-owned solver lazily and report a missing required host."""
-    modules = {'MovingBoundaryIllingworthFD1DModel': 'binary', 'MovingBoundaryIllingworthTernaryFD1DModel': 'ternary', 'MovingBoundaryIllingworthTernaryThreePhaseFD1DModel': 'three_phase'}
+    modules = {'MovingBoundaryIllingworthFD1DModel': 'illingworth.binary', 'MovingBoundaryIllingworthTernaryFD1DModel': 'illingworth.ternary', 'MovingBoundaryIllingworthTernaryThreePhaseFD1DModel': 'illingworth.three_phase'}
     if name not in modules:
         raise AttributeError(name)
     try:

@@ -3,7 +3,7 @@
 All three Illingworth solver classes and complete required local modules now live
 in moving_boundary. They derive from public host DiffusionModel through bounded
 package adapters, never from fork Illingworth classes. Shared private helpers live
-at package level in shared.py. Host framework/engine ownership is described in
+in solvers/illingworth/shared.py. Host framework/engine ownership is described in
 PUBLIC_KAWIN_MILESTONE.md.
 
 Source authority for every row: samuelgprice/kawin
@@ -14,24 +14,24 @@ fixture remains a separate oracle. No frozen source is developed or refreshed.
 
 | Package path | Source path / extraction | Changes |
 |---|---|---|
-| solvers/binary.py | kawin/diffusion/MovingBoundaryIllingworthFDM.py | module placement/imports only |
-| numerics/binary.py | kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py | module placement/imports only |
+| solvers/illingworth/binary.py | kawin/diffusion/MovingBoundaryIllingworthFDM.py | module placement/imports only |
+| solvers/illingworth/numerics/binary.py | kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py | module placement/imports only |
 | mesh/FDM1D.py | kawin/diffusion/mesh/FDM1D.py | module placement/imports only |
 | mesh/TransformedGrids.py | kawin/diffusion/mesh/TransformedGrids.py | module placement/imports only |
-| _illingworth_interstitials.py | kawin/diffusion/_illingworth_interstitials.py | module placement/imports only |
-| shared.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | complete pre-class helper section; imports only |
-| numerics/ternary.py | kawin/diffusion/mesh/MovingBoundaryIllingworthTernaryFD1D.py | module placement/imports only |
+| solvers/illingworth/_interstitials.py | kawin/diffusion/_illingworth_interstitials.py | module placement/imports only |
+| solvers/illingworth/shared.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | complete pre-class helper section; imports only |
+| solvers/illingworth/numerics/ternary.py | kawin/diffusion/mesh/MovingBoundaryIllingworthTernaryFD1D.py | module placement/imports only |
 | equilibrium.py | kawin/diffusion/MovingBoundaryEquilibrium.py | module placement/imports only |
 | _spectral_validation.py | kawin/diffusion/_spectral_validation.py | module placement/imports only |
-| solvers/ternary.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | class body unchanged; complete shared helper section moved to shared.py |
-| solvers/three_phase.py | kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py | module placement/imports only |
+| solvers/illingworth/ternary.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | class body unchanged; complete shared helper section moved to solvers/illingworth/shared.py |
+| solvers/illingworth/three_phase.py | kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py | module placement/imports only |
 | surrogates.py | kawin/diffusion/MovingBoundarySurrogates.py | Whole local provider module; imports and two inherited trailing-whitespace lines only; numerical AST identical |
 | surrogate_artifacts.py | kawin/diffusion/SurrogateArtifacts.py | Whole local provider/helper module; imports only |
 | _diffusivity_domain.py | kawin/diffusion/_diffusivity_domain.py | Whole local provider/helper module; imports only |
 
 compatibility/ policy methods and their precise upstream-derived source locations
 are mapped separately in PUBLIC_KAWIN_MILESTONE.md. No framework clone is hidden
-in the helper copies. tridiagonal.py re-exports the complete binary helper's kernel.
+in the helper copies. solvers/illingworth/numerics/tridiagonal.py re-exports the complete binary helper's kernel.
 
 Binary 8233ad2, ternary e08eed0 and three-phase 693595d each passed 29 exact
 installed-wheel run comparisons plus 22 tests before the dependency switch.

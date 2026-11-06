@@ -7,7 +7,7 @@ import numpy as np
 
 from moving_boundary.compatibility import GenericModel
 from moving_boundary.compatibility import DiffusionModel
-from moving_boundary._illingworth_interstitials import (
+from moving_boundary.solvers.illingworth._interstitials import (
     has_interstitials,
     record_initial_u_fractions,
     resolve_diffusivity_provider,
@@ -15,13 +15,13 @@ from moving_boundary._illingworth_interstitials import (
     validate_interstitial_element_order,
     x_to_u_independent,
 )
-from moving_boundary.shared import (
+from moving_boundary.solvers.illingworth.shared import (
     _BULK_DIFFUSIVITY_IMPLICIT,
     _BULK_DIFFUSIVITY_PHASE_UNIFORM,
     _coerce_bulk_diffusivity_mode,
 )
 from moving_boundary.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D
-from moving_boundary.numerics.binary import (
+from moving_boundary.solvers.illingworth.numerics.binary import (
     flatten_1d_coordinates,
     integrate_planar_transformed_profile,
     reconstruct_planar_transformed_profile,

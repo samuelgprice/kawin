@@ -79,8 +79,8 @@ if __name__ == "__main__":
         from kawin.diffusion.MovingBoundaryIllingworthFDM import MovingBoundaryIllingworthFD1DModel as Model
     else:
         from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel as Model
-        assert Model._new_concentration_left_planar.__module__ == "moving_boundary.solvers.binary"
-        assert Model._new_concentration_right_planar.__module__ == "moving_boundary.solvers.binary"
+        assert Model._new_concentration_left_planar.__module__ == "moving_boundary.solvers.illingworth.binary"
+        assert Model._new_concentration_right_planar.__module__ == "moving_boundary.solvers.illingworth.binary"
     arrays = run_cases(Model, Path(__file__).parents[1] / "examples/binary_constant.py")
     arrays.update(run_bulk_cases(Model))
     np.savez(sys.argv[2], **arrays)

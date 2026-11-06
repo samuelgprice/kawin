@@ -10,18 +10,22 @@ the same results as main.
 
 ## Current checkpoint
 
+Illingworth solvers, shared/interstitial helpers and numerics moved under `solvers/illingworth/`, leaving room for sibling solver families.
+Commit: `refactor: group Illingworth modules under solvers/illingworth`; permitted docstring changes: `solvers/__init__.py`, `solvers/illingworth/__init__.py` and the approved `solvers/illingworth/numerics/__init__.py`.
+Fresh installed-wheel full `--record`: 40 runs and 5 contracts bit-identical, 88 tests, 34 repeat pairs, 578.02 s; solver origins `moving_boundary.solvers.illingworth.*`.
+
 Whole-module relocation is complete: binary 8233ad2, ternary e08eed0, three-phase
 693595d. Each separate installed-wheel quick gate passed 29 exact run comparisons
 and 22 package tests. The method-by-method subclass strategy is replaced.
 
 Stage 1B is complete against unmodified public kawin 0.5.0 in its separate local
 environment, with bounded package policy adapters and no fork-only runtime imports.
-Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 550.55 s.
+Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 578.02 s.
 See PUBLIC_KAWIN_MILESTONE.md, acceptance.json and README for scope and command.
 
 The final quick gate used 427.34 s of its unchanged 600 s
 budget, below the 540 s review threshold. It changed zero tracked files. Full
-used `--record` and completed in 550.55 s of its unchanged
+used `--record` and completed in 578.02 s of its unchanged
 1200 s cap. All 33 quick/contract reference pairs remain; full adds O06's
 unseeded pair for 34. No case was skipped on this configured machine. Only
 the new ignored O06 fixture pair was captured; all 89 older files are unchanged.

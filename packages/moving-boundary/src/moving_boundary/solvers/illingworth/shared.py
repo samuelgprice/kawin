@@ -8,7 +8,7 @@ from moving_boundary._spectral_validation import TERNARY_DIFFUSIVITY_POSITIVE_EI
 from moving_boundary.compatibility import GenericModel
 from moving_boundary.compatibility import DiffusionModel
 from kawin.diffusion.DiffusionParameters import TemperatureParameters
-from moving_boundary._illingworth_interstitials import (
+from moving_boundary.solvers.illingworth._interstitials import (
     composition_bound_violation,
     full_mole_fractions,
     has_interstitials,
@@ -23,7 +23,7 @@ from moving_boundary.equilibrium import (
     ThermodynamicTernaryInterfaceEquilibrium,
 )
 from moving_boundary.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D
-from moving_boundary.numerics.ternary import (
+from moving_boundary.solvers.illingworth.numerics.ternary import (
     _fill_ternary_left_planar_interior,
     _fill_ternary_right_planar_interior,
     _solve_illingworth_block_tridiagonal_two_phase as solve_illingworth_block_tridiagonal,

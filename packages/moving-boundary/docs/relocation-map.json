@@ -1,15 +1,22 @@
 {
-  "solvers/binary.py": {
+  "solvers/illingworth/binary.py": {
     "source_path": "kawin/diffusion/MovingBoundaryIllingworthFDM.py",
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "previous_package_path": "solvers/binary.py",
     "changes": "module placement/imports only",
     "numerical_ast": "identical"
   },
-  "numerics/binary.py": {
+  "solvers/illingworth/numerics/binary.py": {
     "source_path": "kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py",
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "previous_package_path": "numerics/binary.py",
     "changes": "module placement/imports only",
     "numerical_ast": "identical"
+  },
+  "solvers/illingworth/numerics/tridiagonal.py": {
+    "source_path": null,
+    "previous_package_path": "numerics/tridiagonal.py",
+    "changes": "package-owned re-export of the tridiagonal kernels defined in solvers/illingworth/numerics/binary.py; no numerical code"
   },
   "mesh/FDM1D.py": {
     "source_path": "kawin/diffusion/mesh/FDM1D.py",
@@ -23,15 +30,17 @@
     "changes": "module placement/imports only",
     "numerical_ast": "identical"
   },
-  "_illingworth_interstitials.py": {
+  "solvers/illingworth/_interstitials.py": {
     "source_path": "kawin/diffusion/_illingworth_interstitials.py",
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "previous_package_path": "_illingworth_interstitials.py",
     "changes": "module placement/imports only",
     "numerical_ast": "identical"
   },
-  "shared.py": {
+  "solvers/illingworth/shared.py": {
     "source_path": "kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py",
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "previous_package_path": "shared.py",
     "symbols": [
       "_BULK_DIFFUSIVITY_PHASE_UNIFORM",
       "_BULK_DIFFUSIVITY_LAGGED",
@@ -68,9 +77,10 @@
     ],
     "changes": "complete pre-class helper section; imports only"
   },
-  "numerics/ternary.py": {
+  "solvers/illingworth/numerics/ternary.py": {
     "source_path": "kawin/diffusion/mesh/MovingBoundaryIllingworthTernaryFD1D.py",
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "previous_package_path": "numerics/ternary.py",
     "changes": "module placement/imports only",
     "numerical_ast": "identical"
   },
@@ -86,14 +96,16 @@
     "changes": "module placement/imports only",
     "numerical_ast": "identical"
   },
-  "solvers/ternary.py": {
+  "solvers/illingworth/ternary.py": {
     "source_path": "kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py",
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
-    "changes": "class body unchanged; complete shared helper section moved to shared.py"
+    "previous_package_path": "solvers/ternary.py",
+    "changes": "class body unchanged; complete shared helper section moved to solvers/illingworth/shared.py"
   },
-  "solvers/three_phase.py": {
+  "solvers/illingworth/three_phase.py": {
     "source_path": "kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py",
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "previous_package_path": "solvers/three_phase.py",
     "changes": "module placement/imports only",
     "numerical_ast": "identical"
   },

@@ -2,7 +2,7 @@
 
 ## Current capability inventory
 
-Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 550.55 s.
+Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 578.02 s.
 These are regression claims for the approved frozen inputs, not a full release or
 physical convergence audit. See ACCEPTANCE_CANDIDATES.md for exact input variants.
 
@@ -29,7 +29,7 @@ adapter is package-owned and accepted within O06; research orchestration
 remains outside the package. The broader Stage 2
 generation/evaluation/persistence/domain/equilibrium split is open; the four whole
 copied modules remain unchanged. R01 is open on the research branch. Shared private
-helpers live in shared.py. No fork solver inheritance remains. Public unmodified
+helpers live in solvers/illingworth/shared.py. No fork solver inheritance remains. Public unmodified
 kawin==0.5.0 supplies model/solver iteration, mesh bases, recording, temperature and
 thermo/pycalphad. PUBLIC_KAWIN_MILESTONE.md maps every bounded policy method:
 minimum-step/final-remainder, initial adjustment, local floor, recording additions,

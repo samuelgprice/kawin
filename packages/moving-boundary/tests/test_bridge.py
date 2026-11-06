@@ -22,7 +22,7 @@ def test_binary_example():
     model = example.build_model()
     model.solve(.5, minDtFrac=1e-14)
     assert model.currentTime == .5
-    assert model.__class__.__module__ == 'moving_boundary.solvers.binary'
+    assert model.__class__.__module__ == 'moving_boundary.solvers.illingworth.binary'
 
 
 def test_namespace_import_is_lazy():

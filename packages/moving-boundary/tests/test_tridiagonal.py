@@ -6,7 +6,7 @@ import sys
 import numpy as np
 import pytest
 
-from moving_boundary.numerics import tridiagonal as kernel
+from moving_boundary.solvers.illingworth.numerics import tridiagonal as kernel
 
 
 def test_dense_solution_and_input_preservation():
@@ -45,7 +45,7 @@ class Block:
         if fullname.split('.')[0] in {'kawin', 'numba'}:
             raise ModuleNotFoundError('excluded for fallback test', name=fullname)
 sys.meta_path.insert(0, Block())
-from moving_boundary.numerics import tridiagonal as kernel
+from moving_boundary.solvers.illingworth.numerics import tridiagonal as kernel
 assert kernel._solve_illingworth_tridiagonal_numba is None
 assert kernel.solve_illingworth_tridiagonal([0.], [-2.], [0.], [-1.])[0] == .5
 assert 'kawin' not in sys.modules

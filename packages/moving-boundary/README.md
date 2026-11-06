@@ -10,6 +10,29 @@ surrogate providers. The wheel depends on unmodified public `kawin==0.5.0`.
         MovingBoundaryIllingworthTernaryThreePhaseFD1DModel,
     )
 
+Solver families live in their own subpackages under `solvers/` (currently only
+`solvers/illingworth/`), so other method families can be added beside them. The
+classes above are re-exported from `moving_boundary.solvers`, so this import does
+not depend on the file layout. Module map from the research fork (full detail,
+including symbols, in docs/relocation-map.json):
+
+| Package module | Research fork module (06dc7b4) |
+|---|---|
+| solvers/illingworth/binary.py | kawin/diffusion/MovingBoundaryIllingworthFDM.py |
+| solvers/illingworth/ternary.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py (class) |
+| solvers/illingworth/shared.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py (helpers) |
+| solvers/illingworth/three_phase.py | kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py |
+| solvers/illingworth/_interstitials.py | kawin/diffusion/_illingworth_interstitials.py |
+| solvers/illingworth/numerics/binary.py | kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py |
+| solvers/illingworth/numerics/ternary.py | kawin/diffusion/mesh/MovingBoundaryIllingworthTernaryFD1D.py |
+| mesh/FDM1D.py, mesh/TransformedGrids.py | kawin/diffusion/mesh/ (same names) |
+| equilibrium.py | kawin/diffusion/MovingBoundaryEquilibrium.py |
+| surrogates.py | kawin/diffusion/MovingBoundarySurrogates.py |
+| surrogate_artifacts.py | kawin/diffusion/SurrogateArtifacts.py |
+| _diffusivity_domain.py, _spectral_validation.py | kawin/diffusion/ (same names) |
+| providers/pycalphad.py | examples/ternaryExamples/pycalphad_default_phase_adapter.py |
+| providers/thermocalc.py | examples/ThermoCalc/tc_python_adapter.py |
+
 Public kawin still owns the model/solver loop, mesh bases, recording machinery,
 TemperatureParameters and pycalphad/thermodynamic engine. Small subclasses in
 compatibility/ preserve minimum-step/final-remainder policy, valid initial
@@ -48,7 +71,7 @@ source checkouts with no editable/site hooks. Shared kawin is unchanged.
 The local environment pointer is ignored `.verification/public-environment.json`;
 this is a configured local verification command, not a portable bootstrap.
 
-Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 550.55 s.
+Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 578.02 s.
 
 Quick includes C01-C24/C30-C32, the older binary fixture/bulk probes and freshly
 sampled O05 (4.94-second sampling pilot) and O08 (two valid default-phase tie lines
