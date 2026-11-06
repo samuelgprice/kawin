@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "state": "Local solver/provider relocation with public kawin 0.5.0; generation acceptance bounded to documented O05/O08 workflows",
+  "state": "Public kawin 0.5.0 with Stage 2B O05/O08 and Stage 2C O06 generation acceptance; broader Stage 2 split open",
   "reference_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
   "dependency_commit": "5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e",
   "quick": {
@@ -78,9 +78,9 @@
     "separate_environment": true,
     "shared_environment_unchanged": true,
     "quick": {
-      "elapsed_seconds": 436.25,
+      "elapsed_seconds": 427.3440000000119,
       "pytest": {
-        "tests": 72,
+        "tests": 88,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -88,19 +88,17 @@
       "skipped": {}
     },
     "full": {
-      "elapsed_seconds": 508.9529999999795,
+      "elapsed_seconds": 550.5469999999914,
       "pytest": {
-        "tests": 72,
+        "tests": 88,
         "failures": 0,
         "errors": 0,
         "skipped": 0
       },
-      "skipped": {
-        "O06": "TC adapter not yet batch-safe; disabled as approved"
-      }
+      "skipped": {}
     },
     "quick_runs": 30,
-    "full_runs": 39,
+    "full_runs": 40,
     "tolerances": "preregistered public; unchanged",
     "source_audit": {
       "numerical_ast": {
@@ -143,9 +141,9 @@
   },
   "review_followup": {
     "quick": {
-      "elapsed_seconds": 436.25,
+      "elapsed_seconds": 427.3440000000119,
       "pytest": {
-        "tests": 72,
+        "tests": 88,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -159,15 +157,15 @@
       }
     },
     "full": {
-      "elapsed_seconds": 508.9529999999795,
+      "elapsed_seconds": 550.5469999999914,
       "pytest": {
-        "tests": 72,
+        "tests": 88,
         "failures": 0,
         "errors": 0,
         "skipped": 0
       },
       "deviations": {
-        "bit_identical_runs": 39,
+        "bit_identical_runs": 40,
         "within_tolerance_not_identical_runs": 0,
         "failed_runs": 0,
         "worst": null,
@@ -202,5 +200,53 @@
     "package_generation_no_examples_import_or_read": true,
     "research_dependency_issue": "R02: main examples/ternaryExamples/pycalphad_default_phase_adapter.py:190 still imports examples.debugInPlace in the invalid-endpoint branch; main unchanged",
     "accepted_scope": "O05 restricted-phase surrogate generation; O08 default-phase endpoint/equilibrium sampling; broader default-phase workflows unaccepted"
+  },
+  "stage_2c": {
+    "status": "complete within O06",
+    "case": "O06",
+    "tier": "full",
+    "python_hash_seed": null,
+    "numpy_seed": null,
+    "reference_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "source_path": "examples/ThermoCalc/tc_python_adapter.py",
+    "source_sha256": "4f8886bbee01dc3b96752951a05a5d8fc5c605572b185470fc9003c0df931389",
+    "reference_sha256": {
+      "O06.json": "1b4c4a580b037b73db8cc8e4a5f84237082e37887d1e0d3eb6a4ae4ad4a50fa6",
+      "O06.npz": "cdde6600a7f376166299d6cfb72380451d8c0fdf25de09ca2fc9880dbc9aa12d"
+    },
+    "input_sha256": "f65208afbdc2ec50c16c518da532a0b602be0bdf54e8e52f7c2fba235a5cdb84",
+    "comparison": {
+      "numerical_arrays": "exact shape, dtype and bytes; no tolerance",
+      "structural_arrays": "exact shape, dtype and bytes",
+      "metadata_array": "provider/metadata_json",
+      "normalize_only": "thermocalc_config.cache_dir",
+      "normalization": "replace only that JSON value with null; retain all other JSON text"
+    },
+    "counts": {
+      "compared_arrays": 56,
+      "tie_lines": 3,
+      "bulk_points": 2,
+      "accepted_steps": 6
+    },
+    "bit_identical": true,
+    "package_generation_no_examples_import_or_read": true,
+    "fresh_cache_per_worker": true,
+    "full_unseeded_repeat_pair": true,
+    "existing_reference_files_unchanged": 89,
+    "worker_elapsed_seconds": 20.25,
+    "public_metrics": "redacted; retained only in ignored local output",
+    "research_issues": [
+      "R03 TC debugger dependency remains on main",
+      "R04 exact-name convention cleanup remains on research branch"
+    ],
+    "uncovered": [
+      "NiTiNb/other databases/phase universes",
+      "arbitrary three-phase TC generation",
+      "TC invalid-probe acceptance",
+      "research dataset export/resume/plotting/assembly",
+      "broader diagnostics/retry settings",
+      "physical convergence",
+      "broader Stage 2 split"
+    ]
   }
 }

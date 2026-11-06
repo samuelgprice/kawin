@@ -23,7 +23,8 @@ def isolated_runner(tmp_path, monkeypatch, *, failure=False):
     (tmp_path/'docs/acceptance.json').write_text(json.dumps(acceptance))
     (tmp_path/'docs/acceptance-deviations.json').write_text('{"previous": true}')
     manifest=dict(reference_commit='06dc7b4ab56f67226ceabfde41ebf2690c088841',quick=['C01'],
-        contracts=[],full_drift=[],public_tolerances={'profiles':dict(rtol=1e-10,atol=1e-12)})
+        contracts=[],full_drift=[],thermocalc_sampling=dict(repeat_unseeded=True),
+        public_tolerances={'profiles':dict(rtol=1e-10,atol=1e-12)})
     (tmp_path/'manifest.json').write_text(json.dumps(manifest))
     monkeypatch.setattr(tool,'PROJECT',tmp_path)
     monkeypatch.setattr(tool,'OUTPUT',output)
@@ -33,6 +34,8 @@ def isolated_runner(tmp_path, monkeypatch, *, failure=False):
     monkeypatch.setattr(tool,'check_repeatability',lambda *args,**kwargs:None)
     monkeypatch.setattr(tool,'run_pytest',lambda *args,**kwargs:dict(tests=1,failures=0,errors=0,skipped=0))
     def worker(case, role, **kwargs):
+        if kwargs.get("probe_thermocalc"):
+            return dict(status="PASS",thermocalc_availability=dict(available=False,reason="TC-Python is not installed"))
         if failure and case=='C01':
             raise RuntimeError('deliberate test failure')
         report=dict(status='PASS')
@@ -55,6 +58,9 @@ def test_cli_without_record_leaves_tracked_files_unchanged(tmp_path, monkeypatch
     assert tool.main([action])==int(failure)
     assert {path:path.read_bytes() for path in tracked}==tracked
     assert (tool.OUTPUT/(action+'-deviations.json')).exists()
+    if action == "full":
+        summary=json.loads((tool.OUTPUT/"full-summary.json").read_text())
+        assert summary["skipped"]["O06"] == "TC-Python is not installed"
 
 
 @pytest.mark.parametrize('action', ['quick','full'])

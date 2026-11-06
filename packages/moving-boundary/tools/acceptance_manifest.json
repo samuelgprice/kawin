@@ -52,7 +52,7 @@
   ],
   "optional": {
     "O05": "quick if sampling <=60 seconds, otherwise full",
-    "O06": "disabled until TC adapter batch-safe",
+    "O06": "full only; real TC when runtime/licence/local input available; unseeded; bitwise; fresh per-worker cache",
     "O08": "approved quick and full; real default-phase valid/invalid endpoint sampling, hash 0 and byte identity"
   },
   "budgets": {
@@ -188,7 +188,10 @@
     "kawin/tests/test_thermocalc_examples.py": "b7bfacfacecb782f247054ee16fc4bbb73a859192223965b17c217893568bb08",
     "kawin/tests/test_thermodynamics.py": "566dfab13bf0e8603bf1f04a8195ad7037169188a1398177fa2fed2695143341",
     "kawin/tests/test_three_phase_examples.py": "8f20c8d54acbdeb226b69d04c3ddc403f306a4be304c53d6a0c30c6c8c211dbc",
-    "kawin/tests/test_transformed_grids.py": "0a2f1d351fb54a2aec2e65c338f3918eafb4181853397ed08b4e8666f98c7cd9"
+    "kawin/tests/test_transformed_grids.py": "0a2f1d351fb54a2aec2e65c338f3918eafb4181853397ed08b4e8666f98c7cd9",
+    "examples/ThermoCalc/tc_python_adapter.py": "4f8886bbee01dc3b96752951a05a5d8fc5c605572b185470fc9003c0df931389",
+    "examples/ThermoCalc/training_data.py": "7822fa7a427b2f75efe5639f2346981249b384246d3c1621504291dae5fe1b74",
+    "examples/ThermoCalc/FeCrNi_TC_Python.py": "472516f2c131a83403b6d08ae530e2b65f6135de56a202c282e54edfb55b18e7"
   },
   "tooling_sha256": {
     "acceptance_inputs.py": "b241d9ef3ffd9022025548078f7abd93e3ad3ece506394d0e59c22b01d9c8276",
@@ -296,5 +299,32 @@
       "O08.npz": "8c82de3d241cbd2488f4227f68c01914c587591806f161f18d4a72dd12ec65d8"
     },
     "hash_policy": "R01: hash 0/1 changes five of seven O08 arrays; hash 0 repeats exactly; no NumPy seed"
+  },
+  "thermocalc_sampling": {
+    "case": "O06",
+    "tier": "full",
+    "input": "O06.json",
+    "input_sha256": "f65208afbdc2ec50c16c518da532a0b602be0bdf54e8e52f7c2fba235a5cdb84",
+    "worker_seconds": 300,
+    "repeat_unseeded": true,
+    "reference_sha256": {
+      "O06.json": "1b4c4a580b037b73db8cc8e4a5f84237082e37887d1e0d3eb6a4ae4ad4a50fa6",
+      "O06.npz": "cdde6600a7f376166299d6cfb72380451d8c0fdf25de09ca2fc9880dbc9aa12d"
+    },
+    "reference_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "comparison": {
+      "numerical_arrays": "exact shape, dtype and bytes; no tolerance",
+      "structural_arrays": "exact shape, dtype and bytes",
+      "metadata_array": "provider/metadata_json",
+      "normalize_only": "thermocalc_config.cache_dir",
+      "normalization": "replace only that JSON value with null; retain all other JSON text"
+    },
+    "counts": {
+      "tie_lines": 3,
+      "bulk_points": 2,
+      "accepted_steps": 6
+    },
+    "python_hash_seed": null,
+    "numpy_seed": null
   }
 }

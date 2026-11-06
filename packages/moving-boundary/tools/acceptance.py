@@ -27,6 +27,23 @@ def metric_tools():
     return module
 
 
+@lru_cache(maxsize=1)
+def thermocalc_tools():
+    """Load TC tooling without importing its optional licensed engine."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("acceptance_thermocalc", PROJECT / "tools/acceptance_thermocalc.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def comparison_array(case, key, value):
+    """Normalize only O06's documented metadata cache path; all other bytes remain exact."""
+    if case == "O06" and key == "provider/metadata_json":
+        return thermocalc_tools().normalize_metadata(value)
+    return value
+
+
 def run(args, *, cwd=None, timeout=120, env=None):
     """Run a bounded batch job and preserve diagnostic output on failure."""
     result = subprocess.run(args, cwd=cwd or OUTPUT, env=env, capture_output=True,
@@ -34,6 +51,25 @@ def run(args, *, cwd=None, timeout=120, env=None):
     if result.returncode:
         raise RuntimeError(result.stdout + result.stderr)
     return result.stdout
+
+
+def run_tc_worker(args, *, env, timeout):
+    """Bound a TC process tree so a hung licence/server cannot outlive its worker."""
+    process = subprocess.Popen(args,cwd=OUTPUT,env=env,stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+    try:
+        stdout,stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            subprocess.run(["taskkill","/PID",str(process.pid),"/T","/F"],
+                           stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+        else:
+            process.kill()
+        process.communicate(timeout=10)
+        raise
+    if process.returncode:
+        raise RuntimeError(stdout + stderr)
+    return stdout
 
 
 def validate_reference(reference):
@@ -64,14 +100,14 @@ def worker_environment(case):
     return env
 
 
-def worker(case, role, *, reference=REFERENCE, state=None, prepare=False, timeout=60, output=None):
+def worker(case, role, *, reference=REFERENCE, state=None, prepare=False, timeout=60, output=None, probe_thermocalc=False):
     """Execute an origin-checked worker; diagnostics use separate destinations.
 
-    O08's registered reference destination cannot overwrite an existing fixture.
+    O06/O08's registered reference destinations cannot overwrite an existing fixture.
     """
     path = Path(output) if output is not None else OUTPUT / ("reference" if role == "reference" else "package") / case
-    if role == "reference" and case == "O08" and path.resolve() == (OUTPUT / "reference/O08").resolve():
-        assert not any(path.with_suffix(suffix).exists() for suffix in (".json",".npz")), "O08 fixture is frozen; refusing overwrite"
+    if role == "reference" and case in {"O06","O08"} and path.resolve() == (OUTPUT / "reference" / case).resolve():
+        assert not any(path.with_suffix(suffix).exists() for suffix in (".json",".npz")), case + " fixture is frozen; refusing overwrite"
     args = [sys.executable, "-P", "-S", str(PROJECT / "tools/acceptance_worker.py"),
         "--role", role, "--root", str(reference), "--case", case, "--output", str(path),
         "--artifacts", str(OUTPUT / "inputs")]
@@ -79,10 +115,12 @@ def worker(case, role, *, reference=REFERENCE, state=None, prepare=False, timeou
         args.extend(["--target", state["target"], "--host", state["host"]])
     if prepare:
         args.append("--prepare")
+    if probe_thermocalc:
+        args.append("--probe-thermocalc")
     env = worker_environment(case)
     started = time.monotonic()
     try:
-        output = run(args, env=env, timeout=timeout)
+        output = (run_tc_worker if case == "O06" else run)(args, env=env, timeout=timeout)
     except Exception as exc:
         (path.parent).mkdir(parents=True, exist_ok=True)
         (path.with_suffix(".log")).write_text(str(exc), encoding="utf-8")
@@ -113,12 +151,12 @@ def check_repeatability(case, *, reference, directory, timeout=120):
         remaining = timeout - (time.monotonic()-started)
         assert remaining > 0, "Unseeded repeatability budget exceeded"
         report = worker(case, "reference", reference=reference,
-                        output=folder / repeat, timeout=min(60,remaining))
+                        output=folder / repeat, timeout=min(300 if case == "O06" else 60,remaining))
         assert report["hash_seed"] is None and not report["numpy_seed_override"]
         reports.append(report)
     with np.load(folder / "a.npz") as left, np.load(folder / "b.npz") as right:
         assert set(left.files) == set(right.files), case
-        failed = [key for key in left.files if not bit_identical(left[key],right[key])]
+        failed = [key for key in left.files if not bit_identical(comparison_array(case,key,left[key]),comparison_array(case,key,right[key]))]
         result = dict(case=case, bit_identical=not failed, arrays=len(left.files), failed_keys=failed,
                       elapsed_seconds=time.monotonic()-started)
     assert reports[0].get("stop_status") == reports[1].get("stop_status"), case
@@ -173,20 +211,21 @@ def quantity(key):
 
 
 def compare(case, package, *, tolerance="exact", require=()):
-    """Keep frozen gates and record deviations; O08 additionally requires byte identity.
+    """Keep frozen gates; O06/O08 require bytes even in public mode.
 
-    O08 verifies its fixture hashes and ordered phase metadata before comparing
-    shape/dtype/bytes, even in public mode. Existing quantity tolerances remain
-    unchanged for all other cases.
+    O06 compares every numerical array bitwise and all structural arrays after
+    normalizing only metadata_json.thermocalc_config.cache_dir. Both new cases
+    verify fixture hashes before comparison; existing tolerances are unchanged.
     """
     import numpy as np
     ref = OUTPUT / "reference" / case
     got = OUTPUT / "package" / case
-    if case == "O08":
-        frozen = json.loads(MANIFEST.read_text(encoding="utf-8"))["default_phase_sampling"]["reference_sha256"]
-        assert set(frozen) == {"O08.json","O08.npz"}, "O08 requires its frozen fixture hashes"
+    if case in {"O06","O08"}:
+        section = "thermocalc_sampling" if case == "O06" else "default_phase_sampling"
+        frozen = json.loads(MANIFEST.read_text(encoding="utf-8"))[section]["reference_sha256"]
+        assert set(frozen) == {case+".json",case+".npz"}, case + " requires its frozen fixture hashes"
         for filename,digest in frozen.items():
-            assert hashlib.sha256((ref.parent / filename).read_bytes()).hexdigest() == digest, "O08 frozen fixture changed: " + filename
+            assert hashlib.sha256((ref.parent / filename).read_bytes()).hexdigest() == digest, case + " frozen fixture changed: " + filename
     expected = json.loads(ref.with_suffix(".json").read_text(encoding="utf-8"))
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     assert expected["status"] == package["status"] == "PASS"
@@ -198,13 +237,21 @@ def compare(case, package, *, tolerance="exact", require=()):
         if provider is not None:
             assert provider.startswith("moving_boundary."), (case, family, provider)
     results = {}
+    structural = {}
     metrics = metric_tools()
     measured = {name:{} for name in metrics.QUANTITIES}
     with np.load(ref.with_suffix(".npz")) as reference, np.load(got.with_suffix(".npz")) as actual:
         assert set(reference.files) == set(actual.files), case
         for key in reference.files:
-            wanted, value = reference[key], actual[key]
+            wanted, value = comparison_array(case,key,reference[key]), comparison_array(case,key,actual[key])
             group = quantity(key)
+            if case == "O06" and (wanted.dtype.kind not in "bifcu" or value.dtype.kind not in "bifcu"):
+                ok = bit_identical(wanted,value)
+                structural[key] = dict(bit_identical=ok)
+                results[group] = results.get(group,True) and ok
+                if not ok:
+                    results.setdefault("failed_keys",[]).append(key)
+                continue
             settings = manifest["public_tolerances"][group]
             scale = 1.
             if group == "interface" or (group == "analytic_error" and key == "exact/interface_error"):
@@ -214,12 +261,12 @@ def compare(case, package, *, tolerance="exact", require=()):
             elif group == "inventory":
                 scale = expected.get("length_scale", 1.) / expected.get("minimum_molar_volume", 1.)
             measured[group][key] = metrics.array_metrics(wanted,value,
-                rtol=settings["rtol"] if tolerance == "public" and case != "O08" else 0.,
-                atol=settings["atol"]*scale if tolerance == "public" and case != "O08" else 0.)
+                rtol=settings["rtol"] if tolerance == "public" and case not in {"O06","O08"} else 0.,
+                atol=settings["atol"]*scale if tolerance == "public" and case not in {"O06","O08"} else 0.)
             ok = wanted.shape == value.shape
             if ok:
                 ok = np.array_equal(np.isnan(wanted), np.isnan(value))
-            if ok and case == "O08":
+            if ok and case in {"O06","O08"}:
                 ok = bit_identical(wanted,value)
             elif ok and tolerance == "exact":
                 ok = np.array_equal(wanted, value, equal_nan=True)
@@ -235,7 +282,10 @@ def compare(case, package, *, tolerance="exact", require=()):
     quantities["stop_status"] = dict(applicable=True,bit_identical=True,
         max_absolute_deviation=None,max_relative_deviation=None,tolerance="exact structural equality")
     record = dict(case=case,tolerance_mode=tolerance,passed=not results.get("failed_keys"),
-        bit_identical=all(stats["bit_identical"] for stats in quantities.values() if stats["applicable"]), quantities=quantities)
+        bit_identical=all(stats["bit_identical"] for stats in quantities.values() if stats["applicable"])
+            and all(item["bit_identical"] for item in structural.values()), quantities=quantities)
+    if structural:
+        record["structural_arrays"] = structural
     got.with_suffix(".deviations.json").write_text(json.dumps(record,indent=2,allow_nan=False),encoding="utf-8")
     return results
 
@@ -361,7 +411,7 @@ assert Path(kawin.__file__).resolve() == Path(sys.argv[2]) / 'kawin/__init__.py'
 import pytest
 raise SystemExit(pytest.main(sys.argv[3:]))
 """
-    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py", "test_acceptance_reporting.py", "test_pycalphad_provider.py", "test_default_phase_acceptance.py", "test_thermocalc_provider.py"]
+    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py", "test_acceptance_reporting.py", "test_pycalphad_provider.py", "test_default_phase_acceptance.py", "test_thermocalc_provider.py", "test_thermocalc_acceptance.py"]
     args = [sys.executable, "-I", "-S", "-c", code, state["target"], state["host"],
             *[str(PROJECT / "tests" / name) for name in tests],
             str(PROJECT / "tests/test_bridge.py") + "::test_namespace_import_is_lazy",
@@ -433,7 +483,6 @@ def main(argv=None):
                 cases.append(case)
             else:
                 skipped[case] = "cached input missing"
-        skipped["O06"] = "TC adapter not yet batch-safe; disabled as approved"
     # Private hashes never enter committed evidence. Present corrupted inputs
     # fail instead of being disguised as missing licensed/provider coverage.
     inputs_manifest = OUTPUT / "inputs/private-inputs.json"
@@ -459,8 +508,21 @@ def main(argv=None):
     if args.action != "capture":
         state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8")) if args.reuse_targets else setup_targets()
         state["repeatability_directory"] = tempfile.mkdtemp(prefix="unseeded-", dir=OUTPUT)
-    else:
+    elif args.cases != ["O06"]:
         worker("prepare", "reference", reference=args.reference, prepare=True)
+    if full and not args.cases and args.action != "capture":
+        probe_dir = Path(tempfile.mkdtemp(prefix="tc-availability-",dir=OUTPUT))
+        try:
+            probe = worker("O06","package",reference=args.reference,state=state,
+                           output=probe_dir / "O06",probe_thermocalc=True,timeout=60)
+            assert probe["status"] == "PASS", "TC availability probe failed"
+            availability = probe["thermocalc_availability"]
+        except subprocess.TimeoutExpired:
+            availability = dict(available=False,reason="TC session/licence availability probe timed out (60 s)")
+        if availability["available"]:
+            cases.append("O06")
+        else:
+            skipped["O06"] = availability["reason"]
     if args.action == "capture" and not args.cases:
         cases = cases + manifest["contracts"]
     for case in cases:
@@ -472,8 +534,8 @@ def main(argv=None):
         try:
             report = worker(case, "reference" if args.action == "capture" else "package",
                             reference=args.reference, state=state,
-                            timeout=min(180 if case.startswith("F") else 60, max(1,remaining)))
-            if args.action in {"quick","full"} and case in set(manifest["quick"]) | {"C32","LEGACY"}:
+                            timeout=min(300 if case == "O06" else (180 if case.startswith("F") else 60), max(1,remaining)))
+            if args.action in {"quick","full"} and case in set(manifest["quick"]) | {"C32","LEGACY"} | ({"O06"} if full and manifest["thermocalc_sampling"]["repeat_unseeded"] else set()):
                 check_repeatability(case, reference=args.reference, directory=state["repeatability_directory"],
                     timeout=max(1,limit-(time.monotonic()-started)))
             result = {"capture":True} if args.action == "capture" else compare(case, report,

@@ -35,6 +35,7 @@ def main():
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--prepare", action="store_true")
     parser.add_argument("--sample-pycalphad", action="store_true")
+    parser.add_argument("--probe-thermocalc", action="store_true")
     args = parser.parse_args()
     sys.path.extend(site.getsitepackages())
     if args.role == "reference":
@@ -59,7 +60,7 @@ def main():
     number = int(args.case[1:]) if args.case.startswith("C") else -1
     if args.case in {"LEGACY","F04","O07"} or number in list(range(1,5))+[13,14,15,25,30,31]:
         inputs.family = "binary"
-    elif args.case in {"O01","O03a","O04","O05"} or number in [5,6,7,8,16,17,18,19,24,26]:
+    elif args.case in {"O01","O03a","O04","O05","O06"} or number in [5,6,7,8,16,17,18,19,24,26]:
         inputs.family = "ternary"
     else:
         inputs.family = "three_phase"
@@ -70,7 +71,15 @@ def main():
                   hash_seed=os.environ.get("PYTHONHASHSEED"), numpy_seed_override=False)
     try:
         import numpy as np
-        if args.prepare:
+        if args.probe_thermocalc:
+            optional = module("acceptance_optional", HERE / "acceptance_optional.py")
+            tc = module("acceptance_thermocalc", HERE / "acceptance_thermocalc.py")
+            configuration = json.loads((HERE / "acceptance_manifest.json").read_text(encoding="utf-8"))["thermocalc_sampling"]
+            available = tc.probe_availability(inputs, configuration,
+                generation_guard=optional.guard_package_generation, directory=args.output.parent)
+            report.update(thermocalc_availability=available, stop_status="tc_availability_checked")
+            arrays = {}
+        elif args.prepare:
             source = inputs.load(args.root / "kawin/tests/test_surrogate_artifacts.py", ["_surrogate"])
             source._surrogate().save(args.artifacts / "open-surrogate.npz")
             arrays = {}
@@ -114,7 +123,13 @@ def main():
         else:
             if args.case.startswith("O"):
                 optional = module("acceptance_optional", HERE / "acceptance_optional.py")
-                model, duration, analytic = optional.build_optional(inputs, args.case)
+                if args.case == "O06":
+                    tc = module("acceptance_thermocalc", HERE / "acceptance_thermocalc.py")
+                    configuration = json.loads((HERE / "acceptance_manifest.json").read_text(encoding="utf-8"))["thermocalc_sampling"]
+                    model, duration, analytic = tc.build_case(inputs, configuration,
+                        generation_guard=optional.guard_package_generation, directory=args.output.parent)
+                else:
+                    model, duration, analytic = optional.build_optional(inputs, args.case)
             else:
                 model, duration, analytic = cases.build_case(inputs, args.case, args.output.parent)
             length = float(np.ptp(np.ravel(model.mesh.z)))
@@ -126,6 +141,12 @@ def main():
                     for key in saved.files:
                         if saved[key].dtype.kind in "bifcu":
                             arrays["provider/" + key] = saved[key]
+            if args.case == "O06":
+                with np.load(inputs.thermocalc_surrogate, allow_pickle=False) as saved:
+                    arrays.update({"provider/" + key:saved[key] for key in saved.files})
+                steps = len(arrays["interfaceData/time"]) - 1
+                assert steps == 6, "O06 must complete six accepted steps"
+                report.update(accepted_steps=steps, thermocalc_cache=str(inputs.thermocalc_cache))
             if args.case == "C30":
                 arrays["temperature/provider_queries"] = np.array([float(np.ravel(item[2])[0]) for item in model.therm.calls])
             report.update(final_time=float(model.currentTime), requested_duration=duration,
@@ -140,11 +161,11 @@ def main():
                         mod = sys.modules[provider]
                         assert Path(mod.__file__).resolve().is_relative_to(args.target.resolve())
             np.savez_compressed(args.output.with_suffix(".npz"), **arrays)
-        if args.case in {"O05","O08"} and args.role == "package":
+        if args.case in {"O05","O08","O06"} and args.role == "package" and not args.probe_thermocalc:
             audit = inputs.generation_audit
             assert audit["guarded"] and not audit["examples_imported"] and not audit["examples_read"]
             assert Path(audit["adapter_origin"]).resolve().is_relative_to(args.target.resolve())
-            report["pycalphad_generation"] = audit
+            report["thermocalc_generation" if args.case == "O06" else "pycalphad_generation"] = audit
         report.update(status="PASS", arrays=len(arrays))
     except Exception:
         report.update(status="FAIL", error=traceback.format_exc())

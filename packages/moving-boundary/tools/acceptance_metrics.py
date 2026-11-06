@@ -1,7 +1,7 @@
 """Deviation measurements with the frozen elementwise tolerance and private-data boundary."""
 import numpy as np
 
-PRIVATE_CASES = frozenset({"O01", "O02", "O03a", "O03b", "O04", "O07"})
+PRIVATE_CASES = frozenset({"O01", "O02", "O03a", "O03b", "O04", "O06", "O07"})
 QUANTITIES = ("interface", "profiles", "eta", "inventory", "accepted_times", "analytic_error")
 
 

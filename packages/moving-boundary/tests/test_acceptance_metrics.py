@@ -75,19 +75,20 @@ def test_quantity_retains_different_array_tolerances():
     assert compact['C01']['quantities']['interface']['tolerance']['atol']==.01
 
 
-def test_private_metrics_do_not_enter_committed_report():
+@pytest.mark.parametrize("case", ["O04", "O06"])
+def test_private_metrics_do_not_enter_committed_report(case):
     """Private errors and dimensional scales are redacted even in worst/near summaries."""
     tool=metrics()
     sensitive=8765.4321
-    entry=dict(case='O04',quantity='interface',error=sensitive,allowance=sensitive)
+    entry=dict(case=case,quantity='interface',error=sensitive,allowance=sensitive)
     summary=dict(bit_identical_runs=0,within_tolerance_not_identical_runs=1,failed_runs=0,
                  worst=entry,within_10x=[entry])
-    public=dict(cases=tool.public_cases({'O04':{'secret':sensitive},'C01':{'public':0.}}),
+    public=dict(cases=tool.public_cases({case:{'secret':sensitive},'C01':{'public':0.}}),
                 summary=tool.public_summary(summary))
     encoded=json.dumps(public,allow_nan=False)
     assert str(sensitive) not in encoded
-    assert public['cases']['O04']['private_metrics']
-    assert public['summary']['worst']==dict(case='O04',quantity='interface',private_metrics=True)
+    assert public['cases'][case]['private_metrics']
+    assert public['summary']['worst']==dict(case=case,quantity='interface',private_metrics=True)
 
 
 def test_overflow_is_explicit_and_serializable():

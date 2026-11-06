@@ -2,7 +2,7 @@
 
 ## Current capability inventory
 
-Quick: 30 run comparisons and 72 pytest tests passed in 436.25 s. Full: 39 run comparisons and 72 pytest tests passed in 508.95 s.
+Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 550.55 s.
 These are regression claims for the approved frozen inputs, not a full release or
 physical convergence audit. See ACCEPTANCE_CANDIDATES.md for exact input variants.
 
@@ -15,7 +15,7 @@ physical convergence audit. See ACCEPTANCE_CANDIDATES.md for exact input variant
 | Lifecycle, rollback, failures and terminal stop | C25-C29 package pytest main/package contracts; C32 configured continue stop using real retries; no topology transition |
 | Cached material/provider workflows | O01/O02/O03a/O03b/O04/O07 run whenever present; private TC-derived inputs/references remain ignored |
 | pycalphad generation (Stage 2B relocation complete within O05/O08) | Installed providers/pycalphad.py; real restricted O05 and default-phase O08 sampling, seed 0, package examples import/read guard; O08 has two valid tie lines and one invalid probe, bitwise fixture/metadata gate |
-| TC-Python live generation | Stage 2C batch-safe adapter relocated and unit-tested in providers/thermocalc.py (b688ecf); approved suffixed O06 convention resolves R04's input mismatch; O06 disabled pending repeatability and acceptance approval |
+| TC-Python live generation | Stage 2C complete within full-only O06: installed batch-safe adapter, real guarded sampling, approved suffixed local input, six steps and unseeded repeat pair; exact arrays, only metadata cache path normalized |
 | Unaccepted workflows | Arbitrary plotting/results/restart/coupling, Numba fallback, other kawin versions, alternative moving-boundary solvers and curvature/precipitation APIs are outside this gate |
 
 ## Ownership and provenance
@@ -25,8 +25,8 @@ to 06dc7b4 in relocation-map.json and BINARY_SLICE.md. Stage 2B generation maps
 function-by-function in PUBLIC_KAWIN_MILESTONE.md and the provider docstring.
 Generating with pycalphad no longer needs the research checkout; examples-based
 research builders/assembly, including TC training_data.py, still do. The TC
-adapter is package-owned and unit-tested; live O06 acceptance awaits the
-approved suffixed-input repeatability pilot. The broader Stage 2
+adapter is package-owned and accepted within O06; research orchestration
+remains outside the package. The broader Stage 2
 generation/evaluation/persistence/domain/equilibrium split is open; the four whole
 copied modules remain unchanged. R01 is open on the research branch. Shared private
 helpers live in shared.py. No fork solver inheritance remains. Public unmodified
@@ -115,6 +115,18 @@ omits only this unused import and passes its generation import/read guard.
 Main and the frozen oracle are unchanged. A research-branch cleanup of the unused
 import is proposed separately; no repair is made on main in this extraction.
 
+## Research dependency issue R03: TC debugger import/call (open)
+
+Main 5f4ad57 still imports examples.debugInPlace at
+examples/ThermoCalc/tc_python_adapter.py:21 and calls debugInPlace() in the
+generic calculation-wrapper exception branch at :1289 (also frozen at 06dc7b4).
+Inside Jupyter the helper can wait for a debugger client; its module import also
+creates a research-checkout dependency. The package copy omits only the import
+and live call, retaining diagnostics, error type/message/cause and retry logic.
+Licence-free failure tests guard input/debugger imports and preserve __cause__.
+Main and the frozen reference are unchanged. Any source cleanup belongs on the
+research branch; the installed batch-safe copy does not resolve this main issue.
+
 ## Research phase-name issue R04 (open research cleanup; O06 convention resolved)
 
 In examples/ThermoCalc/tc_python_adapter.py, calculate_equilibrium:452 stopped
@@ -132,8 +144,10 @@ session closed normally. No adapter change was made. This suffixed-name
 convention, already used by the NiTiNb TC script
 examples/ternaryExamples/IllingworthTernaryThreePhaseNiTiNb_TC.py:166, resolves
 O06's phase-name blocker. The user approved that sole O06 input revision;
-the reference adapter remains frozen at 06dc7b4. O06 stays disabled pending
-the revised-input repeatability pilot and separate acceptance approval.
+the reference adapter remains frozen at 06dc7b4. The revised two unseeded
+runs and hash-1 control were bit-identical. O06 is now accepted in full,
+unseeded with its own repeat pair and no numerical tolerance. Only the
+per-worker metadata cache-directory field is normalized in comparison.
 
 The duplicate-base-phase check at :453 cannot detect separately numbered
 composition sets, and the docstring at :441-446 still describes base-name
@@ -158,7 +172,8 @@ The approved debugger-fix branch was integrated into local main. The final
 5f4ad57 commit removed only obsolete test stubs (12 lines), with two retry tests
 passing; production numerics were unchanged. The temporary runtime pin followed
 that fix until the explicit switch to public 0.5.0. No research branch was merged
-and the frozen extraction was not merged forward. Live TC remains disabled.
+and the frozen extraction was not merged forward. Live TC is accepted only
+within the separately authorized O06 scope.
 
 ## Redistribution and scientific maintenance
 

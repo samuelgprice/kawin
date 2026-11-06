@@ -50,7 +50,8 @@
     "O03a",
     "O03b",
     "O04",
-    "O07"
+    "O07",
+    "O06"
   ],
   "contract_cases": [
     "C25",
@@ -60,7 +61,7 @@
     "C29"
   ],
   "summary": {
-    "bit_identical_runs": 39,
+    "bit_identical_runs": 40,
     "within_tolerance_not_identical_runs": 0,
     "failed_runs": 0,
     "worst": null,
@@ -73,9 +74,7 @@
     "worst": null,
     "within_10x": []
   },
-  "skipped": {
-    "O06": "TC adapter not yet batch-safe; disabled as approved"
-  },
+  "skipped": {},
   "cases": {
     "C01": {"bit_identical": true, "quantities": {"interface": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 5e-12, "rule": "atol + rtol * abs(reference)"}}, "profiles": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "eta": {"applicable": false}, "inventory": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 5e-12, "rule": "atol + rtol * abs(reference)"}}, "accepted_times": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 0.0, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "analytic_error": {"applicable": false}, "stop_status": {"max_absolute_deviation": null, "max_relative_deviation": null, "max_tolerance_fraction": null, "tolerance": "exact structural equality"}}},
     "C02": {"bit_identical": true, "quantities": {"interface": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 5e-12, "rule": "atol + rtol * abs(reference)"}}, "profiles": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "eta": {"applicable": false}, "inventory": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 5e-12, "rule": "atol + rtol * abs(reference)"}}, "accepted_times": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 0.0, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "analytic_error": {"applicable": false}, "stop_status": {"max_absolute_deviation": null, "max_relative_deviation": null, "max_tolerance_fraction": null, "tolerance": "exact structural equality"}}},
@@ -116,6 +115,7 @@
     "O03b": {"private_metrics": true, "reason": "TC-derived numerical metrics retained only in ignored output"},
     "O04": {"private_metrics": true, "reason": "TC-derived numerical metrics retained only in ignored output"},
     "O07": {"private_metrics": true, "reason": "TC-derived numerical metrics retained only in ignored output"},
+    "O06": {"private_metrics": true, "reason": "TC-derived numerical metrics retained only in ignored output"},
     "C25": {"bit_identical": true, "quantities": {"interface": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "profiles": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "eta": {"applicable": false}, "inventory": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "accepted_times": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 0.0, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "analytic_error": {"applicable": false}, "stop_status": {"max_absolute_deviation": null, "max_relative_deviation": null, "max_tolerance_fraction": null, "tolerance": "exact structural equality"}}},
     "C26": {"bit_identical": true, "quantities": {"interface": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "profiles": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "eta": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "inventory": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "accepted_times": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 0.0, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "analytic_error": {"applicable": false}, "stop_status": {"max_absolute_deviation": null, "max_relative_deviation": null, "max_tolerance_fraction": null, "tolerance": "exact structural equality"}}},
     "C27": {"bit_identical": true, "quantities": {"interface": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "profiles": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "eta": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "inventory": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 1e-10, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "accepted_times": {"max_absolute_deviation": 0.0, "max_relative_deviation": 0.0, "max_tolerance_fraction": 0.0, "tolerance": {"rtol": 0.0, "atol": 1e-12, "rule": "atol + rtol * abs(reference)"}}, "analytic_error": {"applicable": false}, "stop_status": {"max_absolute_deviation": null, "max_relative_deviation": null, "max_tolerance_fraction": null, "tolerance": "exact structural equality"}}},

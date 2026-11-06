@@ -29,6 +29,12 @@ not been established.
 
 Stage 2B adapter relocation is complete for accepted O05 restricted-phase generation and O08 default-phase endpoint/equilibrium sampling. See [docs/NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for the remaining research builders/assembly dependency, open broader Stage 2 split and research-branch R01.
 
+Stage 2C is complete within O06: real TC generation uses the installed
+`moving_boundary.providers.thermocalc` facade with separately installed
+TC-Python and a valid licence; no TC pip dependency is added. See
+[NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#stage-2c-complete-within-o06) for
+the accepted scope, remaining research builders and uncovered workflows.
+
 ## Local acceptance
 
 From the extraction root, run:
@@ -42,20 +48,23 @@ source checkouts with no editable/site hooks. Shared kawin is unchanged.
 The local environment pointer is ignored `.verification/public-environment.json`;
 this is a configured local verification command, not a portable bootstrap.
 
-Quick: 30 run comparisons and 72 pytest tests passed in 436.25 s. Full: 39 run comparisons and 72 pytest tests passed in 508.95 s.
+Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 550.55 s.
 
 Quick includes C01-C24/C30-C32, the older binary fixture/bulk probes and freshly
 sampled O05 (4.94-second sampling pilot) and O08 (two valid default-phase tie lines
 and one FCC-only invalid probe). O08 was explicitly approved for quick/full after
 a 3.83-second worker pilot. C25-C29 are pytest lifecycle/failure
 contracts, with independent main/package workers. Full adds enabled cached
-O01/O02/O03a/O03b/O04/O07 and F04/F11/F12 drift checks. O06 reports SKIPPED until
-the TC adapter is batch-safe. All available cached cases ran. Missing caches are
+O01/O02/O03a/O03b/O04/O07 and F04/F11/F12 drift checks. Full-only O06 samples
+real TC data and completes six accepted steps with the approved suffixed phase
+names, fresh separate caches and an unseeded reference repeat pair. It skips
+with a clear reason if local inputs, TC-Python/runtime or licence are missing.
+All available cached cases ran. Missing caches are
 the only cache skip; invalid or changed existing inputs fail. Reference-independent
 exact/similarity errors are recorded in both short and long variants.
 
 Use the same wrapper with `acceptance.py full` for full. Announce its runtime
-estimate first (currently about 8-11 minutes including unseeded reference pairs); quick has a 600-second budget and
+estimate first (allow about 11 minutes including the O06 availability check and repeat pair); quick has a 600-second budget and
 full a 1200-second cap, well below 30 minutes. `verify.py` delegates to quick;
 `probe_fork.py` is explicitly historical. Separate environment creation is an
 offline setup operation, outside the quick budget. Use tools/setup_public_environment.py
@@ -66,14 +75,18 @@ References were captured from the clean detached `mb-ref-06dc7b4` worktree at
 kawin import origin. The extraction's older kawin/examples/root packaging remain
 frozen at ae9fb29; legacy fixtures are also checked. Tolerances/inputs are frozen
 in tools/acceptance_manifest.json; relocation gates were exact, public gates use
-the preregistered quantity tolerances without widening. O08 additionally requires byte identity and ordered phase metadata;
-its new detached-06dc7b4 fixture hashes are in the manifest. Only O05/O08 use a fixed Python hash
+the preregistered quantity tolerances without widening. O06/O08 require byte
+identity and frozen fixture hashes. O06 compares every numerical array exactly;
+only metadata_json.thermocalc_config.cache_dir is normalized, retaining all
+other metadata text. O08 also checks ordered phase metadata. Only O05/O08 use a fixed Python hash
 seed for the diagnosed pycalphad symbolic-ordering issue (LEDGERS.md R01). No
 NumPy seed is imposed. All other quick runs/contracts are repeated twice in fresh
-unseeded reference processes and must match byte for byte; fixtures are unchanged.
+unseeded reference processes and must match byte for byte; full also repeats
+O06. All 89 older reference files are unchanged; only the new O06 pair was captured.
 
-Numeric reference outputs, TC inputs, private hashes, logs, build targets and
-environment state stay local/git-ignored. Committed acceptance.json contains only
+Numeric reference outputs, TC inputs, logs, build targets and environment
+state stay local/git-ignored. Only approved O06 input/fixture provenance hashes
+enter the manifest; cached TC data hashes remain local. Committed acceptance.json contains only
 sanitized counts/provenance. docs/acceptance-deviations.json records per-run and
 per-quantity deviations, actual tolerances and bit identity, with TC metrics
 redacted to ignored output. Runs write only ignored local reports by default.

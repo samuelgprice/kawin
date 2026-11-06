@@ -1,7 +1,7 @@
 # Stage 1B: stock kawin 0.5.0
 
 Status: implemented and acceptance passed after all three exact module relocations.
-Quick: 30 run comparisons and 72 pytest tests passed in 436.25 s. Full: 39 run comparisons and 72 pytest tests passed in 508.95 s.
+Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 550.55 s.
 
 Stage 2B adapter relocation is complete for O05 restricted-phase generation and O08 default-phase endpoint/equilibrium sampling; these need no research checkout. See [NEXT_SESSIONS.md](NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for remaining research builders/assembly, the open broader Stage 2 split and research-branch R01.
 
@@ -69,6 +69,39 @@ Research assembly remains in the checkout. Acceptance is bounded to O05/O08;
 arbitrary default-phase workflows and delegated methods are not established.
 The broader Stage 2 split and R01 research-branch repair remain open.
 
+### Stage 2C TC generation source map
+
+providers/thermocalc.py maps all 87 classes/functions/methods one-to-one, with
+unchanged names, to examples/ThermoCalc/tc_python_adapter.py at
+06dc7b4ab56f67226ceabfde41ebf2690c088841. Source file SHA256:
+4f8886bbee01dc3b96752951a05a5d8fc5c605572b185470fc9003c0df931389.
+The module docstring lists every definition's original qualified name and line.
+
+| Package ownership | Frozen source / changes permitted |
+|---|---|
+| ThermoCalcConfig, TCPythonThermodynamics and all error/helper/backend definitions | Complete adapter copy; same arithmetic, defaults, composition/phase conventions, grid points, calls and retry order |
+| _TCPythonBackend.start/get_runtime_version | Original lazy tc_python imports; separately installed/licensed runtime, no pip dependency |
+| kawin.thermo.utils private helper imports | _process_xT_arrays:13, _getMatrixPhase:59, _getPrecipitatePhase:67 are byte-identical in stock 0.5.0; no compatibility copies |
+| Debugger dependency removal | Omit source import :21; replace only the live :1289 call with pass, retaining its conditional, print, exception/message/from-cause chain and retries |
+| Acceptance's installed builder call | tools/acceptance_thermocalc.py::_installed_surrogate maps training_data.py:187-223 without the research import; same conversions, from_database arguments/order and metadata |
+
+The complete adapter closure is __future__.annotations, contextlib.contextmanager,
+dataclasses.asdict/dataclass/field, pathlib.Path, re, typing.Any, NumPy, the three
+stock helpers and lazy tc_python/TCPython. No examples/debugger helper is copied.
+Executable adapter AST matches the frozen source after the two removals and
+module provenance docstring. Main remains unchanged (LEDGERS.md R03/R04).
+
+Stage 2C is complete within full-only O06: real installed TC generation under
+the examples import/read guard, three tie lines/two bulk points, six accepted
+steps and an unseeded reference repeat pair. The approved suffixed phase names
+are local input, not an adapter normalization change. All numerical arrays are
+bitwise-only; only metadata_json.thermocalc_config.cache_dir is normalized, and
+all other metadata text remains exact. The new reference is from detached
+06dc7b4, refuses overwrite and is frozen by manifest hashes. Inputs/databases,
+TC-derived values and metrics remain ignored; only counts/hashes are committed.
+See NEXT_SESSIONS.md's Stage 2C scope for research builders and unaccepted TC
+workflows. The broader Stage 2 split remains open; no scientific fix was made.
+
 The model constructs a local MeshData subclass and transfers the host's initial
 record state; it never replaces host class/module globals. Host mesh bases and
 TemperatureParameters remain public (array times in hours). The local provider
@@ -92,9 +125,10 @@ The installed workers assert stock version and package/host origins and use safe
 paths/no site hooks. Reference workers assert the clean detached 06dc7b4 origin.
 Frozen public tolerances are unchanged. Exact relocation evidence is separate in
 acceptance.json. C25-C29 compare reference/package contract outputs inside pytest.
-Full covers cached O-runs and longer analytic drift. Only live O06 is SKIPPED,
-pending a batch-safe TC adapter; cached cases ran when present. TC-derived values
-and hashes are never committed. Binary/two-phase unequal molar volumes remain
+Full covers cached O-runs, longer analytic drift and real O06, with its own
+unseeded repeat pair. O06 skips explicitly when runtime/licence/local inputs
+are unavailable. TC-derived values and metrics remain ignored; only sanitized
+counts/hashes are committed. Binary/two-phase unequal molar volumes remain
 unsupported; three-phase volume and supported x/u cases pass.
 
 Regression acceptance does not establish untested physical models, topology
