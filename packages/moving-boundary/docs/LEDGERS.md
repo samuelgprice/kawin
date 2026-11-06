@@ -15,7 +15,7 @@ physical convergence audit. See ACCEPTANCE_CANDIDATES.md for exact input variant
 | Lifecycle, rollback, failures and terminal stop | C25-C29 package pytest main/package contracts; C32 configured continue stop using real retries; no topology transition |
 | Cached material/provider workflows | O01/O02/O03a/O03b/O04/O07 run whenever present; private TC-derived inputs/references remain ignored |
 | pycalphad generation (Stage 2B relocation complete within O05/O08) | Installed providers/pycalphad.py; real restricted O05 and default-phase O08 sampling, seed 0, package examples import/read guard; O08 has two valid tie lines and one invalid probe, bitwise fixture/metadata gate |
-| TC-Python live generation | Stage 2C batch-safe adapter relocated and unit-tested in providers/thermocalc.py (b688ecf); O06 disabled and blocked on research issue R04 |
+| TC-Python live generation | Stage 2C batch-safe adapter relocated and unit-tested in providers/thermocalc.py (b688ecf); approved suffixed O06 convention resolves R04's input mismatch; O06 disabled pending repeatability and acceptance approval |
 | Unaccepted workflows | Arbitrary plotting/results/restart/coupling, Numba fallback, other kawin versions, alternative moving-boundary solvers and curvature/precipitation APIs are outside this gate |
 
 ## Ownership and provenance
@@ -25,8 +25,8 @@ to 06dc7b4 in relocation-map.json and BINARY_SLICE.md. Stage 2B generation maps
 function-by-function in PUBLIC_KAWIN_MILESTONE.md and the provider docstring.
 Generating with pycalphad no longer needs the research checkout; examples-based
 research builders/assembly, including TC training_data.py, still do. The TC
-adapter is package-owned and unit-tested, but live O06 generation is blocked on
-R04. The broader Stage 2
+adapter is package-owned and unit-tested; live O06 acceptance awaits the
+approved suffixed-input repeatability pilot. The broader Stage 2
 generation/evaluation/persistence/domain/equilibrium split is open; the four whole
 copied modules remain unchanged. R01 is open on the research branch. Shared private
 helpers live in shared.py. No fork solver inheritance remains. Public unmodified
@@ -115,25 +115,36 @@ omits only this unused import and passes its generation import/read guard.
 Main and the frozen oracle are unchanged. A research-branch cleanup of the unused
 import is proposed separately; no repair is made on main in this extraction.
 
-## Research phase-name issue R04 (open)
+## Research phase-name issue R04 (open research cleanup; O06 convention resolved)
 
 In examples/ThermoCalc/tc_python_adapter.py, calculate_equilibrium:452 stopped
 applying base_phase_name in cd87f88 (2026-08-22), preserving composition-set
-names such as FCC_A1#1. With the O06 FeCrNi base-phase configuration, the exact
-phase-key match at :1754 fails, every tie line is invalid, and
+names such as FCC_A1#1. With the original O06 FeCrNi base-phase configuration,
+the exact phase-key match at :1754 fails, every tie line is invalid, and
 kawin/diffusion/MovingBoundarySurrogates.py:873 rejects the endpoints. The
 examples/ThermoCalc tree is identical at frozen 06dc7b4 and main 5f4ad57, so
-main's FeCrNi TC workflow is affected too.
+main's unsuffixed FeCrNi TC workflow is affected too.
 
-The duplicate-base-phase check at :453 can no longer fire for separately numbered
-composition sets, while the docstring at :441-446 still describes base-name
-merging. The cd87f88 commit explicitly preserves composition-set numbers; that
-choice may be deliberate for systems where several composition sets are
-physically distinct phases, including the NiTiNb three-phase TC work. A fix
-requires a deliberate name-mapping rule on the research branch, validated on
-both FeCrNi and NiTiNb; unconditional suffix stripping is not an approved fix.
-Do not repair this behavior in the package or on main, change accepted inputs,
-or refresh references to hide it. O06 remains disabled pending R04.
+The diagnostic probe using the frozen 06dc7b4 adapter and the same O06 sampling
+inputs with phases=("BCC_A2#1", "FCC_A1#1") passed configuration validation,
+all three tie-line checks, ten kinetics queries and the surrogate build; the
+session closed normally. No adapter change was made. This suffixed-name
+convention, already used by the NiTiNb TC script
+examples/ternaryExamples/IllingworthTernaryThreePhaseNiTiNb_TC.py:166, resolves
+O06's phase-name blocker. The user approved that sole O06 input revision;
+the reference adapter remains frozen at 06dc7b4. O06 stays disabled pending
+the revised-input repeatability pilot and separate acceptance approval.
+
+The duplicate-base-phase check at :453 cannot detect separately numbered
+composition sets, and the docstring at :441-446 still describes base-name
+merging. Composition-set identifiers can distinguish physically distinct
+phases in NiTiNb; do not strip them unconditionally in the package or on main.
+Remaining research-branch work, validated on both FeCrNi and NiTiNb:
+
+- Update FeCrNi_TC_Python.py to configure suffixed names.
+- Raise a clear error when a stable phase matches a configured phase by base
+  name but not by exact name.
+- Correct the stale docstring at :441-446 and the dead duplicate check at :453.
 
 ## Historical evidence and narrow fix integration
 

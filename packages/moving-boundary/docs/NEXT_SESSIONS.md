@@ -50,7 +50,7 @@ Anything importing or reading examples/ still needs the research checkout. This
 includes research builders/assembly scripts and TC training_data.py. Those
 orchestration scripts are not installed APIs; the installed pycalphad generation
 step does not import or read them. The batch-safe TC adapter is now installed
-in providers/thermocalc.py, but O06 generation remains blocked on R04.
+in providers/thermocalc.py; live O06 acceptance awaits its revised-input repeatability pilot.
 
 surrogates.py, surrogate_artifacts.py, _diffusivity_domain.py and equilibrium.py
 were copied whole and unchanged in implementation, apart from required import
@@ -114,31 +114,14 @@ domain validation and equilibrium interfaces is still open. The four whole copie
 modules above have not been refactored into that split. R01 is still open on the
 research branch; Stage 2B makes no species/term sorting or CSE change.
 
-## Research phase-name issue R04 (open)
-
-In examples/ThermoCalc/tc_python_adapter.py, calculate_equilibrium:452 stopped
-applying base_phase_name in cd87f88 (2026-08-22), preserving composition-set
-names such as FCC_A1#1. With the O06 FeCrNi base-phase configuration, the exact
-phase-key match at :1754 fails, every tie line is invalid, and
-kawin/diffusion/MovingBoundarySurrogates.py:873 rejects the endpoints. The
-examples/ThermoCalc tree is identical at frozen 06dc7b4 and main 5f4ad57, so
-main's FeCrNi TC workflow is affected too.
-
-The duplicate-base-phase check at :453 can no longer fire for separately numbered
-composition sets, while the docstring at :441-446 still describes base-name
-merging. The cd87f88 commit explicitly preserves composition-set numbers; that
-choice may be deliberate for systems where several composition sets are
-physically distinct phases, including the NiTiNb three-phase TC work. A fix
-requires a deliberate name-mapping rule on the research branch, validated on
-both FeCrNi and NiTiNb; unconditional suffix stripping is not an approved fix.
-Do not repair this behavior in the package or on main, change accepted inputs,
-or refresh references to hide it. O06 remains disabled pending R04.
+See [LEDGERS.md R04](LEDGERS.md#research-phase-name-issue-r04-open-research-cleanup-o06-convention-resolved) for the passing suffixed-name probe and remaining research-branch work.
 
 ## Next scoped work
 
-- Stage 2C: batch-safe adapter relocated and unit-tested; O06 blocked on R04.
-  b688ecf retains the frozen numerical behavior; 77 package tests passed. Keep
-  O06 disabled until the research name-mapping rule and acceptance scope are reviewed.
+- Stage 2C: batch-safe adapter relocated and unit-tested; resume the O06
+  repeatability pilot with the approved suffixed phase names and unchanged
+  frozen adapter. b688ecf retains the numerical behavior; 77 package tests passed.
+  Keep O06 disabled until the pilot is reviewed and acceptance is separately approved.
 - Broaden fallback/Numba, plotting/result workflows, restart/coupling and scientific
   convergence coverage before claiming those capabilities. Parity is not proof of
   mathematical convergence or support for untested combinations.
