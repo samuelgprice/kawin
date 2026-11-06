@@ -1,7 +1,7 @@
 # Stage 1B: stock kawin 0.5.0
 
 Status: implemented and acceptance passed after all three exact module relocations.
-Quick: 29 run comparisons and 41 pytest tests passed in 435.73 s. Full: 38 run comparisons and 41 pytest tests passed in 495.45 s.
+Quick: 29 run comparisons and 65 pytest tests passed in 437.06 s. Full: 38 run comparisons and 65 pytest tests passed in 517.25 s.
 
 Stage 2B is complete: installed pycalphad generation needs no research checkout. See [NEXT_SESSIONS.md](NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for remaining research builders/assembly, the open broader Stage 2 split and research-branch R01.
 

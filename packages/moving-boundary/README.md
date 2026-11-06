@@ -42,7 +42,7 @@ source checkouts with no editable/site hooks. Shared kawin is unchanged.
 The local environment pointer is ignored `.verification/public-environment.json`;
 this is a configured local verification command, not a portable bootstrap.
 
-Quick: 29 run comparisons and 41 pytest tests passed in 435.73 s. Full: 38 run comparisons and 41 pytest tests passed in 495.45 s.
+Quick: 29 run comparisons and 65 pytest tests passed in 437.06 s. Full: 38 run comparisons and 65 pytest tests passed in 517.25 s.
 
 Quick includes C01-C24/C30-C32, the older binary fixture/bulk probes and freshly
 sampled O05 (4.94-second sampling pilot). C25-C29 are pytest lifecycle/failure

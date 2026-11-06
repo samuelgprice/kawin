@@ -16,8 +16,15 @@ and 22 package tests. The method-by-method subclass strategy is replaced.
 
 Stage 1B is complete against unmodified public kawin 0.5.0 in its separate local
 environment, with bounded package policy adapters and no fork-only runtime imports.
-Quick: 29 run comparisons and 41 pytest tests passed in 435.73 s. Full: 38 run comparisons and 41 pytest tests passed in 495.45 s.
+Quick: 29 run comparisons and 65 pytest tests passed in 437.06 s. Full: 38 run comparisons and 65 pytest tests passed in 517.25 s.
 See PUBLIC_KAWIN_MILESTONE.md, acceptance.json and README for scope and command.
+
+The final Stage 2B quick gate used 437.06 s of its unchanged
+600 s budget, 102.94 s below the 540 s review threshold. Tier
+membership is unchanged; all 33 unaffected quick/contract reference pairs remain
+in quick and full. The default quick run changed zero tracked files. Full used
+`--record`; its passing compact export retains one record per case. Only O06
+was skipped, under the existing TC-adapter batch-safety restriction.
 
 ## Installed solving and research-owned generation
 
