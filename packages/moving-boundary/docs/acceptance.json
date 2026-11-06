@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "state": "Complete binary module relocation; public-kawin gate pending",
+  "state": "Complete ternary module relocation; public-kawin gate pending",
   "reference_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
   "dependency_commit": "5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e",
   "quick": {
@@ -43,6 +43,18 @@
         "skipped": 0
       },
       "elapsed_seconds": 185.04699999999139,
+      "tolerance": "exact",
+      "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841"
+    },
+    "ternary": {
+      "runs": 29,
+      "pytest": {
+        "tests": 22,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "elapsed_seconds": 176.56200000000536,
       "tolerance": "exact",
       "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841"
     }

@@ -33,12 +33,62 @@
     "source_path": "kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py",
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
     "symbols": [
-      "_BULK_DIFFUSIVITY_IMPLICIT",
-      "_BULK_DIFFUSIVITY_LAGGED",
       "_BULK_DIFFUSIVITY_PHASE_UNIFORM",
+      "_BULK_DIFFUSIVITY_LAGGED",
+      "_BULK_DIFFUSIVITY_IMPLICIT",
       "_SUPPORTED_BULK_DIFFUSIVITY_MODES",
-      "_coerce_bulk_diffusivity_mode"
+      "_INITIAL_ETA_DISTINCT_ROOT_COMPOSITION_TOL",
+      "_COMPONENTWISE_ROUNDOFF_FACTOR",
+      "_loge_arange",
+      "_matvec_2x2",
+      "_bounded_finite_difference_perturbation",
+      "_newton_step_2x2",
+      "_condition_number_2x2",
+      "_smallest_real_eigenvalue_2x2",
+      "_validate_motion_branch",
+      "_allocate_ternary_block_system",
+      "_MOTION_BRANCH_ATOL",
+      "_INTERFACE_ETA_FD_STEP",
+      "_select_interface_motion_branch",
+      "InitialEtaEstimate",
+      "_InterfaceCandidate",
+      "_BulkPhaseSolveResult",
+      "_validate_ternary_diffusivity_matrix",
+      "_validate_ternary_diffusivity_stack",
+      "_select_converged_branch",
+      "_validate_eta_bounds",
+      "_coerce_initial_eta_bracket",
+      "_temperature_at_interface",
+      "_get_stefan_interdiffusivity",
+      "_get_bulk_interdiffusivity",
+      "_coerce_bulk_diffusivity_mode",
+      "estimate_initial_eta_from_instantaneous_balance",
+      "_ScalarHistory",
+      "_ArrayHistory"
     ],
-    "changes": "shared helper placement; definitions unchanged"
+    "changes": "complete pre-class helper section; imports only"
+  },
+  "numerics/ternary.py": {
+    "source_path": "kawin/diffusion/mesh/MovingBoundaryIllingworthTernaryFD1D.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "module placement/imports only",
+    "numerical_ast": "identical"
+  },
+  "equilibrium.py": {
+    "source_path": "kawin/diffusion/MovingBoundaryEquilibrium.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "module placement/imports only",
+    "numerical_ast": "identical"
+  },
+  "_spectral_validation.py": {
+    "source_path": "kawin/diffusion/_spectral_validation.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "module placement/imports only",
+    "numerical_ast": "identical"
+  },
+  "solvers/ternary.py": {
+    "source_path": "kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "class body unchanged; complete shared helper section moved to shared.py"
   }
 }

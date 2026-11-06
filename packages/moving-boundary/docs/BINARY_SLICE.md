@@ -11,8 +11,6 @@ ae9fb29, and the temporary installed host pin is the test-only cleanup 5f4ad57.
 The detached 06dc7b4 source stays clean. Source files are copied mechanically;
 imports/module placement change, preserving arithmetic, docstrings, exception and
 boundary conventions, temperature-array hours and supported composition bases.
-Copied EOF whitespace is trimmed where needed for Git's whitespace check;
-no numerical AST or surrounding source formatting is changed.
 
 | Package path | Source path / extraction | Changes |
 |---|---|---|
@@ -21,7 +19,11 @@ no numerical AST or surrounding source formatting is changed.
 | mesh/FDM1D.py | kawin/diffusion/mesh/FDM1D.py | module placement/imports only |
 | mesh/TransformedGrids.py | kawin/diffusion/mesh/TransformedGrids.py | module placement/imports only |
 | _illingworth_interstitials.py | kawin/diffusion/_illingworth_interstitials.py | module placement/imports only |
-| shared.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | shared helper placement; definitions unchanged |
+| shared.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | complete pre-class helper section; imports only |
+| numerics/ternary.py | kawin/diffusion/mesh/MovingBoundaryIllingworthTernaryFD1D.py | module placement/imports only |
+| equilibrium.py | kawin/diffusion/MovingBoundaryEquilibrium.py | module placement/imports only |
+| _spectral_validation.py | kawin/diffusion/_spectral_validation.py | module placement/imports only |
+| solvers/ternary.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | class body unchanged; complete shared helper section moved to shared.py |
 
 The scalar kernel's old numerics/tridiagonal.py path now re-exports from the whole
 binary helper module, avoiding two independent copies. Shared private helpers
