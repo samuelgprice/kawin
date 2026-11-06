@@ -19,7 +19,7 @@ actual tested hashes and separately records those formatting-only adjustments.
 These are prior results, not a newly executed acceptance suite.
 
 The source reference remains ae9fb2971a9fd49132f71ddc883a5bd5406644b6 and the
-installed dependency remains 06dc7b4ab56f67226ceabfde41ebf2690c088841.
+installed dependency is 5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e.
 The approved-run suite will use main at 06dc7b4 as its reference. Do not silently
 replace the earlier reference fixture. Public-kawin compatibility is unproven.
 
@@ -36,7 +36,7 @@ before relocating solvers or changing the dependency. Item 4e requires
 that suite for every subsequent solver move and the public-kawin switch.
 
 After approval, write per-quantity tolerances before examining new results, then
-capture outputs from main at 06dc7b4 and build the isolated acceptance runner.
+capture outputs from a clean detached 06dc7b4 worktree and build the isolated acceptance runner.
 Use exact comparison for mechanical relocation and installed-wheel processes.
 
 ### Whole-module relocation (review item 2; not yet implemented)

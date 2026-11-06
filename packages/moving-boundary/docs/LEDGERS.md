@@ -53,6 +53,7 @@ Git addition status establishes repository history, not independent authorship.
 | diffusion/mesh/FDM1D.py (CartesianFD1D), TransformedGrids.py, MovingBoundaryIllingworth*FD1D.py | Local additions absent upstream; scalar tridiagonal kernel extracted; transformed grids and block kernel remain fork-owned |
 | diffusion/_illingworth_interstitials.py, _spectral_validation.py, MovingBoundaryEquilibrium.py | Local helpers retained transitively, not extracted |
 | diffusion/MovingBoundarySurrogates.py, SurrogateArtifacts.py, SurrogateDiagnostics.py and related benchmark/domain modules | Local additions; provider/surrogate stage deferred |
+| examples/ThermoCalc/tc_python_adapter.py | Still imports/calls examples.debugInPlace. Remove that dependency when promoted in Stage 2C; O06 remains disabled until batch-safe |
 | diffusion/__init__.py and mesh/__init__.py | Local expanded export lists; targeted submodule import still executes initializer and imports unrelated machinery |
 | New facade __getattr__ | Lazy resolution to binary subclass; two bulk methods and scalar kernel extracted without global patches |
 | New example build_model and ConstantDiffusivity | Adapted from _binary_model and _BinaryThermodynamics in baseline builder at fork SHA; original source mapping retained here |
@@ -164,7 +165,7 @@ the entire Stage 0 matrix or independent mathematical validation.
 ## Fork packaging integration
 
 The baseline mapping above remains at ae9fb29. The installable dependency now
-pins 06dc7b4ab56f67226ceabfde41ebf2690c088841, from fix/remove-debugger-imports
+pins 5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e, from fix/remove-debugger-imports
 based directly on ae9fb29 and fast-forwarded into local main. No solver/host code
 was copied into the extension and the extraction reference was not merged forward.
 The change removes production debugger dependencies and adds batch-import and

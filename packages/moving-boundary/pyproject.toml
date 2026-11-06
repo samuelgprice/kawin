@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = {file = "LICENSE"}
 dependencies = [
   "numpy",
-  "kawin @ git+https://github.com/samuelgprice/kawin.git@06dc7b4ab56f67226ceabfde41ebf2690c088841",
+  "kawin @ git+https://github.com/samuelgprice/kawin.git@5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e",
 ]
 
 [tool.setuptools]

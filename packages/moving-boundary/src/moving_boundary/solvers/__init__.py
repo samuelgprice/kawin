@@ -25,7 +25,7 @@ def __getattr__(name):
                         "kawin.diffusion.MovingBoundaryIllingworthFDM"}:
             raise ImportError(
                 "This development bridge requires samuelgprice/kawin at "
-                "06dc7b4ab56f67226ceabfde41ebf2690c088841; public kawin "
+                "5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e; public kawin "
                 "does not provide this solver. See the package README."
             ) from exc
         raise
