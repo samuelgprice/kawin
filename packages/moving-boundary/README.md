@@ -27,6 +27,28 @@ cases pass an explicit policy and input() is prohibited before imports.
 C32 is a configured retry stress case. A small natural physical stop run has
 not been established.
 
+## Installed solving and research-owned generation
+
+The installed package with stock kawin alone supports solving with user-supplied
+analytic providers, saved surrogates, or cached tables supplied through the solver's
+provider interface. Those solves do not require the research checkout once their
+provider inputs are assembled using installed APIs.
+
+The approved pycalphad data-generation workflow still needs the research checkout.
+O05 reads examples/ternaryExamples/pycalphad_default_phase_adapter.py from detached
+06dc7b4 through the acceptance input loader; that adapter is not in the installed
+wheel. Anything importing from examples/ also needs the checkout. This includes
+the research builders/assembly scripts used by the acceptance suite, even when
+their resulting solver can operate entirely on analytic or cached provider data.
+The public thermodynamic engine is installed; the research generation adapter and
+example orchestration have not been extracted.
+
+surrogates.py, surrogate_artifacts.py, _diffusivity_domain.py and equilibrium.py
+were copied whole and unchanged in implementation, apart from required import
+relocations and documented whitespace-only edits. Their presence in the package
+does not complete the Stage 2 provider/surrogate separation. NEXT_SESSIONS.md Stage 2B scopes
+the adapter move; R01 remains a separate research-branch scientific issue.
+
 ## Local acceptance
 
 From the extraction root, run:
@@ -40,7 +62,7 @@ source checkouts with no editable/site hooks. Shared kawin is unchanged.
 The local environment pointer is ignored `.verification/public-environment.json`;
 this is a configured local verification command, not a portable bootstrap.
 
-Quick: 29 run comparisons and 30 pytest tests passed in 146.36 s. Full: 38 run comparisons and 30 pytest tests passed in 220.99 s.
+Quick: 29 run comparisons and 41 pytest tests passed in 435.73 s. Full: 38 run comparisons and 41 pytest tests passed in 495.45 s.
 
 Quick includes C01-C24/C30-C32, the older binary fixture/bulk probes and freshly
 sampled O05 (4.94-second sampling pilot). C25-C29 are pytest lifecycle/failure
@@ -51,7 +73,7 @@ the only cache skip; invalid or changed existing inputs fail. Reference-independ
 exact/similarity errors are recorded in both short and long variants.
 
 Use the same wrapper with `acceptance.py full` for full. Announce its runtime
-estimate first (currently about 5-8 minutes); quick has a 600-second budget and
+estimate first (currently about 8-11 minutes including unseeded reference pairs); quick has a 600-second budget and
 full a 1200-second cap, well below 30 minutes. `verify.py` delegates to quick;
 `probe_fork.py` is explicitly historical. Separate environment creation is an
 offline setup operation, outside the quick budget. Use tools/setup_public_environment.py
@@ -69,7 +91,9 @@ unseeded reference processes and must match byte for byte; fixtures are unchange
 
 Numeric reference outputs, TC inputs, private hashes, logs, build targets and
 environment state stay local/git-ignored. Committed acceptance.json contains only
-sanitized counts/provenance. See docs/BINARY_SLICE.md, LEDGERS.md and
+sanitized counts/provenance. docs/acceptance-deviations.json records per-run and
+per-quantity deviations, actual tolerances and bit identity, with TC metrics
+redacted to ignored output. See docs/BINARY_SLICE.md, LEDGERS.md and
 PUBLIC_KAWIN_MILESTONE.md for ownership, scope and method-level source mapping.
 
 Package identity/audience, publication, pushing, MAP outreach, upstream contribution

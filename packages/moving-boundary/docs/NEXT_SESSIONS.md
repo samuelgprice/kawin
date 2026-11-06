@@ -16,8 +16,30 @@ and 22 package tests. The method-by-method subclass strategy is replaced.
 
 Stage 1B is complete against unmodified public kawin 0.5.0 in its separate local
 environment, with bounded package policy adapters and no fork-only runtime imports.
-Quick: 29 run comparisons and 30 pytest tests passed in 146.36 s. Full: 38 run comparisons and 30 pytest tests passed in 220.99 s.
+Quick: 29 run comparisons and 41 pytest tests passed in 435.73 s. Full: 38 run comparisons and 41 pytest tests passed in 495.45 s.
 See PUBLIC_KAWIN_MILESTONE.md, acceptance.json and README for scope and command.
+
+## Installed solving and research-owned generation
+
+The installed package with stock kawin alone supports solving with user-supplied
+analytic providers, saved surrogates, or cached tables supplied through the solver's
+provider interface. Those solves do not require the research checkout once their
+provider inputs are assembled using installed APIs.
+
+The approved pycalphad data-generation workflow still needs the research checkout.
+O05 reads examples/ternaryExamples/pycalphad_default_phase_adapter.py from detached
+06dc7b4 through the acceptance input loader; that adapter is not in the installed
+wheel. Anything importing from examples/ also needs the checkout. This includes
+the research builders/assembly scripts used by the acceptance suite, even when
+their resulting solver can operate entirely on analytic or cached provider data.
+The public thermodynamic engine is installed; the research generation adapter and
+example orchestration have not been extracted.
+
+surrogates.py, surrogate_artifacts.py, _diffusivity_domain.py and equilibrium.py
+were copied whole and unchanged in implementation, apart from required import
+relocations and documented whitespace-only edits. Their presence in the package
+does not complete the Stage 2 provider/surrogate separation. Stage 2B below scopes
+the adapter move; R01 remains a separate research-branch scientific issue.
 
 ## Completed implementation order
 
@@ -44,6 +66,24 @@ Propose a research-branch provider regression across hash seeds, followed by
 validated deterministic symbolic ordering or a dependency/compiler fix. Do not
 implement that scientific fix independently in the package, on main, or by
 refreshing references. Numerical code, references and tolerances remain unchanged.
+
+## Stage 2B: move the pycalphad generation adapter (not implemented)
+
+Move the needed provider facade and phase-universe/g_offset/endpoint-ordering
+helpers from examples/ternaryExamples/pycalphad_default_phase_adapter.py into a
+package-owned provider module. Preserve their existing numerical conventions and
+explicit contracts; do not bundle the R01 scientific repair or TC-adapter work.
+Switch O05 to the installed adapter so generation no longer imports or reads that
+examples/ module. Keep immutable reference setup definitions available to acceptance
+without representing those research builders as installed-package functionality.
+
+Acceptance for that move: real pycalphad sampling with stock kawin outside research
+import paths, unchanged reference/input hashes and quantity tolerances, labelled
+endpoint/phase/component ordering, and passing quick/full gates. Do not replace
+generation with a cached/fake provider. Keep databases, trained artifacts and TC
+outputs local as required. The broader Stage 2 separation of provider generation,
+surrogate evaluation, persistence/domain validation and equilibrium interfaces is
+still open; the four whole copied modules above have not been refactored into it.
 
 ## Next scoped work
 
