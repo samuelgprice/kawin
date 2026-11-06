@@ -23,7 +23,12 @@ installed dependency is 5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e.
 The approved-run suite will use main at 06dc7b4 as its reference. Do not silently
 replace the earlier reference fixture. Public-kawin compatibility is unproven.
 
-## Approval gate and implementation order
+## Acceptance command and implementation order
+
+The approved suite is implemented: quick passes 29 runs plus 22 tests; full
+passes 38 runs plus 22 tests, with O06 explicitly disabled. Source inputs and
+tolerances are frozen; references come from clean detached 06dc7b4. All TC-derived
+outputs stay ignored. See acceptance.json and ACCEPTANCE_CANDIDATES.md.
 
 The concrete candidate list is ACCEPTANCE_CANDIDATES.md (review item 4a):
 The list is approved with quick/full tiers, enabled-when-present local caches,

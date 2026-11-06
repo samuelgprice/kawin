@@ -37,19 +37,36 @@ new run of that numerical verification. New results will record their own inputs
 
 Every Python-based command must use the activated kawin Conda environment:
 
-    cmd.exe /d /c 'call "C:\ProgramData\anaconda3\Scripts\activate.bat" "C:\ProgramData\anaconda3\envs\kawin" && python packages/moving-boundary/tools/verify.py --require-installed-fork'
+    cmd.exe /d /c 'call "C:\ProgramData\anaconda3\Scripts\activate.bat" "C:\ProgramData\anaconda3\envs\kawin" && python packages/moving-boundary/tools/acceptance.py quick'
 
-The existing command builds the nested project and pinned local fork privately,
-checks the frozen fixture and separate installed imports/parity, and runs package
-pytest. Each subprocess has an actual timeout (30–600 seconds). Batch workers
-forbid input() and frozen case loading supplies explicit ternary terminal policies;
-production prompt defaults are unchanged. No source/editable paths are used by
-the installed -I -S probe. Logs/builds/caches stay under ignored .verification/.
+The command builds the nested package and pinned local fork in private targets,
+runs outside source roots, compares every recorded quantity with detached 06dc7b4,
+then runs package pytest including C25–C29. Quick passes 29 run comparisons plus
+22 tests in about 143 seconds using existing targets; fresh private builds add
+roughly 20 seconds. Real O05 pycalphad sampling is enabled after its five-second
+pilot. C31 uses the irregular Fig. 4 grid and C32 reaches configured terminal stop
+under continue with real solver retries. Binary/two-phase unequal volumes are
+explicitly unsupported.
 
-The approved quick/full command is implemented after input/tolerance manifests
-are frozen; its default quick budget is under ten minutes. The full tier adds
-present cached research cases and long drift checks, with an estimate reported
-before execution and a cap well below 30 minutes. C25–C29 live in pytest.
+Use `python packages/moving-boundary/tools/acceptance.py full` through the same
+activation wrapper for quick plus present cached runs and longer analytic drift
+checks. Full passes 38 runs and 22 tests in about 198 seconds; O06 is explicitly
+SKIPPED pending a batch-safe TC adapter. Missing cached inputs are the only cache
+skip; corrupt data or enabled-case errors fail. Full has a 20-minute cap and a
+runtime estimate is reported before execution.
+
+Numerical fixtures, datasets, logs, build/install targets and private input hashes
+remain under ignored .verification/; no TC-derived reference output is committed.
+docs/acceptance.json contains only sanitized counts/status and provenance. Input
+sources and tolerances are frozen in tools/acceptance_manifest.json. Workers use
+safe-path/no-site startup, cleared Python path variables and deterministic hash/
+NumPy seeds; import origins and the detached source's cleanliness are asserted.
+The previous non-repeatable O05 fixture is preserved locally. Tolerances did not
+change. Exact/similarity errors are recorded as independent quantities.
+
+The older verify.py --require-installed-fork remains a scoped frozen-fixture
+verification tool for the temporary Git-pinned checkpoint. The quick/full command
+is the approved suite and includes the retained 33 legacy arrays and 12 probes.
 
 No independent driver/results or thermodynamic rewrite is intended. Unequal
 per-phase molar volumes are supported by the three-phase solver only, not binary

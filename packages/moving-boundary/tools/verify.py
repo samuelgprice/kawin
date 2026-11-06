@@ -177,6 +177,7 @@ report = dict(
             cwd=outside, env=env)
         run("parity", [sys.executable, "-m", "pytest",
                        str(PROJECT / "tests"), "--import-mode=importlib",
+                       "--ignore", str(PROJECT / "tests/test_acceptance_contracts.py"),
                        "--basetemp", str(FORK / ".pytest_tmp/package_bridge"),
                        "--junitxml", str(OUTPUT / "pytest.xml"),
                        "-q"], cwd=outside, env=env)

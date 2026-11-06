@@ -35,23 +35,40 @@
 - These are scoped checks, not completion of the approved suite or Stage 1B.
   No new main-reference fixture capture or public-kawin acceptance is claimed yet.
 
+## Approved suite implementation
+
+tools/acceptance.py quick passes 29 separate run comparisons and all 22 package
+pytest tests (including C25–C29) in 142.58 s with existing private wheels.
+Full passes 38 run comparisons and the same 22 tests in 197.80 s. O06 is skipped
+explicitly because the TC adapter remains unsafe. Enabled caches were all present.
+All output quantities, original binary fixtures and bulk probes match exactly.
+See acceptance.json for sanitized evidence; TC-derived reference arrays stay local.
+
+Real pycalphad sampling took 4.94 s and runs afresh in O05. Initial unseeded
+reference-vs-reference sampling varied; fixed Python hashing and NumPy seed 0
+restored exact repeatability. The old fixture is archived locally, no tolerance
+was widened, and the detached source is unchanged. Workers use -P -S with Python
+path variables removed so the hash seed is honored while retaining safe paths and
+no editable/site hooks. Every reference worker asserts kawin.__file__.
+
+The regular/irregular binary, opposite/drift similarity, interstitial and volume
+runs have reference fixtures. F04/F11/F12 retain longer drift and independent
+analytic errors. C32 reaches configured terminal stop through actual retries,
+with continue explicit and no fake solve callback. It is a terminal-retry stress
+setup; phase-disappearance support remains outside scope. Explicit unequal molar
+volumes in binary and ternary two-phase remain unsupported.
+
 ## Next execution
 
-1. Freeze exact input variants and per-quantity tolerances before comparisons.
-2. Create/assert the clean detached 06dc7b4 reference worktree and capture approved
-   quick/full references there. No generated licensed/data-derived outputs may be
-   committed. Keep the original research checkout's untracked files untouched.
-3. Put lifecycle/failure C25–C29 into package pytest with separate main/package
-   workers. Add irregular-grid, supported terminal-continue and independent
-   exact/similarity errors. Explicitly document unsupported volume combinations.
-4. Pilot real O05 sampling: quick/default if it fits about a minute, otherwise
-   full. Full enables O01/O02/O03/O04/O07 when caches exist, skipping only missing
-   caches. O06 stays disabled pending a batch-safe promoted adapter.
-5. Capture/compare installed wheels after each whole-module move (binary, ternary
-   two-phase, then three-phase). Quick including pytest must stay under ten minutes.
-6. Build the package compatibility layer and verify stock kawin 0.5.0 in a separate
-   environment. Keep 8.3145 explicit, minComposition 1e-10, and required host
-   minimum/final-step, recording and initialization semantics without monkeypatches.
+1. Relocate complete binary, ternary two-phase and three-phase local modules,
+   each as an import-only mechanical move with a separate passing quick gate and
+   commit. Shared private helpers belong in a package-level module; remove the
+   intermediate inheritance from the fork's binary Illingworth class.
+2. Add bounded package compatibility and a separate stock-kawin 0.5.0 environment,
+   preserving host loop/mesh/recording and thermo services without monkeypatches.
+   Require no fork-only imports and the preregistered public tolerances.
+3. Run full including cached research cases and analytic drift after the public
+   switch; report the runtime estimate first and preserve all private fixtures.
 
 All Python, pytest, package-inspection and setup commands inherit the required
 Conda activation wrapper and use actual subprocess timeouts, noninteractive stdin

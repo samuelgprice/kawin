@@ -190,8 +190,58 @@
     "kawin/tests/test_transformed_grids.py": "0a2f1d351fb54a2aec2e65c338f3918eafb4181853397ed08b4e8666f98c7cd9"
   },
   "tooling_sha256": {
-    "acceptance_inputs.py": "ae6a4d2bbf8069b3691cf2e6c34122e3c2eeebc55544fe46321d2ac9f586f53f",
-    "acceptance_cases.py": "b856911a2167bfd06af587b1dddd8ddf35cade88dc78f0a4c2f5c7a302f6f46a",
-    "acceptance_worker.py": "7e4b32a83310016ed69329a0370ed9facba9fec14bba10a969a3850cdf897d3c"
+    "acceptance_inputs.py": "30d9db0d914b60854f63a5d724f9189ab5b89bd7bbc6693662791be8cb3d6666",
+    "acceptance_cases.py": "72197527dcacd4ec25d4a825c138ff0c9f11780f0693942340f6a4c34561e34e",
+    "acceptance_worker.py": "dc11c77dc4a4418f7b50aa0c92c6a9af26a1e9216b655ed3512f06e1dfb9fef6",
+    "acceptance_contracts.py": "0acd90fe540475db812be91bb90b7b5393586e13ce5cd0375fc21275e1c88604",
+    "acceptance.py": "9ea5ba492f7d7de8f29dfa4c63c132898ffaa2ab3fc2a09eb4108e4cb914764a",
+    "acceptance_optional.py": "d5c5ca91122e7aac1b61c6da6fad6f73563f7cc0590bdcd9390b325b11a4d0dd"
+  },
+  "tooling_revision_note": "Added runner and pytest contract dispatch; no tolerance or approved numeric setup changed after the initial pilots.",
+  "terminal_pilot": {
+    "case": "C32",
+    "source": "_make_nonstationary_unequal_volume_model",
+    "policy": "continue",
+    "max_iterations_after_setup": 1,
+    "max_step_retries": 1,
+    "terminal_width": 0.31,
+    "extra_retries": 25,
+    "duration": 2e-06,
+    "classification": "configured thin-phase retry stress; no forced solve callback"
+  },
+  "pycalphad_pilot": {
+    "temperature": 1373.0,
+    "phases": [
+      "BCC_A2",
+      "FCC_A1"
+    ],
+    "seed": [
+      0.45,
+      0.21
+    ],
+    "samples_per_side": 2,
+    "bulk_points": [
+      [
+        0.39696,
+        0.0001
+      ],
+      [
+        0.139297,
+        0.142387
+      ]
+    ],
+    "min_composition": 1e-10,
+    "g_offset": 0.0,
+    "validity_policy": "legacy"
+  },
+  "process_policy": {
+    "python_flags": [
+      "-P",
+      "-S"
+    ],
+    "clear_python_path_variables": true,
+    "python_hash_seed": 0,
+    "numpy_seed": 0,
+    "reason": "Unchanged O05 reference-vs-reference was non-bitwise with randomized hashing; two seeded reference workers matched every array exactly. Original unseeded O05 fixture preserved locally. No tolerance changed."
   }
 }
