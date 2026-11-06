@@ -361,7 +361,7 @@ assert Path(kawin.__file__).resolve() == Path(sys.argv[2]) / 'kawin/__init__.py'
 import pytest
 raise SystemExit(pytest.main(sys.argv[3:]))
 """
-    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py", "test_acceptance_reporting.py", "test_pycalphad_provider.py", "test_default_phase_acceptance.py"]
+    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py", "test_acceptance_reporting.py", "test_pycalphad_provider.py", "test_default_phase_acceptance.py", "test_thermocalc_provider.py"]
     args = [sys.executable, "-I", "-S", "-c", code, state["target"], state["host"],
             *[str(PROJECT / "tests" / name) for name in tests],
             str(PROJECT / "tests/test_bridge.py") + "::test_namespace_import_is_lazy",
