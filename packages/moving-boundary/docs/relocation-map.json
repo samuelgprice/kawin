@@ -90,5 +90,11 @@
     "source_path": "kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py",
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
     "changes": "class body unchanged; complete shared helper section moved to shared.py"
+  },
+  "solvers/three_phase.py": {
+    "source_path": "kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "module placement/imports only",
+    "numerical_ast": "identical"
   }
 }

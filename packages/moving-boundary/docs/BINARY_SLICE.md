@@ -24,6 +24,7 @@ boundary conventions, temperature-array hours and supported composition bases.
 | equilibrium.py | kawin/diffusion/MovingBoundaryEquilibrium.py | module placement/imports only |
 | _spectral_validation.py | kawin/diffusion/_spectral_validation.py | module placement/imports only |
 | solvers/ternary.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | class body unchanged; complete shared helper section moved to shared.py |
+| solvers/three_phase.py | kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py | module placement/imports only |
 
 The scalar kernel's old numerics/tridiagonal.py path now re-exports from the whole
 binary helper module, avoiding two independent copies. Shared private helpers

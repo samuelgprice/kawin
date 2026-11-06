@@ -1,12 +1,12 @@
 """Relocated Illingworth solvers; host loop and mesh bases still come from kawin."""
 import importlib
 
-__all__ = ['MovingBoundaryIllingworthFD1DModel', 'MovingBoundaryIllingworthTernaryFD1DModel']
+__all__ = ['MovingBoundaryIllingworthFD1DModel', 'MovingBoundaryIllingworthTernaryFD1DModel', 'MovingBoundaryIllingworthTernaryThreePhaseFD1DModel']
 
 
 def __getattr__(name):
     """Load the package-owned solver lazily and report a missing required host."""
-    modules = {'MovingBoundaryIllingworthFD1DModel': 'binary', 'MovingBoundaryIllingworthTernaryFD1DModel': 'ternary'}
+    modules = {'MovingBoundaryIllingworthFD1DModel': 'binary', 'MovingBoundaryIllingworthTernaryFD1DModel': 'ternary', 'MovingBoundaryIllingworthTernaryThreePhaseFD1DModel': 'three_phase'}
     if name not in modules:
         raise AttributeError(name)
     try:
