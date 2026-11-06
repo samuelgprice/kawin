@@ -32,7 +32,7 @@ the reference import path. Assert kawin.__file__ in every reference worker and
 assert installed-package/host origins in every package worker. Keep reference
 source clean (external caches and bytecode disabled), verifying Git state before
 and after reference capture. The ae9fb29 fixture remains a separate older oracle.
-Workers use -P -S with Python path variables cleared, PYTHONHASHSEED=0 and NumPy seed 0. This retains no-site/safe-path isolation while fixing provider repeatability (unlike -I, which ignores the hash-seed environment variable). An unseeded reference-vs-reference O05 check was non-bitwise; two seeded reference workers match exactly, and the original fixture is retained locally. No tolerance was widened.
+Workers use -P -S with Python path variables cleared. Only O05 uses PYTHONHASHSEED=0 for the diagnosed third-party symbolic-order/CSE issue (LEDGERS.md R01); no NumPy seed is imposed. Every unaffected quick run and pytest contract is compared across two fresh unseeded reference workers using raw bytes. Existing references and tolerances remain unchanged.
 Each worker runs outside source checkouts; case input definitions may be read
 from the detached source without adding research checkout paths to installed runs.
 

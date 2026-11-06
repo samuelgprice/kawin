@@ -42,7 +42,8 @@ def main():
     else:
         sys.path[:0] = [str(args.target.resolve()), str(args.host.resolve())]
     import numpy as np
-    np.random.seed(0)
+    if args.case != "O05":
+        assert "PYTHONHASHSEED" not in os.environ, "Unrelated cases must be unseeded"
     import kawin
     expected = args.root / "kawin/__init__.py" if args.role == "reference" else args.host / "kawin/__init__.py"
     assert Path(kawin.__file__).resolve() == expected.resolve(), kawin.__file__
@@ -65,7 +66,8 @@ def main():
     inputs.artifacts = args.artifacts
     args.output.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    report = dict(case=args.case, role=args.role, kawin_origin=kawin.__file__)
+    report = dict(case=args.case, role=args.role, kawin_origin=kawin.__file__,
+                  hash_seed=os.environ.get("PYTHONHASHSEED"), numpy_seed_override=False)
     try:
         import numpy as np
         if args.prepare:

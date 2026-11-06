@@ -38,9 +38,24 @@ def validate_reference(reference):
     return manifest
 
 
-def worker(case, role, *, reference=REFERENCE, state=None, prepare=False, timeout=60):
-    """Execute a single worker outside source roots; retain outputs locally."""
-    path = OUTPUT / ("reference" if role == "reference" else "package") / case
+def worker_environment(case):
+    """Isolate Python configuration; only O05 needs hash-stable provider compilation.
+
+    NumPy seeding is deliberately absent: O05's variation comes from unordered
+    symbolic construction/CSE, not a random sampler. All other cases retain
+    independently randomized interpreter hashes and untouched NumPy RNG state.
+    """
+    env = {key:value for key,value in os.environ.items() if not key.startswith("PYTHON")}
+    env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1",
+               NUMBA_CACHE_DIR=str(OUTPUT / "numba"))
+    if case == "O05":
+        env["PYTHONHASHSEED"] = "0"
+    return env
+
+
+def worker(case, role, *, reference=REFERENCE, state=None, prepare=False, timeout=60, output=None):
+    """Execute an origin-checked worker; optional diagnostic paths never replace fixtures."""
+    path = Path(output) if output is not None else OUTPUT / ("reference" if role == "reference" else "package") / case
     args = [sys.executable, "-P", "-S", str(PROJECT / "tools/acceptance_worker.py"),
         "--role", role, "--root", str(reference), "--case", case, "--output", str(path),
         "--artifacts", str(OUTPUT / "inputs")]
@@ -48,9 +63,7 @@ def worker(case, role, *, reference=REFERENCE, state=None, prepare=False, timeou
         args.extend(["--target", state["target"], "--host", state["host"]])
     if prepare:
         args.append("--prepare")
-    env = {key:value for key,value in os.environ.items() if not key.startswith("PYTHON")}
-    env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONHASHSEED="0", PYTHONNOUSERSITE="1",
-               NUMBA_CACHE_DIR=str(OUTPUT / "numba"))
+    env = worker_environment(case)
     started = time.monotonic()
     try:
         output = run(args, env=env, timeout=timeout)
@@ -62,6 +75,40 @@ def worker(case, role, *, reference=REFERENCE, state=None, prepare=False, timeou
     report = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     report["wall_seconds"] = time.monotonic() - started
     return report
+
+
+def bit_identical(left, right):
+    """Require equal shapes, dtypes and bytes, including signed zero and NaN payloads."""
+    return left.shape == right.shape and left.dtype == right.dtype and left.tobytes() == right.tobytes()
+
+
+def check_repeatability(case, *, reference, directory, timeout=120):
+    """Compare two fresh unseeded reference processes without changing any fixture.
+
+    Every unaffected quick run and pytest contract is checked. A difference fails
+    the gate; it must never trigger another seed exception automatically.
+    """
+    import numpy as np
+    assert case != "O05", "O05 is the documented hash-sensitive generation workflow"
+    started = time.monotonic()
+    folder = Path(directory) / case
+    reports = []
+    for repeat in ("a", "b"):
+        remaining = timeout - (time.monotonic()-started)
+        assert remaining > 0, "Unseeded repeatability budget exceeded"
+        report = worker(case, "reference", reference=reference,
+                        output=folder / repeat, timeout=min(60,remaining))
+        assert report["hash_seed"] is None and not report["numpy_seed_override"]
+        reports.append(report)
+    with np.load(folder / "a.npz") as left, np.load(folder / "b.npz") as right:
+        assert set(left.files) == set(right.files), case
+        failed = [key for key in left.files if not bit_identical(left[key],right[key])]
+        result = dict(case=case, bit_identical=not failed, arrays=len(left.files), failed_keys=failed,
+                      elapsed_seconds=time.monotonic()-started)
+    assert reports[0].get("stop_status") == reports[1].get("stop_status"), case
+    (folder / "comparison.json").write_text(json.dumps(result,indent=2),encoding="utf-8")
+    assert not failed, ("Unseeded reference is not repeatable",case,failed)
+    return result
 
 
 def setup_targets():
@@ -156,6 +203,8 @@ def contract_case(case, state=None, *, reference=REFERENCE, tolerance="exact", r
     """Entry point for package pytest: compare an isolated contract with its fixture."""
     if state is None:
         state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8"))
+    if state.get("repeatability_directory"):
+        check_repeatability(case, reference=reference, directory=state["repeatability_directory"])
     report = worker(case, "package", reference=reference, state=state)
     result = compare(case, report, tolerance=tolerance, require=require)
     assert not result.get("failed_keys"), result
@@ -167,7 +216,7 @@ def run_pytest(state, *, reference, tolerance, require, timeout=180):
     state.update(reference=str(reference), tolerance=tolerance, require=list(require))
     configured = OUTPUT / "state.json"
     configured.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    env = os.environ.copy()
+    env = {key:value for key,value in os.environ.items() if not key.startswith("PYTHON")}
     env.update(MB_ACCEPTANCE_STATE=str(configured), PYTHONDONTWRITEBYTECODE="1",
                PYTHONPATH=os.pathsep.join([state["target"], state["host"]]),
                NUMBA_CACHE_DIR=str(OUTPUT / "numba"))
@@ -181,7 +230,7 @@ assert Path(kawin.__file__).resolve() == Path(sys.argv[2]) / 'kawin/__init__.py'
 import pytest
 raise SystemExit(pytest.main(sys.argv[3:]))
 """
-    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py"]
+    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py"]
     args = [sys.executable, "-I", "-S", "-c", code, state["target"], state["host"],
             *[str(PROJECT / "tests" / name) for name in tests],
             str(PROJECT / "tests/test_bridge.py") + "::test_namespace_import_is_lazy",
@@ -267,6 +316,7 @@ def main(argv=None):
     state = None
     if args.action != "capture":
         state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8")) if args.reuse_targets else setup_targets()
+        state["repeatability_directory"] = tempfile.mkdtemp(prefix="unseeded-", dir=OUTPUT)
     else:
         worker("prepare", "reference", reference=args.reference, prepare=True)
     if args.action == "capture" and not args.cases:
@@ -281,6 +331,9 @@ def main(argv=None):
             report = worker(case, "reference" if args.action == "capture" else "package",
                             reference=args.reference, state=state,
                             timeout=min(180 if case.startswith("F") else 60, max(1,remaining)))
+            if args.action in {"quick","full"} and case in set(manifest["quick"]) | {"C32","LEGACY"}:
+                check_repeatability(case, reference=args.reference, directory=state["repeatability_directory"],
+                    timeout=max(1,limit-(time.monotonic()-started)))
             result = {"capture":True} if args.action == "capture" else compare(case, report,
                 tolerance=args.tolerance, require=args.require_family)
             results[case] = result
@@ -306,6 +359,11 @@ def main(argv=None):
     validate_reference(args.reference)
     summary = dict(action=args.action, cases=results, failures=failures, skipped=skipped,
                    pytest=tests, elapsed_seconds=time.monotonic()-started)
+    if state and state.get("repeatability_directory"):
+        checks = [json.loads(path.read_text()) for path in Path(state["repeatability_directory"]).glob("*/comparison.json")]
+        summary["unseeded_repeatability"] = {entry["case"]:entry for entry in checks}
+        print(f"Unseeded reference repeatability: {len(checks)} cases checked twice; "
+              f"{sum(not entry['bit_identical'] for entry in checks)} differences", flush=True)
     (OUTPUT / (args.action + "-summary.json")).write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"{len(results)} cases, {len(failures)} failures, {summary['elapsed_seconds']:.2f}s", flush=True)
     return 1 if failures else 0

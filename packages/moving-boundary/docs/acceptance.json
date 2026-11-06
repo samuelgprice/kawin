@@ -32,7 +32,7 @@
   "origins_asserted": true,
   "tolerance": "exact",
   "tc_fixtures": "local/git-ignored only",
-  "provider_determinism": "Unseeded reference-vs-reference differed; hash seed 0 and NumPy seed 0 restored bitwise repeatability. Original fixture retained locally.",
+  "provider_determinism": "R01: only O05 hash-sensitive in pycalphad ideal-mixing/CSE; PYTHONHASHSEED=0 only for O05; no NumPy seeding; existing references unchanged.",
   "relocations": {
     "binary": {
       "runs": 29,
@@ -119,5 +119,24 @@
     },
     "normal_environment_install": true,
     "post_full_change": "Nine inherited whitespace lines only; numerical AST unchanged; final fresh quick gate passed"
+  },
+  "reproducibility_investigation": {
+    "affected_cases": [
+      "O05"
+    ],
+    "unaffected_cases": 42,
+    "unseeded_reference_pairs_identical": 42,
+    "quick_pairs_including_contracts": 33,
+    "measured_quick_pair_seconds": 290.98,
+    "estimated_quick_seconds": 437.34,
+    "source": "third-party pycalphad 0.11.1 model.py:893/895/903 and sympydiff_utils.py:137; SymEngine 0.13.0",
+    "controls": {
+      "hash_0_vs_1_different_arrays": 25,
+      "numpy_seed_only_different_arrays": 25,
+      "hash_only_different_arrays": 0,
+      "diagnostic_sorted_ideal_mixing_different_arrays": 0,
+      "diagnostic_sorted_normalization_moles_different_arrays": 25
+    },
+    "scientific_fix": "Open on research branch; no production/dependency fix or reference regeneration"
   }
 }

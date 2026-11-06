@@ -34,8 +34,10 @@ three-phase volumes and all supported interstitial families are covered.
 References and C25-C29 contract outputs come from clean detached 06dc7b4;
 every reference worker asserts its origin. The older ae9fb29 binary fixture and
 12 bulk probes remain checked. Source inputs/tolerances were frozen first. Real
-O05 sampling runs afresh with fixed hash/NumPy seeds; initial unseeded
-reference-vs-reference variability was diagnosed without widening tolerances.
+O05 sampling runs afresh with only its Python hash seed fixed; third-party
+pycalphad ideal-mixing construction/CSE causes hash-order-dependent roundoff.
+NumPy seeding is removed. All other quick cases/contracts repeat twice unseeded;
+see LEDGERS.md R01 for exact cause, controls and the proposed research-branch fix.
 Raw reference/provider outputs and their hashes remain ignored and private.
 acceptance.json records sanitized results and separate relocation-stage evidence.
 

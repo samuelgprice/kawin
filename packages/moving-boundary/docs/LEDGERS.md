@@ -37,9 +37,53 @@ and distribution metadata, no kawin sources or reference/provider datasets.
 Numerical source for new references is clean detached 06dc7b4. Every reference
 worker asserts its import origin and source SHA; installed workers assert stock
 host and package origins. The extraction's kawin/examples/root packaging stay
-at ae9fb29. Inputs and tolerances were frozen before comparisons. Unseeded O05
-reference-vs-reference sampling varied; deterministic process/NumPy seeds restored
-repeatability with the original fixture archived, without tolerance widening.
+at ae9fb29. Inputs and tolerances were frozen before comparisons. Only O05
+needs the narrow hash exception described in R01 below. The original fixtures
+remain unchanged; NumPy seeding has been removed from every worker.
+
+## Research reproducibility issue R01 (open)
+
+Only O05 differed in this suite: 42 other cases (33 quick runs/contracts plus nine
+full additions) each matched in two fresh processes with neither seed override.
+The cause is third-party pycalphad 0.11.1 symbolic construction, not an unseeded
+sampler or moving-boundary solver. pycalphad/variables.py:215 hashes Species by
+its name; pycalphad/model.py:893 constructs an unordered active-species set,
+:895 iterates it and :903 accumulates ideal_mixing_term. Hash-dependent insertion
+order changes the ordered SymEngine expression tree even when its printed algebra
+is identical. pycalphad/codegen/sympydiff_utils.py:137 compiles Hessians through
+SymEngine 0.13.0 lambdify with CSE enabled; compiled Hessian roundoff and the first
+interface endpoints already differ before the moving-boundary solve.
+
+Controlled hash 0/1 reference runs differed in 25 arrays. Sorting only the
+ideal_mixing_energy active-species iteration in an isolated diagnostic process
+made every O05 array identical across those hashes; sorting normalization/moles
+alone did not. Compile-only no-CSE Hessian evaluation also removed the observed
+test-point discrepancy. These were diagnostic controls, not source fixes.
+NumPy's global RNG state was unchanged and no RNG calls were observed; a NumPy
+seed alone failed to restore repeatability. Only PYTHONHASHSEED=0 remains for O05;
+no worker calls np.random.seed. Other cases explicitly require no hash override.
+
+Affected research workflow at main 06dc7b4: surrogate generation in
+kawin/diffusion/MovingBoundarySurrogates.py:1810/:887 and the restricted provider
+factory examples/ternaryExamples/pycalphad_default_phase_adapter.py:86 delegates
+to these third-party models. Rebuilding pycalphad-backed training data can propagate
+roundoff into sampled endpoints/matrices and then solver histories. Analytic,
+saved-surrogate and cached-table solves do not invoke that model generation.
+Default-phase generation shares the dependency but was not separately diagnosed.
+
+Proposed research-branch fix: add cross-hash subprocess regression coverage at
+the provider boundary, then evaluate deterministic symbolic species/term ordering
+(or a validated dependency/compiler change), including raw derivatives, endpoint
+ordering, sampled matrices and downstream solves. This is a scientific change:
+author/review it on the designated research branch and port deliberately. No fix
+was applied to main, extracted numerics or installed dependencies. No reference
+or preregistered tolerance was changed. Diagnostic traces remain ignored locally.
+
+The mandatory quick/full gate now repeats every unaffected quick case and C25-C29
+contract twice in fresh unseeded reference workers, comparing shape, dtype and raw
+bytes, including signed zero/NaN payloads. Their diagnostic outputs never overwrite
+fixtures. The measured 33 reference pairs took 290.98 s; together with the former
+146.36 s quick gate the estimate is 7-8 minutes, below its unchanged 600 s cap.
 
 ## Historical evidence and narrow fix integration
 

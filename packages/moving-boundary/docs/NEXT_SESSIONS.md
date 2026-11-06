@@ -27,6 +27,24 @@ quantity tolerances, detached 06dc7b4 reference capture, then the three separate
 item 2 relocations and item 3 public-host compatibility. No approval is outstanding
 for that completed work. All TC-derived fixtures remain ignored; O06 stays disabled.
 
+## Research reproducibility issue R01 (open)
+
+O05 data generation is sensitive to Python hash order in third-party pycalphad
+0.11.1: model.py:893/895/903 builds the ideal-mixing expression from an unordered
+Species set (variables.py:215), then sympydiff_utils.py:137 compiles a hash-order-
+sensitive Hessian with SymEngine CSE. A diagnostic ordered-iteration control alone
+eliminated all O05 hash-0/hash-1 differences. NumPy seeding was unnecessary.
+This affects rebuilt pycalphad-backed surrogate data and subsequent histories;
+the 42 other cases repeat bitwise unseeded. Default-phase generation shares the
+dependency but has not been diagnosed separately. See LEDGERS.md R01 for controls
+and the main-06dc7b4 call sites. Only O05 retains PYTHONHASHSEED=0; no NumPy seed
+is imposed. Every unaffected quick case/contract is checked twice unseeded.
+
+Propose a research-branch provider regression across hash seeds, followed by
+validated deterministic symbolic ordering or a dependency/compiler fix. Do not
+implement that scientific fix independently in the package, on main, or by
+refreshing references. Numerical code, references and tolerances remain unchanged.
+
 ## Next scoped work
 
 - Stage 2C: remove debugInPlace from the TC adapter before promoting it; establish

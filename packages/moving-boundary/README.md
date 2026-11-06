@@ -62,8 +62,10 @@ References were captured from the clean detached `mb-ref-06dc7b4` worktree at
 kawin import origin. The extraction's older kawin/examples/root packaging remain
 frozen at ae9fb29; legacy fixtures are also checked. Tolerances/inputs are frozen
 in tools/acceptance_manifest.json; relocation gates were exact, public gates use
-the preregistered quantity tolerances without widening. Deterministic hash/NumPy
-seeds make real O05 sampling repeatable; the original unseeded fixture is archived.
+the preregistered quantity tolerances without widening. Only O05 uses a fixed Python hash
+seed for the diagnosed pycalphad symbolic-ordering issue (LEDGERS.md R01). No
+NumPy seed is imposed. All other quick runs/contracts are repeated twice in fresh
+unseeded reference processes and must match byte for byte; fixtures are unchanged.
 
 Numeric reference outputs, TC inputs, private hashes, logs, build targets and
 environment state stay local/git-ignored. Committed acceptance.json contains only
