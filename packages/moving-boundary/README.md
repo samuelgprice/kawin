@@ -50,13 +50,32 @@ cases pass an explicit policy and input() is prohibited before imports.
 C32 is a configured retry stress case. A small natural physical stop run has
 not been established.
 
-Stage 2B adapter relocation is complete for accepted O05 restricted-phase generation and O08 default-phase endpoint/equilibrium sampling. See [docs/NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for the remaining research builders/assembly dependency, open broader Stage 2 split and research-branch R01.
+Stage 2B adapter relocation is complete for accepted O05 restricted-phase generation and O08 default-phase endpoint/equilibrium sampling. See [docs/NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for remaining research script orchestration, the open broader Stage 2 split and research-branch R01.
 
 Stage 2C is complete within O06: real TC generation uses the installed
 `moving_boundary.providers.thermocalc` facade with separately installed
 TC-Python and a valid licence; no TC pip dependency is added. See
 [NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#stage-2c-complete-within-o06) for
-the accepted scope, remaining research builders and uncovered workflows.
+the accepted scope, remaining research script orchestration and uncovered workflows.
+
+## Building surrogates
+
+Build Thermo-Calc or pycalphad surrogates with the installed APIs; no research
+checkout is needed. Sketch (`...` and `sampling_arguments` are system-specific):
+
+    from moving_boundary.providers.thermocalc import TCPythonThermodynamics
+    from moving_boundary.surrogates import TernaryMovingBoundaryThermodynamicsSurrogate as Surrogate
+    with TCPythonThermodynamics(...) as source:
+        surrogate = Surrogate.from_database(thermodynamics=source, **sampling_arguments)
+
+For pycalphad, pass a source from
+`moving_boundary.providers.pycalphad.create_pycalphad_thermodynamics_source(...)`
+instead. Optionally put the build in a callback for
+`moving_boundary.surrogate_artifacts.prepare_surrogate_artifact` to create a
+verified, reloadable bundle; the callback returns `(surrogate, members)`.
+`moving_boundary.surrogates.merge_phase_diffusivity_surrogates` combines one
+phase's diffusivity samples from two surrogates. See
+[research orchestration scope](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation).
 
 ## Local acceptance
 

@@ -48,11 +48,28 @@ O08 has two valid BCC/FCC probes and one invalid FCC-only probe at 1373 K, using
 the same FeCrNi database. It compares all arrays bitwise and phase labels in order.
 Only O05/O08 keep PYTHONHASHSEED=0; R01 remains open on the research branch.
 
-Anything importing or reading examples/ still needs the research checkout. This
-includes research builders/assembly scripts and TC training_data.py. Those
-orchestration scripts are not installed APIs; the installed pycalphad generation
-step does not import or read them. The batch-safe TC adapter is now installed
-in providers/thermocalc.py; its real O06 generation acceptance is described below.
+Building Thermo-Calc or pycalphad surrogates works from the installed package:
+pass the installed provider to from_database, optionally use
+prepare_surrogate_artifact for a verified, reloadable bundle, and use
+merge_phase_diffusivity_surrogates to combine one phase's diffusivity samples.
+See [README's installed pattern](../README.md#building-surrogates). The batch-safe
+TC adapter is installed in providers/thermocalc.py; TC-Python and its licence are
+separately required. Its real O06 generation acceptance is described below.
+
+Anything importing or reading examples/ still needs the research checkout.
+What stays there is script orchestration: the FeCrNi demo wrapper,
+training_data.py dataset sampling/export/resume, case assembly, plotting, and
+research scripts' probe-point search settings, failure/diagnostic reports and
+bundle build specs. Real research workflows call the installed from_database
+directly, usually inside prepare_surrogate_artifact; NiTiNb also uses the installed
+merge_phase_diffusivity_surrogates.
+
+Decision: do not move training_data.py:build_moving_boundary_surrogate into the
+package. It is a thin FeCrNi-demo wrapper with demo-specific defaults; only
+FeCrNi_TC_Python.py and kawin/tests/test_thermocalc_examples.py use it, with no real
+research workflow depending on it. A general helper limited to session handling
+and provenance metadata, with no system defaults, remains possible but is not
+planned.
 
 surrogates.py, surrogate_artifacts.py, _diffusivity_domain.py and equilibrium.py
 were copied whole and unchanged in implementation, apart from required import
@@ -108,8 +125,9 @@ older reference, input hash and preregistered tolerance remains unchanged. O08 i
 bitwise-only even in public mode. No cached/fake provider replaces real generation.
 This acceptance does not cover arbitrary databases/phase universes, default-phase
 surrogate training, or every delegated kinetics/diagnostics method.
-Research builders/assembly remain available only from the checkout after the
-guarded generation step. Databases, trained artifacts and TC outputs stay local.
+Surrogate building uses the installed APIs (README); the research script
+orchestration listed above stays in the checkout. Databases, trained artifacts
+and TC outputs stay local.
 
 The broader Stage 2 separation of generation, surrogate evaluation, persistence/
 domain validation and equilibrium interfaces is still open. The four whole copied
@@ -140,8 +158,10 @@ before comparison. All 89 older reference files and existing inputs/tolerances
 are unchanged. A missing runtime/licence/local input produces an explicit skip;
 a present input hash mismatch or unrelated generation failure fails the gate.
 
-The research builders/assembly, training_data.py dataset export/resume and plotting
-scripts remain outside the installed package. NiTiNb/other TC databases or phase
+Surrogate building is installed; the script orchestration listed above remains
+in the research checkout, including the deliberately retained FeCrNi demo wrapper.
+O06 follows that demo; a future TC case using the Lee 1996 script's probe-point search plus a prepare_surrogate_artifact bundle is an option for the user to decide, not an approved addition.
+NiTiNb/other TC databases or phase
 universes, arbitrary three-phase generation, default-phase invalid probes with TC,
 broader diagnostics/retry settings and physical convergence are not accepted by
 O06. The broader Stage 2 generation/evaluation/persistence/domain/equilibrium split

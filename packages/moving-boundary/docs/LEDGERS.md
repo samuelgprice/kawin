@@ -23,10 +23,19 @@ physical convergence audit. See ACCEPTANCE_CANDIDATES.md for exact input variant
 Original whole-module solver/numerics/mesh/equilibrium/provider/domain copies map
 to 06dc7b4 in relocation-map.json and BINARY_SLICE.md. Stage 2B generation maps
 function-by-function in PUBLIC_KAWIN_MILESTONE.md and the provider docstring.
-Generating with pycalphad no longer needs the research checkout; examples-based
-research builders/assembly, including TC training_data.py, still do. The TC
-adapter is package-owned and accepted within O06; research orchestration
-remains outside the package. The broader Stage 2
+Building Thermo-Calc or pycalphad surrogates uses installed providers and
+from_database, optionally prepare_surrogate_artifact bundles and
+merge_phase_diffusivity_surrogates; see [README's pattern](../README.md#building-surrogates).
+Research-checkout dependencies are script orchestration: the FeCrNi demo wrapper,
+training_data.py dataset sampling/export/resume, case assembly, plotting, and
+scripts' probe-point search settings, failure/diagnostic reports and bundle build
+specs. The demo wrapper will not move: its defaults are demo-specific and no real
+research workflow uses it. A general session/provenance helper without system
+defaults is possible but not planned; see NEXT_SESSIONS.md's installed-building
+scope. The TC adapter is package-owned and accepted within O06, which follows
+the FeCrNi demo; a future real-usage TC case (Lee 1996 probe-point search plus a
+prepare_surrogate_artifact bundle) remains a user decision, not an approved case.
+The broader Stage 2
 generation/evaluation/persistence/domain/equilibrium split is open; the four whole
 copied modules remain unchanged. R01 is open on the research branch. Shared private
 helpers live in solvers/illingworth/shared.py. No fork solver inheritance remains. Public unmodified

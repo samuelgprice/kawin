@@ -3,7 +3,7 @@
 Status: implemented and acceptance passed after all three exact module relocations.
 Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 578.02 s.
 
-Stage 2B adapter relocation is complete for O05 restricted-phase generation and O08 default-phase endpoint/equilibrium sampling; these need no research checkout. See [NEXT_SESSIONS.md](NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for remaining research builders/assembly, the open broader Stage 2 split and research-branch R01.
+Stage 2B adapter relocation is complete for O05 restricted-phase generation and O08 default-phase endpoint/equilibrium sampling; these need no research checkout. See [NEXT_SESSIONS.md](NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for remaining research script orchestration, the open broader Stage 2 split and research-branch R01.
 
 ## Ownership and method-level source mapping
 
@@ -65,7 +65,8 @@ narrow hash exception. Its new JSON/NPZ reference came from clean detached 06dc7
 and is frozen by hashes in acceptance_manifest.json; older fixtures are unchanged.
 The installed worker uses the existing generation guard; the reference worker
 imports the original adapter, including its unused invalid-branch debugger import.
-Research assembly remains in the checkout. Acceptance is bounded to O05/O08;
+Surrogate building uses installed APIs (README's Building surrogates); research
+script orchestration stays in the checkout. Acceptance is bounded to O05/O08;
 arbitrary default-phase workflows and delegated methods are not established.
 The broader Stage 2 split and R01 research-branch repair remain open.
 
@@ -99,8 +100,17 @@ bitwise-only; only metadata_json.thermocalc_config.cache_dir is normalized, and
 all other metadata text remains exact. The new reference is from detached
 06dc7b4, refuses overwrite and is frozen by manifest hashes. Inputs/databases,
 TC-derived values and metrics remain ignored; only counts/hashes are committed.
-See NEXT_SESSIONS.md's Stage 2C scope for research builders and unaccepted TC
-workflows. The broader Stage 2 split remains open; no scientific fix was made.
+Thermo-Calc and pycalphad surrogate building use installed providers/from_database,
+prepare_surrogate_artifact bundles and merge_phase_diffusivity_surrogates; see
+[README's pattern](../README.md#building-surrogates). The research checkout retains
+script orchestration: the FeCrNi demo wrapper, training_data.py dataset
+sampling/export/resume, case assembly, plotting, and scripts' probe-point search
+settings, failure/diagnostic reports and bundle build specs. The demo wrapper will
+not move because its defaults are demo-specific and no real research workflow uses
+it; a general session/provenance-only helper without system defaults is possible
+but not planned. See NEXT_SESSIONS.md for that decision and unaccepted TC workflows.
+O06 follows the FeCrNi demo; a future real-usage TC case (Lee 1996 probe-point search plus a prepare_surrogate_artifact bundle) remains a user decision, not an approved addition.
+The broader Stage 2 split remains open; no scientific fix was made.
 
 The model constructs a local MeshData subclass and transfers the host's initial
 record state; it never replaces host class/module globals. Host mesh bases and
