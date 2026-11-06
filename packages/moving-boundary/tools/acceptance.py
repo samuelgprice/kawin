@@ -65,24 +65,30 @@ def worker(case, role, *, reference=REFERENCE, state=None, prepare=False, timeou
 
 
 def setup_targets():
-    """Build/install package and exact fork wheels privately, without shared changes."""
+    """Install a package wheel beside stock kawin in the separate test environment."""
     from email.parser import Parser
     import tomllib
     build = Path(tempfile.mkdtemp(prefix="install-", dir=OUTPUT))
     project = tomllib.loads((PROJECT / "pyproject.toml").read_text(encoding="utf-8"))
-    pin, = [r.rsplit("@", 1)[-1] for r in project["project"]["dependencies"] if r.startswith("kawin @ ")]
-    archive = build / "fork.zip"
-    run(["git", "archive", "-o", str(archive), pin], cwd=PROJECT.parents[1], timeout=30)
-    with zipfile.ZipFile(archive) as z:
-        z.extractall(build / "source")
-    for name, source in (("host", build / "source"), ("target", PROJECT)):
+    assert "kawin==0.5.0" in project["project"]["dependencies"]
+    import site
+    from importlib.metadata import version
+    assert version("kawin") == "0.5.0"
+    host = Path(site.getsitepackages()[-1])
+    stock = PROJECT / ".verification/kawin-0.5.0-py3-none-any.whl"
+    assert hashlib.sha256(stock.read_bytes()).hexdigest() == "9f7a1497c5dff4314536860ac6fd0b96a68243dd681db8eb106dbe33fe25cbaf"
+    with zipfile.ZipFile(stock) as archive:
+        for member in archive.namelist():
+            if member.startswith("kawin/") and not member.endswith("/"):
+                assert (host / member).read_bytes() == archive.read(member), member
+    for name, source in (("target", PROJECT),):
         wheel_dir = build / (name + "-wheels")
         run([sys.executable, "-m", "pip", "wheel", str(source), "--no-deps", "--no-build-isolation",
              "--no-index", "--wheel-dir", str(wheel_dir)], timeout=120)
         wheel, = wheel_dir.glob("*.whl")
         run([sys.executable, "-m", "pip", "install", str(wheel), "--no-deps", "--no-index",
              "--target", str(build / name)], timeout=120)
-    state = dict(host=str(build / "host"), target=str(build / "target"), pin=pin,
+    state = dict(host=str(host), target=str(build / "target"), public_version="0.5.0",
                  manifest_sha256=hashlib.sha256(MANIFEST.read_bytes()).hexdigest())
     (OUTPUT / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
     return state
@@ -130,7 +136,7 @@ def compare(case, package, *, tolerance="exact", require=()):
             elif ok:
                 settings = manifest["public_tolerances"][group]
                 scale = 1.
-                if group == "interface":
+                if group == "interface" or (group == "analytic_error" and key == "exact/interface_error"):
                     scale = expected.get("length_scale", 1.)
                 elif group == "accepted_times":
                     scale = max(1., expected.get("requested_duration", 1.))
@@ -175,10 +181,11 @@ assert Path(kawin.__file__).resolve() == Path(sys.argv[2]) / 'kawin/__init__.py'
 import pytest
 raise SystemExit(pytest.main(sys.argv[3:]))
 """
-    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py"]
+    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py"]
     args = [sys.executable, "-I", "-S", "-c", code, state["target"], state["host"],
             *[str(PROJECT / "tests" / name) for name in tests],
             str(PROJECT / "tests/test_bridge.py") + "::test_namespace_import_is_lazy",
+            str(PROJECT / "tests/test_bridge.py") + "::test_binary_example",
             str(PROJECT / "tests/test_bridge.py") + "::test_missing_fork_error",
             "--import-mode=importlib", "--basetemp", str(OUTPUT / "pytest"), "-q",
             "--junitxml", str(OUTPUT / "pytest.xml")]
@@ -199,10 +206,22 @@ def main(argv=None):
     parser.add_argument("--reference", type=Path, default=REFERENCE)
     parser.add_argument("--cases", nargs="*")
     parser.add_argument("--reuse-targets", action="store_true")
-    parser.add_argument("--require-family", nargs="*", default=[])
-    parser.add_argument("--tolerance", choices=("exact", "public"), default="exact")
+    parser.add_argument("--require-family", nargs="*", default=["binary", "ternary", "three_phase"])
+    parser.add_argument("--tolerance", choices=("exact", "public"), default="public")
     parser.add_argument("--tier", choices=("quick", "full"), default="quick")
     args = parser.parse_args(argv)
+    # The parent is invoked after required Conda activation. The cloned runtime
+    # inherits those native DLL paths; prepend the clone's equivalent locations.
+    if args.action != "capture":
+        config = json.loads((PROJECT / ".verification/public-environment.json").read_text())
+        executable = Path(config["python"])
+        if Path(sys.executable).resolve() != executable.resolve():
+            env = os.environ.copy()
+            prefix = executable.parent
+            env["PATH"] = os.pathsep.join([str(prefix), str(prefix/"Library/bin"), str(prefix/"Scripts"), env.get("PATH", "")])
+            env["CONDA_PREFIX"] = str(prefix)
+            return subprocess.run([str(executable), str(Path(__file__).resolve()), *(sys.argv[1:] if argv is None else argv)],
+                env=env, stdin=subprocess.DEVNULL, timeout=1250 if args.action=="full" else 650).returncode
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / "inputs").mkdir(exist_ok=True)
     manifest = validate_reference(args.reference)
@@ -214,6 +233,8 @@ def main(argv=None):
         if full or (pilot.exists() and json.loads(pilot.read_text())["elapsed_seconds"] <= 60):
             cases.append("O05")
     skipped = {}
+    if not args.cases and not (OUTPUT / "inputs/FeCrNi.tdb").exists():
+        skipped["O05"] = "database input missing"
     if full and not args.cases:
         cases.extend(manifest["full_drift"])
         private = {"O01":"exb5.json","O02":"exb5.json","O03a":"femnc.json","O03b":"femnc.json", "O04":"fecrni.surrogate","O07":"fec.json"}
@@ -223,6 +244,21 @@ def main(argv=None):
             else:
                 skipped[case] = "cached input missing"
         skipped["O06"] = "TC adapter not yet batch-safe; disabled as approved"
+    # Private hashes never enter committed evidence. Present corrupted inputs
+    # fail instead of being disguised as missing licensed/provider coverage.
+    inputs_manifest = OUTPUT / "inputs/private-inputs.json"
+    if inputs_manifest.exists():
+        enabled_inputs = {"O01":"exb5.json", "O02":"exb5.json", "O03a":"femnc.json",
+            "O03b":"femnc.json", "O04":"fecrni.surrogate", "O05":"FeCrNi.tdb", "O07":"fec.json"}
+        recorded = json.loads(inputs_manifest.read_text(encoding="utf-8"))
+        for case in cases:
+            name = enabled_inputs.get(case)
+            if name is not None and name in recorded:
+                for relative, digest in recorded[name].get("sha256", {}).items():
+                    location = OUTPUT / "inputs"
+                    if (location / name).is_dir():
+                        location = location / name
+                    assert hashlib.sha256((location / relative).read_bytes()).hexdigest() == digest, case + " input changed"
     if args.action == "setup":
         print(json.dumps(setup_targets()))
         return 0

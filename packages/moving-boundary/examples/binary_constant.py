@@ -3,7 +3,7 @@
 import numpy as np
 from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel
 from kawin.diffusion.DiffusionParameters import TemperatureParameters
-from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
+from moving_boundary.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 
 
 class ConstantDiffusivity:

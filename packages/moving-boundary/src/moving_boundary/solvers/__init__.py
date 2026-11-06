@@ -13,5 +13,5 @@ def __getattr__(name):
         return getattr(importlib.import_module('.' + modules[name], __name__), name)
     except ModuleNotFoundError as exc:
         if exc.name == 'kawin' or (exc.name and exc.name.startswith('kawin.')):
-            raise ImportError('This checkpoint requires the pinned kawin host 5f4ad574; see README.') from exc
+            raise ImportError('This package requires public kawin 0.5.0; see README.') from exc
         raise

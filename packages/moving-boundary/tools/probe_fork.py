@@ -1,4 +1,4 @@
-"""Probe the pinned fork wheel without source trees or editable-install hooks."""
+"""Historical fork checkpoint probe; current acceptance uses stock kawin."""
 
 from pathlib import Path
 import argparse
@@ -13,7 +13,9 @@ import zipfile
 PROJECT = Path(__file__).resolve().parents[1]
 FORK = PROJECT.parents[1]
 OUTPUT = PROJECT / ".verification"
-from verify import pinned_fork_commit
+def pinned_fork_commit():
+    """Historical installed-fork checkpoint, superseded by acceptance.py."""
+    return "5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e"
 
 
 def run(args, cwd, timeout=120):
@@ -28,7 +30,7 @@ def run(args, cwd, timeout=120):
 def main():
     """Build a Git snapshot and report import compatibility as a separate gate.
 
-    The pin comes from package metadata, not the frozen reference. An optional
+    The explicit historical pin is independent of current runtime metadata. An optional
     installed binary slice compares all three modes and nonuniform-grid bulk
     probes with the separately captured reference supplied by verify.py, without
     adding either checkout to the import path. A failed fork

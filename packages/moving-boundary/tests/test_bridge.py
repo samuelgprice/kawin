@@ -9,29 +9,20 @@ import numpy as np
 EXAMPLE = Path(__file__).parents[1] / "examples" / "binary_constant.py"
 
 
-def test_binary_parity(tmp_path):
-    """Compare separate legacy/bridge processes and the frozen binary fixture.
+def test_binary_example():
+    """The shipped example runs using local mesh additions and stock host services.
 
-    Separate processes cover all three binary modes and both bulk upwind
-    branches without sharing solver globals or changing the frozen fixtures.
+    Full legacy fixture and bulk comparisons belong to acceptance.py LEGACY,
+    where the oracle is detached and each package worker is separately installed.
     """
-    worker = EXAMPLE.parents[1] / "tools/binary_cases.py"
-    from kawin.tests.illingworth_baseline_cases import BASELINE_PATH
-    assert BASELINE_PATH.is_file(), "Required binary baseline fixture is missing"
-    for entry in ("legacy", "bridge"):
-        subprocess.run([sys.executable, str(worker), entry,
-                        str(tmp_path / f"{entry}.npz")],
-                       check=True, timeout=60)
-    with np.load(tmp_path / "legacy.npz") as legacy, \
-            np.load(tmp_path / "bridge.npz") as bridge, \
-            np.load(BASELINE_PATH) as baseline:
-        keys = {key for key in baseline.files if key.startswith("binary_")}
-        assert keys == {key for key in legacy.files if key.startswith("binary_")}
-        assert set(legacy.files) == set(bridge.files)
-        for key in legacy.files:
-            np.testing.assert_array_equal(bridge[key], legacy[key], err_msg=key)
-            if key in keys:
-                np.testing.assert_array_equal(legacy[key], baseline[key], err_msg=key)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('binary_example', EXAMPLE)
+    example = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(example)
+    model = example.build_model()
+    model.solve(.5, minDtFrac=1e-14)
+    assert model.currentTime == .5
+    assert model.__class__.__module__ == 'moving_boundary.solvers.binary'
 
 
 def test_namespace_import_is_lazy():
@@ -51,7 +42,7 @@ sys.meta_path.insert(0, BlockKawin())
 try:
     from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel
 except ImportError as exc:
-    assert '5f4ad574' in str(exc)
+    assert 'public kawin 0.5.0' in str(exc)
 else:
     raise AssertionError('missing fork accepted')
 """

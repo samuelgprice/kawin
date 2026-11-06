@@ -20,6 +20,8 @@ MODULES = {
     "kawin.diffusion.mesh.TransformedGrids": "moving_boundary.mesh.TransformedGrids",
     "kawin.diffusion.MovingBoundaryEquilibrium": "moving_boundary.equilibrium",
     "kawin.diffusion._illingworth_interstitials": "moving_boundary._illingworth_interstitials",
+    "kawin.diffusion.MovingBoundarySurrogates": "moving_boundary.surrogates",
+    "kawin.diffusion.SurrogateArtifacts": "moving_boundary.surrogate_artifacts",
 }
 
 
@@ -89,6 +91,8 @@ class CaseInputs:
             return getattr(self.load(path, [name]), name)
         if self.role == "package":
             choices = []
+            if module == "kawin.thermo" and name == "MulticomponentThermodynamics":
+                choices.append("moving_boundary.compatibility.thermo")
             if module in MODULES:
                 choices.append(MODULES[module])
             if module in {"kawin.diffusion", "kawin.diffusion.mesh"}:
@@ -140,9 +144,10 @@ class CaseInputs:
                         for item in ast.walk(target):
                             if isinstance(item, ast.Name):
                                 bindings[item.id] = node
-        wanted, selected = list(names), set()
+        wanted, selected, requested = list(names), set(), set()
         while wanted:
             name = wanted.pop()
+            requested.add(name)
             if name in overrides:
                 continue
             node = bindings.get(name)
@@ -181,11 +186,17 @@ class CaseInputs:
                 return node
 
             def visit_ImportFrom(self, node):
+                # A selected import statement can contain unrelated aliases.
+                # Retain only names used by the definition closure; nested imports
+                # are part of the selected function body and remain intact.
+                aliases = [alias for alias in node.names if id(node) not in selected
+                           or (alias.asname or alias.name) in requested]
                 if node.module and node.module.startswith(("kawin", "examples")):
                     return [ast.Assign(targets=[ast.Name(id=alias.asname or alias.name, ctx=ast.Store())],
                         value=ast.Call(func=ast.Name(id="_input_symbol", ctx=ast.Load()),
                         args=[ast.Constant(node.module), ast.Constant(alias.name)], keywords=[]))
-                        for alias in node.names if alias.name != "*"]
+                        for alias in aliases if alias.name != "*"]
+                node.names = aliases
                 return node
 
             def visit_Call(self, node):

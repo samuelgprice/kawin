@@ -4,7 +4,7 @@ import warnings
 from dataclasses import dataclass
 
 import numpy as np
-from kawin.diffusion.Diffusion import DiffusionModel
+from moving_boundary.compatibility import DiffusionModel
 from moving_boundary._illingworth_interstitials import (
     composition_bound_violation,
     full_mole_fractions,

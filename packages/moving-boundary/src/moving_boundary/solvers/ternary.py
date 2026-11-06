@@ -5,8 +5,8 @@ from dataclasses import dataclass
 import numpy as np
 from moving_boundary._spectral_validation import TERNARY_DIFFUSIVITY_POSITIVE_EIGENVALUE_TOL, TERNARY_DIFFUSIVITY_REAL_SPECTRUM_TOL
 
-from kawin.GenericModel import GenericModel
-from kawin.diffusion.Diffusion import DiffusionModel
+from moving_boundary.compatibility import GenericModel
+from moving_boundary.compatibility import DiffusionModel
 from kawin.diffusion.DiffusionParameters import TemperatureParameters
 from moving_boundary._illingworth_interstitials import (
     composition_bound_violation,

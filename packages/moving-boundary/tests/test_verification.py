@@ -77,7 +77,7 @@ def test_wheel_discovery_uses_metadata(tmp_path):
         archive.writestr("moving_boundary/__init__.py", "")
         archive.writestr("moving_boundary-9.8.7.dist-info/METADATA",
                          "Name: moving-boundary\nVersion: 9.8.7\n"
-                         f"Requires-Dist: kawin @ git+https://example.invalid/repo@{verify.pinned_fork_commit()}\n")
+                         f"Requires-Dist: {verify.pinned_host_requirement()}\n")
     assert verify.inspect_wheel(tmp_path)[0] == wheel
     (tmp_path / "stale.whl").touch()
     with pytest.raises(RuntimeError, match="exactly one"):
@@ -90,5 +90,5 @@ def test_dependency_pin_is_separate_from_reference():
         "pin_verify", Path(__file__).parents[1] / "tools/verify.py")
     verify = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(verify)
-    assert verify.pinned_fork_commit() == moving_boundary.FORK_COMMIT
-    assert verify.pinned_fork_commit() != verify.EXPECTED
+    assert verify.pinned_host_requirement() == "kawin==" + moving_boundary.PUBLIC_KAWIN_VERSION
+    assert moving_boundary.REFERENCE_COMMIT != verify.EXPECTED

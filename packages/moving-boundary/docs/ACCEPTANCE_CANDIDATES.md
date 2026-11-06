@@ -6,12 +6,12 @@ be frozen before comparison; changes are recorded before reference capture.
 
 ## Execution and time budget
 
-- Quick: C01–C24, C30, and the irregular-grid binary C31. C25–C29 are package
+- Quick: C01–C24, C30, the irregular-grid binary C31, and the configured C32 stress variant. C25–C29 are package
   pytest contracts with separate main/package workers, not comparison-table runs.
   The combined quick run plus contracts must remain below ten minutes and run
   after every numerical code move.
-- Full: quick, enabled O-runs, and long drift F04/F11/F12. Estimate 8–18 minutes
-  before measurement; report the updated estimate before each materially changed
+- Full: quick, enabled O-runs, and long drift F04/F11/F12. Measured baseline about 3–4 minutes; estimate 5–8 minutes
+  for current full execution and report it before each materially changed
   full run. Use a 1200-second overall cap, well below 30 minutes. Longer jobs
   require a new explanation before execution, never an unnoticed timeout extension.
 - Workers have actual timeouts, noninteractive stdin and an input() prohibition
@@ -112,7 +112,7 @@ original interactive scripts are not executed wholesale.
 |---|---|---|
 | F04 | C04 analytic case, 21/21 phase nodes, absolute end 1e-2 (start 1e-4), dt=2e-5 | Error in interface and physical phase profiles against the exact planar solution |
 | F11/F12 | C11/C12 opposite/drift similarity cases, absolute end 1.0, 21 nodes/phase and semiLog_dt=0.05 | Interface rates/positions, eta and phase-profile error against the exact similarity solution |
-| C32 if feasible | Small natural terminal-thin-phase setup under continue; pilot before freezing | Reached terminal stop, accepted state/history and explicit stop status. A forced-retry test alone is classified as a pytest contract, not a natural physical stop run |
+| C32 configured stress | Small unequal-volume builder; explicit continue, terminal width .31, maxIterations=1, maxStepRetries=1, extraRetries=25 after setup; duration 2e-6 | Real numerical retries reach terminal stop; no fake callback. This is an additional configured retry stress variant, not evidence of natural phase disappearance. A small natural physical stop run remains unestablished |
 
 C04, C11/C12 and C31 also record their exact/similarity errors in quick runs,
 independently of main. Freeze values/acceptance limits before package comparisons.
@@ -142,11 +142,11 @@ the new main-reference suite rather than silently regenerating them.
 | Accepted times | All synchronized history times, counts, final time, and schedule/continuation segments | Exact |
 | Stop status | Completion vs explicit terminal-thin-phase failure, exception class/chaining, retry diagnostics and absence of accepted-state mutation on rejected steps | Exact structural match |
 
-Public-kawin per-quantity numerical tolerances are a separate preregistration:
-choose and commit explicit dimensional atol/rtol values by run and quantity before any public-host/reference comparison. No new result
-has been examined and no public-host tolerance has been selected here. Do not
-infer tolerances from observed errors; gas-constant/composition-floor differences
-must be investigated against this preregistration, not silently excused. Optional
+Public-kawin per-quantity tolerances were frozen in tools/acceptance_manifest.json
+before reference capture/comparison: rtol=1e-10, atol=1e-12 with each quantity's
+documented dimensional scale; accepted times use rtol=0. Shapes, masks and statuses
+are exact. Analytic errors use the underlying quantity's physical scale. No
+tolerance was inferred from results or widened for the public-host switch. Optional
 provider outputs (phase endpoints, element order, matrices, temperature and build
 metadata) must be checked before downstream solver comparisons.
 

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "state": "Complete three_phase module relocation; public-kawin gate pending",
+  "state": "Complete local solver/provider relocation; public kawin 0.5.0 quick/full accepted",
   "reference_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
   "dependency_commit": "5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e",
   "quick": {
@@ -70,5 +70,54 @@
       "tolerance": "exact",
       "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841"
     }
+  },
+  "public_kawin": {
+    "version": "0.5.0",
+    "unmodified_stock_files": 73,
+    "wheel_sha256": "9f7a1497c5dff4314536860ac6fd0b96a68243dd681db8eb106dbe33fe25cbaf",
+    "separate_environment": true,
+    "shared_environment_unchanged": true,
+    "quick": {
+      "elapsed_seconds": 146.35899999999674,
+      "pytest": {
+        "tests": 30,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "skipped": {}
+    },
+    "full": {
+      "elapsed_seconds": 220.98500000001513,
+      "pytest": {
+        "tests": 30,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "skipped": {
+        "O06": "TC adapter not yet batch-safe; disabled as approved"
+      }
+    },
+    "quick_runs": 29,
+    "full_runs": 38,
+    "tolerances": "preregistered public; unchanged",
+    "source_audit": {
+      "numerical_ast": {
+        "solvers/binary.py": "class numerical AST identical; imports bind local host adapter",
+        "solvers/ternary.py": "class numerical AST identical; imports bind local host adapter",
+        "solvers/three_phase.py": "class numerical AST identical; imports bind local host adapter",
+        "surrogates.py": "whole numerical AST identical; imports only",
+        "surrogate_artifacts.py": "whole numerical AST identical; imports only",
+        "_diffusivity_domain.py": "whole numerical AST identical; imports only"
+      },
+      "frozen_extraction": true,
+      "detached_reference_clean": true,
+      "wheel_scoped": true,
+      "stock_requirement": "kawin==0.5.0",
+      "wheel_members": 30
+    },
+    "normal_environment_install": true,
+    "post_full_change": "Nine inherited whitespace lines only; numerical AST unchanged; final fresh quick gate passed"
   }
 }

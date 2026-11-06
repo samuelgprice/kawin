@@ -5,8 +5,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from kawin.GenericModel import GenericModel
-from kawin.diffusion.Diffusion import DiffusionModel
+from moving_boundary.compatibility import GenericModel
+from moving_boundary.compatibility import DiffusionModel
 from moving_boundary._illingworth_interstitials import (
     has_interstitials,
     record_initial_u_fractions,

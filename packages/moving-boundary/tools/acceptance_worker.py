@@ -47,6 +47,8 @@ def main():
     expected = args.root / "kawin/__init__.py" if args.role == "reference" else args.host / "kawin/__init__.py"
     assert Path(kawin.__file__).resolve() == expected.resolve(), kawin.__file__
     if args.role == "package":
+        from importlib.metadata import version
+        assert version("kawin") == "0.5.0"
         import moving_boundary
         assert Path(moving_boundary.__file__).resolve().is_relative_to(args.target.resolve())
         assert not any(Path(p).resolve() == args.root.resolve() for p in sys.path if p)

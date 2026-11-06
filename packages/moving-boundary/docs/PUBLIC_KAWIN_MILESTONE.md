@@ -1,67 +1,58 @@
 # Stage 1B: stock kawin 0.5.0
 
-Status: planned, not implemented or accepted. This is review item 3, after the
-whole-module binary, ternary two-phase and ternary three-phase moves in item 2.
-All implementation waits for approval and creation of the run suite in item 4.
+Status: implemented and acceptance passed after all three exact module relocations.
+Quick: 29 run comparisons and 30 pytest tests passed in 146.36 s. Full: 38 run comparisons and 30 pytest tests passed in 220.99 s.
 
-## Boundary
+## Ownership and method-level source mapping
 
-Use unmodified public kawin 0.5.0 for the host model/solver loop, mesh/recording,
-TemperatureParameters and pycalphad/thermodynamic services. The package owns its
-Illingworth solvers, local numerical modules and narrowly required compatibility
-behavior. The completed static assessment is in LEDGERS.md/assessment.json;
-it is not runtime evidence of public-kawin compatibility.
+The host distribution is unmodified kawin==0.5.0. The 73 installed stock files are
+checked byte for byte against wheel SHA256
+9f7a1497c5dff4314536860ac6fd0b96a68243dd681db8eb106dbe33fe25cbaf.
+No dependency module/global is patched and no Illingworth fork class is inherited.
 
-| Fork-only behavior | Package compatibility responsibility and required checks |
-|---|---|
-| Solver minimum-timestep rejection | Explicit adapter must reject an ordinary reduced trial below the outer minimum before acceptance; never enlarge dt after solving the candidate |
-| Solver final remainder | Allow the final remainder below the ordinary minimum and retain synchronized recorded times/state, including tiny remainders and continuation |
-| MeshData preallocation and exact-time lookup | Local recorder adapter provides capacity growth without changing data and exact recorded-time selection/range errors where required; keep upstream mesh bases |
-| DiffusionModel initial composition adjustment | Local model adapter retains conditional adjustment only for genuine below-floor violations during initialization/reset; preserve valid inputs |
-| minComposition | Pass 1e-10 explicitly through package-owned configuration; never change an upstream module default |
-| Gas constant | Use 8.3145 explicitly at relevant package call sites/constants; do not assign to kawin.Constants or patch upstream code |
-| MultiTherm.returnMeta | Implement only if an approved provider actually requires endpoint/phase metadata; preserve phase and element ordering and validate sampled outputs before solving |
+Policy methods below derive from samuelgprice/kawin at
+06dc7b4ab56f67226ceabfde41ebf2690c088841. Whole local additions are mapped in
+relocation-map.json and BINARY_SLICE.md; upstream MIT notice remains in NOTICE.
 
-Select adapter mechanisms from the actual release APIs. GenericModel.solve
-constructs DESolver directly; a package entry point must explicitly select the
-compatible host-loop adapter if required. Do not replace class/module globals or
-copy a complete driver/results/thermodynamic framework to avoid a small mismatch.
-Constructor signatures, docstrings, x/u conversions, temperature-array hours and
-exception/stop contracts remain documented and tested.
+| Package adapter | Frozen source / behavior retained | Host services inherited |
+|---|---|---|
+| compatibility/solver.py::DESolver._getdXdt | solver/Solver.py; below-minimum rejection and exact final-remainder exception. Remaining time is computed at the iterator callback from the requested final time | Complete integration loop, callbacks and corrections |
+| compatibility/solver.py::GenericModel.solve | GenericModel.py::solve; selects the local DESolver adapter only | Model state, flattening and time bookkeeping |
+| compatibility/recording.py::MeshData.preallocate/y | diffusion/mesh/MeshBase.py; allocation, valid recorded range, optional exact-time lookup | reset/record/finalize and underlying storage conventions |
+| compatibility/diffusion.py::DiffusionModel._validateMeshComposition | diffusion/Diffusion.py; adjust only floor violations, preserve valid inputs and x-to-u conversion | Construction, reset and diffusion lifecycle |
+| compatibility/diffusion.py::DiffusionConstraints | diffusion/DiffusionParameters.py; local minComposition=1e-10 and moving-boundary fields | Host constraint defaults and initialization |
+| compatibility/thermo.py::MulticomponentThermodynamics.getInterfacialComposition/_interfacialComposition | thermo/MultiTherm.py; returnMeta required by real O05 sampling, phase-labelled endpoints in input element order | Equilibrium engine and interdiffusivity |
+| compatibility/thermo.py::_tracerDiffusivitySingle/tracer_diffusivity | thermo/Thermodynamics.py tracer wrapper plus explicit package GAS_CONSTANT=8.3145 and host mobility evaluation | Local equilibrium and mobility engine |
 
-Audit all imports, including material/surrogate paths exercised by the approved
-suite. A module merely renamed compatibility is not an acceptable fork dependency.
-Any local provider/surrogate evaluation required by that suite must be explicitly
-relocated or adapted before claiming this gate; fake-provider tests cannot replace
-approved pycalphad/live-provider runs. Keep live licensed runs opt-in with reasons.
+The model constructs a local MeshData subclass and transfers the host's initial
+record state; it never replaces host class/module globals. Host mesh bases and
+TemperatureParameters remain public (array times in hours). The local provider
+boundary covers moving-boundary equilibrium, interdiffusivity and tracer queries;
+unrelated precipitation/curvature APIs retain stock conventions and are untested.
+No independent solver/results/thermodynamic framework was copied.
 
-## Separate environment and acceptance
+The two inherited trailing-whitespace lines in surrogates.py and seven in
+compatibility methods were removed without changing numerical AST. C32 is a
+configured retry stress variant; a small natural physical stop remains unestablished.
 
-After approval, create a disposable environment under ignored .verification/,
-without shared site packages or editable hooks. Install the moving-boundary wheel,
-the stock kawin 0.5.0 artifact and recorded dependencies there. The existing local
-wheel has SHA256 9f7a1497c5dff4314536860ac6fd0b96a68243dd681db8eb106dbe33fe25cbaf;
-verify identity before using it. Do not reinstall, upgrade or remove packages in
-the shared kawin Conda environment. All local Python-based setup and subprocesses
-must inherit the required Conda activation and have actual timeouts.
+## Environment and acceptance boundary
 
-Before examining new results, record per-quantity tolerances for the public-host
-comparison in a versioned manifest; pure relocation remains exact. Gas-constant
-and composition-floor differences are possible causes to investigate, not a reason
-to auto-widen tolerances or regenerate reference fixtures.
+`mb-public-050` is an offline Conda clone in a separate sibling directory. Stock
+kawin was installed only there, then the built package wheel installed privately.
+The shared kawin environment is unchanged. The ignored environment pointer and
+cached wheel configure the local one-command runner described in README; portable
+environment bootstrap is not claimed. All operations have subprocess timeouts.
 
-Definition of done:
+The installed workers assert stock version and package/host origins and use safe
+paths/no site hooks. Reference workers assert the clean detached 06dc7b4 origin.
+Frozen public tolerances are unchanged. Exact relocation evidence is separate in
+acceptance.json. C25-C29 compare reference/package contract outputs inside pytest.
+Full covers cached O-runs and longer analytic drift. Only live O06 is SKIPPED,
+pending a batch-safe TC adapter; cached cases ran when present. TC-derived values
+and hashes are never committed. Binary/two-phase unequal molar volumes remain
+unsupported; three-phase volume and supported x/u cases pass.
 
-- The built wheel installs with stock kawin 0.5.0 in the separate environment.
-- Runs execute outside source checkouts; origins, versions, wheel/source hashes
-  and dependency setup are asserted and recorded.
-- No execution path imports a fork-only symbol, including saved-surrogate and
-  provider paths. No upstream module is monkeypatched or edited.
-- The approved main-06dc7b4 acceptance suite passes every required quantity within
-  its recorded tolerance and prints a per-run/per-quantity pass/fail/skip table.
-  Every opt-in skip has a reason; skipped provider coverage is not provider parity.
-- The single acceptance command stays within its measured approximately ten-minute
-  budget, or a longer run is explained and approved before execution.
-
-Nothing here authorizes pushing, publication, upstream contribution, MAP outreach,
-a new package identity, or a change to the thin-phase prompt default.
+Regression acceptance does not establish untested physical models, topology
+transitions, fallback parity, arbitrary stock versions or licensing clearance.
+Package identity, audience, pushing/publication, outreach, upstream contribution
+and changing the prompt default remain user decisions.

@@ -96,5 +96,20 @@
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
     "changes": "module placement/imports only",
     "numerical_ast": "identical"
+  },
+  "surrogates.py": {
+    "source_path": "kawin/diffusion/MovingBoundarySurrogates.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "Whole local provider module; imports and two inherited trailing-whitespace lines only; numerical AST identical"
+  },
+  "surrogate_artifacts.py": {
+    "source_path": "kawin/diffusion/SurrogateArtifacts.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "Whole local provider/helper module; imports only"
+  },
+  "_diffusivity_domain.py": {
+    "source_path": "kawin/diffusion/_diffusivity_domain.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "Whole local provider/helper module; imports only"
   }
 }

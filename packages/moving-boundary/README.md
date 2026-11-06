@@ -1,77 +1,75 @@
-# moving-boundary: extraction checkpoint
+# moving-boundary: local extraction checkpoint
 
-The installable development package currently exposes one binary solver:
+Binary, ternary two-phase and ternary three-phase Illingworth solvers now live in
+this package, with their local meshes, numerical helpers, interface closures and
+surrogate providers. The wheel depends on unmodified public `kawin==0.5.0`.
 
-    from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel
+    from moving_boundary.solvers import (
+        MovingBoundaryIllingworthFD1DModel,
+        MovingBoundaryIllingworthTernaryFD1DModel,
+        MovingBoundaryIllingworthTernaryThreePhaseFD1DModel,
+    )
 
-The complete binary solver, binary kernel/profile helpers, local finite-difference
-mesh additions, transformed grids and interstitial helpers are package-owned.
-The class derives directly from host DiffusionModel; it no longer inherits the
-fork's Illingworth class. Host loop, mesh bases, recording and thermo remain
-dependency-owned. Ternary solver modules are the next mechanical relocations. See
-docs/BINARY_SLICE.md for source mappings and docs/NEXT_SESSIONS.md for the target.
+Public kawin still owns the model/solver loop, mesh bases, recording machinery,
+TemperatureParameters and pycalphad/thermodynamic engine. Small subclasses in
+compatibility/ preserve minimum-step/final-remainder policy, valid initial
+compositions, the 1e-10 floor, preallocation/exact-time lookup and provider endpoint
+metadata. The local tracer wrapper explicitly uses R=8.3145. No kawin module,
+constant or class global is patched. Curvature/precipitation APIs retain stock
+conventions and are outside the accepted moving-boundary provider boundary.
 
-The temporary dependency is samuelgprice/kawin at
-5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e. It removes production debugger
-dependencies and two obsolete test stubs, and is integrated into local main.
-Nothing is pushed: the Git pin is not remotely installable from this work.
-Verification builds local Git objects into private targets; shared packages
-must not be upgraded or reinstalled. Stock kawin 0.5.0 compatibility is planned,
-not established; see docs/PUBLIC_KAWIN_MILESTONE.md.
+All three families retain tested interstitial x/u conventions. Explicit unequal
+molar volumes are supported by three-phase only; binary and ternary two-phase
+unequal-volume combinations are explicitly unsupported. Thin-phase stopping is
+not a topology transition. Both ternary prompt defaults are unchanged; all batch
+cases pass an explicit policy and input() is prohibited before imports.
 
-## Reference and acceptance
+C32 is a configured retry stress case. A small natural physical stop run has
+not been established.
 
-The older source/fixture oracle remains ae9fb29. The approved quick/full suite
-will capture from a clean detached 06dc7b4 worktree with asserted import origins,
-never from the user's main checkout. See docs/ACCEPTANCE_CANDIDATES.md for the
-approved inputs, budgets, cache policy, analytic drift metrics and contract tests.
-TC-derived fixtures stay local/git-ignored; their availability is not permission
-to redistribute them. O06 is disabled until the TC adapter is batch-safe.
+## Local acceptance
 
-Prior installed verification passed 15 tests, 33 binary history arrays and 12
-nonuniform-grid bulk probes exactly, with all nine frozen fixture cases exact.
-That evidence is docs/verification.json and identifies its actual tested pin and
-source hashes. The current repin/guard changes are not falsely represented as a
-new run of that numerical verification. New results will record their own inputs.
-
-## Local verification
-
-Every Python-based command must use the activated kawin Conda environment:
+From the extraction root, run:
 
     cmd.exe /d /c 'call "C:\ProgramData\anaconda3\Scripts\activate.bat" "C:\ProgramData\anaconda3\envs\kawin" && python packages/moving-boundary/tools/acceptance.py quick'
 
-The command builds the nested package and pinned local fork in private targets,
-runs outside source roots, compares every recorded quantity with detached 06dc7b4,
-then runs package pytest including C25–C29. Quick passes 29 run comparisons plus
-22 tests in about 143 seconds using existing targets; fresh private builds add
-roughly 20 seconds. Real O05 pycalphad sampling is enabled after its five-second
-pilot. C31 uses the irregular Fig. 4 grid and C32 reaches configured terminal stop
-under continue with real solver retries. Binary/two-phase unequal volumes are
-explicitly unsupported.
+This selects the separate `mb-public-050` Conda clone, builds/installs a fresh
+package wheel into a private target, asserts package/stock import origins and
+checks the host's 73 files against the cached stock wheel. Workers run outside
+source checkouts with no editable/site hooks. Shared kawin is unchanged.
+The local environment pointer is ignored `.verification/public-environment.json`;
+this is a configured local verification command, not a portable bootstrap.
 
-Use `python packages/moving-boundary/tools/acceptance.py full` through the same
-activation wrapper for quick plus present cached runs and longer analytic drift
-checks. Full passes 38 runs and 22 tests in about 198 seconds; O06 is explicitly
-SKIPPED pending a batch-safe TC adapter. Missing cached inputs are the only cache
-skip; corrupt data or enabled-case errors fail. Full has a 20-minute cap and a
-runtime estimate is reported before execution.
+Quick: 29 run comparisons and 30 pytest tests passed in 146.36 s. Full: 38 run comparisons and 30 pytest tests passed in 220.99 s.
 
-Numerical fixtures, datasets, logs, build/install targets and private input hashes
-remain under ignored .verification/; no TC-derived reference output is committed.
-docs/acceptance.json contains only sanitized counts/status and provenance. Input
-sources and tolerances are frozen in tools/acceptance_manifest.json. Workers use
-safe-path/no-site startup, cleared Python path variables and deterministic hash/
-NumPy seeds; import origins and the detached source's cleanliness are asserted.
-The previous non-repeatable O05 fixture is preserved locally. Tolerances did not
-change. Exact/similarity errors are recorded as independent quantities.
+Quick includes C01-C24/C30-C32, the older binary fixture/bulk probes and freshly
+sampled O05 (4.94-second sampling pilot). C25-C29 are pytest lifecycle/failure
+contracts, with independent main/package workers. Full adds enabled cached
+O01/O02/O03a/O03b/O04/O07 and F04/F11/F12 drift checks. O06 reports SKIPPED until
+the TC adapter is batch-safe. All available cached cases ran. Missing caches are
+the only cache skip; invalid or changed existing inputs fail. Reference-independent
+exact/similarity errors are recorded in both short and long variants.
 
-The older verify.py --require-installed-fork remains a scoped frozen-fixture
-verification tool for the temporary Git-pinned checkpoint. The quick/full command
-is the approved suite and includes the retained 33 legacy arrays and 12 probes.
+Use the same wrapper with `acceptance.py full` for full. Announce its runtime
+estimate first (currently about 5-8 minutes); quick has a 600-second budget and
+full a 1200-second cap, well below 30 minutes. `verify.py` delegates to quick;
+`probe_fork.py` is explicitly historical. Separate environment creation is an
+offline setup operation, outside the quick budget. Use tools/setup_public_environment.py
+through the same activation wrapper to rebuild that offline clone from the cached wheel.
 
-No independent driver/results or thermodynamic rewrite is intended. Unequal
-per-phase molar volumes are supported by the three-phase solver only, not binary
-or ternary two-phase. New namespace initialization stays lazy. See LICENSE/NOTICE
-for unresolved MAP/local provenance; no blanket redistribution clearance exists.
-Package name, audience, publication, outreach, upstream contribution and changing
-the prompt default remain user decisions.
+References were captured from the clean detached `mb-ref-06dc7b4` worktree at
+06dc7b4ab56f67226ceabfde41ebf2690c088841. Every reference worker asserts its
+kawin import origin. The extraction's older kawin/examples/root packaging remain
+frozen at ae9fb29; legacy fixtures are also checked. Tolerances/inputs are frozen
+in tools/acceptance_manifest.json; relocation gates were exact, public gates use
+the preregistered quantity tolerances without widening. Deterministic hash/NumPy
+seeds make real O05 sampling repeatable; the original unseeded fixture is archived.
+
+Numeric reference outputs, TC inputs, private hashes, logs, build targets and
+environment state stay local/git-ignored. Committed acceptance.json contains only
+sanitized counts/provenance. See docs/BINARY_SLICE.md, LEDGERS.md and
+PUBLIC_KAWIN_MILESTONE.md for ownership, scope and method-level source mapping.
+
+Package identity/audience, publication, pushing, MAP outreach, upstream contribution
+and changing the prompt default remain user decisions. LICENSE/NOTICE preserve
+attribution without claiming unresolved local/MAP redistribution rights are cleared.

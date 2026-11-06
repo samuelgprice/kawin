@@ -24,7 +24,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 Local extraction provenance (November 5, 2026)
-Complete local Illingworth/numerical/mesh modules are relocated from
+Complete local Illingworth/numerical/mesh/provider modules and bounded
+host-policy methods are relocated/adapted from
 samuelgprice/kawin at 06dc7b4ab56f67226ceabfde41ebf2690c088841.
 See docs/BINARY_SLICE.md and source module headers for function-level mappings.
 The binary scheme identifies MAP C++ provenance. The MIT notice above is retained

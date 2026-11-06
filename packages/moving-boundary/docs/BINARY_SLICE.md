@@ -1,16 +1,16 @@
-# Complete Illingworth module relocation
+# Complete local solver and helper relocation
 
-The binary solver is package-owned and directly derives from the host
-DiffusionModel. It no longer inherits the fork's Illingworth class. Complete local
-modules replace the earlier two-method subclass checkpoint. The host model/solver
-loop, mesh bases, MeshData and thermodynamic engine remain dependency-owned.
+All three Illingworth solver classes and complete required local modules now live
+in moving_boundary. They derive from public host DiffusionModel through bounded
+package adapters, never from fork Illingworth classes. Shared private helpers live
+at package level in shared.py. Host framework/engine ownership is described in
+PUBLIC_KAWIN_MILESTONE.md.
 
-Every entry below comes from samuelgprice/kawin at
-06dc7b4ab56f67226ceabfde41ebf2690c088841. The older numerical fixture remains
-ae9fb29, and the temporary installed host pin is the test-only cleanup 5f4ad57.
-The detached 06dc7b4 source stays clean. Source files are copied mechanically;
-imports/module placement change, preserving arithmetic, docstrings, exception and
-boundary conventions, temperature-array hours and supported composition bases.
+Source authority for every row: samuelgprice/kawin
+06dc7b4ab56f67226ceabfde41ebf2690c088841. Mechanical copies preserve numerical
+AST, documentation, exception and unit conventions; import/module placement
+changes and two whitespace-only binary edits are recorded. The older ae9fb29
+fixture remains a separate oracle. No frozen source is developed or refreshed.
 
 | Package path | Source path / extraction | Changes |
 |---|---|---|
@@ -25,26 +25,24 @@ boundary conventions, temperature-array hours and supported composition bases.
 | _spectral_validation.py | kawin/diffusion/_spectral_validation.py | module placement/imports only |
 | solvers/ternary.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | class body unchanged; complete shared helper section moved to shared.py |
 | solvers/three_phase.py | kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py | module placement/imports only |
+| surrogates.py | kawin/diffusion/MovingBoundarySurrogates.py | Whole local provider module; imports and two inherited trailing-whitespace lines only; numerical AST identical |
+| surrogate_artifacts.py | kawin/diffusion/SurrogateArtifacts.py | Whole local provider/helper module; imports only |
+| _diffusivity_domain.py | kawin/diffusion/_diffusivity_domain.py | Whole local provider/helper module; imports only |
 
-The scalar kernel's old numerics/tridiagonal.py path now re-exports from the whole
-binary helper module, avoiding two independent copies. Shared private helpers
-belong in shared.py instead of being imported from a ternary solver. See
-relocation-map.json for machine-readable source mapping.
+compatibility/ policy methods and their precise upstream-derived source locations
+are mapped separately in PUBLIC_KAWIN_MILESTONE.md. No framework clone is hidden
+in the helper copies. tridiagonal.py re-exports the complete binary helper's kernel.
 
-The mandatory quick gate runs every approved short case, independent analytic
-errors, real pycalphad sampling, old binary fixtures/bulk probes and package
-pytest contracts against privately installed wheels in separate processes.
-Each family under relocation must originate in the installed package. Families
-not yet moved are explicitly reported as host-backed intermediates. Per-stage
-exact parity and counts are in acceptance.json; full is rerun at the public gate.
+Binary 8233ad2, ternary e08eed0 and three-phase 693595d each passed 29 exact
+installed-wheel run comparisons plus 22 tests before the dependency switch.
+Quick: 29 run comparisons and 30 pytest tests passed in 146.36 s. Full: 38 run comparisons and 30 pytest tests passed in 220.99 s.
+Independent exact/similarity errors accompany short/long drift checks. The suite
+includes supported interstitial/three-phase volume combinations, irregular grid,
+real pycalphad sampling, saved providers and configured terminal retry stopping.
+Binary/two-phase unequal volumes and topology transitions are unsupported.
 
-Binary/two-phase unequal molar volumes remain unsupported; three-phase explicit
-volume semantics are retained. C32 tests configured terminal-retry stop under
-continue without a fake solve callback. No topology-transition support is added.
-
-The fork identifies the binary scheme as a port of the authors' MAP C++ code.
-Upstream MIT text remains verbatim in NOTICE; local/MAP rights remain unresolved.
-No C++ reference source, PDFs, digitized data or TC datasets enter this wheel.
-Scientific fixes must have one authoritative source and an explicitly recorded
-port; the frozen reference is not developed independently to hide discrepancies.
-Package identity/audience, publication and licensing outreach remain user decisions.
+Upstream MIT text remains verbatim in NOTICE. The binary scheme identifies a port
+of the authors' MAP C++ code; local/MAP rights remain unresolved. No C++ source,
+PDFs, digitized data, databases or TC outputs enter the wheel. Numerical fixes
+must have one authority and explicit source/port records. Package identity,
+audience, publication, licensing outreach and prompt-default changes remain open.

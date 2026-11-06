@@ -2,87 +2,66 @@
 
 ## Current state
 
-- Extraction branch: refactor/package-extraction. The intermediate binary slice
-  is committed in 945dff3 and its prior verification in c970f85.
-- Approved quick/full inputs and implementation order are in
-  ACCEPTANCE_CANDIDATES.md. Approval is complete; do not ask again to implement it.
-- Definition of done and whole-module/public-kawin milestones are in
-  NEXT_SESSIONS.md and PUBLIC_KAWIN_MILESTONE.md.
-- Frozen older numerical source/fixture: ae9fb2971a9fd49132f71ddc883a5bd5406644b6.
-  The extraction checkout's kawin/, required examples and root packaging are frozen.
-- Approved reference: clean detached worktree at
-  06dc7b4ab56f67226ceabfde41ebf2690c088841. Each reference worker must assert
-  kawin.__file__; do not import from the user's main checkout.
-- Temporary package dependency and local main:
-  5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e. The separate fix branch removed
-  only the two unused debugger test stubs (12 lines); production numerical code is
-  unchanged. It was fast-forwarded into main; research branches were not merged.
-- The package still subclasses the fork binary model and overrides two bulk
-  methods. Complete binary, ternary two-phase and three-phase relocation remain
-  required, in separate parity-checked commits. Keep host loop/mesh/recording and
-  thermo services; shared local helpers belong at package level.
+The extraction branch is refactor/package-extraction. Whole binary, two-phase
+ternary and three-phase modules are package-owned, committed separately as
+8233ad2, e08eed0 and 693595d after exact quick gates (29 runs plus 22 tests each).
+The public-kawin milestone is implemented and accepted by the frozen quick/full
+suite. Runtime metadata requires stock kawin==0.5.0, not the research fork.
 
-## Verification evidence
+The separate offline environment is `mb-public-050` beside the extraction worktree.
+All 73 stock files match the cached 0.5.0 wheel byte for byte. Its LAPACK check
+passed. The package wheel installs privately beside that host. The original shared
+kawin environment was not reinstalled or upgraded. Every Python operation uses
+the required activation wrapper and bounded, noninteractive subprocesses.
 
-- Prior numerical verification: 15 package tests, 33 binary history arrays plus
-  12 bulk probes exact in separate installed -I -S processes; all nine old source
-  cases match the committed fixture. See verification.json for the actual tested
-  source/dependency hashes. EOF-only checkpoint changes are explicitly recorded.
-- Batch guard/tooling tests: 12 passed in 1.19 s. Workers prohibit input() before
-  imports and explicitly inject raise/continue in case constructor ASTs, without
-  modifying frozen sources or production module globals. Prompt defaults persist.
-- Narrow test-stub cleanup: two retry tests passed in 5.81 s without stubs.
-- These are scoped checks, not completion of the approved suite or Stage 1B.
-  No new main-reference fixture capture or public-kawin acceptance is claimed yet.
+Small compatibility subclasses preserve fork-only policy while inheriting public
+iteration, reset, recording, temperature handling and equilibrium/interdiffusivity.
+Provider modules are complete local additions; metadata and explicit-R tracer
+wrappers are bounded adaptations, not a thermodynamic engine copy. See
+PUBLIC_KAWIN_MILESTONE.md and relocation-map.json. No monkeypatches are used.
 
-## Approved suite implementation
+## Acceptance evidence
 
-tools/acceptance.py quick passes 29 separate run comparisons and all 22 package
-pytest tests (including C25–C29) in 142.58 s with existing private wheels.
-Full passes 38 run comparisons and the same 22 tests in 197.80 s. O06 is skipped
-explicitly because the TC adapter remains unsafe. Enabled caches were all present.
-All output quantities, original binary fixtures and bulk probes match exactly.
-See acceptance.json for sanitized evidence; TC-derived reference arrays stay local.
+Quick: 29 run comparisons and 30 pytest tests passed in 146.36 s. Full: 38 run comparisons and 30 pytest tests passed in 220.99 s.
 
-Real pycalphad sampling took 4.94 s and runs afresh in O05. Initial unseeded
-reference-vs-reference sampling varied; fixed Python hashing and NumPy seed 0
-restored exact repeatability. The old fixture is archived locally, no tolerance
-was widened, and the detached source is unchanged. Workers use -P -S with Python
-path variables removed so the hash seed is honored while retaining safe paths and
-no editable/site hooks. Every reference worker asserts kawin.__file__.
+All cached inputs were present and enabled. Only O06 was SKIPPED: the TC adapter
+still imports/calls debugInPlace and is disabled until batch-safe. Exact/similarity
+errors are saved for C04/C11/C12 and F04/F11/F12, plus irregular Fig. 4 C31.
+C32 reaches a configured terminal retry stop under explicit continue with real
+retries, not a fake callback. Binary/two-phase unequal volumes are unsupported;
+three-phase volumes and all supported interstitial families are covered.
 
-The regular/irregular binary, opposite/drift similarity, interstitial and volume
-runs have reference fixtures. F04/F11/F12 retain longer drift and independent
-analytic errors. C32 reaches configured terminal stop through actual retries,
-with continue explicit and no fake solve callback. It is a terminal-retry stress
-setup; phase-disappearance support remains outside scope. Explicit unequal molar
-volumes in binary and ternary two-phase remain unsupported.
+References and C25-C29 contract outputs come from clean detached 06dc7b4;
+every reference worker asserts its origin. The older ae9fb29 binary fixture and
+12 bulk probes remain checked. Source inputs/tolerances were frozen first. Real
+O05 sampling runs afresh with fixed hash/NumPy seeds; initial unseeded
+reference-vs-reference variability was diagnosed without widening tolerances.
+Raw reference/provider outputs and their hashes remain ignored and private.
+acceptance.json records sanitized results and separate relocation-stage evidence.
 
-## Next execution
+## Repository boundaries
 
-1. Relocate complete binary, ternary two-phase and three-phase local modules,
-   each as an import-only mechanical move with a separate passing quick gate and
-   commit. Shared private helpers belong in a package-level module; remove the
-   intermediate inheritance from the fork's binary Illingworth class.
-2. Add bounded package compatibility and a separate stock-kawin 0.5.0 environment,
-   preserving host loop/mesh/recording and thermo services without monkeypatches.
-   Require no fork-only imports and the preregistered public tolerances.
-3. Run full including cached research cases and analytic drift after the public
-   switch; report the runtime estimate first and preserve all private fixtures.
+Local main and fix/remove-debugger-imports are at 5f4ad57. That narrow test cleanup
+removed 12 obsolete stub lines and passed two retry tests before the authorized
+fast-forward; production numerics did not change. It was never merged into this
+extraction's frozen kawin/examples/root packaging at ae9fb29. The reference
+worktree remains detached and clean. Original untracked research work is preserved;
+AGENTS.md stays untracked. No push, publication, research-branch merge or external
+contact occurred. Attribution is retained; no licensing clearance is claimed.
 
-All Python, pytest, package-inspection and setup commands inherit the required
-Conda activation wrapper and use actual subprocess timeouts, noninteractive stdin
-and local temp directories. No shared editable reinstall, dependency upgrade,
-push, publication, research-branch merge or external contact is authorized.
-AGENTS.md remains untracked. Source mappings/attribution and numerical docstrings
-must stay synchronized. Existing mixed tooling line endings are preserved;
-the README/handoff have been rewritten as requested using their dominant CRLF.
+The final diff passes git diff --check. Nine inherited whitespace-only lines in
+new copies were trimmed with a numerical-AST equality assertion. The substantially
+rewritten verify.py now uses CRLF instead of mixed endings; other localized edits
+preserve existing mixed endings. No broad whitespace cleanup was applied.
 
-## Open decisions and limitations
+## Next work and open decisions
 
-Package name/audience, pushing, MAP outreach, upstream contribution and changing
-the terminal prompt default remain user decisions. No rights clearance is implied
-by copying local/MAP-derived code. The TC adapter still imports/calls debugInPlace
-and must lose that dependency on promotion in Stage 2C. Stock host/provider parity,
-the full capability matrix, live TC availability and complete fallback acceptance
-remain unproven until separately tested.
+The authorized extraction/public-host acceptance work is complete. Future work
+requires its own scope: promote a batch-safe TC adapter (Stage 2C), broaden
+provider/fallback/plotting/restart coverage, and review scientific convergence
+separately from regression parity. The package has no topology transition feature.
+Name, audience/distribution, release ownership, pushing, MAP licensing outreach,
+upstream contribution and the ternary prompt default remain user decisions.
+README contains the current single quick/full command. Keep numerical fixes
+authoritative in one place and record deliberate ports; never refresh a frozen
+reference to conceal a discrepancy.
