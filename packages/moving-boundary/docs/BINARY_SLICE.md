@@ -6,6 +6,11 @@ ae9fb2971a9fd49132f71ddc883a5bd5406644b6; dependency remains
 
 ## Dependency review and boundary
 
+This is the retained intermediate checkpoint. The accepted next strategy is
+whole-module relocation, with shared helpers at package level and no inheritance
+from the fork's Illingworth class. See NEXT_SESSIONS.md. Further relocation waits
+for approval and implementation of the main-reference acceptance suite.
+
 The original binary class imports DiffusionModel/GenericModel, interstitial
 helpers, diffusivity-mode helpers from the ternary module, CartesianFD1D and
 boundary classes, four transformed-profile/kernel helpers, explicitEulerIterator,

@@ -1,45 +1,84 @@
-# Extraction status and next step
+# Definition of done
 
-Updated November 5, 2026. This execution list governs the next steps; the long
-EXTRACTION_PLAN.md remains background. No driver rewrite is authorized by a
-packaging failure alone.
+The end state: my Illingworth solvers (binary, ternary two-phase, ternary three-phase,
+with interstitial and molar-volume support) live in this package. The package depends
+on UNMODIFIED public kawin (a chosen release, currently 0.5.0) only for what it
+really needs: the model/solver loop, mesh and recording, TemperatureParameters, and
+the pycalphad/thermo side. Fork-only host behavior lives in the package's own
+compatibility layer. A single command shows that the runs I actually use still give
+the same results as main.
 
-1. **Verification and bounded host assessment completed.**
-   The summary exposes the installed-fork gate; strict mode rejects an open gate.
-   Twelve package/verification tests and all nine substitutional cases pass.
-   The public 0.5.0 wheel was inspected, not installed. See LEDGERS.md for the
-   comparison and source hash. Localized host differences favor retaining the
-   host rather than starting a complete driver rewrite.
+## Current checkpoint
 
-2. **Narrow fork debugger fix completed and integrated.**
-   Branch fix/remove-debugger-imports starts at ae9fb29 and contains
-   commit 06dc7b4ab56f67226ceabfde41ebf2690c088841. Local main has the same
-   commit through a fast-forward merge. The package pins this commit; the
-   extraction checkout's reference source stays at ae9fb29.
-   Production imports/reloads and pauses were removed, including surrogate and
-   Olaye dependencies and ternary/three-phase retry exhaustion.
-   Seventy-six focused tests and three fake-provider cases passed; new public
-   retry tests verify chained errors and unchanged accepted state/histories.
-   Installed import and binary parity now pass without source checkout paths.
-   Explicit terminal-thin-phase prompt policies remain unchanged.
-   No push or upstream/licensing outreach has occurred.
+The intermediate binary subclass and scalar kernel are committed in 945dff3;
+the separate verification checkpoint is c970f85. The recorded run passed 15
+package tests and exact installed-wheel parity for 33 binary history arrays and
+12 nonuniform-grid bulk probes. All nine frozen source cases match their fixture.
+Only EOF blank lines changed while checkpointing; verification.json preserves the
+actual tested hashes and separately records those formatting-only adjustments.
+These are prior results, not a newly executed acceptance suite.
 
-3. **First binary numerical slice completed.**
-   The package subclasses the pinned host and overrides only the two planar
-   bulk-concentration methods, using an extracted scalar Thomas kernel. See
-   BINARY_SLICE.md for function-level mapping, assumptions and temporary ownership.
-   Strict private-wheel verification passes: 33 binary fixture history arrays
-   across three modes and 12 nonuniform-grid bulk probes match exactly in separate
-   processes. All nine frozen cases still match; 15 package tests pass.
-   Host driver/results, interface balance, Picard/retry policy and thermodynamics
-   remain inherited. No reference source/fixtures or dependency pins changed.
+The source reference remains ae9fb2971a9fd49132f71ddc883a5bd5406644b6 and the
+installed dependency remains 06dc7b4ab56f67226ceabfde41ebf2690c088841.
+The approved-run suite will use main at 06dc7b4 as its reference. Do not silently
+replace the earlier reference fixture. Public-kawin compatibility is unproven.
 
-4. **Characterize the next binary lifecycle boundary before moving it.**
-   Add extracted-class evidence for retries/rollback, final remainders, repeated
-   setup/reset and continued solves, plus supported interstitial inputs. Choose
-   the next small method/helper slice from that evidence. Keep host driver/results;
-   do not start ternary extraction or an independent driver from this checkpoint.
-   MAP redistribution and the broader Stage 0 matrix remain open.
+## Approval gate and implementation order
+
+First propose the acceptance runs, with shortened inputs and explicit dependencies,
+and wait for the user's approval before building their suite, capturing reference
+outputs, relocating another solver, or changing the dependency. Item 4e requires
+that suite for every subsequent solver move and the public-kawin switch.
+
+After approval, write per-quantity tolerances before examining new results, then
+capture outputs from main at 06dc7b4 and build the isolated acceptance runner.
+Use exact comparison for mechanical relocation and installed-wheel processes.
+
+### Whole-module relocation (review item 2; not yet implemented)
+
+Replace the method-by-method subclass strategy with complete local modules.
+The current subclass is an intermediate checkpoint, not the intended architecture.
+Use mechanical copies with import changes, preserving operation order, numerical
+docstrings, units and exceptions. Identify and document any unavoidable change
+separately; do not hide a numerical repair in a relocation.
+
+1. Binary commit: relocate MovingBoundaryIllingworthFDM.py and the helper modules
+   it needs. The resulting class must derive from host DiffusionModel/GenericModel,
+   never the fork's Illingworth class. Include the complete binary mesh/kernel
+   helper module, TransformedGrids.py, the needed FDM1D.py CartesianFD1D additions,
+   _illingworth_interstitials.py and dependency-graph-required local helpers.
+   Keep host mesh base classes and MeshData supplied by kawin at this stage.
+2. Ternary two-phase commit: relocate MovingBoundaryIllingworthTernaryFDM.py and
+   its complete numerical/helper modules, including _spectral_validation.py and
+   required MovingBoundaryEquilibrium services.
+3. Three-phase commit: relocate MovingBoundaryIllingworthTernaryThreePhaseFDM.py
+   and any remaining local helpers. Do not introduce a subclass of a fork solver.
+
+Move shared private helpers to a package-level module rather than importing from
+the ternary solver: diffusivity-mode constants/coercion for binary; scalar/array
+histories, finite-difference perturbation, eta bounds, matrix/stack validation,
+log schedules and shared constants for three-phase. Determine the exact closure
+from imports and call sites, rather than copying all of kawin.
+
+For each commit, record every source path and commit in BINARY_SLICE.md/LEDGERS.md.
+Select debugger-free solver sources explicitly at 06dc7b4 where needed; retain
+ae9fb29 as the older frozen fixture source and document their narrow difference.
+The approved main-reference suite, existing fixture and bulk probes must pass
+exactly in separate processes against the privately installed package wheel.
+Retain the host model/solver loop, mesh/recording and thermodynamic engine.
+
+## Open decisions reserved for the user
+
+- Final package name.
+- Intended audience and distribution/maintenance model.
+- Pushing branches or publishing artifacts.
+- MAP licensing outreach.
+- Upstream contribution.
+- Changing either ternary solver's thin-phase prompt default.
+- Approval or revision of the acceptance run list.
+
+No push, research-branch merge, upstream contact or MAP-author contact is authorized.
+The shared kawin Conda environment must not be repackaged or reinstalled.
 
 ## Baseline and concurrent research policy
 
