@@ -88,9 +88,9 @@
       "skipped": {}
     },
     "full": {
-      "elapsed_seconds": 495.4530000000086,
+      "elapsed_seconds": 517.25,
       "pytest": {
-        "tests": 41,
+        "tests": 65,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -157,9 +157,9 @@
       }
     },
     "full": {
-      "elapsed_seconds": 495.4530000000086,
+      "elapsed_seconds": 517.25,
       "pytest": {
-        "tests": 41,
+        "tests": 65,
         "failures": 0,
         "errors": 0,
         "skipped": 0

@@ -14,14 +14,19 @@ physical convergence audit. See ACCEPTANCE_CANDIDATES.md for exact input variant
 | Exact/similarity diagnostics and drift | C04/C11/C12 and full F04/F11/F12; analytic errors recorded independently of reference |
 | Lifecycle, rollback, failures and terminal stop | C25-C29 package pytest main/package contracts; C32 configured continue stop using real retries; no topology transition |
 | Cached material/provider workflows | O01/O02/O03a/O03b/O04/O07 run whenever present; private TC-derived inputs/references remain ignored |
-| pycalphad generation | O05 real seeded sampling each worker, 4.94-second pilot; raw samples and solver outputs compared |
+| pycalphad generation (Stage 2B complete) | Installed providers/pycalphad.py; real O05 sampling with PYTHONHASHSEED=0, no examples import/read during package generation; frozen reference adapter retained |
 | TC-Python live generation | O06 disabled; examples/ThermoCalc/tc_python_adapter.py still imports/calls debugInPlace. Remove at Stage 2C before promotion |
 | Unaccepted workflows | Arbitrary plotting/results/restart/coupling, Numba fallback, other kawin versions, alternative moving-boundary solvers and curvature/precipitation APIs are outside this gate |
 
 ## Ownership and provenance
 
-Every local solver/numerics/mesh/equilibrium/provider/domain file is mapped to its
-06dc7b4 source path in relocation-map.json and BINARY_SLICE.md. Shared private
+Original whole-module solver/numerics/mesh/equilibrium/provider/domain copies map
+to 06dc7b4 in relocation-map.json and BINARY_SLICE.md. Stage 2B generation maps
+function-by-function in PUBLIC_KAWIN_MILESTONE.md and the provider docstring.
+Generating with pycalphad no longer needs the research checkout; examples-based
+research builders/assembly and the live TC adapter still do. The broader Stage 2
+generation/evaluation/persistence/domain/equilibrium split is open; the four whole
+copied modules remain unchanged. R01 is open on the research branch. Shared private
 helpers live in shared.py. No fork solver inheritance remains. Public unmodified
 kawin==0.5.0 supplies model/solver iteration, mesh bases, recording, temperature and
 thermo/pycalphad. PUBLIC_KAWIN_MILESTONE.md maps every bounded policy method:
@@ -70,6 +75,9 @@ to these third-party models. Rebuilding pycalphad-backed training data can propa
 roundoff into sampled endpoints/matrices and then solver histories. Analytic,
 saved-surrogate and cached-table solves do not invoke that model generation.
 Default-phase generation shares the dependency but was not separately diagnosed.
+The installed Stage 2B copy retains R01: isolated real hash-1 sampling differs in
+13 of 21 numeric provider arrays from the accepted hash-0 generation. That check
+uses ignored temporary artifacts and leaves accepted outputs unchanged.
 
 Proposed research-branch fix: add cross-hash subprocess regression coverage at
 the provider boundary, then evaluate deterministic symbolic species/term ordering

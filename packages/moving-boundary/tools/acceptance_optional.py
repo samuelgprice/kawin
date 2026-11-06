@@ -1,5 +1,6 @@
 """Approved cached and real-provider inputs; never auto-build a missing TC cache."""
 from pathlib import Path
+from contextlib import contextmanager
 import dataclasses
 import json
 import numpy as np
@@ -80,10 +81,73 @@ def build_optional(inputs, case):
     raise KeyError(case)
 
 
+@contextmanager
+def guard_package_generation():
+    """Reject examples/debugger imports and every examples source read while sampling.
+
+    An audit hook also catches file reads that bypass Python import machinery.
+    Audit hooks cannot be removed, so the hook becomes inert on context exit.
+    Research assembly after generation is deliberately outside this boundary.
+    """
+    import os
+    import sys
+    active = True
+    audit = dict(guarded=True,examples_imported=False,examples_read=False)
+    def reject_import(name):
+        """Fail for research/debugger roots, including any preloaded module."""
+        if name.split(".")[0] in {"examples","debugpy"}:
+            raise AssertionError("Research/debugger import during package generation: " + name)
+    class NoResearch:
+        """Reject research/debugger modules before their loaders can read source."""
+        def find_spec(self, fullname, path=None, target=None):
+            """Allow other finders to resolve every permitted module."""
+            reject_import(fullname)
+    def audit_event(event, args):
+        """Catch direct reads and import events only while this context is active."""
+        if not active:
+            return
+        if event == "import":
+            reject_import(args[0])
+        elif event == "open" and isinstance(args[0],(str,bytes,os.PathLike)):
+            parts = os.fsdecode(args[0]).replace("\\","/").lower().split("/")
+            if "examples" in parts:
+                raise AssertionError("Research examples source read during package generation: " + os.fsdecode(args[0]))
+    for name in sys.modules:
+        reject_import(name)
+    finder = NoResearch()
+    sys.meta_path.insert(0,finder)
+    sys.addaudithook(audit_event)
+    try:
+        yield audit
+        for name in sys.modules:
+            reject_import(name)
+    finally:
+        active = False
+        sys.meta_path.remove(finder)
+
+
 def sample_pycalphad(inputs):
-    """Perform real five-tie-line provider sampling; never substitute analytic data."""
+    """Sample real tie lines; package generation must use installed code without examples.
+
+    Reference generation continues to load the frozen 06dc7b4 adapter. The
+    scoped package guard ends before research case assembly begins.
+    """
+    if inputs.role == "package":
+        with guard_package_generation() as audit:
+            from moving_boundary.providers import pycalphad as source
+            import moving_boundary
+            assert Path(source.__file__).resolve().is_relative_to(Path(moving_boundary.__file__).resolve().parent)
+            surrogate = _sample_pycalphad(inputs,source)
+            audit.update(adapter_module=source.__name__,adapter_origin=source.__file__)
+            inputs.generation_audit = audit
+            return surrogate
     source = inputs.load(inputs.root / "examples/ternaryExamples/pycalphad_default_phase_adapter.py",
                          ["create_pycalphad_thermodynamics_source"])
+    return _sample_pycalphad(inputs,source)
+
+
+def _sample_pycalphad(inputs, source):
+    """Keep the approved five-tie-line real sampling inputs and arithmetic unchanged."""
     database = Path(inputs.artifacts) / "FeCrNi.tdb"
     therm = source.create_pycalphad_thermodynamics_source(database, ["FE","CR","NI"],
         ["BCC_A2","FCC_A1"], use_default_phases=False, g_offset=0.)

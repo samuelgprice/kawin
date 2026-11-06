@@ -26,20 +26,24 @@ analytic providers, saved surrogates, or cached tables supplied through the solv
 provider interface. Those solves do not require the research checkout once their
 provider inputs are assembled using installed APIs.
 
-The approved pycalphad data-generation workflow still needs the research checkout.
-O05 reads examples/ternaryExamples/pycalphad_default_phase_adapter.py from detached
-06dc7b4 through the acceptance input loader; that adapter is not in the installed
-wheel. Anything importing from examples/ also needs the checkout. This includes
-the research builders/assembly scripts used by the acceptance suite, even when
-their resulting solver can operate entirely on analytic or cached provider data.
-The public thermodynamic engine is installed; the research generation adapter and
-example orchestration have not been extracted.
+Generating data with pycalphad now works from the installed package through
+`moving_boundary.providers.pycalphad.create_pycalphad_thermodynamics_source`.
+The engine is imported lazily; stock kawin 0.5.0 already requires pycalphad>=0.11,
+so no separate extra is needed. Stage 2B is complete. O05 performs real sampling
+through this installed adapter under an examples-import/source-read guard. Its
+reference worker still uses the original adapter from clean detached 06dc7b4.
+Only O05 keeps PYTHONHASHSEED=0; R01 remains open on the research branch.
+
+Anything importing or reading examples/ still needs the research checkout. This
+includes the research builders/assembly scripts used after sampling by acceptance
+and the unpromoted live TC adapter. Those orchestration scripts are not installed
+APIs; the installed pycalphad generation step does not import or read them.
 
 surrogates.py, surrogate_artifacts.py, _diffusivity_domain.py and equilibrium.py
 were copied whole and unchanged in implementation, apart from required import
 relocations and documented whitespace-only edits. Their presence in the package
-does not complete the Stage 2 provider/surrogate separation. Stage 2B below scopes
-the adapter move; R01 remains a separate research-branch scientific issue.
+does not complete the broader Stage 2 provider/surrogate separation. Stage 2B
+is complete; R01 remains a separate research-branch scientific issue.
 
 ## Completed implementation order
 
@@ -67,23 +71,26 @@ validated deterministic symbolic ordering or a dependency/compiler fix. Do not
 implement that scientific fix independently in the package, on main, or by
 refreshing references. Numerical code, references and tolerances remain unchanged.
 
-## Stage 2B: move the pycalphad generation adapter (not implemented)
+## Stage 2B: pycalphad generation adapter (complete)
 
-Move the needed provider facade and phase-universe/g_offset/endpoint-ordering
-helpers from examples/ternaryExamples/pycalphad_default_phase_adapter.py into a
-package-owned provider module. Preserve their existing numerical conventions and
-explicit contracts; do not bundle the R01 scientific repair or TC-adapter work.
-Switch O05 to the installed adapter so generation no longer imports or reads that
-examples/ module. Keep immutable reference setup definitions available to acceptance
-without representing those research builders as installed-package functionality.
+The source-mapped provider facade and phase-universe/g_offset/endpoint-ordering
+helpers now live in providers/pycalphad.py. Their arithmetic, iteration order,
+component conventions and R01 hash sensitivity are unchanged. The only closure
+outside the source adapter was an unused conditional import of examples.debugInPlace;
+its call was commented out. That import is omitted; no debugger helper or larger
+examples tree was copied. See PUBLIC_KAWIN_MILESTONE.md for the full source map.
 
-Acceptance for that move: real pycalphad sampling with stock kawin outside research
-import paths, unchanged reference/input hashes and quantity tolerances, labelled
-endpoint/phase/component ordering, and passing quick/full gates. Do not replace
-generation with a cached/fake provider. Keep databases, trained artifacts and TC
-outputs local as required. The broader Stage 2 separation of provider generation,
-surrogate evaluation, persistence/domain validation and equilibrium interfaces is
-still open; the four whole copied modules above have not been refactored into it.
+O05 samples real pycalphad data through the installed adapter while rejecting
+examples/debugger imports and direct examples source reads. Reference generation
+keeps the original detached-06dc7b4 adapter. Sampling inputs, references and
+preregistered tolerances remain unchanged; no cached/fake provider replaces it.
+Research builders/assembly remain available only from the checkout after the
+guarded generation step. Databases, trained artifacts and TC outputs stay local.
+
+The broader Stage 2 separation of generation, surrogate evaluation, persistence/
+domain validation and equilibrium interfaces is still open. The four whole copied
+modules above have not been refactored into that split. R01 is still open on the
+research branch; Stage 2B makes no species/term sorting or CSE change.
 
 ## Next scoped work
 

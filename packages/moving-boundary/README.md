@@ -27,7 +27,7 @@ cases pass an explicit policy and input() is prohibited before imports.
 C32 is a configured retry stress case. A small natural physical stop run has
 not been established.
 
-See [docs/NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for installed solving and research-owned generation.
+Stage 2B is complete: pycalphad data generation uses the installed package. See [docs/NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for the remaining research builders/assembly dependency, open broader Stage 2 split and research-branch R01.
 
 ## Local acceptance
 

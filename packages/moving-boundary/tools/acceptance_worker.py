@@ -127,6 +127,11 @@ def main():
                         mod = sys.modules[provider]
                         assert Path(mod.__file__).resolve().is_relative_to(args.target.resolve())
             np.savez_compressed(args.output.with_suffix(".npz"), **arrays)
+        if args.case == "O05" and args.role == "package":
+            audit = inputs.generation_audit
+            assert audit["guarded"] and not audit["examples_imported"] and not audit["examples_read"]
+            assert Path(audit["adapter_origin"]).resolve().is_relative_to(args.target.resolve())
+            report["pycalphad_generation"] = audit
         report.update(status="PASS", arrays=len(arrays))
     except Exception:
         report.update(status="FAIL", error=traceback.format_exc())
