@@ -22,7 +22,7 @@ PUBLIC_KAWIN_MILESTONE.md and relocation-map.json. No monkeypatches are used.
 
 ## Acceptance evidence
 
-Quick: 29 run comparisons and 30 pytest tests passed in 146.36 s. Full: 38 run comparisons and 30 pytest tests passed in 220.99 s.
+Quick: 29 run comparisons and 41 pytest tests passed in 435.73 s. Full: 38 run comparisons and 41 pytest tests passed in 495.45 s.
 
 All cached inputs were present and enabled. Only O06 was SKIPPED: the TC adapter
 still imports/calls debugInPlace and is disabled until batch-safe. Exact/similarity

@@ -35,7 +35,7 @@ in the helper copies. tridiagonal.py re-exports the complete binary helper's ker
 
 Binary 8233ad2, ternary e08eed0 and three-phase 693595d each passed 29 exact
 installed-wheel run comparisons plus 22 tests before the dependency switch.
-Quick: 29 run comparisons and 30 pytest tests passed in 146.36 s. Full: 38 run comparisons and 30 pytest tests passed in 220.99 s.
+Quick: 29 run comparisons and 41 pytest tests passed in 435.73 s. Full: 38 run comparisons and 41 pytest tests passed in 495.45 s.
 Independent exact/similarity errors accompany short/long drift checks. The suite
 includes supported interstitial/three-phase volume combinations, irregular grid,
 real pycalphad sampling, saved providers and configured terminal retry stopping.

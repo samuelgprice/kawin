@@ -9,11 +9,22 @@ import sys
 import tempfile
 import time
 import zipfile
+from functools import lru_cache
 
 PROJECT = Path(__file__).resolve().parents[1]
 OUTPUT = PROJECT / ".verification/acceptance"
 REFERENCE = PROJECT.parents[2] / "mb-ref-06dc7b4"
 MANIFEST = PROJECT / "tools/acceptance_manifest.json"
+
+
+@lru_cache(maxsize=1)
+def metric_tools():
+    """Load sibling reporting code without adding a checkout to the import path."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("acceptance_metrics", PROJECT / "tools/acceptance_metrics.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def run(args, *, cwd=None, timeout=120, env=None):
@@ -157,7 +168,7 @@ def quantity(key):
 
 
 def compare(case, package, *, tolerance="exact", require=()):
-    """Compare every quantity, rejecting altered shapes/masks/status/providers."""
+    """Keep frozen acceptance decisions and record per-array/quantity deviation margins."""
     import numpy as np
     ref = OUTPUT / "reference" / case
     got = OUTPUT / "package" / case
@@ -170,25 +181,30 @@ def compare(case, package, *, tolerance="exact", require=()):
         if provider is not None:
             assert provider.startswith("moving_boundary."), (case, family, provider)
     results = {}
+    metrics = metric_tools()
+    measured = {name:{} for name in metrics.QUANTITIES}
     with np.load(ref.with_suffix(".npz")) as reference, np.load(got.with_suffix(".npz")) as actual:
         assert set(reference.files) == set(actual.files), case
         for key in reference.files:
             wanted, value = reference[key], actual[key]
             group = quantity(key)
+            settings = manifest["public_tolerances"][group]
+            scale = 1.
+            if group == "interface" or (group == "analytic_error" and key == "exact/interface_error"):
+                scale = expected.get("length_scale", 1.)
+            elif group == "accepted_times":
+                scale = max(1., expected.get("requested_duration", 1.))
+            elif group == "inventory":
+                scale = expected.get("length_scale", 1.) / expected.get("minimum_molar_volume", 1.)
+            measured[group][key] = metrics.array_metrics(wanted,value,
+                rtol=settings["rtol"] if tolerance == "public" else 0.,
+                atol=settings["atol"]*scale if tolerance == "public" else 0.)
             ok = wanted.shape == value.shape
             if ok:
                 ok = np.array_equal(np.isnan(wanted), np.isnan(value))
             if ok and tolerance == "exact":
                 ok = np.array_equal(wanted, value, equal_nan=True)
             elif ok:
-                settings = manifest["public_tolerances"][group]
-                scale = 1.
-                if group == "interface" or (group == "analytic_error" and key == "exact/interface_error"):
-                    scale = expected.get("length_scale", 1.)
-                elif group == "accepted_times":
-                    scale = max(1., expected.get("requested_duration", 1.))
-                elif group == "inventory":
-                    scale = expected.get("length_scale", 1.) / expected.get("minimum_molar_volume", 1.)
                 ok = np.allclose(wanted, value, rtol=settings["rtol"], atol=settings["atol"]*scale, equal_nan=True)
             results[group] = results.get(group, True) and bool(ok)
             if not ok:
@@ -196,7 +212,52 @@ def compare(case, package, *, tolerance="exact", require=()):
     results["stop_status"] = True
     for group in ("interface", "profiles", "eta", "inventory", "accepted_times", "analytic_error"):
         results.setdefault(group, None)
+    quantities = {group:metrics.quantity_metrics(arrays) for group,arrays in measured.items()}
+    quantities["stop_status"] = dict(applicable=True,bit_identical=True,
+        max_absolute_deviation=None,max_relative_deviation=None,tolerance="exact structural equality")
+    record = dict(case=case,tolerance_mode=tolerance,passed=not results.get("failed_keys"),
+        bit_identical=all(stats["bit_identical"] for stats in quantities.values() if stats["applicable"]), quantities=quantities)
+    got.with_suffix(".deviations.json").write_text(json.dumps(record,indent=2,allow_nan=False),encoding="utf-8")
     return results
+
+
+def report_deviations(action, cases, *, contracts, skipped, started, tolerance):
+    """Persist all local metrics and a path-free committed report with TC metrics redacted.
+
+    Contract comparisons are included separately from the run table. No fixture
+    is read or written here; compare() already measured the existing outputs.
+    Only current-run files are eligible, preventing a failed case from silently
+    reusing a previous successful measurement.
+    """
+    metrics=metric_tools()
+    def load_current(ids):
+        records={}
+        for case in ids:
+            path=OUTPUT / "package" / (case+".deviations.json")
+            if path.exists() and path.stat().st_mtime >= started:
+                records[case]=json.loads(path.read_text(encoding="utf-8"))
+        return records
+    runs=load_current(cases)
+    contract_runs=load_current(contracts)
+    summary=metrics.summarize(runs)
+    contract_summary=metrics.summarize(contract_runs)
+    local=dict(cases=runs,contracts=contract_runs,summary=summary,contract_summary=contract_summary,skipped=skipped)
+    (OUTPUT / (action+"-deviations.json")).write_text(json.dumps(local,indent=2,allow_nan=False),encoding="utf-8")
+    metrics.print_summary("Acceptance",summary)
+    if contract_runs:
+        metrics.print_summary("Contracts",contract_summary)
+    if tolerance == "public":
+        path=PROJECT / "docs/acceptance-deviations.json"
+        document=json.loads(path.read_text(encoding="utf-8")) if path.exists() else dict(schema=1,tiers={})
+        document.update(reference_commit="06dc7b4ab56f67226ceabfde41ebf2690c088841",host_version="0.5.0",
+            definitions=dict(relative_error="abs(actual-reference)/abs(reference); nonzero error at zero reference is unbounded (null plus flag)",
+                tolerance_fraction="max elementwise abs(error)/(scaled_atol + rtol*abs(reference))",
+                within_10x="tolerance fraction >= 0.1",bit_identical="same shape, dtype and bytes including signed zeros and NaN payloads",
+                privacy="TC-derived numerical metrics are retained only in ignored local output; case coverage is labelled"))
+        document["tiers"][action]=dict(cases=metrics.public_cases(runs),contracts=metrics.public_cases(contract_runs),
+            summary=metrics.public_summary(summary),contract_summary=metrics.public_summary(contract_summary),skipped=skipped)
+        path.write_text(json.dumps(document,indent=2,allow_nan=False)+"\n",encoding="utf-8")
+    return metrics.public_summary(summary)
 
 
 def contract_case(case, state=None, *, reference=REFERENCE, tolerance="exact", require=()):
@@ -230,7 +291,7 @@ assert Path(kawin.__file__).resolve() == Path(sys.argv[2]) / 'kawin/__init__.py'
 import pytest
 raise SystemExit(pytest.main(sys.argv[3:]))
 """
-    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py"]
+    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py"]
     args = [sys.executable, "-I", "-S", "-c", code, state["target"], state["host"],
             *[str(PROJECT / "tests" / name) for name in tests],
             str(PROJECT / "tests/test_bridge.py") + "::test_namespace_import_is_lazy",
@@ -312,6 +373,7 @@ def main(argv=None):
         print(json.dumps(setup_targets()))
         return 0
     started = time.monotonic()
+    started_timestamp = time.time()
     results, failures = {}, []
     state = None
     if args.action != "capture":
@@ -359,6 +421,10 @@ def main(argv=None):
     validate_reference(args.reference)
     summary = dict(action=args.action, cases=results, failures=failures, skipped=skipped,
                    pytest=tests, elapsed_seconds=time.monotonic()-started)
+    if args.action in {"quick","full"}:
+        summary["deviations"] = report_deviations(args.action,cases,
+            contracts=manifest["contracts"] if tests else (),skipped=skipped,
+            started=started_timestamp,tolerance=args.tolerance)
     if state and state.get("repeatability_directory"):
         checks = [json.loads(path.read_text()) for path in Path(state["repeatability_directory"]).glob("*/comparison.json")]
         summary["unseeded_repeatability"] = {entry["case"]:entry for entry in checks}

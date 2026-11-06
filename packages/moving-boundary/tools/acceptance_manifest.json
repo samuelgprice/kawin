@@ -194,10 +194,11 @@
     "acceptance_cases.py": "72197527dcacd4ec25d4a825c138ff0c9f11780f0693942340f6a4c34561e34e",
     "acceptance_worker.py": "16507cd369cd81a122204a289cadecd87e608bf886db37adb6c2440a458ac355",
     "acceptance_contracts.py": "0acd90fe540475db812be91bb90b7b5393586e13ce5cd0375fc21275e1c88604",
-    "acceptance.py": "c03294bb695b98753351d6f66280da71a03060c3131ac25bbe201ce376aa3ab2",
-    "acceptance_optional.py": "d5c5ca91122e7aac1b61c6da6fad6f73563f7cc0590bdcd9390b325b11a4d0dd"
+    "acceptance.py": "697606a9b2515b607adf4af0892a5b96b335598aba056bf184b18c34533da868",
+    "acceptance_optional.py": "d5c5ca91122e7aac1b61c6da6fad6f73563f7cc0590bdcd9390b325b11a4d0dd",
+    "acceptance_metrics.py": "95a5024fc384645c3a371913e082fa94ea7f29b3bb2f9b8eccce28c41f41bdb9"
   },
-  "tooling_revision_note": "Review item 1: scoped hash policy and unseeded repeatability checks; frozen inputs/tolerances unchanged.",
+  "tooling_revision_note": "Review items 1-2: scoped hash policy, unseeded repeatability and quantitative reporting; frozen numerical inputs/tolerances unchanged.",
   "terminal_pilot": {
     "case": "C32",
     "source": "_make_nonstationary_unequal_volume_model",

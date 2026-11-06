@@ -78,9 +78,9 @@
     "separate_environment": true,
     "shared_environment_unchanged": true,
     "quick": {
-      "elapsed_seconds": 146.35899999999674,
+      "elapsed_seconds": 435.73499999998603,
       "pytest": {
-        "tests": 30,
+        "tests": 41,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -88,9 +88,9 @@
       "skipped": {}
     },
     "full": {
-      "elapsed_seconds": 220.98500000001513,
+      "elapsed_seconds": 495.4530000000086,
       "pytest": {
-        "tests": 30,
+        "tests": 41,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -138,5 +138,62 @@
       "diagnostic_sorted_normalization_moles_different_arrays": 25
     },
     "scientific_fix": "Open on research branch; no production/dependency fix or reference regeneration"
+  },
+  "review_followup": {
+    "quick": {
+      "elapsed_seconds": 435.73499999998603,
+      "pytest": {
+        "tests": 41,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "deviations": {
+        "bit_identical_runs": 29,
+        "within_tolerance_not_identical_runs": 0,
+        "failed_runs": 0,
+        "worst": {
+          "case": "C01",
+          "quantity": "interface",
+          "array": "interfaceData/values",
+          "fraction": 0.0,
+          "unbounded": false,
+          "error": 0.0,
+          "allowance": 1.05e-10
+        },
+        "within_10x": []
+      }
+    },
+    "full": {
+      "elapsed_seconds": 495.4530000000086,
+      "pytest": {
+        "tests": 41,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "deviations": {
+        "bit_identical_runs": 38,
+        "within_tolerance_not_identical_runs": 0,
+        "failed_runs": 0,
+        "worst": {
+          "case": "C01",
+          "quantity": "interface",
+          "array": "interfaceData/values",
+          "fraction": 0.0,
+          "unbounded": false,
+          "error": 0.0,
+          "allowance": 1.05e-10
+        },
+        "within_10x": []
+      }
+    },
+    "unseeded_reference_pairs_per_tier": 33,
+    "all_bit_identical": true,
+    "reference_files_unchanged": 87,
+    "numerical_source_unchanged": true,
+    "preregistered_tolerances_unchanged": true,
+    "deviation_report": "acceptance-deviations.json",
+    "private_metrics": "ignored .verification/acceptance/<tier>-deviations.json"
   }
 }
