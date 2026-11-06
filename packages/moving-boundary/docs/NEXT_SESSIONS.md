@@ -25,6 +25,11 @@ replace the earlier reference fixture. Public-kawin compatibility is unproven.
 
 ## Approval gate and implementation order
 
+The concrete candidate list is ACCEPTANCE_CANDIDATES.md (review item 4a):
+30 self-contained runs plus seven optional local-data/provider entries. It is
+awaiting explicit approval; no acceptance tooling, new reference capture,
+environment creation or new wheel build was performed for this proposal.
+
 First propose the acceptance runs, with shortened inputs and explicit dependencies,
 and wait for the user's approval before building their suite, capturing reference
 outputs, relocating another solver, or changing the dependency. Item 4e requires
