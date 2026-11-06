@@ -27,7 +27,7 @@ cases pass an explicit policy and input() is prohibited before imports.
 C32 is a configured retry stress case. A small natural physical stop run has
 not been established.
 
-Stage 2B is complete: pycalphad data generation uses the installed package. See [docs/NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for the remaining research builders/assembly dependency, open broader Stage 2 split and research-branch R01.
+Stage 2B adapter relocation is complete for accepted O05 restricted-phase generation and O08 default-phase endpoint/equilibrium sampling. See [docs/NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for the remaining research builders/assembly dependency, open broader Stage 2 split and research-branch R01.
 
 ## Local acceptance
 
@@ -42,10 +42,12 @@ source checkouts with no editable/site hooks. Shared kawin is unchanged.
 The local environment pointer is ignored `.verification/public-environment.json`;
 this is a configured local verification command, not a portable bootstrap.
 
-Quick: 29 run comparisons and 65 pytest tests passed in 437.06 s. Full: 38 run comparisons and 65 pytest tests passed in 517.25 s.
+Quick: 30 run comparisons and 72 pytest tests passed in 436.25 s. Full: 39 run comparisons and 72 pytest tests passed in 508.95 s.
 
 Quick includes C01-C24/C30-C32, the older binary fixture/bulk probes and freshly
-sampled O05 (4.94-second sampling pilot). C25-C29 are pytest lifecycle/failure
+sampled O05 (4.94-second sampling pilot) and O08 (two valid default-phase tie lines
+and one FCC-only invalid probe). O08 was explicitly approved for quick/full after
+a 3.83-second worker pilot. C25-C29 are pytest lifecycle/failure
 contracts, with independent main/package workers. Full adds enabled cached
 O01/O02/O03a/O03b/O04/O07 and F04/F11/F12 drift checks. O06 reports SKIPPED until
 the TC adapter is batch-safe. All available cached cases ran. Missing caches are
@@ -64,7 +66,8 @@ References were captured from the clean detached `mb-ref-06dc7b4` worktree at
 kawin import origin. The extraction's older kawin/examples/root packaging remain
 frozen at ae9fb29; legacy fixtures are also checked. Tolerances/inputs are frozen
 in tools/acceptance_manifest.json; relocation gates were exact, public gates use
-the preregistered quantity tolerances without widening. Only O05 uses a fixed Python hash
+the preregistered quantity tolerances without widening. O08 additionally requires byte identity and ordered phase metadata;
+its new detached-06dc7b4 fixture hashes are in the manifest. Only O05/O08 use a fixed Python hash
 seed for the diagnosed pycalphad symbolic-ordering issue (LEDGERS.md R01). No
 NumPy seed is imposed. All other quick runs/contracts are repeated twice in fresh
 unseeded reference processes and must match byte for byte; fixtures are unchanged.

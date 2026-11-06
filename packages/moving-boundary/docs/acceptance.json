@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "state": "Complete local solver/provider relocation; public kawin 0.5.0 quick/full accepted",
+  "state": "Local solver/provider relocation with public kawin 0.5.0; generation acceptance bounded to documented O05/O08 workflows",
   "reference_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
   "dependency_commit": "5f4ad574f2b7348ee2f818b1a18b75c0c0325c2e",
   "quick": {
@@ -32,7 +32,7 @@
   "origins_asserted": true,
   "tolerance": "exact",
   "tc_fixtures": "local/git-ignored only",
-  "provider_determinism": "R01: only O05 hash-sensitive in pycalphad ideal-mixing/CSE; PYTHONHASHSEED=0 only for O05; no NumPy seeding; existing references unchanged.",
+  "provider_determinism": "R01: only O05/O08 use PYTHONHASHSEED=0 after real cross-hash diagnostics; no NumPy seed; unaffected reference pairs remain unseeded; existing references unchanged.",
   "relocations": {
     "binary": {
       "runs": 29,
@@ -78,9 +78,9 @@
     "separate_environment": true,
     "shared_environment_unchanged": true,
     "quick": {
-      "elapsed_seconds": 435.9219999999914,
+      "elapsed_seconds": 436.25,
       "pytest": {
-        "tests": 56,
+        "tests": 72,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -88,9 +88,9 @@
       "skipped": {}
     },
     "full": {
-      "elapsed_seconds": 517.25,
+      "elapsed_seconds": 508.9529999999795,
       "pytest": {
-        "tests": 65,
+        "tests": 72,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -99,8 +99,8 @@
         "O06": "TC adapter not yet batch-safe; disabled as approved"
       }
     },
-    "quick_runs": 29,
-    "full_runs": 38,
+    "quick_runs": 30,
+    "full_runs": 39,
     "tolerances": "preregistered public; unchanged",
     "source_audit": {
       "numerical_ast": {
@@ -122,7 +122,8 @@
   },
   "reproducibility_investigation": {
     "affected_cases": [
-      "O05"
+      "O05",
+      "O08"
     ],
     "unaffected_cases": 42,
     "unseeded_reference_pairs_identical": 42,
@@ -137,19 +138,20 @@
       "diagnostic_sorted_ideal_mixing_different_arrays": 0,
       "diagnostic_sorted_normalization_moles_different_arrays": 25
     },
-    "scientific_fix": "Open on research branch; no production/dependency fix or reference regeneration"
+    "scientific_fix": "Open on research branch; no production/dependency fix or existing reference regeneration; O08 adds one separately authorized frozen fixture",
+    "controls_case": "O05; default-phase O08 controls are recorded separately below"
   },
   "review_followup": {
     "quick": {
-      "elapsed_seconds": 435.9219999999914,
+      "elapsed_seconds": 436.25,
       "pytest": {
-        "tests": 56,
+        "tests": 72,
         "failures": 0,
         "errors": 0,
         "skipped": 0
       },
       "deviations": {
-        "bit_identical_runs": 29,
+        "bit_identical_runs": 30,
         "within_tolerance_not_identical_runs": 0,
         "failed_runs": 0,
         "worst": null,
@@ -157,15 +159,15 @@
       }
     },
     "full": {
-      "elapsed_seconds": 517.25,
+      "elapsed_seconds": 508.9529999999795,
       "pytest": {
-        "tests": 65,
+        "tests": 72,
         "failures": 0,
         "errors": 0,
         "skipped": 0
       },
       "deviations": {
-        "bit_identical_runs": 38,
+        "bit_identical_runs": 39,
         "within_tolerance_not_identical_runs": 0,
         "failed_runs": 0,
         "worst": null,
@@ -179,5 +181,26 @@
     "preregistered_tolerances_unchanged": true,
     "deviation_report": "acceptance-deviations.json",
     "private_metrics": "ignored .verification/acceptance/<tier>-deviations.json"
+  },
+  "default_phase_followup": {
+    "case": "O08",
+    "use_default_phases": true,
+    "valid_tie_lines": 2,
+    "invalid_single_phase_probes": 1,
+    "bit_identical": true,
+    "compared_arrays": 7,
+    "hash_0_repeat_bit_identical": true,
+    "hash_0_vs_1_different_arrays": 5,
+    "python_hash_seed": 0,
+    "numpy_seed": null,
+    "reference_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "reference_sha256": {
+      "O08.json": "d23d57b9d1af633f06ed5d029d439dec127e38861c8f2e37680226e8019eaabe",
+      "O08.npz": "8c82de3d241cbd2488f4227f68c01914c587591806f161f18d4a72dd12ec65d8"
+    },
+    "existing_reference_data_files_unchanged": 87,
+    "package_generation_no_examples_import_or_read": true,
+    "research_dependency_issue": "R02: main examples/ternaryExamples/pycalphad_default_phase_adapter.py:190 still imports examples.debugInPlace in the invalid-endpoint branch; main unchanged",
+    "accepted_scope": "O05 restricted-phase surrogate generation; O08 default-phase endpoint/equilibrium sampling; broader default-phase workflows unaccepted"
   }
 }

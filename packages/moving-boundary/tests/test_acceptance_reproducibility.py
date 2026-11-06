@@ -17,7 +17,8 @@ def test_seeds_are_scoped_to_provider(monkeypatch):
     monkeypatch.setenv('PYTHONHASHSEED','123')
     monkeypatch.setenv('PYTHONPATH','untrusted')
     tool=runner()
-    assert tool.worker_environment('O05')['PYTHONHASHSEED']=='0'
+    for case in ['O05','O08']:
+        assert tool.worker_environment(case)['PYTHONHASHSEED']=='0'
     for case in ['C01','C24','C25','LEGACY','F11','O04']:
         env=tool.worker_environment(case)
         assert 'PYTHONHASHSEED' not in env and 'PYTHONPATH' not in env

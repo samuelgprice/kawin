@@ -2,7 +2,7 @@
 
 ## Current capability inventory
 
-Quick: 29 run comparisons and 65 pytest tests passed in 437.06 s. Full: 38 run comparisons and 65 pytest tests passed in 517.25 s.
+Quick: 30 run comparisons and 72 pytest tests passed in 436.25 s. Full: 39 run comparisons and 72 pytest tests passed in 508.95 s.
 These are regression claims for the approved frozen inputs, not a full release or
 physical convergence audit. See ACCEPTANCE_CANDIDATES.md for exact input variants.
 
@@ -14,7 +14,7 @@ physical convergence audit. See ACCEPTANCE_CANDIDATES.md for exact input variant
 | Exact/similarity diagnostics and drift | C04/C11/C12 and full F04/F11/F12; analytic errors recorded independently of reference |
 | Lifecycle, rollback, failures and terminal stop | C25-C29 package pytest main/package contracts; C32 configured continue stop using real retries; no topology transition |
 | Cached material/provider workflows | O01/O02/O03a/O03b/O04/O07 run whenever present; private TC-derived inputs/references remain ignored |
-| pycalphad generation (Stage 2B complete) | Installed providers/pycalphad.py; real O05 sampling with PYTHONHASHSEED=0, no examples import/read during package generation; frozen reference adapter retained |
+| pycalphad generation (Stage 2B relocation complete within O05/O08) | Installed providers/pycalphad.py; real restricted O05 and default-phase O08 sampling, seed 0, package examples import/read guard; O08 has two valid tie lines and one invalid probe, bitwise fixture/metadata gate |
 | TC-Python live generation | O06 disabled; examples/ThermoCalc/tc_python_adapter.py still imports/calls debugInPlace. Remove at Stage 2C before promotion |
 | Unaccepted workflows | Arbitrary plotting/results/restart/coupling, Numba fallback, other kawin versions, alternative moving-boundary solvers and curvature/precipitation APIs are outside this gate |
 
@@ -42,14 +42,16 @@ and distribution metadata, no kawin sources or reference/provider datasets.
 Numerical source for new references is clean detached 06dc7b4. Every reference
 worker asserts its import origin and source SHA; installed workers assert stock
 host and package origins. The extraction's kawin/examples/root packaging stay
-at ae9fb29. Inputs and tolerances were frozen before comparisons. Only O05
-needs the narrow hash exception described in R01 below. The original fixtures
-remain unchanged; NumPy seeding has been removed from every worker.
+at ae9fb29. Existing inputs and tolerances were frozen before comparisons. O05/O08
+need the narrow hash exception described in R01 below. O08 adds one newly frozen
+detached-06dc7b4 JSON/NPZ fixture with manifest hashes; original fixtures remain
+unchanged. No worker imposes a NumPy seed.
 
 ## Research reproducibility issue R01 (open)
 
-Only O05 differed in this suite: 42 other cases (33 quick runs/contracts plus nine
-full additions) each matched in two fresh processes with neither seed override.
+O05 restricted generation and O08 default-phase sampling are hash-sensitive.
+The 42 unaffected cases (33 quick runs/contracts plus nine full additions) each
+matched in two fresh processes with neither seed override.
 The cause is third-party pycalphad 0.11.1 symbolic construction, not an unseeded
 sampler or moving-boundary solver. pycalphad/variables.py:215 hashes Species by
 its name; pycalphad/model.py:893 constructs an unordered active-species set,
@@ -65,7 +67,7 @@ made every O05 array identical across those hashes; sorting normalization/moles
 alone did not. Compile-only no-CSE Hessian evaluation also removed the observed
 test-point discrepancy. These were diagnostic controls, not source fixes.
 NumPy's global RNG state was unchanged and no RNG calls were observed; a NumPy
-seed alone failed to restore repeatability. Only PYTHONHASHSEED=0 remains for O05;
+seed alone failed to restore repeatability. Only O05/O08 retain PYTHONHASHSEED=0;
 no worker calls np.random.seed. Other cases explicitly require no hash override.
 
 Affected research workflow at main 06dc7b4: surrogate generation in
@@ -74,7 +76,13 @@ factory examples/ternaryExamples/pycalphad_default_phase_adapter.py:86 delegates
 to these third-party models. Rebuilding pycalphad-backed training data can propagate
 roundoff into sampled endpoints/matrices and then solver histories. Analytic,
 saved-surrogate and cached-table solves do not invoke that model generation.
-Default-phase generation shares the dependency but was not separately diagnosed.
+O08 exercises the default-phase facade at
+examples/ternaryExamples/pycalphad_default_phase_adapter.py:169. Fresh hash-0/hash-1
+reference workers differ in five of seven O08 arrays: alpha/beta endpoints, phase
+amounts, full compositions and chemical potentials. A hash-0 repeat is bit-identical.
+This real full-phase equilibrium path shares the diagnosed pycalphad symbolic/CSE
+dependency. Two preliminary unseeded pilots happened to match hash 0; the explicit
+hash-1 control establishes sensitivity, so O08 has the same narrow seed exception.
 The installed Stage 2B copy retains R01: isolated real hash-1 sampling differs in
 13 of 21 numeric provider arrays from the accepted hash-0 generation. That check
 uses ignored temporary artifacts and leaves accepted outputs unchanged.
@@ -92,6 +100,18 @@ contract twice in fresh unseeded reference workers, comparing shape, dtype and r
 bytes, including signed zero/NaN payloads. Their diagnostic outputs never overwrite
 fixtures. The measured 33 reference pairs took 290.98 s; together with the former
 146.36 s quick gate the estimate is 7-8 minutes, below its unchanged 600 s cap.
+
+## Research dependency issue R02: invalid-endpoint debugger import (open)
+
+Main still imports examples.debugInPlace inside the invalid-endpoint branch of
+examples/ternaryExamples/pycalphad_default_phase_adapter.py:190 (also present at
+06dc7b4). The actual debugInPlace() call is commented out, but the import creates
+a research-checkout dependency whenever a probe is outside the requested two-phase
+field. O08's real FCC-only probe executes that branch in the unchanged reference
+adapter and confirms the helper was imported. The package's source-mapped copy
+omits only this unused import and passes its generation import/read guard.
+Main and the frozen oracle are unchanged. A research-branch cleanup of the unused
+import is proposed separately; no repair is made on main in this extraction.
 
 ## Historical evidence and narrow fix integration
 

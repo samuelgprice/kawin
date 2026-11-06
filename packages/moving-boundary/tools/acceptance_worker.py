@@ -42,7 +42,7 @@ def main():
     else:
         sys.path[:0] = [str(args.target.resolve()), str(args.host.resolve())]
     import numpy as np
-    if args.case != "O05":
+    if args.case not in {"O05","O08"}:
         assert "PYTHONHASHSEED" not in os.environ, "Unrelated cases must be unseeded"
     import kawin
     expected = args.root / "kawin/__init__.py" if args.role == "reference" else args.host / "kawin/__init__.py"
@@ -74,6 +74,19 @@ def main():
             source = inputs.load(args.root / "kawin/tests/test_surrogate_artifacts.py", ["_surrogate"])
             source._surrogate().save(args.artifacts / "open-surrogate.npz")
             arrays = {}
+        elif args.case == "O08":
+            optional = module("acceptance_optional", HERE / "acceptance_optional.py")
+            default = module("acceptance_default_phase", HERE / "acceptance_default_phase.py")
+            configuration = json.loads((HERE / "acceptance_manifest.json").read_text(encoding="utf-8"))["default_phase_sampling"]
+            arrays,contract,audit = default.sample_default_phase(inputs,configuration,
+                generation_guard=optional.guard_package_generation)
+            report.update(default_phase_contract=contract,pycalphad_generation=audit,
+                          stop_status="default_phase_sampling_completed")
+            if args.role == "package":
+                inputs.generation_audit = audit
+            else:
+                report["invalid_branch_debugger_imported"] = "examples.debugInPlace" in sys.modules
+            np.savez_compressed(args.output.with_suffix(".npz"), **arrays)
         elif args.sample_pycalphad:
             optional = module("acceptance_optional", HERE / "acceptance_optional.py")
             optional.sample_pycalphad(inputs)
@@ -127,7 +140,7 @@ def main():
                         mod = sys.modules[provider]
                         assert Path(mod.__file__).resolve().is_relative_to(args.target.resolve())
             np.savez_compressed(args.output.with_suffix(".npz"), **arrays)
-        if args.case == "O05" and args.role == "package":
+        if args.case in {"O05","O08"} and args.role == "package":
             audit = inputs.generation_audit
             assert audit["guarded"] and not audit["examples_imported"] and not audit["examples_read"]
             assert Path(audit["adapter_origin"]).resolve().is_relative_to(args.target.resolve())

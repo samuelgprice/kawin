@@ -50,23 +50,28 @@ def validate_reference(reference):
 
 
 def worker_environment(case):
-    """Isolate Python configuration; only O05 needs hash-stable provider compilation.
+    """Isolate Python configuration; only O05/O08 need hash-stable provider compilation.
 
-    NumPy seeding is deliberately absent: O05's variation comes from unordered
+    NumPy seeding is deliberately absent: O05/O08 variation comes from unordered
     symbolic construction/CSE, not a random sampler. All other cases retain
     independently randomized interpreter hashes and untouched NumPy RNG state.
     """
     env = {key:value for key,value in os.environ.items() if not key.startswith("PYTHON")}
     env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1",
                NUMBA_CACHE_DIR=str(OUTPUT / "numba"))
-    if case == "O05":
+    if case in {"O05","O08"}:
         env["PYTHONHASHSEED"] = "0"
     return env
 
 
 def worker(case, role, *, reference=REFERENCE, state=None, prepare=False, timeout=60, output=None):
-    """Execute an origin-checked worker; optional diagnostic paths never replace fixtures."""
+    """Execute an origin-checked worker; diagnostics use separate destinations.
+
+    O08's registered reference destination cannot overwrite an existing fixture.
+    """
     path = Path(output) if output is not None else OUTPUT / ("reference" if role == "reference" else "package") / case
+    if role == "reference" and case == "O08" and path.resolve() == (OUTPUT / "reference/O08").resolve():
+        assert not any(path.with_suffix(suffix).exists() for suffix in (".json",".npz")), "O08 fixture is frozen; refusing overwrite"
     args = [sys.executable, "-P", "-S", str(PROJECT / "tools/acceptance_worker.py"),
         "--role", role, "--root", str(reference), "--case", case, "--output", str(path),
         "--artifacts", str(OUTPUT / "inputs")]
@@ -100,7 +105,7 @@ def check_repeatability(case, *, reference, directory, timeout=120):
     the gate; it must never trigger another seed exception automatically.
     """
     import numpy as np
-    assert case != "O05", "O05 is the documented hash-sensitive generation workflow"
+    assert case not in {"O05","O08"}, "O05/O08 are documented hash-sensitive generation workflows"
     started = time.monotonic()
     folder = Path(directory) / case
     reports = []
@@ -168,14 +173,26 @@ def quantity(key):
 
 
 def compare(case, package, *, tolerance="exact", require=()):
-    """Keep frozen acceptance decisions and record per-array/quantity deviation margins."""
+    """Keep frozen gates and record deviations; O08 additionally requires byte identity.
+
+    O08 verifies its fixture hashes and ordered phase metadata before comparing
+    shape/dtype/bytes, even in public mode. Existing quantity tolerances remain
+    unchanged for all other cases.
+    """
     import numpy as np
     ref = OUTPUT / "reference" / case
     got = OUTPUT / "package" / case
+    if case == "O08":
+        frozen = json.loads(MANIFEST.read_text(encoding="utf-8"))["default_phase_sampling"]["reference_sha256"]
+        assert set(frozen) == {"O08.json","O08.npz"}, "O08 requires its frozen fixture hashes"
+        for filename,digest in frozen.items():
+            assert hashlib.sha256((ref.parent / filename).read_bytes()).hexdigest() == digest, "O08 frozen fixture changed: " + filename
     expected = json.loads(ref.with_suffix(".json").read_text(encoding="utf-8"))
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     assert expected["status"] == package["status"] == "PASS"
     assert expected.get("stop_status") == package.get("stop_status")
+    if case == "O08":
+        assert expected["default_phase_contract"] == package["default_phase_contract"], "Default-phase labels/validity changed"
     for family in require:
         provider = package.get("providers", {}).get(family)
         if provider is not None:
@@ -197,12 +214,14 @@ def compare(case, package, *, tolerance="exact", require=()):
             elif group == "inventory":
                 scale = expected.get("length_scale", 1.) / expected.get("minimum_molar_volume", 1.)
             measured[group][key] = metrics.array_metrics(wanted,value,
-                rtol=settings["rtol"] if tolerance == "public" else 0.,
-                atol=settings["atol"]*scale if tolerance == "public" else 0.)
+                rtol=settings["rtol"] if tolerance == "public" and case != "O08" else 0.,
+                atol=settings["atol"]*scale if tolerance == "public" and case != "O08" else 0.)
             ok = wanted.shape == value.shape
             if ok:
                 ok = np.array_equal(np.isnan(wanted), np.isnan(value))
-            if ok and tolerance == "exact":
+            if ok and case == "O08":
+                ok = bit_identical(wanted,value)
+            elif ok and tolerance == "exact":
                 ok = np.array_equal(wanted, value, equal_nan=True)
             elif ok:
                 ok = np.allclose(wanted, value, rtol=settings["rtol"], atol=settings["atol"]*scale, equal_nan=True)
@@ -342,7 +361,7 @@ assert Path(kawin.__file__).resolve() == Path(sys.argv[2]) / 'kawin/__init__.py'
 import pytest
 raise SystemExit(pytest.main(sys.argv[3:]))
 """
-    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py", "test_acceptance_reporting.py", "test_pycalphad_provider.py"]
+    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py", "test_acceptance_reporting.py", "test_pycalphad_provider.py", "test_default_phase_acceptance.py"]
     args = [sys.executable, "-I", "-S", "-c", code, state["target"], state["host"],
             *[str(PROJECT / "tests" / name) for name in tests],
             str(PROJECT / "tests/test_bridge.py") + "::test_namespace_import_is_lazy",
@@ -398,6 +417,12 @@ def main(argv=None):
         if full or (pilot.exists() and json.loads(pilot.read_text())["elapsed_seconds"] <= 60):
             cases.append("O05")
     skipped = {}
+    default_case = manifest.get("default_phase_sampling")
+    if default_case and not args.cases and (full or default_case["tier"] == "quick"):
+        if (OUTPUT / "inputs" / default_case["database_input"]).exists():
+            cases.append(default_case["case"])
+        else:
+            skipped[default_case["case"]] = "database input missing"
     if not args.cases and not (OUTPUT / "inputs/FeCrNi.tdb").exists():
         skipped["O05"] = "database input missing"
     if full and not args.cases:
@@ -414,7 +439,7 @@ def main(argv=None):
     inputs_manifest = OUTPUT / "inputs/private-inputs.json"
     if inputs_manifest.exists():
         enabled_inputs = {"O01":"exb5.json", "O02":"exb5.json", "O03a":"femnc.json",
-            "O03b":"femnc.json", "O04":"fecrni.surrogate", "O05":"FeCrNi.tdb", "O07":"fec.json"}
+            "O03b":"femnc.json", "O04":"fecrni.surrogate", "O05":"FeCrNi.tdb", "O07":"fec.json", "O08":"FeCrNi.tdb"}
         recorded = json.loads(inputs_manifest.read_text(encoding="utf-8"))
         for case in cases:
             name = enabled_inputs.get(case)

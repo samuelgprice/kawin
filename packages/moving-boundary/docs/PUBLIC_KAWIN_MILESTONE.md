@@ -1,9 +1,9 @@
 # Stage 1B: stock kawin 0.5.0
 
 Status: implemented and acceptance passed after all three exact module relocations.
-Quick: 29 run comparisons and 65 pytest tests passed in 437.06 s. Full: 38 run comparisons and 65 pytest tests passed in 517.25 s.
+Quick: 30 run comparisons and 72 pytest tests passed in 436.25 s. Full: 39 run comparisons and 72 pytest tests passed in 508.95 s.
 
-Stage 2B is complete: installed pycalphad generation needs no research checkout. See [NEXT_SESSIONS.md](NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for remaining research builders/assembly, the open broader Stage 2 split and research-branch R01.
+Stage 2B adapter relocation is complete for O05 restricted-phase generation and O08 default-phase endpoint/equilibrium sampling; these need no research checkout. See [NEXT_SESSIONS.md](NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for remaining research builders/assembly, the open broader Stage 2 split and research-branch R01.
 
 ## Ownership and method-level source mapping
 
@@ -56,8 +56,17 @@ kawin 0.5.0 already requires pycalphad>=0.11; no optional extra is added.
 Executable numerical AST matches the frozen adapter after excluding imports and
 docstrings. Phase/g_offset/endpoint conventions, arithmetic and iteration order are
 unchanged, including R01 hash sensitivity. O05 uses real sampling with hash seed 0
-and rejects examples imports/source reads only during package-side generation;
-the original reference adapter and research assembly remain in the checkout.
+and rejects examples imports/source reads only during package-side generation.
+O08 uses the same real FeCrNi database with use_default_phases=True: two BCC/FCC
+tie lines and one FCC-only invalid probe at 1373 K, comparing endpoints, ordered
+phase labels, phase amounts/compositions and chemical potentials bitwise. Hash
+0/1 changes five of its seven arrays; hash 0 repeats exactly, so O08 shares O05's
+narrow hash exception. Its new JSON/NPZ reference came from clean detached 06dc7b4
+and is frozen by hashes in acceptance_manifest.json; older fixtures are unchanged.
+The installed worker uses the existing generation guard; the reference worker
+imports the original adapter, including its unused invalid-branch debugger import.
+Research assembly remains in the checkout. Acceptance is bounded to O05/O08;
+arbitrary default-phase workflows and delegated methods are not established.
 The broader Stage 2 split and R01 research-branch repair remain open.
 
 The model constructs a local MeshData subclass and transfers the host's initial

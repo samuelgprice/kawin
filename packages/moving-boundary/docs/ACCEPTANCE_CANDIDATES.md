@@ -9,8 +9,9 @@ be frozen before comparison; changes are recorded before reference capture.
 - Quick: C01–C24, C30, the irregular-grid binary C31, and the configured C32 stress variant. C25–C29 are package
   pytest contracts with separate main/package workers, not comparison-table runs.
   The combined quick run plus contracts must remain below ten minutes and run
-  after every numerical code move.
-- Full: quick, enabled O-runs, and long drift F04/F11/F12. Measured baseline about 3–4 minutes; estimate 5–8 minutes
+  after every numerical code move. Quick also includes LEGACY, enabled O05,
+  and the explicitly approved real default-phase O08 sampling case.
+- Full: quick, enabled O-runs, and long drift F04/F11/F12. Estimate 8–11 minutes
   for current full execution and report it before each materially changed
   full run. Use a 1200-second overall cap, well below 30 minutes. Longer jobs
   require a new explanation before execution, never an unnoticed timeout extension.
@@ -32,7 +33,7 @@ the reference import path. Assert kawin.__file__ in every reference worker and
 assert installed-package/host origins in every package worker. Keep reference
 source clean (external caches and bytecode disabled), verifying Git state before
 and after reference capture. The ae9fb29 fixture remains a separate older oracle.
-Workers use -P -S with Python path variables cleared. Only O05 uses PYTHONHASHSEED=0 for the diagnosed third-party symbolic-order/CSE issue (LEDGERS.md R01); no NumPy seed is imposed. Every unaffected quick run and pytest contract is compared across two fresh unseeded reference workers using raw bytes. Existing references and tolerances remain unchanged.
+Workers use -P -S with Python path variables cleared. Only O05/O08 use PYTHONHASHSEED=0 for the diagnosed third-party symbolic-order/CSE issue (LEDGERS.md R01); no NumPy seed is imposed. Every unaffected quick run and pytest contract is compared across two fresh unseeded reference workers using raw bytes. Existing references and tolerances remain unchanged.
 Each worker runs outside source checkouts; case input definitions may be read
 from the detached source without adding research checkout paths to installed runs.
 
@@ -101,6 +102,7 @@ research sources, module globals, or installed kawin.
 | O05 | examples/ternaryExamples/FeCrNi/IllingworthTernaryTwoPhase_FeCrNi_Lee1996Cases.py::build_source_thermodynamics/build_tieline_surrogate; examples/ternaryExamples/pycalphad_default_phase_adapter.py | Real pycalphad BCC_A2/FCC_A1 sampling at 1373 K: source seed point [0.45,0.21], at most five eta samples and a small explicitly recorded bulk sample set, then 21/41 phase nodes, 401 physical nodes, dt=600 s, duration 3600 s. Preflight sample validity; no silent analytic replacement | Default-enabled after a <=60-second sampling pilot, with examples/FeCrNi_Lee1993_L_style_ternary_checked_withMobility.tdb (present). No TC licence. Database identity, kinetic coverage and sample success required; unavailable database is SKIPPED; slow sampling moves to full. Do not import the interactive Lee script to execute its cells |
 | O06 | examples/ThermoCalc/FeCrNi_TC_Python.py; examples/ThermoCalc/training_data.py; examples/ThermoCalc/tc_python_adapter.py | Explicitly enabled live TC-Python: 1373 K BCC_A2/FCC_A1, three eta samples on the example's valid probe line [0.25,0.068]–[0.45,0.242], minimal recorded bulk samples, then the same 21/41-node six-step solve. No DICTRA invocation or full demo grid | Thermo-Calc/TC-Python runtime, valid TCFE9 and MOBFE4 access and licence. Backend availability is unverified. Adapter still imports/calls debugInPlace; a batch-safe promoted path is required before enabling it. Disabled/missing resources report SKIPPED explicitly; fake tests do not satisfy this row |
 | O07 | examples/Interstitials/fe_c_exb1a.py::run_kawin | Physical Fe–C interstitial exb1a: load its existing LE/DC tables, lagged D, duration 0.1 s, ferrite/austenite 21/81 nodes, physical mesh 401, semiLog_dt=0.05, original geometry/compositions | examples/Interstitials/outputs/fe_c_exb1a_tc_inputs_v2.json (present), generated TC inputs; no live licence for loading. Enabled when present, SKIPPED only if absent. Never invoke build_tc_inputs if the cache is missing |
+| O08 | examples/ternaryExamples/pycalphad_default_phase_adapter.py::PycalphadDefaultPhaseThermodynamics at detached 06dc7b4; installed moving_boundary.providers.pycalphad in package workers | Real use_default_phases=True sampling at 1373 K from the same FeCrNi database: probes [0.45,0.21], [0.40,0.20] give two valid BCC/FCC tie lines; [0.20,0.10] is FCC-only and exercises the invalid-endpoint branch. Record endpoints, ordered phase labels, phase amounts/compositions and chemical potentials; require byte identity and seed 0 after hash sensitivity diagnosis | Explicitly approved quick/full after a 3.83 s worker pilot. New local JSON/NPZ fixture captured once from detached 06dc7b4, frozen with manifest hashes; no older reference/input hash/tolerance change. Package generation rejects examples imports/source reads; reference retains the unused debugger import (LEDGERS.md R02) |
 
 O03 uses separate two-phase and three-phase workers. No cache builder is allowed
 to silently launch Thermo-Calc. Source paths above identify case provenance;

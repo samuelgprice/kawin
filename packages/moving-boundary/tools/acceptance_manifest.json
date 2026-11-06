@@ -52,7 +52,8 @@
   ],
   "optional": {
     "O05": "quick if sampling <=60 seconds, otherwise full",
-    "O06": "disabled until TC adapter batch-safe"
+    "O06": "disabled until TC adapter batch-safe",
+    "O08": "approved quick and full; real default-phase valid/invalid endpoint sampling, hash 0 and byte identity"
   },
   "budgets": {
     "quick_seconds": 600,
@@ -242,9 +243,58 @@
     ],
     "clear_python_path_variables": true,
     "numpy_seed": null,
-    "reason": "R01: pycalphad unordered ideal-mixing construction/CSE affects O05 only; no NumPy RNG cause. Other quick cases/contracts run twice unseeded; no numerical inputs or tolerances changed.",
+    "reason": "R01: pycalphad unordered ideal-mixing construction/CSE affects O05 and default-phase O08; no NumPy RNG cause. Other quick cases/contracts run twice unseeded; no numerical inputs or tolerances changed.",
     "python_hash_seed_by_case": {
-      "O05": 0
+      "O05": 0,
+      "O08": 0
     }
+  },
+  "default_phase_sampling": {
+    "case": "O08",
+    "tier": "quick",
+    "database_input": "FeCrNi.tdb",
+    "temperature": 1373.0,
+    "elements": [
+      "FE",
+      "CR",
+      "NI"
+    ],
+    "interface_phases": [
+      "BCC_A2",
+      "FCC_A1"
+    ],
+    "equilibrium_phases": [
+      "BCC_A2",
+      "FCC_A1",
+      "LIQUID",
+      "SIGMA"
+    ],
+    "use_default_phases": true,
+    "g_offset": 0.0,
+    "probes": [
+      [
+        0.45,
+        0.21
+      ],
+      [
+        0.4,
+        0.2
+      ],
+      [
+        0.2,
+        0.1
+      ]
+    ],
+    "expected_valid": [
+      true,
+      true,
+      false
+    ],
+    "comparison": "bitwise; shape, dtype, bytes and ordered phase metadata",
+    "reference_sha256": {
+      "O08.json": "d23d57b9d1af633f06ed5d029d439dec127e38861c8f2e37680226e8019eaabe",
+      "O08.npz": "8c82de3d241cbd2488f4227f68c01914c587591806f161f18d4a72dd12ec65d8"
+    },
+    "hash_policy": "R01: hash 0/1 changes five of seven O08 arrays; hash 0 repeats exactly; no NumPy seed"
   }
 }
