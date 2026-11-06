@@ -26,13 +26,13 @@ replace the earlier reference fixture. Public-kawin compatibility is unproven.
 ## Approval gate and implementation order
 
 The concrete candidate list is ACCEPTANCE_CANDIDATES.md (review item 4a):
-30 self-contained runs plus seven optional local-data/provider entries. It is
-awaiting explicit approval; no acceptance tooling, new reference capture,
-environment creation or new wheel build was performed for this proposal.
+The list is approved with quick/full tiers, enabled-when-present local caches,
+conditional default pycalphad sampling, detached 06dc7b4 references, independent
+analytic drift metrics and lifecycle/failure contracts in package pytest.
 
-First propose the acceptance runs, with shortened inputs and explicit dependencies,
-and wait for the user's approval before building their suite, capturing reference
-outputs, relocating another solver, or changing the dependency. Item 4e requires
+Approval is recorded in ACCEPTANCE_CANDIDATES.md. Implement batch guards and
+cleanup first, then freeze tolerances/inputs and capture detached references
+before relocating solvers or changing the dependency. Item 4e requires
 that suite for every subsequent solver move and the public-kawin switch.
 
 After approval, write per-quantity tolerances before examining new results, then
@@ -94,7 +94,6 @@ The shared kawin Conda environment is unchanged.
 - MAP licensing outreach.
 - Upstream contribution.
 - Changing either ternary solver's thin-phase prompt default.
-- Approval or revision of the acceptance run list.
 
 No push, research-branch merge, upstream contact or MAP-author contact is authorized.
 The shared kawin Conda environment must not be repackaged or reinstalled.
