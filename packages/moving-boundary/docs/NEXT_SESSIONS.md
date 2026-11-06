@@ -67,6 +67,20 @@ The approved main-reference suite, existing fixture and bulk probes must pass
 exactly in separate processes against the privately installed package wheel.
 Retain the host model/solver loop, mesh/recording and thermodynamic engine.
 
+### Stage 1B: unmodified public kawin (review item 3; not yet implemented)
+
+After all three whole-module relocations pass the approved main-reference suite,
+implement the bounded compatibility/ layer described in PUBLIC_KAWIN_MILESTONE.md.
+The first chosen public release is kawin 0.5.0. Retain its model/solver loop,
+mesh/recording, TemperatureParameters and pycalphad/thermo services; put required
+fork-only behavior in package-owned adapters without monkeypatching kawin.
+
+Acceptance requires a privately installed wheel with stock kawin 0.5.0 in a
+separate environment, no fork-only imports, and every approved run/quantity
+passing its pre-recorded tolerance (explicit opt-in skips remain visible).
+No new environment, compatibility code or dependency switch has been built yet.
+The shared kawin Conda environment is unchanged.
+
 ## Open decisions reserved for the user
 
 - Final package name.
