@@ -4,7 +4,10 @@ This separately buildable checkpoint exposes one binary Illingworth solver:
 
     from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel
 
-It returns the original class, retaining its docstring, inputs and results.
+It now returns a subclass with two extracted planar bulk-concentration methods
+and a scalar tridiagonal kernel. Constructor, interface iteration, retry/timestep
+behavior and result services remain inherited from the pinned fork.
+See docs/BINARY_SLICE.md for exact source mappings and verification scope.
 See examples/binary_constant.py for a complete analytic example.
 
 **Requires the research fork samuelgprice/kawin at
@@ -48,8 +51,9 @@ editable-install hooks. The bridge build uses a fresh wheel directory and reads
 the artifact's metadata rather than assuming its filename or version.
 Frozen source content is checked independently of HEAD, so package-only commits
 are permitted. Legacy and bridge cases run in separate processes against the
-fixed fixture. Test counts come from JUnit XML. Durable evidence uses path roles;
-full diagnostic paths remain in ignored local logs.
+fixed fixture. All 33 binary history arrays and 12 additional nonuniform-grid
+bulk probes match exactly. Test counts come from JUnit XML. Durable evidence uses
+path roles and hashes package source inputs; full paths stay in ignored logs.
 
 Generated logs, fresh numerical arrays and installation files stay in
 .verification/ (ignored); docs/verification.json is the reviewable evidence.
@@ -59,14 +63,15 @@ release or proof of upstream compatibility. A bare namespace import is lazy;
 requesting the solver still executes the fork's broad kawin.diffusion
 initialization, with transitive thermodynamic and unrelated solver imports.
 CartesianFD1D, transformed grids, host driver and results remain fork-owned.
-No thermodynamic provider, surrogate, ternary solver or numerical infrastructure
-has been extracted. Future numerics/, providers/, sampling/, surrogates/,
-diagnostics/, results/ and compatibility/ namespaces are reserved in the plan,
-not implemented APIs in this wheel.
+Only the two binary concentration methods and their scalar tridiagonal kernel
+are extracted. No provider, surrogate, ternary solver, driver or result service
+is extracted. Other planned namespaces remain deferred.
 
-Only the existing closed planar substitutional binary example is exposed and
-verified here: constant temperature, zero-flux outer boundaries, fixed interface
-compositions, positive phase-uniform diffusivity. The original class retains
+The closed planar substitutional binary cases cover phase-uniform, lagged
+composition-dependent and implicit composition-dependent diffusivity: constant
+temperature, zero-flux outer boundaries and fixed interface compositions.
+Nonuniform-grid bulk probes cover advancing, receding and stationary interfaces
+with scalar and face-valued diffusivities. The original class retains
 other capabilities; this milestone does not validate every combination.
 No database or live TC-Python session is needed. Review LICENSE, NOTICE and
 docs/HANDOFF.md before considering any redistribution.

@@ -1,4 +1,4 @@
-# Next three sessions
+# Extraction status and next step
 
 Updated November 5, 2026. This execution list governs the next steps; the long
 EXTRACTION_PLAN.md remains background. No driver rewrite is authorized by a
@@ -24,12 +24,22 @@ packaging failure alone.
    Explicit terminal-thin-phase prompt policies remain unchanged.
    No push or upstream/licensing outreach has occurred.
 
-3. **Implement one chosen binary slice.**
-   Preserve source mapping, attribution, operation order, constants and units.
-   Run isolated reference/extracted processes against frozen fixtures. Require
-   installed-package imports without source checkout paths for any installation
-   claim. Keep host driver/results unless the preceding assessment justifies
-   replacing a bounded part. Do not extract all three solvers in one step.
+3. **First binary numerical slice completed.**
+   The package subclasses the pinned host and overrides only the two planar
+   bulk-concentration methods, using an extracted scalar Thomas kernel. See
+   BINARY_SLICE.md for function-level mapping, assumptions and temporary ownership.
+   Strict private-wheel verification passes: 33 binary fixture history arrays
+   across three modes and 12 nonuniform-grid bulk probes match exactly in separate
+   processes. All nine frozen cases still match; 15 package tests pass.
+   Host driver/results, interface balance, Picard/retry policy and thermodynamics
+   remain inherited. No reference source/fixtures or dependency pins changed.
+
+4. **Characterize the next binary lifecycle boundary before moving it.**
+   Add extracted-class evidence for retries/rollback, final remainders, repeated
+   setup/reset and continued solves, plus supported interstitial inputs. Choose
+   the next small method/helper slice from that evidence. Keep host driver/results;
+   do not start ternary extraction or an independent driver from this checkpoint.
+   MAP redistribution and the broader Stage 0 matrix remain open.
 
 ## Baseline and concurrent research policy
 

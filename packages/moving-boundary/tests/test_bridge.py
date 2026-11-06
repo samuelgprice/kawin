@@ -12,41 +12,26 @@ EXAMPLE = Path(__file__).parents[1] / "examples" / "binary_constant.py"
 def test_binary_parity(tmp_path):
     """Compare separate legacy/bridge processes and the frozen binary fixture.
 
-    This remains an alias checkpoint. Separate processes prevent shared module
-    state from masking differences when the bridge becomes an extracted class.
+    Separate processes cover all three binary modes and both bulk upwind
+    branches without sharing solver globals or changing the frozen fixtures.
     """
-    worker = """
-import importlib.util, sys
-import numpy as np
-from kawin.tests.illingworth_baseline_cases import _collect
-spec = importlib.util.spec_from_file_location("binary_constant", sys.argv[1])
-example = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(example)
-if sys.argv[2] == "legacy":
-    from kawin.diffusion.MovingBoundaryIllingworthFDM import MovingBoundaryIllingworthFD1DModel as Model
-else:
-    from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel as Model
-model = example.build_model(Model)
-model.solve(0.5, minDtFrac=1e-14)
-assert model.currentTime == 0.5
-arrays = _collect("binary_phase_uniform", model,
-                  ("interfaceData", "concData", "pData", "qData"))
-np.savez(sys.argv[3], **arrays)
-"""
+    worker = EXAMPLE.parents[1] / "tools/binary_cases.py"
     from kawin.tests.illingworth_baseline_cases import BASELINE_PATH
     assert BASELINE_PATH.is_file(), "Required binary baseline fixture is missing"
     for entry in ("legacy", "bridge"):
-        subprocess.run([sys.executable, "-c", worker, str(EXAMPLE), entry,
+        subprocess.run([sys.executable, str(worker), entry,
                         str(tmp_path / f"{entry}.npz")],
                        check=True, timeout=60)
     with np.load(tmp_path / "legacy.npz") as legacy, \
             np.load(tmp_path / "bridge.npz") as bridge, \
             np.load(BASELINE_PATH) as baseline:
-        keys = {key for key in baseline.files if key.startswith("binary_phase_uniform__")}
-        assert keys == set(legacy.files) == set(bridge.files)
-        for key in keys:
-            np.testing.assert_array_equal(legacy[key], baseline[key])
-            np.testing.assert_array_equal(bridge[key], baseline[key])
+        keys = {key for key in baseline.files if key.startswith("binary_")}
+        assert keys == {key for key in legacy.files if key.startswith("binary_")}
+        assert set(legacy.files) == set(bridge.files)
+        for key in legacy.files:
+            np.testing.assert_array_equal(bridge[key], legacy[key], err_msg=key)
+            if key in keys:
+                np.testing.assert_array_equal(legacy[key], baseline[key], err_msg=key)
 
 
 def test_namespace_import_is_lazy():

@@ -2,11 +2,29 @@
 
 ## Current status
 
+- First numerical slice completed November 5, 2026, as uncommitted package-only
+  changes after ff57991. The public binary class is now a subclass with two
+  extracted bulk-concentration methods and an extracted scalar Thomas kernel.
+  Constructor and other services remain inherited from the pinned fork.
+- Strict private-wheel verification passes for all 33 binary history arrays
+  (three modes) and 12 nonuniform-grid bulk probes. Separate frozen-source and
+  installed -I -S processes agree exactly. All nine original fixture cases remain
+  exact; 15 package tests pass. Dense-solve/kernel-error and blocked-Numba fallback
+  tests cover the kernel, without claiming full fallback solver acceptance.
+- See BINARY_SLICE.md for dependencies, function-level provenance, class identity
+  implications and limits. Two method bodies and all three kernel bodies retain
+  their source AST (excluding the added compiled-helper docstring).
+- Host driver/results, interface iteration, Picard/retry policy, thermodynamics,
+  reference source and fixtures are unchanged. No shared package installation,
+  dependency upgrade, push, publication, licensing outreach or new clearance.
+- New source files use LF. Existing mixed line endings in package documentation
+  and probe tooling are preserved with localized edits. AGENTS.md stays untracked.
+
 - Numerical reference: ae9fb2971a9fd49132f71ddc883a5bd5406644b6; frozen source/fixtures unchanged.
 - Dependency fix: 06dc7b4ab56f67226ceabfde41ebf2690c088841 on fix/remove-debugger-imports,
   based directly on the reference and fast-forwarded into local main.
 - Package metadata/runtime pin updated on refactor/package-extraction.
-- Installed fork imports and installed bridge/fork binary parity pass without
+- Installed fork imports and installed binary subclass/fork parity pass without
   checkout paths; the nine-case reference capture still matches the fixture.
 - 76 focused fork tests passed in 26.33 seconds; 3 fake-provider tests passed
   in 3.20 seconds. New public retry exhaustion tests cover both ternary families,

@@ -29,8 +29,9 @@ def main():
     """Build a Git snapshot and report import compatibility as a separate gate.
 
     The pin comes from package metadata, not the frozen reference. An optional
-    installed-bridge solve compares its histories with the separately captured
-    baseline without adding either checkout to the import path. A failed fork
+    installed binary slice compares all three modes and nonuniform-grid bulk
+    probes with the separately captured reference supplied by verify.py, without
+    adding either checkout to the import path. A failed fork
     import is recorded separately; unexpected missing dependencies fail.
     """
     parser = argparse.ArgumentParser(description=__doc__)
@@ -86,25 +87,31 @@ else:
         import numpy as np
         import moving_boundary
         assert Path(moving_boundary.__file__).is_relative_to(Path(sys.argv[2]))
-        spec = importlib.util.spec_from_file_location('installed_example', sys.argv[3])
-        example = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(example)
-        model = example.build_model()
-        model.solve(0.5, minDtFrac=1e-14)
-        assert model.currentTime == 0.5
-        arrays = {'binary_phase_uniform__compositions': model.getCompositions()}
-        for name in ('data', 'interfaceData', 'concData', 'pData', 'qData'):
-            history = getattr(model, name)
-            n = history.N + 1
-            arrays[f'binary_phase_uniform__{name}_time'] = history._time[:n]
-            arrays[f'binary_phase_uniform__{name}_y'] = history._y[:n]
+        from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel as Model
+        import moving_boundary.solvers.binary as binary
+        from moving_boundary.numerics import tridiagonal
+        bridge_target = Path(sys.argv[2]).resolve()
+        for module in (binary, tridiagonal):
+            assert Path(module.__file__).resolve().is_relative_to(bridge_target)
+        assert Model._new_concentration_left_planar.__module__ == binary.__name__
+        assert Model._new_concentration_right_planar.__module__ == binary.__name__
+        spec = importlib.util.spec_from_file_location('binary_cases', sys.argv[5])
+        cases = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cases)
+        arrays = cases.run_cases(Model, sys.argv[3])
+        arrays.update(cases.run_bulk_cases(Model))
         with np.load(sys.argv[4]) as reference:
-            keys = {k for k in reference.files if k.startswith('binary_phase_uniform__')}
-            assert keys == arrays.keys()
+            assert set(reference.files) == arrays.keys()
             for key, value in arrays.items():
                 np.testing.assert_array_equal(value, reference[key], err_msg=key)
         assert 'examples' not in sys.modules
         report.update(binary_parity=True, arrays_compared=len(arrays),
+                      binary_modes=3,
+                      kernel_accelerated=tridiagonal._solve_illingworth_tridiagonal_numba is not None,
+                      history_arrays=sum(k.startswith('binary_') for k in arrays),
+                      bulk_branch_arrays=sum(k.startswith('bulk__') for k in arrays),
+                      solver_origin='<WHEEL_TARGET>/moving_boundary/solvers/binary.py',
+                      kernel_origin='<WHEEL_TARGET>/moving_boundary/numerics/tridiagonal.py',
                       bridge_origin='<WHEEL_TARGET>/moving_boundary/__init__.py')
 print(json.dumps(report))
 """
@@ -112,7 +119,8 @@ print(json.dumps(report))
         if args.bridge_target is not None:
             worker_args.extend([str(args.bridge_target.resolve()),
                                 str(PROJECT / "examples/binary_constant.py"),
-                                str(args.reference.resolve())])
+                                str(args.reference.resolve()),
+                                str(PROJECT / "tools/binary_cases.py")])
         result = subprocess.run(
             [sys.executable, "-I", "-S", "-c", code, *worker_args],
             cwd=scratch, capture_output=True, text=True, timeout=60)

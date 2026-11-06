@@ -130,7 +130,7 @@ import kawin, moving_boundary
 from kawin.tests.illingworth_baseline_cases import BASELINE_PATH, run_all_cases
 from kawin.diffusion.mesh import MovingBoundaryIllingworthFD1D as binary
 from kawin.diffusion.mesh import MovingBoundaryIllingworthTernaryFD1D as ternary
-target, fork, out = map(Path, sys.argv[1:])
+target, fork, out, project = map(Path, sys.argv[1:])
 assert Path(moving_boundary.__file__).is_relative_to(target)
 assert Path(kawin.__file__).resolve() == fork / 'kawin/__init__.py'
 np.testing.assert_allclose(np.linalg.solve([[2.,1.],[1.,3.]], [1.,2.]), [0.2,0.6], rtol=0, atol=1e-15)
@@ -140,6 +140,14 @@ with np.load(BASELINE_PATH) as stored:
     for key, value in fresh.items():
         assert np.array_equal(value, stored[key], equal_nan=True), key
 np.savez(out / 'fresh-baseline.npz', **fresh)
+import importlib.util
+spec = importlib.util.spec_from_file_location('binary_cases', project / 'tools/binary_cases.py')
+cases = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cases)
+from kawin.diffusion.MovingBoundaryIllingworthFDM import MovingBoundaryIllingworthFD1DModel as LegacyModel
+slice_arrays = {k: v for k, v in fresh.items() if k.startswith('binary_')}
+slice_arrays.update(cases.run_bulk_cases(LegacyModel))
+np.savez(out / 'fresh-binary-slice.npz', **slice_arrays)
 report = dict(
     python=sys.version, executable=sys.executable, platform=platform.platform(),
     conda_prefix=os.environ.get('CONDA_PREFIX'), cwd=str(Path.cwd()),
@@ -156,11 +164,11 @@ report = dict(
 """
     with tempfile.TemporaryDirectory(prefix="moving-boundary-outside-") as outside:
         run("capture", [sys.executable, "-c", capture, str(target), str(FORK),
-                        str(OUTPUT)], cwd=outside, env=env)
+                        str(OUTPUT), str(PROJECT)], cwd=outside, env=env)
         run("installed-fork", [
             sys.executable, str(PROJECT / "tools/probe_fork.py"),
             "--bridge-target", str(target),
-            "--reference", str(OUTPUT / "fresh-baseline.npz")],
+            "--reference", str(OUTPUT / "fresh-binary-slice.npz")],
             cwd=outside, env=env)
         run("parity", [sys.executable, "-m", "pytest",
                        str(PROJECT / "tests"), "--import-mode=importlib",
@@ -175,7 +183,16 @@ report = dict(
               for key in ("tests", "failures", "errors", "skipped")}
     if counts["tests"] == 0 or any(counts[k] for k in ("failures", "errors", "skipped")):
         raise RuntimeError(f"Incomplete bridge acceptance: {counts}")
-    report.update(commit=sha, baseline_commit=EXPECTED,
+    source_paths = sorted((PROJECT / "src").rglob("*.py")) + [
+        PROJECT / "tools/binary_cases.py"]
+    source_hashes = {path.relative_to(PROJECT).as_posix():
+                     hashlib.sha256(path.read_bytes()).hexdigest()
+                     for path in source_paths}
+    package_status = run("package-status", ["git", "status", "--porcelain", "--",
+                         str(PROJECT)], cwd=FORK, timeout=30)
+    report.update(package_source_sha256=source_hashes,
+                  package_worktree_dirty=bool(package_status.strip()),
+                  commit=sha, baseline_commit=EXPECTED,
                   dependency_commit=pinned_fork_commit(), wheel_members=members,
                   wheel_sha256=hashlib.sha256(wheel.read_bytes()).hexdigest(),
                   fixture_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest(),

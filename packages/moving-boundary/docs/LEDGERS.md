@@ -2,7 +2,10 @@
 
 All paths below are relative to the fork at
 ae9fb2971a9fd49132f71ddc883a5bd5406644b6 unless marked otherwise.
-These are scoped first-session records, not complete release audits.
+These are scoped records, not complete release audits. The first binary
+numerical extraction is mapped function-by-function in BINARY_SLICE.md: two bulk
+methods and the scalar Thomas kernel now live in the package. Earlier baseline
+assessment details below retain their historical source context.
 
 ## Capability inventory
 
@@ -46,12 +49,12 @@ Git addition status establishes repository history, not independent authorship.
 | Constants.py | Upstream-derived gas constant changed from 8.314 to 8.3145 relative to ancestor; preserve convention |
 | thermo/Thermodynamics.py, MultiTherm.py, Surrogate.py, Mobility.py | Upstream-derived local modifications; metadata/diagnostics/provider differences remain. Binary analytic case does not validate thermodynamic equivalence |
 | thermo/LocalEquilibrium.py | Differs against cached upstream but unchanged relative to common ancestor; do not mislabel subsequent upstream development as local authorship |
-| diffusion/MovingBoundaryIllingworth*FDM.py | Local additions, absent from cached upstream; binary class explicitly describes a port of authors' MAP C++ code. No solver source copied into new wheel |
-| diffusion/mesh/FDM1D.py (CartesianFD1D), TransformedGrids.py, MovingBoundaryIllingworth*FD1D.py | Local additions absent upstream; transformed grids and scalar/block tridiagonal kernels remain supplied by pinned fork |
+| diffusion/MovingBoundaryIllingworth*FDM.py | Local additions, absent from cached upstream; binary class explicitly describes a port of authors' MAP C++ code. Two binary bulk methods copied; remaining solver services inherited (BINARY_SLICE.md) |
+| diffusion/mesh/FDM1D.py (CartesianFD1D), TransformedGrids.py, MovingBoundaryIllingworth*FD1D.py | Local additions absent upstream; scalar tridiagonal kernel extracted; transformed grids and block kernel remain fork-owned |
 | diffusion/_illingworth_interstitials.py, _spectral_validation.py, MovingBoundaryEquilibrium.py | Local helpers retained transitively, not extracted |
 | diffusion/MovingBoundarySurrogates.py, SurrogateArtifacts.py, SurrogateDiagnostics.py and related benchmark/domain modules | Local additions; provider/surrogate stage deferred |
 | diffusion/__init__.py and mesh/__init__.py | Local expanded export lists; targeted submodule import still executes initializer and imports unrelated machinery |
-| New facade __getattr__ | New lazy alias only; no numerical code, global patches or compatibility copies |
+| New facade __getattr__ | Lazy resolution to binary subclass; two bulk methods and scalar kernel extracted without global patches |
 | New example build_model and ConstantDiffusivity | Adapted from _binary_model and _BinaryThermodynamics in baseline builder at fork SHA; original source mapping retained here |
 | New parity tests | Same-environment comparisons; no copied expected values |
 | LICENSE / NOTICE | License status explicitly unresolved; NOTICE reproduces upstream LICENSE.txt verbatim |
@@ -81,8 +84,9 @@ TC-Python adapter code, SDK/runtime, databases, generated data and trained model
 have distinct provenance/terms; none was cleared or redistributed here.
 No external legal terms were reverified in this session. A release owner and
 upstream-update maintenance owner still need designation. There are no
-compatibility code copies to maintain at this checkpoint; the fork remains
-authoritative for every numerical implementation.
+host compatibility copies. The bounded binary numerical copies are mapped in
+BINARY_SLICE.md; the frozen fork remains the numerical authority during parity
+work. Named maintenance/release ownership remains unresolved.
 
 See git-audit.txt for file-level addition/modification evidence and input hashes.
 

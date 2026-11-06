@@ -1020,12 +1020,24 @@
     }
   },
   "baseline_exact": true,
-  "commit": "2fa6094068de4858cfc44cc538a52cbf1dfe6362",
+  "package_source_sha256": {
+    "src/moving_boundary/__init__.py": "b8eeaa071444690b1f23f80e88ed1cc4ad439143653ef62673a526a6bba9e0b5",
+    "src/moving_boundary/numerics/__init__.py": "dd0aa8e9920572423ce6caf07852e383e9949c6cd0b43589d727596990a5ef40",
+    "src/moving_boundary/numerics/tridiagonal.py": "45d1ea5088790169e253cc76ed8e19c0e88b25ffa962d6580523f2204425ce5a",
+    "src/moving_boundary/solvers/__init__.py": "5b8c8cd697836b8ab6923f6f4e3d3b58f0357ee861f2ee2e28ff01b5a572f078",
+    "src/moving_boundary/solvers/binary.py": "f91bcf32f2d3b28937edb615bbb7f89de77f66c0017a06e5a0a20aa2f67ff1de",
+    "tools/binary_cases.py": "5968a1648630cec1b45989069a98110549d9b68edf0303303f0e7893439ff4ff"
+  },
+  "package_worktree_dirty": true,
+  "commit": "ff579915c1c6b4457314786f7b88478ff5d7fe6d",
   "baseline_commit": "ae9fb2971a9fd49132f71ddc883a5bd5406644b6",
   "dependency_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
   "wheel_members": [
     "moving_boundary/__init__.py",
+    "moving_boundary/numerics/__init__.py",
+    "moving_boundary/numerics/tridiagonal.py",
     "moving_boundary/solvers/__init__.py",
+    "moving_boundary/solvers/binary.py",
     "moving_boundary-0.0.1.dev0.dist-info/licenses/LICENSE",
     "moving_boundary-0.0.1.dev0.dist-info/licenses/NOTICE",
     "moving_boundary-0.0.1.dev0.dist-info/METADATA",
@@ -1033,12 +1045,12 @@
     "moving_boundary-0.0.1.dev0.dist-info/top_level.txt",
     "moving_boundary-0.0.1.dev0.dist-info/RECORD"
   ],
-  "wheel_sha256": "d0bf7ab861267351f71205e59f9f64c3a8638dd8aa54135e31c116f0632c4aaf",
+  "wheel_sha256": "91c0b37aba1fb70d004465cd842eaba25ee05456137f18cecf4723605d257fb1",
   "fixture_sha256": "ba0af5d95224d524aea6bbce290afd0f83747d59edd8e1ac6aa1a1b4000e295c",
   "checks": {
     "baseline_capture": "exact",
     "bridge_tests": {
-      "tests": 12,
+      "tests": 15,
       "failures": 0,
       "errors": 0,
       "skipped": 0
@@ -1050,12 +1062,30 @@
     "import_ok": true,
     "missing_module": null,
     "binary_parity": true,
-    "arrays_compared": 11,
+    "arrays_compared": 45,
+    "binary_modes": 3,
+    "kernel_accelerated": true,
+    "history_arrays": 33,
+    "bulk_branch_arrays": 12,
+    "solver_origin": "<WHEEL_TARGET>/moving_boundary/solvers/binary.py",
+    "kernel_origin": "<WHEEL_TARGET>/moving_boundary/numerics/tridiagonal.py",
     "bridge_origin": "<WHEEL_TARGET>/moving_boundary/__init__.py",
     "dependency_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
-    "wheel_sha256": "0aab14a346dfa3ffe6f4816d5f0dbfe1a1e158443606a90286e32864e370f815",
+    "wheel_sha256": "71f1cd3885422b9ee377d424cb6758f234ae23514e9ddcb46232bb84d3f8b30d",
     "kawin_origin": "<FORK_WHEEL_TARGET>/kawin/__init__.py",
     "wheel_contains_examples": false,
     "setup": "pinned Git archive wheel; -I -S; no source/editable paths"
+  },
+  "checkpoint_formatting": {
+    "src/moving_boundary/numerics/tridiagonal.py": {
+      "verified_sha256": "45d1ea5088790169e253cc76ed8e19c0e88b25ffa962d6580523f2204425ce5a",
+      "checkpoint_sha256": "857969a2f508499f33a4a96f343f3abd82a34aa72dc2b89b1a11a46812eb7820",
+      "change": "remove one blank line at EOF only; numerical run not repeated"
+    },
+    "src/moving_boundary/solvers/binary.py": {
+      "verified_sha256": "f91bcf32f2d3b28937edb615bbb7f89de77f66c0017a06e5a0a20aa2f67ff1de",
+      "checkpoint_sha256": "2afa9cd3064716d0950b3a30ad6550d8eaf2c8197adcd0552e629656b03e3335",
+      "change": "remove one blank line at EOF only; numerical run not repeated"
+    }
   }
 }
