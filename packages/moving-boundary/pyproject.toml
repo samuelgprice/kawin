@@ -16,6 +16,15 @@ dependencies = [
   "kawin==0.5.0",
 ]
 
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers -m 'not slow'"
+markers = [
+  "slow: longer refinement studies; deselected by default, run with -m slow",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 license-files = ["LICENSE", "NOTICE"]

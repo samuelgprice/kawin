@@ -1,0 +1,12 @@
+# The wheel holds only the moving_boundary package. The source distribution adds what's
+# needed to run the examples and tests. No database, private input or generated output.
+include LICENSE NOTICE README.md pyproject.toml
+graft docs
+graft examples
+graft tests
+graft tools
+exclude .gitignore
+global-exclude *.tdb *.npz *.surrogate __pycache__/* *.py[cod]
+prune .verification
+prune build
+prune dist
