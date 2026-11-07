@@ -1,4 +1,19 @@
 {
+  "analytic/_two_phase.py": {
+    "source_path": "examples/ternaryExamples/ternaryTwoPhaseSimilarity.py",
+    "source_commit": "bc62481fa24bf7b375c4e391dddae13bb793092d",
+    "changes": "Whole copy of the R05-corrected source (branch fix/r05-similarity-state-basis, on main 5f4ad57); see LEDGERS.md R05. Provenance header only."
+  },
+  "analytic/_three_phase.py": {
+    "source_path": "examples/ternaryExamples/ternaryThreePhaseSimilarity.py",
+    "source_commit": "bc62481fa24bf7b375c4e391dddae13bb793092d",
+    "changes": "Whole copy of the R05-corrected source; one import made relative. Its docstring's derivation path refers to the research repository."
+  },
+  "analytic/_planar_binary.py": {
+    "source_path": "examples/Illingworth2005/replicate_illingworth2005_fig4_5_6_planar.py",
+    "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "changes": "Selected exact-solution definitions only (VALIDATION_PARAMS, planar_similarity_integral, solve_planar_zener_j, planar_exact_interface, planar_exact_profile, PlanarExactProfile); no MAP-derived code"
+  },
   "solvers/illingworth/binary.py": {
     "source_path": "kawin/diffusion/MovingBoundaryIllingworthFDM.py",
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
