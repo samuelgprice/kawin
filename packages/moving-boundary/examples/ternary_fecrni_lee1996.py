@@ -1,64 +1,68 @@
-"""How does a Fe-Cr-Ni couple evolve with composition-dependent diffusivity?
+# %% [markdown]
+# # How does a Fe-Cr-Ni couple evolve with composition-dependent diffusivity?
+#
+# A Lee & Oh (1996) case B couple at 1373 K: a thin BCC layer against FCC. Thermodynamics and
+# mobilities come from a CALPHAD database through pycalphad, sampled once into a reusable
+# surrogate. This is the full workflow:
+#
+#     select source -> sample surrogate -> save -> reload -> build model -> solve -> inspect
+#
+# **You supply the database**: set `TDB` in the Settings cell (or `MB_EXAMPLE_TDB`, or `--tdb`
+# from a terminal). It needs FE, CR and NI, BCC_A2 and FCC_A1, and mobilities. This example was
+# developed with a Fe-Cr-Ni database assembled from Lee (1993) with Lee & Oh (1996) mobilities;
+# see `examples/README.md` for why it isn't included yet.
+#
+# **Configurations, and what each one can tell you:**
+#
+# - `LAGGED_DEMO` (default) and `LAGGED_FAST`: the real workflow, with bulk matrices from
+#   `composition_dependent_lagged` and `simplex_positive_2x2` interpolation. There is no exact
+#   solution, so these make **no accuracy claim**. They show that the workflow runs, conserves
+#   solute, stays inside the sampled data, and really uses composition-dependent matrices.
+# - `FROZEN_ANALYTIC`: frozen matrices sampled from the same surrogate, on an effectively
+#   semi-infinite domain, compared with the exact similarity solution. This checks the numerics
+#   with realistic data and closure. It does **not** validate composition-dependent Fe-Cr-Ni
+#   physics.
+# - `FROZEN_FAST`: a very short frozen-matrix run with a minimal surrogate.
+#
+# **Ordering, basis and units.** Elements are `[FE, CR, NI]` with FE dependent; compositions are
+# `[X_CR, X_NI]` mole fractions. BCC_A2 lies left of FCC_A1. Lengths are in m, times in s,
+# temperature in K, diffusivities in m^2/s. The domain is half of the symmetric experimental
+# couple, so the left wall is a symmetry plane.
+#
+# **Files.** Bundles go in `OUTPUT_DIR`, by default
+# `~/moving_boundary_example_outputs/fecrni_lee1996/<config>/`, wherever you run from. A
+# compatible bundle is reloaded without sampling; an incompatible or damaged one stops with an
+# error; `REBUILD = True` (or `--rebuild`) replaces it. Nothing is ever rebuilt silently.
+#
+# **Settings you would change:** `bulk_spacing` and `samples_per_side` (sampling cost against
+# accuracy), node counts, `semi_log_dt`, `duration`, the far-field compositions and
+# `terminal_thin_phase_policy` (`"raise"` stops at a thin-phase limit, `"continue"` proceeds past
+# it; neither changes the phase topology).
+#
+# **Limitations.** These settings are deliberately coarse and not converged. A production case B
+# run uses about 101 tie lines, a 0.01 bulk grid (5151 points), 100/1000 nodes and
+# `semiLog_dt = 0.25 / 160` to 1000 h. Assumes equal molar volumes, no Kirkendall flow and a
+# fixed temperature. With `validity_policy="raise"` a bulk query lacking fit support raises an
+# error; with `"legacy"` it silently falls back to the nearest sample, so coverage is worth
+# checking (see `workflow_report`). Sampling also prints progress from the surrogate builder.
+#
+# **Running.** Run the cells in order in a Jupyter or VS Code Interactive window, editing the
+# Settings cell first. From a terminal:
+# `python ternary_fecrni_lee1996.py --tdb PATH [--config LAGGED_FAST] [--plot]`. `LAGGED_DEMO`
+# takes about 40 s and `LAGGED_FAST` about 15 s, measured on one machine.
+"""How does a Fe-Cr-Ni couple evolve with composition-dependent diffusivity? See the notes above."""
 
-A Lee & Oh (1996) case B couple at 1373 K: a thin BCC layer against FCC. Thermodynamics
-and mobilities come from a CALPHAD database through pycalphad, sampled once into a
-reusable surrogate. This is the full workflow:
-
-    select source -> sample surrogate -> save -> reload -> build model -> solve -> inspect
-
-**You supply the database** with ``--tdb PATH`` (or ``MB_EXAMPLE_TDB``): a TDB with
-FE, CR and NI, BCC_A2 and FCC_A1, and mobilities. This example was developed with a
-Fe-Cr-Ni database assembled from Lee (1993) with Lee & Oh (1996) mobilities; see
-``examples/README.md`` for why it isn't included yet.
-
-**Configurations, and what each one can tell you:**
-
-- ``LAGGED_DEMO`` (default) and ``LAGGED_FAST``: the real workflow, with bulk matrices
-  from ``composition_dependent_lagged`` and ``simplex_positive_2x2`` interpolation.
-  There is no exact solution, so these make **no accuracy claim**. They show that the
-  workflow runs, conserves solute, stays inside the sampled data, and really uses
-  composition-dependent matrices.
-- ``FROZEN_ANALYTIC``: frozen matrices sampled from the same surrogate, on an
-  effectively semi-infinite domain, compared with the exact similarity solution. This
-  checks the numerics with realistic data and closure. It does **not** validate
-  composition-dependent Fe-Cr-Ni physics.
-- ``FROZEN_FAST``: a very short frozen-matrix run with a minimal surrogate.
-
-**Ordering, basis and units.** Elements are ``[FE, CR, NI]`` with FE dependent;
-compositions are ``[X_CR, X_NI]`` mole fractions. BCC_A2 lies left of FCC_A1. Lengths
-are in m, times in s, temperature in K, diffusivities in m^2/s. The domain is half of
-the symmetric experimental couple, so the left wall is a symmetry plane.
-
-**Files.** The bundle goes in ``--output-dir`` (default
-``./moving_boundary_example_outputs/fecrni_lee1996/<config>/``). A compatible bundle
-is reloaded without sampling; an incompatible or damaged one stops with an error;
-``--rebuild`` replaces it. Nothing is ever rebuilt silently.
-
-**Settings you would change:** ``bulk_spacing`` and ``samples_per_side`` (sampling
-cost against accuracy), node counts, ``semi_log_dt``, ``duration``, the far-field
-compositions and ``terminal_thin_phase_policy`` (``"raise"`` stops at a thin-phase
-limit, ``"continue"`` proceeds past it; neither changes the phase topology).
-
-**Limitations.** These settings are deliberately coarse and not converged. A production
-case B run uses about 101 tie lines, a 0.01 bulk grid (5151 points), 100/1000 nodes and
-``semiLog_dt = 0.25 / 160`` to 1000 h. Assumes equal molar volumes, no Kirkendall flow
-and a fixed temperature. With ``validity_policy="raise"`` a bulk query lacking fit
-support raises an error; with ``"legacy"`` it silently falls back to the nearest
-sample, so coverage is worth checking (see ``workflow_report``). Sampling also prints
-progress from the surrogate builder.
-
-Run ``python ternary_fecrni_lee1996.py --tdb PATH`` (about 40 s, measured on one
-machine), or add ``--config LAGGED_FAST`` (about 15 s).
-"""
+# %%
 
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 import argparse
 import hashlib
 import importlib.metadata
 import json
 import os
+import sys
 import tempfile
 
 import numpy as np
@@ -92,7 +96,7 @@ B_BULK = np.array([0.139297, 0.142387])  # far-field [X_CR, X_NI] in FCC_A1 (cas
 HALF_LENGTH = 2000.0e-6 + 124.1e-6 / 2.0
 B_PHASE_LENGTH = 2000.0e-6
 SIZING_TIME = 100.0 * 3600.0  # semi-infinite domains are sized for this time
-DEFAULT_OUTPUT = Path("moving_boundary_example_outputs") / "fecrni_lee1996"
+DEFAULT_OUTPUT = Path.home() / "moving_boundary_example_outputs" / "fecrni_lee1996"
 DATABASE_ENV = "MB_EXAMPLE_TDB"
 
 
@@ -157,10 +161,24 @@ FROZEN_ANALYTIC_LIMITS = {"k_rel": 5.0e-3, "interface_rel": 1.0e-2, "eta_abs": 2
 LAGGED_THRESHOLDS = {"inventory_rel_max": 1.0e-8, "matrix_spread_min": 0.2, "simplices_crossed_min": 3,
                      "interpolation_vs_nearest_min": 1.0e-3, "lagged_vs_frozen_min": 5.0e-3}
 
+# %% [markdown]
+# ## Settings
+#
+# Set `TDB` to your database path (or leave it `None` and set `MB_EXAMPLE_TDB`), and pick a
+# configuration: `LAGGED_DEMO`, `LAGGED_FAST`, `FROZEN_ANALYTIC` or `FROZEN_FAST`.
 
-# ---------------------------------------------------------------------------
-# Thermodynamic source and surrogate
-# ---------------------------------------------------------------------------
+# %%
+TDB = None
+CONFIG = LAGGED_DEMO
+OUTPUT_DIR = DEFAULT_OUTPUT
+REBUILD = False
+PLOT = True
+
+
+# %% [markdown]
+# ## Thermodynamic source and surrogate
+
+# %%
 
 def resolve_database(tdb=None):
     """Return the database path from the argument or ``MB_EXAMPLE_TDB``, or explain what's needed."""
@@ -260,9 +278,10 @@ def _no_builder():
     raise AssertionError("A strict reload must not call its builder.")
 
 
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
+# %% [markdown]
+# ## Models
+
+# %%
 
 @contextmanager
 def _legacy_validity(surrogate):
@@ -367,9 +386,10 @@ def build_model(config=LAGGED_DEMO, surrogate=None, *, thermodynamics=None, tdb=
                       "composition_dependent_lagged")
 
 
-# ---------------------------------------------------------------------------
-# Inspecting a lagged run
-# ---------------------------------------------------------------------------
+# %% [markdown]
+# ## Inspecting a lagged run
+
+# %%
 
 class RecordingDiffusivity:
     """Passes queries through and records attempted bulk compositions per phase.
@@ -475,9 +495,10 @@ def inventory_relative_drift(model):
     return float(np.max(np.abs(inventory[-1] - inventory[0]) / np.abs(inventory[0])))
 
 
-# ---------------------------------------------------------------------------
-# Running
-# ---------------------------------------------------------------------------
+# %% [markdown]
+# ## Running
+
+# %%
 
 def exact_solution(model, surrogate, matrices=None):
     """The exact solution for frozen matrices, using the root closest to the initial tie line."""
@@ -516,16 +537,92 @@ def run(config=LAGGED_DEMO, *, tdb=None, output_dir=DEFAULT_OUTPUT, rebuild=Fals
     return ExampleResult(config, model, None, metrics)
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--tdb", help=f"thermodynamic database (or set {DATABASE_ENV})")
-    parser.add_argument("--config", choices=sorted(CONFIGS), default=LAGGED_DEMO.name)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT, help="where bundles are kept")
-    parser.add_argument("--rebuild", action="store_true", help="rebuild and replace an existing bundle")
-    args = parser.parse_args()
-    try:
-        result = run(CONFIGS[args.config], tdb=args.tdb, output_dir=args.output_dir, rebuild=args.rebuild)
-    except FileNotFoundError as exc:
-        parser.error(str(exc))
+def report(result):
+    """Print the final state and the metrics, with limits or thresholds where they apply."""
     print(f"final interface {result.model.getInterfacePosition():.6e} m, eta {result.model.getInterfaceEta():.6f}")
     print(json.dumps(result.metrics, indent=2, default=float))
+    if result.config == FROZEN_ANALYTIC:
+        print("accuracy limits (numerics only):", FROZEN_ANALYTIC_LIMITS)
+    elif not result.config.frozen:
+        print("workflow thresholds (not accuracy):", LAGGED_THRESHOLDS)
+
+
+def plot(result):
+    """Plot the interface history and the final phase profiles; returns the figure.
+
+    For ``FROZEN_ANALYTIC`` the exact interface is shown too.
+    """
+    import matplotlib.pyplot as plt
+
+    model = result.model
+    times, interface = recorded_history(model.interfaceData)
+    figure, (left, right) = plt.subplots(1, 2, figsize=(10, 4))
+    hours = times / 3600.0
+    left.plot(hours, np.ravel(interface) * 1.0e6, label="model")
+    if result.exact is not None:
+        left.plot(hours, result.exact.interface_position(times) * 1.0e6, "--", label="exact (frozen matrices)")
+    left.set(xlabel="time (h)", ylabel="interface position (um)", title=f"{result.config.name}: interface")
+    left.legend()
+    for x, c in model.getPhysicalPhaseProfiles():
+        right.plot(x * 1.0e6, c[:, 1], color="C0")
+        right.plot(x * 1.0e6, c[:, 2], color="C1")
+    right.axvline(float(model.getInterfacePosition()) * 1.0e6, color="0.6", lw=0.8)
+    right.set(xlabel="position (um)", ylabel="mole fraction", title="Final profiles (BCC left, FCC right)")
+    right.legend(["X_CR", "X_NI"])
+    figure.tight_layout()
+    return figure
+
+
+def settings_from_command_line(tdb, config, output_dir, rebuild, plot_figures):
+    """Apply command-line options from a terminal; inside a notebook kernel, change nothing.
+
+    A Jupyter kernel's ``sys.argv`` holds the kernel's own arguments, so they are not parsed.
+    """
+    if "ipykernel" in sys.modules:
+        return tdb, config, output_dir, rebuild, plot_figures
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], allow_abbrev=False)
+    parser.add_argument("--tdb", default=tdb, help=f"thermodynamic database (or set {DATABASE_ENV})")
+    parser.add_argument("--config", choices=sorted(CONFIGS), default=config.name)
+    parser.add_argument("--output-dir", type=Path, default=output_dir, help="where bundles are kept")
+    parser.add_argument("--rebuild", action="store_true", help="rebuild and replace an existing bundle")
+    parser.add_argument("--plot", action="store_true", help="show plots")
+    args = parser.parse_args()
+    try:
+        resolve_database(args.tdb)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
+    return args.tdb, CONFIGS[args.config], args.output_dir, args.rebuild, args.plot
+
+
+# %% [markdown]
+# ## Run, one step per cell
+#
+# 1. Prepare the surrogate: sample and publish it, or reload a compatible bundle.
+
+# %%
+if __name__ == "__main__":
+    TDB, CONFIG, OUTPUT_DIR, REBUILD, PLOT = settings_from_command_line(TDB, CONFIG, OUTPUT_DIR, REBUILD, PLOT)
+    bundle, action = prepare_surrogate(CONFIG, TDB, output_dir=OUTPUT_DIR, rebuild=REBUILD)
+    surrogate = bundle.surrogate
+    print(f"{action} {bundle.path}")
+    print(f"tie lines: {len(surrogate.eta_samples)}, interpolation: {surrogate.diffusivityInterpolation}, "
+          f"validity policy: {surrogate.validity_policy}")
+
+# %% [markdown]
+# 2. Build the model, solve, and check what this configuration can show. Lagged runs also
+#    solve a frozen-matrix twin for comparison.
+
+# %%
+if __name__ == "__main__":
+    result = run(CONFIG, surrogate=surrogate)
+    report(result)
+
+# %% [markdown]
+# 3. Plot.
+
+# %%
+if __name__ == "__main__" and PLOT:
+    import matplotlib.pyplot as plt
+
+    plot(result)
+    plt.show()

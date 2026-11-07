@@ -1,30 +1,33 @@
-"""How fast does a planar interface grow under diffusion control?
+# %% [markdown]
+# # How fast does a planar interface grow under diffusion control?
+#
+# Grows phase ALPHA into BETA with fixed interface compositions and compares the result
+# with the exact Zener solution, `s(t) = 2 j sqrt(D t)`. This is the place to start: it
+# shows meshes, phases, transformed grids and solving, with no thermodynamic database.
+#
+# **Assumptions.** Planar, constant equal diffusivities, equal molar volumes and a
+# semi-infinite BETA. ALPHA stays flat at its interface composition. Quantities are
+# nondimensional (domain length 1, D = 1); the temperature is required by the API but has
+# no effect here. Elements are `[NI, CR]` with CR the solute, and ALPHA lies to the left;
+# the labels carry no thermodynamics. Compositions are mole fractions.
+#
+# **Things to try.** Change the node counts, `time_step` or the compositions in
+# `VALIDATION_PARAMS`. The exact solution starts from `t_start > 0` because a zero-width
+# start is singular. Coarse uniform grids resolve the early profile poorly: 21 nodes in
+# BETA gives a far larger interface error than 41.
+#
+# This checks numerical accuracy for constant diffusivity. It says nothing about real
+# thermodynamics; see `ternary_fecrni_lee1996.py` for that.
+#
+# **Running.** Run the cells in order in a Jupyter or VS Code Interactive window, editing
+# the Settings cell first. From a terminal: `python binary_planar_growth.py [--fast] [--plot]`
+# (under a second).
+"""How fast does a planar interface grow under diffusion control? See the notes above."""
 
-Grows phase ALPHA into BETA with fixed interface compositions and compares the
-result with the exact Zener solution, ``s(t) = 2 j sqrt(D t)``. This is the place
-to start: it shows meshes, phases, transformed grids and solving, with no
-thermodynamic database.
-
-Assumptions: planar, constant equal diffusivities, equal molar volumes, a
-semi-infinite BETA. ALPHA stays flat at its interface composition. Quantities are
-nondimensional (domain length 1, D = 1); the temperature is required by the API
-but has no effect here. Elements are ``[NI, CR]`` with CR the solute, and ALPHA
-lies to the left; the labels themselves carry no thermodynamics. Compositions are
-mole fractions.
-
-Try changing the node counts, ``time_step`` or the compositions in
-``VALIDATION_PARAMS``. The exact solution starts from ``t_start > 0`` because a
-zero-width start is singular. Coarse uniform grids resolve the early profile
-poorly: 21 nodes in BETA gives a far larger interface error than 41.
-
-This checks numerical accuracy for constant diffusivity. It says nothing about real
-thermodynamics; see ``ternary_fecrni_lee1996.py`` for that.
-
-Run ``python binary_planar_growth.py`` (under a second), or add ``--fast`` or ``--plot``.
-"""
-
+# %%
 from dataclasses import dataclass
 import argparse
+import sys
 
 import numpy as np
 
@@ -40,6 +43,12 @@ from moving_boundary.mesh import CartesianFD1D, ProfileBuilder
 from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel
 
 
+# %% [markdown]
+# ## Configurations
+#
+# Times are absolute similarity times, so `t_start` is the exact state the run starts from.
+
+# %%
 @dataclass(frozen=True)
 class Config:
     """Numerical settings; times are absolute, so ``t_start`` is the exact start state."""
@@ -75,7 +84,21 @@ DEMO = Config()
 # inventory_abs: |final - initial| solute inventory, in composition x length.
 DEMO_LIMITS = {"interface_rel": 1.0e-2, "profile_linf_away": 5.0e-3, "inventory_abs": 1.0e-8}
 
+# %% [markdown]
+# ## Settings
+#
+# Pick a configuration (`DEMO`, `FAST` or `COARSE_LONG`, or your own `Config(...)`), and
+# whether to plot.
 
+# %%
+CONFIG = DEMO
+PLOT = True
+
+
+# %% [markdown]
+# ## Model, solve and evaluation
+
+# %%
 class ConstantDiffusivity:
     """Supplies one constant diffusivity per phase, in place of a thermodynamic database."""
 
@@ -144,29 +167,61 @@ def run(config=DEMO):
     return ExampleResult(config, model, planar_exact_interface, evaluate(model, config))
 
 
+def report(result):
+    """Print the metrics, with limits where they apply."""
+    limits = DEMO_LIMITS if result.config == DEMO else {}
+    if not limits:
+        print("These settings have no accuracy limits; DEMO is the configuration to judge accuracy by.")
+    for name, value in result.metrics.items():
+        print(f"{name}: {value:.4g}" + (f"  (limit {limits[name]:g})" if name in limits else ""))
+
+
 def plot(result):
-    """Plot the interface error against the exact solution."""
+    """Plot the interface against the exact solution, and the final profile; returns the figure."""
     import matplotlib.pyplot as plt
 
     times, interface = recorded_history(result.model.interfaceData)
     absolute = times + result.config.t_start
-    plt.loglog(absolute[1:], np.abs(np.ravel(interface) - planar_exact_interface(absolute))[1:])
-    plt.xlabel("time (nondimensional)")
-    plt.ylabel("|s - s_exact|")
-    plt.show()
+    z = np.ravel(result.model.mesh.z)
+    figure, (left, right) = plt.subplots(1, 2, figsize=(10, 4))
+    left.plot(absolute, np.ravel(interface), label="model")
+    left.plot(absolute, planar_exact_interface(absolute), "--", label="exact")
+    left.set(xlabel="time (nondimensional)", ylabel="interface position", title="Interface")
+    left.legend()
+    right.plot(z, np.ravel(result.model.data.currentY), label="model")
+    right.plot(z, planar_exact_profile(z, result.model.currentTime + result.config.t_start), "--", label="exact")
+    right.set(xlabel="position", ylabel="x(CR)", title="Final profile")
+    right.legend()
+    figure.tight_layout()
+    return figure
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def settings_from_command_line(config, plot_figures):
+    """Apply ``--fast`` and ``--plot`` from a terminal; inside a notebook kernel, change nothing.
+
+    A Jupyter kernel's ``sys.argv`` holds the kernel's own arguments, so they are not parsed.
+    """
+    if "ipykernel" in sys.modules:
+        return config, plot_figures
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], allow_abbrev=False)
     parser.add_argument("--fast", action="store_true", help="use quick check settings")
-    parser.add_argument("--plot", action="store_true", help="plot the interface error")
+    parser.add_argument("--plot", action="store_true", help="show plots")
     args = parser.parse_args()
-    result = run(FAST if args.fast else DEMO)
-    if args.fast:
-        print("Quick check settings: a coarse grid and a very short run, so the interface error is")
-        print("large and has no limit. Run without --fast to judge accuracy.")
-    for name, value in result.metrics.items():
-        limit = DEMO_LIMITS.get(name) if not args.fast else None
-        print(f"{name}: {value:.4g}" + (f"  (limit {limit:g})" if limit else ""))
-    if args.plot:
-        plot(result)
+    return (FAST if args.fast else config), args.plot
+
+
+# %% [markdown]
+# ## Run
+
+# %%
+if __name__ == "__main__":
+    CONFIG, PLOT = settings_from_command_line(CONFIG, PLOT)
+    result = run(CONFIG)
+    report(result)
+
+# %%
+if __name__ == "__main__" and PLOT:
+    import matplotlib.pyplot as plt
+
+    plot(result)
+    plt.show()

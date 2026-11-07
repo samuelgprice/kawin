@@ -1,45 +1,52 @@
-"""How does a fast interstitial and a slow substitutional solute move an interface?
+# %% [markdown]
+# # How does a fast interstitial and a slow substitutional solute move an interface?
+#
+# A Fe-C-Mn-like couple: carbon diffuses about 100 times faster than manganese. With constant
+# matrices and a linear tie-line family the problem has an exact similarity solution, so this
+# checks numerics without any thermodynamic data. The numbers are synthetic and are not real
+# Fe-C-Mn properties.
+#
+# **Composition basis is the main lesson.** Elements are `[FE, C, MN]` with FE dependent and
+# interstitials listed after it. The solver's state is in u-fractions,
+# `u_k = x_k / sum(substitutional x)`. So here:
+#
+# - the diffusivity matrices, closure and exact solution are in u;
+# - the closure declares `composition_basis="u"` (a closure in x would be converted);
+# - the initial profile is given in mole fractions;
+# - `getPhysicalPhaseProfiles` and `getCompositions` return mole fractions, while
+#   `getTransformedState` returns the u state.
+#
+# Compare with the exact solution in u, as `compare_model_to_similarity` does. The plot shows
+# why: the mole-fraction view of carbon differs from u by about u²/(1+u).
+#
+# **Assumptions.** Planar, constant matrices, constant volume per substitutional atom, no bulk
+# flow, effectively semi-infinite phases. Units are nondimensional. ALPHA lies left and BETA
+# right; the interface moves right, with parabolic `s = s0 + k sqrt(t)` and a constant tie
+# line `eta`.
+#
+# **Things to try.** Change `ratio` (a smaller value needs a stronger graded grid), the spacing
+# ratios or the far fields. Point-wise Mn profile errors are large because the Mn spike is
+# narrower than the remaining interface offset, so only carbon has a profile limit.
+# `terminal_thin_phase_policy` must be explicit for ternary models.
+#
+# This checks numerical accuracy under those assumptions, not Fe-C-Mn physics.
+#
+# **Running.** Run the cells in order in a Jupyter or VS Code Interactive window, editing the
+# Settings cell first. From a terminal: `python ternary_interstitial_similarity.py [--fast] [--plot]`
+# (about a second).
+"""How do a fast interstitial and a slow substitutional solute move an interface? See the notes above."""
 
-A Fe-C-Mn-like couple: carbon diffuses about 100 times faster than manganese. With
-constant matrices and a linear tie-line family the problem has an exact similarity
-solution, so this example checks numerics without any thermodynamic data. The
-numbers are synthetic and are not real Fe-C-Mn properties.
-
-**Composition basis is the main lesson.** Elements are ``[FE, C, MN]`` with FE
-dependent and interstitials listed after it. The solver's state is in u-fractions,
-``u_k = x_k / sum(substitutional x)``. So here:
-
-- the diffusivity matrices, closure and exact solution are in u;
-- the closure declares ``composition_basis="u"`` (a closure in x would be converted);
-- the initial profile is given in mole fractions;
-- ``getPhysicalPhaseProfiles`` and ``getCompositions`` return mole fractions, while
-  ``getTransformedState`` returns the u state.
-
-Compare with the exact solution in u, as ``compare_model_to_similarity`` does.
-
-Assumptions: planar, constant matrices, constant volume per substitutional atom, no
-bulk flow, effectively semi-infinite phases. Units are nondimensional. ALPHA lies
-left and BETA right; the interface moves right, with parabolic ``s = s0 + k sqrt(t)``
-and a constant tie line ``eta``.
-
-Try changing ``ratio`` (a smaller value needs a stronger graded grid), the spacing
-ratios or the far fields. Point-wise Mn profile errors are large because the Mn
-spike is narrower than the remaining interface offset, so only carbon has a profile
-limit. ``terminal_thin_phase_policy`` must be explicit for ternary models.
-
-This checks numerical accuracy under those assumptions, not Fe-C-Mn physics.
-
-Run ``python ternary_interstitial_similarity.py`` (about a second), or add ``--fast``.
-"""
-
+# %%
 from dataclasses import dataclass
 import argparse
+import sys
 
 import numpy as np
 
 from moving_boundary.analytic import (
     FixedMatrixTernaryDiffusivity,
     compare_model_to_similarity,
+    recorded_history,
     semi_infinite_validity_time,
     solve_similarity_roots,
 )
@@ -54,6 +61,10 @@ U_LEFT_FAR = np.array([0.002, 0.015])   # far-field [u_C, u_MN] in ALPHA
 U_RIGHT_FAR = np.array([0.010, 0.015])  # far-field [u_C, u_MN] in BETA
 
 
+# %% [markdown]
+# ## Configurations
+
+# %%
 @dataclass(frozen=True)
 class Config:
     """Domain and numerical settings; ``ratio`` is the Mn/C eigenvalue ratio."""
@@ -99,7 +110,20 @@ DEMO = Config()
 DEMO_LIMITS = {"k_rel": 1.0e-2, "interface_rel": 1.0e-2, "eta_abs": 1.0e-3,
                "carbon_profile_linf": 1.0e-3, "inventory_abs": 5.0e-9 * 1.2}
 
+# %% [markdown]
+# ## Settings
+#
+# Pick a configuration (`DEMO` or `FAST`, or your own `Config(...)`), and whether to plot.
 
+# %%
+CONFIG = DEMO
+PLOT = True
+
+
+# %% [markdown]
+# ## Problem definition and model
+
+# %%
 def closure():
     """An NPLE-like linear tie-line family in u-fractions: ``eta -> (u_ALPHA, u_BETA)``."""
 
@@ -162,6 +186,10 @@ def build_model(config=DEMO, *, grids=None):
     )
 
 
+# %% [markdown]
+# ## Exact solution, evaluation and plots
+
+# %%
 def exact_solution(config):
     """The unique similarity root; ``k_bounds`` is needed because the eigenvalues are far apart."""
     d = diffusivities(config.ratio)
@@ -202,13 +230,67 @@ def run(config=DEMO):
     return ExampleResult(config, model, exact, evaluate(model, config, exact))
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--fast", action="store_true", help="use quick check settings")
-    args = parser.parse_args()
-    result = run(FAST if args.fast else DEMO)
+def report(result):
+    """Print the final state and the metrics, with limits where they apply."""
     print(f"final interface {result.model.getInterfacePosition():.6f}, eta {result.model.getInterfaceEta():.6f}; "
           f"exact k {result.exact.k:.6f}, eta {result.exact.eta:.6f}")
+    limits = DEMO_LIMITS if result.config == DEMO else {}
+    if not limits:
+        print("These settings have no accuracy limits; DEMO is the configuration to judge accuracy by.")
     for name, value in result.metrics.items():
-        limit = DEMO_LIMITS.get(name) if not args.fast else None
-        print(f"{name}: {value:.4g}" + (f"  (limit {limit:g})" if limit else ""))
+        print(f"{name}: {value:.4g}" + (f"  (limit {limits[name]:g})" if name in limits else ""))
+
+
+def plot(result):
+    """Plot the interface and the final carbon profile in u and x against the exact u; returns the figure."""
+    import matplotlib.pyplot as plt
+
+    model, exact = result.model, result.exact
+    times, interface = recorded_history(model.interfaceData)
+    figure, (left, right) = plt.subplots(1, 2, figsize=(10, 4))
+    left.plot(times, np.ravel(interface) - result.config.s0, label="model")
+    left.plot(times, exact.interface_position(times) - result.config.s0, "--", label="exact")
+    left.set(xlabel="time", ylabel="s - s0", title="Interface displacement")
+    left.legend()
+    time = float(times[-1])
+    (x_left, c_left), (x_right, c_right) = model.getPhysicalPhaseProfiles(time)
+    u_left, u_right = model.getTransformedState(time)
+    for x, u, c, side, label in ((x_left, u_left, c_left, "left", "ALPHA"), (x_right, u_right, c_right, "right", "BETA")):
+        right.plot(x, u[:, 0], label=f"u_C, model ({label})")
+        right.plot(x, c[:, 1], ":", label=f"x_C, model ({label})")
+        right.plot(x, exact.profile(x, time, phase=side)[:, 0], "--", label=f"u_C, exact ({label})")
+    right.set(xlabel="position", ylabel="carbon", title=f"Carbon at t = {time:.3g}")
+    right.legend(fontsize="small")
+    figure.tight_layout()
+    return figure
+
+
+def settings_from_command_line(config, plot_figures):
+    """Apply ``--fast`` and ``--plot`` from a terminal; inside a notebook kernel, change nothing.
+
+    A Jupyter kernel's ``sys.argv`` holds the kernel's own arguments, so they are not parsed.
+    """
+    if "ipykernel" in sys.modules:
+        return config, plot_figures
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], allow_abbrev=False)
+    parser.add_argument("--fast", action="store_true", help="use quick check settings")
+    parser.add_argument("--plot", action="store_true", help="show plots")
+    args = parser.parse_args()
+    return (FAST if args.fast else config), args.plot
+
+
+# %% [markdown]
+# ## Run
+
+# %%
+if __name__ == "__main__":
+    CONFIG, PLOT = settings_from_command_line(CONFIG, PLOT)
+    result = run(CONFIG)
+    report(result)
+
+# %%
+if __name__ == "__main__" and PLOT:
+    import matplotlib.pyplot as plt
+
+    plot(result)
+    plt.show()

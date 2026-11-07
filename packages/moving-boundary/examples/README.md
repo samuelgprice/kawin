@@ -15,8 +15,16 @@ package. Each script runs on its own and is meant to be copied and adapted.
 *Solve and sampling time on one Windows workstation, excluding Python start-up.
 
 Start with `binary_planar_growth.py`. `ternary_fecrni_lee1996.py` shows the full workflow on
-real thermodynamic data. Each file's docstring covers its assumptions, units, ordering and
-limitations. Add `--fast` for shorter settings, or `--help` for other options.
+real thermodynamic data. Each file opens with notes on its assumptions, units, ordering and
+limitations.
+
+**In a notebook.** Each file is split into `# %%` cells. Open it in VS Code or Jupyter and run
+the cells in order in an Interactive window: edit the Settings cell first, then run the cells
+below it. Run cells only execute when the file is run directly, so tests and other code can
+import its functions without starting a solve.
+
+**From a terminal.** `python <example>.py`, adding `--fast` for shorter settings, or `--help`
+for other options.
 
 ## Conventions worth knowing
 
@@ -65,8 +73,8 @@ redistribution of the one used in development hasn't been cleared. It was assemb
 Lee (1993) with mobilities from Lee & Oh (1996). The sampled probe point and compositions in the
 example suit that database at 1373 K, and may need changing for another.
 
-The surrogate bundle is written to `./moving_boundary_example_outputs/` under the current
-directory unless you pass `--output-dir`. Existing compatible bundles are reloaded, incompatible
+Surrogate bundles are written to `~/moving_boundary_example_outputs/<example>/`, wherever you run
+from, unless you set `OUTPUT_DIR` (or pass `--output-dir`). They never go into the source tree. Existing compatible bundles are reloaded, incompatible
 ones stop with an error, and `--rebuild` replaces them.
 
 ## Running the tests

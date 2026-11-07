@@ -34,7 +34,7 @@ def load(name):
 def test_example_uses_only_the_installed_api_and_is_batch_safe(name):
     tree = ast.parse((EXAMPLES / (name + ".py")).read_text(encoding="utf-8"))
     allowed = {"moving_boundary", "kawin", "numpy", "scipy", "matplotlib", "argparse", "contextlib", "dataclasses",
-               "hashlib", "importlib", "json", "os", "pathlib", "shutil", "tempfile"}
+               "hashlib", "importlib", "json", "os", "pathlib", "shutil", "sys", "tempfile"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             roots = [alias.name.split(".")[0] for alias in node.names]
@@ -315,3 +315,40 @@ def test_settings_record_catches_a_post_construction_change():
     found = settings.differences(baseline, settings.effective_settings(changed, example.FAST.duration, arguments))
     assert {"attributes.dtMode", "attributes.timeStep"} <= set(found)
     assert settings.differences(baseline, settings.effective_settings(changed, example.FAST.duration, arguments), {"dtMode": "why", "timeStep": "why"}) == []
+
+
+# ---- notebook use ------------------------------------------------------------
+
+@pytest.mark.parametrize("name", ["binary_planar_growth", "ternary_interstitial_similarity", "surrogate_lifecycle", "three_phase_similarity"])
+def test_example_runs_as_a_notebook_kernel_would(name, tmp_path, monkeypatch):
+    """Run every cell in order as a Jupyter kernel does, including its own argv and plots.
+
+    A kernel passes ``--f=<connection file>``, which argparse would read as ``--fast`` and
+    reject; the examples must ignore it. Outputs go to a temporary home directory.
+    """
+    import runpy
+    import types
+    import matplotlib
+    matplotlib.use("Agg")
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setitem(sys.modules, "ipykernel", types.ModuleType("ipykernel"))
+    monkeypatch.setattr(sys, "argv", ["ipykernel_launcher.py", f"--f={tmp_path / 'kernel.json'}"])
+    namespace = runpy.run_path(str(EXAMPLES / (name + ".py")), run_name="__main__")
+    if name == "surrogate_lifecycle":
+        assert Path(namespace["bundle"].path).is_relative_to(tmp_path)
+        assert namespace["interface_difference"](namespace["model"], namespace["fresh"]) == 0.0
+    else:
+        assert namespace["result"].config == namespace["CONFIG"]
+
+
+@pytest.mark.parametrize("name", ["binary_planar_growth", "ternary_interstitial_similarity", "three_phase_similarity"])
+def test_example_command_line_still_parses_options(name, monkeypatch):
+    example = load(name)
+    monkeypatch.delitem(sys.modules, "ipykernel", raising=False)
+    monkeypatch.setattr(sys, "argv", [name + ".py", "--fast"])
+    config, plot_figures = example.settings_from_command_line(example.DEMO, True)
+    assert config == example.FAST and plot_figures is False
+    monkeypatch.setattr(sys, "argv", [name + ".py", "--f=kernel.json"])
+    with pytest.raises(SystemExit):
+        example.settings_from_command_line(example.DEMO, True)
