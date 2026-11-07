@@ -77,6 +77,12 @@ verified, reloadable bundle; the callback returns `(surrogate, members)`.
 phase's diffusivity samples from two surrogates. See
 [research orchestration scope](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation).
 
+## Examples and exact solutions
+
+[examples/README.md](examples/README.md) has worked examples, including a full Fe-Cr-Ni
+workflow and what each one does and doesn't validate. `moving_boundary.analytic` provides exact
+solutions and comparison helpers for checking your own runs. Only its `__all__` is supported API.
+
 ## Local acceptance
 
 From the extraction root, run:

@@ -187,3 +187,55 @@ No publication, push, research-branch merge or external contact is authorized.
 Package name/audience, MAP outreach, upstream contribution and changing the
 thin-phase prompt default remain reserved for the user. Approval of this run list
 is complete; no repeated confirmation is required for its implementation.
+
+## Proposed example cases (pending approval)
+
+**Not part of the approved quick or full gates.** These run only through
+`tools/acceptance_examples.py`; `acceptance.py` and `acceptance_manifest.json` are unchanged.
+Each case runs an installed-API example against an existing frozen fixture, which is only
+read. It requires recorded effective settings equal to the accepted case's (taken just before
+solving, with named approved differences), the fixture's exact key set, identical array bytes
+and the same stop status. Example metrics are written separately and never enter parity arrays.
+
+| ID | Example, config | Fixture | Proposed tier | Measured worker |
+|---|---|---|---|---|
+| E01 | `binary_planar_growth`, `FAST` | C04 | Quick | ~3 s |
+| E02 | `binary_planar_growth`, `COARSE_LONG` | F04 | Full | ~4 s |
+| E03 | `ternary_interstitial_similarity`, `FAST` | C16 | Quick | ~4 s |
+| E04 | `surrogate_lifecycle`, `FAST` | C24 | Quick | ~3 s |
+| E05 | `ternary_fecrni_lee1996`, `FROZEN_FAST` | O05 | Quick | ~4 s |
+| E06 | `ternary_fecrni_lee1996`, `FROZEN_FAST` | O04 | Full | ~20 s |
+| E07, E08 | `three_phase_similarity`, `FAST`, `FAST_DRIFT` | C11, C12 | Quick | ~8 s each |
+| E09, E10 | `three_phase_similarity`, `COARSE_LONG`, `COARSE_LONG_DRIFT` | F11, F12 | Full | ~10 s each |
+
+E05 solves unseeded from the frozen `inputs/pycalphad-reference.npz`, so the O05/O08 seed
+exception isn't extended. Its `provider/*` keys come from that same file, which is a schema
+match and not evidence about generation. Approved setting differences are in the manifest:
+O05/O04 construct semi-log then switch to fixed steps, while the example constructs fixed steps
+directly, so the unused semi-log values differ.
+
+**E11, not captured:** `LAGGED_FAST` (bulk spacing 0.05, 8 samples per side, 21/41 nodes,
+`semiLog_dt` 0.05, 10 h). Order: freeze config and limits; prepare one bundle on detached 06dc7b4
+at `PYTHONHASHSEED=0`; capture the reference and an unseeded repeat pair with overwrite refused;
+run the parity comparison. Both hosts reload the same bundle and solve unseeded. Needs explicit
+go-ahead. A full gate run before this isn't the completed expanded suite.
+
+Proposed limits are in each example, with their configuration, normalization and window. Those
+marked below aren't from a source test and need approval before they are treated as frozen.
+
+| Example, settings | Quantity | Limit | Reference-side measured | Basis |
+|---|---|---|---|---|
+| Binary DEMO: 41/41, dt 1e-5, t 1e-4→1e-2 | Interface error / displacement | 1e-2 | 5.3e-3 | **Proposed** accuracy |
+| | Profile L∞, 3 cells from interface excluded | 5e-3 | 2.0e-3 | **Proposed** accuracy |
+| | Inventory abs | 1e-8 | 3.5e-10 | **Proposed** conservation |
+| Interstitial DEMO: 81/81, widths .8+.4, t→1, t ≥ 0.1, in u | k rel; interface rel | 1e-2 each | 5.2e-4; 1.6e-3 | Source values, re-established on this grid; **approve** |
+| | eta abs; C profile L∞ | 1e-3 each | 1.1e-5; 6.6e-4 | Same |
+| | Inventory abs | 6e-9 | 2.9e-10 | Same |
+| Interstitial domain check at 161 nodes | Metric change as a fraction of its limit | 10% | Test passes | **Proposed**; direct thresholds below |
+| | Direct interface / C profile / Mn profile | 1e-3 / 1e-4 / 1e-3 | Test passes | **Proposed** regression |
+| FeCrNi `FROZEN_ANALYTIC`: 50/200, t→100 h, t ≥ 1e4 s | k rel; interface rel | 5e-3; 1e-2 | 1.0e-3; 3.5e-3 at t ≥ 7.7e3 s | **Proposed** accuracy, numerics only |
+| | eta abs; profile L∞; inventory rel | 2e-3; 2e-2; 1e-8 | 5e-4; 8.7e-3; 2.4e-11 | Same |
+| Three-phase DEMO: 81 nodes, mesh 6001, semi-log .025, t ≥ 4·T0 | k rel; eta abs; profile L∞; inventory | 2.5e-2; 1.5e-2; 1e-2; 1e-9 | 1.7e-2; 1.0e-2; 8.0e-3; 1.3e-10 | Source test |
+| Two-phase test: 21/.05 and 41/.025 | As in source | As in source | Test passes | Source test |
+| FeCrNi `LAGGED_FAST` | Inventory rel; matrix spread; simplices crossed | 1e-8; ≥ 0.2; ≥ 3 | 1.7e-10; about 1.0 in each phase; 7 in each phase | **Proposed** workflow, measured on the package |
+| | Interpolation vs nearest (median); lagged vs frozen | ≥ 1e-3; ≥ 5e-3 | ≥ 0.017; 0.036 | **Proposed** workflow, measured on the package |

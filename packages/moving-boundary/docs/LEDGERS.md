@@ -169,6 +169,41 @@ Remaining research-branch work, validated on both FeCrNi and NiTiNb:
   name but not by exact name.
 - Correct the stale docstring at :441-446 and the dead duplicate check at :453.
 
+## Research comparison issue R05: x compared with u (fixed on a research branch, not merged)
+
+`compare_model_to_similarity` and its three-phase counterpart subtracted the exact solution,
+which is in the solver state basis, from `getPhysicalPhaseProfiles`, which returns mole
+fractions. With interstitials that compares x with u, leaving u²/(1+u) for carbon: up to
+about 8.7e-4 at u_C = 0.03, against the fork test's 1e-3 bound. Substitutional results are
+unaffected. No solver numerics were involved, and eta, k, interface and inventory metrics
+were never affected.
+
+Fixed in `bc62481` on `fix/r05-similarity-state-basis` (research worktree, from main 5f4ad57;
+not pushed or merged), with a focused no-solve test. All 30 tests in the four affected fork
+files pass with no bound changed. At the source configuration the corrected carbon profile
+error is 4.75e-4. `analytic/` is ported from that commit. The 06dc7b4 acceptance oracle is
+unchanged: `collect` doesn't use this helper, and existing `exact/*` arrays come from their
+own branches.
+
+## Example acceptance (pending tier approval)
+
+See [ACCEPTANCE_CANDIDATES.md](ACCEPTANCE_CANDIDATES.md#proposed-example-cases-pending-approval)
+and `tools/example_manifest.json`. These claims are kept separate: parity shows matching
+behaviour with the frozen references and is not an accuracy result; analytic comparisons
+assess accuracy within their assumptions; conservation, reload and live-workflow checks each
+assess one named property. Frozen-matrix FeCrNi doesn't validate composition-dependent
+physics, and no check here establishes accuracy for the lagged workflow.
+
+Known gaps: O04, O05 and O06 use frozen matrices, so lagged composition-dependent parity (E11)
+needs a new fixture that isn't captured yet. Its shared-bundle design won't compare grid
+sampling between hosts. Database-dependent tests skip in reviewer installs until a database
+is cleared for redistribution. Linux and other tested-version behaviour hasn't been checked,
+so no thermodynamic golden is frozen.
+
+An unused local `tieTriangle_dict` with hard-coded compositions remains in
+`from_database`'s seed-point scan, with its other uses commented out. It's inert and shared
+with 06dc7b4; removal belongs on the research branch.
+
 ## Historical evidence and narrow fix integration
 
 verification.json, assessment.json and git-audit.txt preserve the original scoped

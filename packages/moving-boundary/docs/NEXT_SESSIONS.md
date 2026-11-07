@@ -30,6 +30,23 @@ used `--record` and completed in 578.02 s of its unchanged
 unseeded pair for 34. No case was skipped on this configured machine. Only
 the new ignored O06 fixture pair was captured; all 89 older files are unchanged.
 
+## Real-usage examples (implemented; tiers pending approval)
+
+`examples/` has five installed-API examples with teaching docs, and `moving_boundary.analytic`
+provides exact solutions. `tools/acceptance_examples.py` compares their quick-check settings with
+existing frozen fixtures; it isn't part of `acceptance.py`, whose inputs and fixtures are unchanged.
+After adding `analytic`, an unchanged full gate gave 40 runs and 5 contracts bit-identical, 34
+repeat pairs, 570 s (not recorded). All ten example cases are bit-identical with matching settings.
+
+Reviewer simulation (fresh venv outside all checkouts, wheel plus PyPI kawin 0.5.0, Windows, private
+paths blocked): 117 passed, 8 expected skips (5 local contracts, 3 needing a database), 167 s;
+37 example/analytic tests pass in about 290 s with a supplied database and no Numba cache.
+
+Awaiting decisions: E-case tiers and proposed limits (ACCEPTANCE_CANDIDATES.md), go-ahead for the
+E11 lagged fixture, Lee TDB redistribution, and merging the R05 branch. E11 isn't captured, so no
+gate is yet the completed expanded suite. Linux and golden tolerance work hasn't been done.
+Thermo-Calc (NiTiNb) remains a later optional extension.
+
 ## Installed solving and research-owned generation
 
 The installed package with stock kawin alone supports solving with user-supplied
