@@ -5,6 +5,7 @@ with a reason without one; the local acceptance gate always supplies it. Limits 
 each example, which documents the configuration, normalization and window they apply to.
 """
 import ast
+import importlib.metadata
 import importlib.util
 import os
 from pathlib import Path
@@ -213,8 +214,41 @@ def test_simplex_points_stay_inside_the_simplex():
     example = load("ternary_fecrni_lee1996")
     points = example.simplex_bulk_points(0.1)
     assert len(points) == 66
-    # Rescaling a corner back onto the simplex leaves it just under the floor, which is harmless.
-    assert np.all(points >= 0.99e-5) and np.all(points.sum(axis=1) <= 1.0 - 1.0e-5 + 1.0e-12)
+    full = np.column_stack((points, 1.0 - points.sum(axis=1)))
+    assert np.all(full >= 1.0e-5 - 1.0e-12)
+    # All three components are treated alike: any swap of components maps the set onto itself.
+    rows = {tuple(np.round(row, 9)) for row in full}
+    for order in ((1, 0, 2), (2, 1, 0), (0, 2, 1)):
+        assert {tuple(np.round(row, 9)) for row in full[:, order]} == rows
+    # An edge point gives up the floor equally from its other two components.
+    assert np.allclose(full[1], [1.0e-5, 0.1 - 0.5e-5, 0.9 - 0.5e-5], rtol=0.0, atol=1.0e-12)
+
+
+def test_fecrni_build_spec_records_package_version_and_production_settings(tmp_path):
+    example = load("ternary_fecrni_lee1996")
+    (tmp_path / "db.tdb").write_bytes(b"ELEMENT A\n")
+    spec = example.build_spec(example.LAGGED_FAST, tmp_path / "db.tdb")
+    assert spec["package"]["moving_boundary"] == importlib.metadata.version("moving-boundary")
+    production = example.CONFIGS["PRODUCTION_B"]
+    assert (production.terminal_thin_phase_policy, production.compare_frozen) == ("continue", False)
+    assert example.LAGGED_FAST.terminal_thin_phase_policy == "raise"
+
+
+def test_fecrni_check_limits_reports_pass_and_fail():
+    example = load("ternary_fecrni_lee1996")
+    limits = example.LAGGED_THRESHOLDS
+    phase = {"matrix_spread": 2 * limits["matrix_spread_min"], "simplices_crossed": limits["simplices_crossed_min"],
+             "interpolation_vs_nearest_median": 0.0}
+    metrics = {"inventory_rel_max": 0.0, "workflow": {name: dict(phase) for name in example.PHASES}}
+    rows = {name: passed for name, _, _, passed in
+            example.check_limits(example.ExampleResult(example.LAGGED_FAST, None, None, metrics))}
+    assert "lagged_vs_frozen" not in rows
+    assert rows["inventory_rel_max"] and rows["BCC_A2 simplices_crossed"] and rows["FCC_A1 matrix_spread"]
+    assert not rows["FCC_A1 interpolation_vs_nearest_median"]
+    frozen = {name: 2 * limit for name, limit in example.FROZEN_ANALYTIC_LIMITS.items()}
+    result = example.ExampleResult(example.FROZEN_ANALYTIC, None, None, frozen)
+    assert not any(passed for *_, passed in example.check_limits(result))
+    assert example.check_limits(example.ExampleResult(example.FROZEN_FAST, None, None, {})) == []
 
 
 @requires_database

@@ -58,7 +58,8 @@ In particular:
 - `FROZEN_ANALYTIC` in the Fe-Cr-Ni example checks numerics with real data and closure. It does
   not validate composition-dependent Fe-Cr-Ni physics.
 - `LAGGED_DEMO` has no exact solution, so it makes no accuracy claim. It is also deliberately
-  coarser than a production run.
+  coarser than a production run. `PRODUCTION_B` has the research case B settings but is
+  untested here, takes roughly 10 minutes, and makes no accuracy claim either.
 - `semi_infinite_validity_time` is a screening estimate of a wall-tail amplitude, not an error
   bound. When it matters, repeat the run on a larger domain and compare directly.
 
@@ -75,7 +76,9 @@ example suit that database at 1373 K, and may need changing for another.
 
 Surrogate bundles are written to `~/moving_boundary_example_outputs/<example>/`, wherever you run
 from, unless you set `OUTPUT_DIR` (or pass `--output-dir`). They never go into the source tree. Existing compatible bundles are reloaded, incompatible
-ones stop with an error, and `--rebuild` replaces them.
+ones stop with an error, and `--rebuild` replaces them. A Fe-Cr-Ni bundle records the
+`moving-boundary` version, so a new release won't reload an old bundle; within one version,
+such as in an editable install, rebuild after changing surrogate code.
 
 ## Running the tests
 
