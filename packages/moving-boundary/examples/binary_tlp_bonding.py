@@ -28,9 +28,10 @@
 #
 # The long solidification stage (hours) has no exact solution; compare it qualitatively with
 # the paper's Fig. 3 ("present work"), which peaks just below the bound within a few seconds
-# and is nearly solidified by 10^5 s. With `DEMO` the half-width peaks at about 23.08 um
-# after about 2.7 s and is about 2.5 um at 7x10^4 s. Refining the grid moves the peak to about
-# 23.11 um, so the peak carries a grid error of about 0.1%.
+# and is nearly solidified by 10^5 s. With `DEMO` the half-width peaks at about 23.10 um
+# after about 2.7 s and is about 2.5 um at 7x10^4 s. A convergence study (linear and power
+# grids, space and time refined) gives a converged peak of 23.110 um, so DEMO's peak is about
+# 0.06% low. That error is almost all spatial and falls at first order with the node count.
 #
 # **Assumptions.** Planar, constant diffusivity in each phase, equal molar volumes in liquid
 # and solid, local equilibrium at fixed interface compositions, and zero flux at both ends. The
@@ -42,13 +43,17 @@
 #
 # **Limitations.** The solver cannot remove a vanishing phase, so runs stop before the liquid
 # is gone. These settings are chosen for speed and are not converged (see the peak above).
+# Finer grids with the same `duration` can fail late in the solidification stage: the
+# interface iteration then stalls just above its tolerance (161/641 nodes with
+# `semi_log_dt` = 0.01 stops at about 6.4x10^4 s). Shorten `duration` if that happens.
 #
 # **Things to try.** Make `solid_spacing_ratio` 1.0 (a uniform solid grid): the peak rises
-# about 0.08 um toward the bound, because a coarse solid grid under-resolves the phosphorus
-# the solid takes up early on. The report's grid line compares the interface spacing with
-# the solid's diffusion length, and the plot markers show where the nodes are. Halve
-# `semi_log_dt` and double the node counts: the early-time
-# error falls about fourfold. Or change a diffusivity in `PARAMS`; the exact checks follow.
+# about 0.05 um, overshooting the converged value, because a coarse solid grid under-resolves
+# the phosphorus the solid takes up early on. The report's grid line compares the interface
+# spacing with the solid's diffusion length, and the plot markers show where the nodes are.
+# Double the node counts: the early-time error halves (first order in space), at little cost,
+# since run time follows the number of time steps rather than nodes. Halving `semi_log_dt`
+# barely changes it. Or change a diffusivity in `PARAMS`; the exact checks follow.
 #
 # **Running.** Run the cells in order in a Jupyter or VS Code Interactive window, editing the
 # Settings cell first. From a terminal: `python binary_tlp_bonding.py [--fast] [--plot]`.
@@ -94,8 +99,8 @@ class Config:
     spacing (1.0 is uniform). The early-time check uses ``early_from`` up to the liquid
     validity time; earlier times hold the start-up transient of the singular step start."""
 
-    liquid_nodes: int = 41
-    solid_nodes: int = 161
+    liquid_nodes: int = 81
+    solid_nodes: int = 321
     liquid_spacing_ratio: float = 0.2
     solid_spacing_ratio: float = 0.01
     semi_log_dt: float = 0.005
@@ -120,10 +125,10 @@ FAST = Config(duration=3.0)          # the early window and the peak only
 
 # Limits for DEMO only (see the notes for each check). early_interface_rel:
 # max|s - s_exact| / (s_exact(t_valid) - s0) for early_from <= t <= liquid_validity_time;
-# DEMO gives 2.0e-3. peak_over_bound: maximum half-width / (s0 c0 / c_liquid), an exact
-# limit; DEMO gives 0.9935. inventory_rel: |final - initial| / initial phosphorus inventory;
-# DEMO gives about 5e-9, set by the 1e-8 um interface tolerance.
-DEMO_LIMITS = {"early_interface_rel": 5.0e-3, "peak_over_bound": 1.0, "inventory_rel": 2.0e-8}
+# DEMO gives 1.1e-3. peak_over_bound: maximum half-width / (s0 c0 / c_liquid), an exact
+# limit; DEMO gives 0.9941. inventory_rel: |final - initial| / initial phosphorus inventory;
+# DEMO gives about 7e-9, set by the 1e-8 um interface tolerance.
+DEMO_LIMITS = {"early_interface_rel": 3.0e-3, "peak_over_bound": 1.0, "inventory_rel": 2.0e-8}
 
 # %% [markdown]
 # ## Settings
