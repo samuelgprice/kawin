@@ -6,6 +6,7 @@ package. Each script runs on its own and is meant to be copied and adapted.
 | Script | Question | Needs | Time* |
 |---|---|---|---|
 | `binary_planar_growth.py` | How fast does a planar interface grow under diffusion control? | Nothing | Under 1 s |
+| `binary_tlp_bonding.py` | How does a liquid interlayer widen and then solidify when bonding nickel? | Nothing | About 2 s |
 | `ternary_interstitial_similarity.py` | How do a fast interstitial and a slow substitutional solute move an interface? | Nothing | About 1 s |
 | `surrogate_lifecycle.py` | How do I save, verify, reload and solve with a surrogate? | Nothing | Under 1 s |
 | `three_phase_similarity.py` | How do two independent interfaces move as a middle layer grows? | Nothing | About 5 s |
@@ -14,7 +15,9 @@ package. Each script runs on its own and is meant to be copied and adapted.
 
 *Solve and sampling time on one Windows workstation, excluding Python start-up.
 
-Start with `binary_planar_growth.py`. `ternary_fecrni_lee1996.py` shows the full workflow on
+Start with `binary_planar_growth.py`. `binary_tlp_bonding.py` applies the same binary solver to
+a real process, the Ni-P bonding case from the algorithm's paper, with exact checks at early
+times and on the liquid width. `ternary_fecrni_lee1996.py` shows the full workflow on
 real thermodynamic data. Each file opens with notes on its assumptions, units, ordering and
 limitations.
 

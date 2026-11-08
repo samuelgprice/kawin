@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 EXAMPLES = Path(__file__).parents[1] / "examples"
-NEW_EXAMPLES = ["binary_planar_growth", "ternary_interstitial_similarity", "surrogate_lifecycle",
+NEW_EXAMPLES = ["binary_planar_growth", "binary_tlp_bonding", "ternary_interstitial_similarity", "surrogate_lifecycle",
                 "ternary_fecrni_lee1996", "three_phase_similarity"]
 TERNARY_MODELS = {"MovingBoundaryIllingworthTernaryFD1DModel", "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel"}
 requires_database = pytest.mark.skipif(not os.environ.get("MB_EXAMPLE_TDB"), reason="set MB_EXAMPLE_TDB to a Fe-Cr-Ni TDB; none is distributed yet")
@@ -80,6 +80,27 @@ def test_binary_fast_runs_and_a_coarse_grid_is_visibly_worse():
     example = load("binary_planar_growth")
     assert example.run(example.FAST).model.currentTime == pytest.approx(example.FAST.duration)
     assert example.run(example.COARSE_LONG).metrics["interface_rel"] > 3.0 * example.run(example.DEMO).metrics["interface_rel"]
+
+
+def test_tlp_bonding_demo_meets_its_limits_and_widens_then_solidifies():
+    example = load("binary_tlp_bonding")
+    result = example.run(example.DEMO)
+    within(result.metrics, example.DEMO_LIMITS)
+    metrics = result.metrics
+    assert metrics["peak_width"] > example.PARAMS["s0"] and metrics["final_width"] < 0.25 * metrics["peak_width"]
+    assert metrics["peak_time"] < 10.0 < metrics["final_time"]
+
+
+def test_tlp_bonding_growth_constant_satisfies_the_flux_balance():
+    """Check k against the interface balance written with plain erfc, independently of erfcx."""
+    from scipy.special import erfc
+
+    example = load("binary_tlp_bonding")
+    p, k = example.PARAMS, example.similarity_growth_constant()
+    liquid = -(p["c_liquid"] - p["c_liquid0"]) * np.sqrt(p["D_liquid"] / np.pi) * np.exp(-k**2 / (4 * p["D_liquid"])) / erfc(-k / (2 * np.sqrt(p["D_liquid"])))
+    solid = -(p["c_solid"] - p["c_solid0"]) * np.sqrt(p["D_solid"] / np.pi) * np.exp(-k**2 / (4 * p["D_solid"])) / erfc(k / (2 * np.sqrt(p["D_solid"])))
+    assert (p["c_liquid"] - p["c_solid"]) * k / 2 == pytest.approx(liquid + solid, rel=1.0e-12)
+    assert example.width_bound() == pytest.approx(12.5 * 0.19 / 0.10223)
 
 
 # ---- 2. interstitial --------------------------------------------------------
@@ -403,7 +424,7 @@ def test_settings_record_catches_a_post_construction_change():
 
 # ---- notebook use ------------------------------------------------------------
 
-@pytest.mark.parametrize("name", ["binary_planar_growth", "ternary_interstitial_similarity", "surrogate_lifecycle", "three_phase_similarity"])
+@pytest.mark.parametrize("name", ["binary_planar_growth", "binary_tlp_bonding", "ternary_interstitial_similarity", "surrogate_lifecycle", "three_phase_similarity"])
 def test_example_runs_as_a_notebook_kernel_would(name, tmp_path, monkeypatch):
     """Run every cell in order as a Jupyter kernel does, including its own argv and plots.
 
@@ -427,7 +448,7 @@ def test_example_runs_as_a_notebook_kernel_would(name, tmp_path, monkeypatch):
         assert namespace["result"].config == namespace["CONFIG"]
 
 
-@pytest.mark.parametrize("name", ["binary_planar_growth", "ternary_interstitial_similarity", "three_phase_similarity"])
+@pytest.mark.parametrize("name", ["binary_planar_growth", "binary_tlp_bonding", "ternary_interstitial_similarity", "three_phase_similarity"])
 def test_example_command_line_still_parses_options(name, monkeypatch):
     example = load(name)
     monkeypatch.delitem(sys.modules, "ipykernel", raising=False)
