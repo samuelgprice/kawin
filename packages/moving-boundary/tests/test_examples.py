@@ -179,10 +179,48 @@ def test_surrogate_lifecycle_builds_reloads_rebuilds_and_detects_damage(tmp_path
     example = load("surrogate_lifecycle")
     first = example.run(output_dir=tmp_path)
     assert first.metrics["action"] == "built"
-    assert first.metrics["fresh_vs_reloaded_interface_abs"] == 0.0
+    differences = first.metrics["fresh_vs_reloaded_max_abs"]
+    assert set(differences) == {"times", "interface", "eta", "inventory", "profiles"}
+    assert all(value == 0.0 for value in differences.values()), differences
     assert first.metrics["changed_specification_refused"] and first.metrics["damaged_member_refused"]
     assert example.run(output_dir=tmp_path).metrics["action"] == "reloaded"
     assert example.run(output_dir=tmp_path, rebuild=True).metrics["action"] == "built"
+
+
+def test_surrogate_lifecycle_run_differences_see_more_than_the_interface():
+    example = load("surrogate_lifecycle")
+    surrogate = example.build_surrogate()
+    model = example.solve(example.DEMO, surrogate)
+    other = example.solve(example.DEMO, surrogate)
+    accessor = other.getTransformedState
+    other.getTransformedState = lambda time: [state + 1.0e-3 for state in accessor(time)]  # profiles only
+    differences = example.run_differences(model, other)
+    assert differences["interface"] == 0.0 and differences["profiles"] == pytest.approx(1.0e-3)
+
+
+def test_surrogate_lifecycle_refuses_a_bundle_without_its_manifest(tmp_path, monkeypatch):
+    example = load("surrogate_lifecycle")
+    bundle_path = tmp_path / "bundle"
+    example.prepare_bundle(bundle_path)
+    (bundle_path / "manifest.json").unlink()
+    before = {path.name: path.read_bytes() for path in bundle_path.iterdir()}
+    monkeypatch.setattr(example, "build_surrogate", lambda: pytest.fail("A folder without a manifest must not be rebuilt"))
+    with pytest.raises(example.SurrogateArtifactIntegrityError, match="no manifest.json(.|\n)*REBUILD"):
+        example.prepare_bundle(bundle_path)
+    assert {path.name: path.read_bytes() for path in bundle_path.iterdir()} == before
+    monkeypatch.undo()
+    assert example.prepare_bundle(bundle_path, rebuild=True)[1] == "built"
+
+
+def test_surrogate_lifecycle_damaged_bundle_says_how_to_rebuild(tmp_path):
+    example = load("surrogate_lifecycle")
+    bundle, _ = example.prepare_bundle(tmp_path / "bundle")
+    model_file = bundle.path / bundle.manifest["members"]["model"]["path"]
+    data = bytearray(model_file.read_bytes())
+    data[len(data) // 2] ^= 0xFF
+    model_file.write_bytes(bytes(data))
+    with pytest.raises(example.SurrogateArtifactIntegrityError, match="REBUILD"):
+        example.prepare_bundle(tmp_path / "bundle")
 
 
 def test_surrogate_lifecycle_refuses_an_incompatible_bundle_without_rebuilding(tmp_path, monkeypatch):
@@ -235,20 +273,41 @@ def test_fecrni_build_spec_records_package_version_and_production_settings(tmp_p
 
 
 def test_fecrni_check_limits_reports_pass_and_fail():
+    import dataclasses
+
     example = load("ternary_fecrni_lee1996")
     limits = example.LAGGED_THRESHOLDS
-    phase = {"matrix_spread": 2 * limits["matrix_spread_min"], "simplices_crossed": limits["simplices_crossed_min"],
-             "interpolation_vs_nearest_median": 0.0}
-    metrics = {"inventory_rel_max": 0.0, "workflow": {name: dict(phase) for name in example.PHASES}}
+    requested = len(example.simplex_bulk_points(example.LAGGED_FAST.bulk_spacing))
+    phase = {"retained_samples": requested, "accepted_outside_hull": 0, "attempted_queries": 5,
+             "attempted_outside_hull": 1, "matrix_spread": 2 * limits["matrix_spread_min"],
+             "simplices_crossed": limits["simplices_crossed_min"], "interpolation_vs_nearest_median": 0.0,
+             "centroids_within_vertex_range": 1.0, "training_point_relative_error": 0.0}
+    metrics = {"inventory_rel_max": 0.0, "workflow": {"interpolation": "nearest", **{name: dict(phase) for name in example.PHASES}}}
     rows = {name: passed for name, _, _, passed in
             example.check_limits(example.ExampleResult(example.LAGGED_FAST, None, None, metrics))}
     assert "lagged_vs_frozen" not in rows
     assert rows["inventory_rel_max"] and rows["BCC_A2 simplices_crossed"] and rows["FCC_A1 matrix_spread"]
+    assert rows["BCC_A2 retained_fraction"] and rows["FCC_A1 accepted_outside_hull"]
     assert not rows["FCC_A1 interpolation_vs_nearest_median"]
+    assert not rows["BCC_A2 attempted_outside_hull"] and not rows["interpolation"]
     frozen = {name: 2 * limit for name, limit in example.FROZEN_ANALYTIC_LIMITS.items()}
     result = example.ExampleResult(example.FROZEN_ANALYTIC, None, None, frozen)
     assert not any(passed for *_, passed in example.check_limits(result))
-    assert example.check_limits(example.ExampleResult(example.FROZEN_FAST, None, None, {})) == []
+    # No validated limits: other frozen runs, the untested production settings and modified copies.
+    for config in (example.FROZEN_FAST, example.PRODUCTION_B, dataclasses.replace(example.LAGGED_FAST, duration=1.0)):
+        assert example.check_limits(example.ExampleResult(config, None, None, metrics)) == []
+
+
+def test_fecrni_refuses_a_bundle_without_its_manifest(tmp_path, monkeypatch):
+    example = load("ternary_fecrni_lee1996")
+    (tmp_path / "db.tdb").write_bytes(b"ELEMENT A\n")
+    folder = tmp_path / "out" / example.LAGGED_FAST.name
+    folder.mkdir(parents=True)
+    (folder / "model.npz").write_bytes(b"partial")
+    monkeypatch.setattr(example, "sample_surrogate", lambda *_: pytest.fail("A folder without a manifest must not be rebuilt"))
+    with pytest.raises(example.SurrogateArtifactIntegrityError, match="no manifest.json(.|\n)*REBUILD"):
+        example.prepare_surrogate(example.LAGGED_FAST, tmp_path / "db.tdb", output_dir=tmp_path / "out")
+    assert (folder / "model.npz").read_bytes() == b"partial"
 
 
 @requires_database
@@ -257,30 +316,19 @@ def test_live_lagged_workflow_uses_its_data(tmp_path):
 
     These are workflow properties, not accuracy. Conservation and reload can both pass
     without the bulk path being used, so this also checks hull coverage from the retained
-    samples, real matrix variation over accepted states, and interpolation evidence.
+    samples, real matrix variation over accepted states, and interpolation evidence. The
+    checks are the example's own ``check_limits``, so the console report and this test agree.
     """
     example = load("ternary_fecrni_lee1996")
     config = example.LAGGED_FAST
     result = example.run(config, output_dir=tmp_path)
-    limits = example.LAGGED_THRESHOLDS
-    metrics = result.metrics
-    assert metrics["surrogate_action"] == "built"
+    assert result.metrics["surrogate_action"] == "built"
     assert result.model.currentTime == pytest.approx(config.duration)
-    assert metrics["inventory_rel_max"] < limits["inventory_rel_max"]
-    workflow = metrics["workflow"]
-    assert workflow["interpolation"] == "simplex_positive_2x2"
-    for phase in example.PHASES:
-        report = workflow[phase]
-        assert report["retained_samples"] > len(example.simplex_bulk_points(config.bulk_spacing)) * 0.9
-        assert report["accepted_outside_hull"] == 0
-        assert report["attempted_outside_hull"] == 0
-        assert report["attempted_queries"] > 0
-        assert report["matrix_spread"] > limits["matrix_spread_min"]
-        assert report["simplices_crossed"] >= limits["simplices_crossed_min"]
-        assert report["interpolation_vs_nearest_median"] > limits["interpolation_vs_nearest_min"]
-        assert report["centroids_within_vertex_range"] > 0.9
-        assert report["training_point_relative_error"] < 1.0e-8
-    assert metrics["lagged_vs_frozen"] > limits["lagged_vs_frozen_min"]
+    rows = example.check_limits(result)
+    names = {name for name, *_ in rows}
+    assert {"interpolation", "lagged_vs_frozen", "BCC_A2 attempted_outside_hull", "FCC_A1 retained_fraction"} <= names
+    failed = [row for row in rows if not row[3]]
+    assert not failed, failed
 
 
 @requires_database
@@ -292,12 +340,14 @@ def test_fresh_and_reloaded_lagged_solves_match(tmp_path):
     reloaded, action = example.prepare_surrogate(config, None, output_dir=tmp_path)
     assert action == "reloaded"
     assert reloaded.manifest["build_fingerprint"] == bundle.manifest["build_fingerprint"]
-    runs = []
+    models = []
     for surrogate in (bundle.surrogate, reloaded.surrogate):
         model = example.build_model(config, surrogate)
-        model.solve(config.duration, minDtFrac=1e-14)
-        runs.append(np.array(example.recorded_history(model.interfaceData)[1]))
-    assert np.max(np.abs(runs[0] - runs[1])) == 0.0
+        model.solve(config.duration, minDtFrac=config.min_dt_frac)
+        models.append(model)
+    # Times, interface, eta, inventory and both phases' states, via the lifecycle example's helper.
+    differences = load("surrogate_lifecycle").run_differences(*models)
+    assert all(value == 0.0 for value in differences.values()), differences
 
 
 @requires_database
@@ -371,7 +421,8 @@ def test_example_runs_as_a_notebook_kernel_would(name, tmp_path, monkeypatch):
     namespace = runpy.run_path(str(EXAMPLES / (name + ".py")), run_name="__main__")
     if name == "surrogate_lifecycle":
         assert Path(namespace["bundle"].path).is_relative_to(tmp_path)
-        assert namespace["interface_difference"](namespace["model"], namespace["fresh"]) == 0.0
+        differences = namespace["run_differences"](namespace["model"], namespace["fresh"])
+        assert all(value == 0.0 for value in differences.values()), differences
     else:
         assert namespace["result"].config == namespace["CONFIG"]
 

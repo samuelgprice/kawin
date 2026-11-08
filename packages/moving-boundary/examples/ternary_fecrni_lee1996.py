@@ -36,18 +36,22 @@
 # **Files.** Bundles go in `OUTPUT_DIR`, by default
 # `~/moving_boundary_example_outputs/fecrni_lee1996/<config>/`, wherever you run from. A
 # compatible bundle is reloaded without sampling; an incompatible or damaged one stops with an
-# error; `REBUILD = True` (or `--rebuild`) replaces it. Nothing is ever rebuilt silently.
+# error, as does a bundle folder with files but no `manifest.json` (usually an interrupted
+# build); `REBUILD = True` (or `--rebuild`) replaces it. Nothing is ever rebuilt silently.
 #
 # A bundle also records the installed `moving-boundary` version, so upgrading the package stops
 # reloads of bundles built by an earlier release. An editable install keeps one version while
 # its code changes, so there, use `REBUILD` after changing surrogate code.
 #
-# **Settings you would change** (all fields of `Config`): `bulk_spacing` and `samples_per_side`
-# (sampling cost against accuracy), node counts, `semi_log_dt`, `duration`, the far-field
-# compositions, `terminal_thin_phase_policy` (`"raise"` stops at a thin-phase limit,
-# `"continue"` proceeds past it; neither changes the phase topology), and `compare_frozen`
-# (lagged runs only: also solve a frozen-matrix twin, roughly doubling the solve time).
-# Make a variant with `dataclasses.replace(LAGGED_DEMO, duration=...)`.
+# **Settings you would change.** Numerical settings are fields of `Config`: `bulk_spacing` and
+# `samples_per_side` (sampling cost against accuracy), node counts, `semi_log_dt`, `duration`,
+# `terminal_thin_phase_policy` (`"raise"` stops at a thin-phase limit, `"continue"` proceeds
+# past it; neither changes the phase topology), and `compare_frozen` (lagged runs only: also
+# solve a frozen-matrix twin, roughly doubling the solve time). Make a variant with
+# `dataclasses.replace(LAGGED_DEMO, duration=...)`. The physical case is set by module
+# constants below the imports: `TEMPERATURE`, the far-field compositions `A_BULK` and
+# `B_BULK`, `PROBE_POINT` and the geometry. Pass/fail limits apply only to the named
+# configurations they were set for; any other settings report their metrics without them.
 #
 # **Limitations.** The demo settings are deliberately coarse and not converged. A production
 # case B run, `PRODUCTION_B`, uses about 101 tie lines, a 0.01 bulk grid (5151 points),
@@ -92,6 +96,7 @@ from moving_boundary.solvers import MovingBoundaryIllingworthTernaryFD1DModel
 from moving_boundary.surrogate_artifacts import (
     SurrogateArtifactBundle,
     SurrogateArtifactCompatibilityError,
+    SurrogateArtifactIntegrityError,
     prepare_surrogate_artifact,
 )
 from moving_boundary.surrogates import TernaryMovingBoundaryThermodynamicsSurrogate
@@ -173,13 +178,20 @@ CONFIGS = {config.name: config for config in (LAGGED_DEMO, LAGGED_FAST, FROZEN_A
 FROZEN_ANALYTIC_LIMITS = {"k_rel": 5.0e-3, "interface_rel": 1.0e-2, "eta_abs": 2.0e-3,
                           "profile_linf": 2.0e-2, "inventory_rel": 1.0e-8}
 
-# Workflow properties for LAGGED_*: thresholds, not accuracy claims. Spread is
-# (max-min)/max|entry| of a phase's matrix entries over accepted states, largest entry.
-# Interpolation is the median relative difference from the nearest training matrix at
+# Workflow properties for LAGGED_FAST and LAGGED_DEMO only: thresholds, not accuracy claims.
+# Spread is (max-min)/max|entry| of a phase's matrix entries over accepted states, largest
+# entry. Interpolation is the median relative difference from the nearest training matrix at
 # centroids of the simplices the accepted path crosses. Lagged-vs-frozen is max|s_lagged -
 # s_frozen| / max|s_frozen - s0| on identical geometry, closure, grids and time schedule.
+# Outside-hull counts accepted or attempted bulk compositions outside the retained samples'
+# hull; retained fraction is retained samples / requested grid points (it can exceed 1, since
+# tie-line endpoints are added and unusable points dropped); centroid range is the
+# fraction of crossed-simplex centroids whose matrix lies within its vertices' range.
 LAGGED_THRESHOLDS = {"inventory_rel_max": 1.0e-8, "matrix_spread_min": 0.2, "simplices_crossed_min": 3,
-                     "interpolation_vs_nearest_min": 1.0e-3, "lagged_vs_frozen_min": 5.0e-3}
+                     "interpolation_vs_nearest_min": 1.0e-3, "lagged_vs_frozen_min": 5.0e-3,
+                     "outside_hull_max": 0, "retained_fraction_min": 0.9,
+                     "centroids_within_vertex_range_min": 0.9, "training_point_relative_error_max": 1.0e-8}
+THRESHOLD_CONFIGS = (LAGGED_FAST, LAGGED_DEMO)
 
 # %% [markdown]
 # ## Settings
@@ -291,18 +303,26 @@ def build_spec(config, tdb):
 def prepare_surrogate(config, tdb, *, output_dir=DEFAULT_OUTPUT, rebuild=False):
     """Build or strictly reload the verified bundle; returns ``(bundle, action)``.
 
-    Dropped bulk points are stored as reports inside the bundle when they can occur.
+    Builds only into a missing or empty folder, or when ``rebuild``. An incompatible or
+    damaged bundle, or a folder with files but no manifest, raises instead. Dropped bulk
+    points are stored as reports inside the bundle when they can occur.
     """
     tdb = resolve_database(tdb)
     bundle_path = Path(output_dir) / config.name
     bundle_path.parent.mkdir(parents=True, exist_ok=True)
     spec = build_spec(config, tdb)
     roles = () if config.bulk_spacing is None else ("failed_bulk_points", "invalid_bulk_points")
-    if not rebuild and (bundle_path / "manifest.json").exists():
-        try:
-            return prepare_surrogate_artifact(bundle_path, spec, _no_builder, reload=True, required_members=roles), "reloaded"
-        except SurrogateArtifactCompatibilityError as exc:
-            raise SurrogateArtifactCompatibilityError(f"{exc}\nUse --rebuild to replace {bundle_path}.") from exc
+    if not rebuild:
+        hint = f"Set REBUILD = True (or use --rebuild) to replace {bundle_path}."
+        if (bundle_path / "manifest.json").exists():
+            try:
+                return prepare_surrogate_artifact(bundle_path, spec, _no_builder, reload=True, required_members=roles), "reloaded"
+            except (SurrogateArtifactCompatibilityError, SurrogateArtifactIntegrityError) as exc:
+                raise type(exc)(f"{exc}\n{hint}") from exc
+        if bundle_path.is_dir() and any(bundle_path.iterdir()):
+            # Publishing writes the manifest last, so this is usually an interrupted build, but
+            # it may be a bundle whose manifest was lost; replacing either is the user's call.
+            raise SurrogateArtifactIntegrityError(f"{bundle_path} has files but no manifest.json.\n{hint}")
     with tempfile.TemporaryDirectory() as directory:
         def builder():
             surrogate = sample_surrogate(config, tdb)
@@ -586,43 +606,67 @@ def run(config=LAGGED_DEMO, *, tdb=None, output_dir=DEFAULT_OUTPUT, rebuild=Fals
 def check_limits(result):
     """Compare metrics with the limits that apply; returns ``(name, value, rule, passed)`` rows.
 
-    ``FROZEN_ANALYTIC`` uses ``FROZEN_ANALYTIC_LIMITS`` (each metric at most its limit).
-    Lagged runs use ``LAGGED_THRESHOLDS``, workflow properties checked per phase as the
-    tests do; ``lagged_vs_frozen`` is checked only when present. Other frozen runs have no
-    limits and return no rows. The limits were set for their named settings only.
+    Limits apply only to the configurations they were set for. ``FROZEN_ANALYTIC`` uses
+    ``FROZEN_ANALYTIC_LIMITS`` (each metric at most its limit). ``LAGGED_FAST`` and
+    ``LAGGED_DEMO`` (``THRESHOLD_CONFIGS``) use ``LAGGED_THRESHOLDS``: the interpolation mode,
+    conservation, and per-phase coverage and interpolation evidence. Rows for
+    ``lagged_vs_frozen`` and attempted queries appear only when those were measured. Any
+    other configuration, including ``PRODUCTION_B`` and modified copies, returns no rows:
+    no validated limits apply to it. The tests assert that every row passes.
     """
     metrics, rows = result.metrics, []
+    compare = {"<": lambda a, b: a < b, "<=": lambda a, b: a <= b, ">": lambda a, b: a > b,
+               ">=": lambda a, b: a >= b, "==": lambda a, b: a == b}
+
+    def add(name, value, symbol, limit):
+        rows.append((name, value, f"{symbol} {limit:g}" if isinstance(limit, (int, float)) else f"{symbol} {limit}",
+                     bool(compare[symbol](value, limit))))
+
     if result.config == FROZEN_ANALYTIC:
         for name, limit in FROZEN_ANALYTIC_LIMITS.items():
-            rows.append((name, metrics[name], f"<= {limit:g}", metrics[name] <= limit))
+            add(name, metrics[name], "<=", limit)
         return rows
-    if result.config.frozen:
+    if result.config not in THRESHOLD_CONFIGS:
         return rows
-    limits = LAGGED_THRESHOLDS
-    rows.append(("inventory_rel_max", metrics["inventory_rel_max"], f"< {limits['inventory_rel_max']:g}",
-                 metrics["inventory_rel_max"] < limits["inventory_rel_max"]))
+    limits, workflow = LAGGED_THRESHOLDS, metrics["workflow"]
+    add("interpolation", workflow["interpolation"], "==", result.config.interpolation)
+    add("inventory_rel_max", metrics["inventory_rel_max"], "<", limits["inventory_rel_max"])
+    requested = len(simplex_bulk_points(result.config.bulk_spacing))
     for phase in PHASES:
-        phase_report = metrics["workflow"][phase]
-        for name, key, compare, symbol in (("matrix_spread", "matrix_spread_min", float.__gt__, ">"),
-                                           ("simplices_crossed", "simplices_crossed_min", float.__ge__, ">="),
-                                           ("interpolation_vs_nearest_median", "interpolation_vs_nearest_min", float.__gt__, ">")):
-            value = phase_report[name]
-            rows.append((f"{phase} {name}", value, f"{symbol} {limits[key]:g}", compare(float(value), float(limits[key]))))
+        phase_report = workflow[phase]
+        add(f"{phase} retained_fraction", phase_report["retained_samples"] / requested, ">", limits["retained_fraction_min"])
+        add(f"{phase} accepted_outside_hull", phase_report["accepted_outside_hull"], "<=", limits["outside_hull_max"])
+        if "attempted_queries" in phase_report:
+            add(f"{phase} attempted_queries", phase_report["attempted_queries"], ">", 0)
+            add(f"{phase} attempted_outside_hull", phase_report["attempted_outside_hull"], "<=", limits["outside_hull_max"])
+        add(f"{phase} matrix_spread", phase_report["matrix_spread"], ">", limits["matrix_spread_min"])
+        add(f"{phase} simplices_crossed", phase_report["simplices_crossed"], ">=", limits["simplices_crossed_min"])
+        add(f"{phase} interpolation_vs_nearest_median", phase_report["interpolation_vs_nearest_median"], ">",
+            limits["interpolation_vs_nearest_min"])
+        add(f"{phase} centroids_within_vertex_range", phase_report["centroids_within_vertex_range"], ">",
+            limits["centroids_within_vertex_range_min"])
+        add(f"{phase} training_point_relative_error", phase_report["training_point_relative_error"], "<",
+            limits["training_point_relative_error_max"])
     if "lagged_vs_frozen" in metrics:
-        rows.append(("lagged_vs_frozen", metrics["lagged_vs_frozen"], f"> {limits['lagged_vs_frozen_min']:g}",
-                     metrics["lagged_vs_frozen"] > limits["lagged_vs_frozen_min"]))
+        add("lagged_vs_frozen", metrics["lagged_vs_frozen"], ">", limits["lagged_vs_frozen_min"])
     return rows
 
 
 def report(result):
-    """Print the final state, the metrics, and each applicable limit with whether it was met."""
+    """Print the final state, the metrics, and each applicable limit with whether it was met.
+
+    Says so explicitly when no validated limits apply to the configuration.
+    """
     print(f"final interface {result.model.getInterfacePosition():.6e} m, eta {result.model.getInterfaceEta():.6f}")
     print(json.dumps(result.metrics, indent=2, default=float))
     rows = check_limits(result)
-    if rows:
-        print("accuracy limits (numerics only):" if result.config.frozen else "workflow thresholds (not accuracy):")
-        for name, value, rule, passed in rows:
-            print(f"  {name}: {value:.3g} {rule}: {'within limit' if passed else 'OUTSIDE LIMIT'}")
+    if not rows:
+        print(f"No validated limits apply to {result.config.name} with these settings; the metrics have no pass/fail.")
+        return
+    print("accuracy limits (numerics only):" if result.config.frozen else "workflow thresholds (not accuracy):")
+    for name, value, rule, passed in rows:
+        shown = f"{value:.3g}" if isinstance(value, (int, float, np.floating, np.integer)) else str(value)
+        print(f"  {name}: {shown} {rule}: {'within limit' if passed else 'OUTSIDE LIMIT'}")
 
 
 def plot(result):

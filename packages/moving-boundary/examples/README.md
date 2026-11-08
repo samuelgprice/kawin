@@ -76,7 +76,8 @@ example suit that database at 1373 K, and may need changing for another.
 
 Surrogate bundles are written to `~/moving_boundary_example_outputs/<example>/`, wherever you run
 from, unless you set `OUTPUT_DIR` (or pass `--output-dir`). They never go into the source tree. Existing compatible bundles are reloaded, incompatible
-ones stop with an error, and `--rebuild` replaces them. A Fe-Cr-Ni bundle records the
+or damaged ones stop with an error, as does a bundle folder with files but no `manifest.json`,
+and `--rebuild` replaces them. A Fe-Cr-Ni bundle records the
 `moving-boundary` version, so a new release won't reload an old bundle; within one version,
 such as in an editable install, rebuild after changing surrogate code.
 

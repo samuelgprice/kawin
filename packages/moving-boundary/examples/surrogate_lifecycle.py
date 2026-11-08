@@ -12,8 +12,9 @@
 #
 # - No bundle yet: build and publish it.
 # - A compatible bundle: reload it. The builder is not called.
-# - An incompatible or damaged bundle: stop with an error. It is never rebuilt silently, so
-#   you always know which data a result came from.
+# - An incompatible or damaged bundle, or a bundle folder with files but no `manifest.json`
+#   (usually an interrupted build): stop with an error. It is never rebuilt silently, so you
+#   always know which data a result came from.
 # - `REBUILD = True` (or `--rebuild`): build and atomically replace it.
 #
 # A *build specification* records everything that defines the data. Reloading requires an
@@ -24,7 +25,8 @@
 # units are nondimensional. So this checks the storage workflow, not surrogate quality or
 # physics: a reload that matches the original says the bundle preserved the data, not that
 # the data is right. With these arbitrary values the interface barely moves over this short
-# run, which doesn't matter for that purpose.
+# run, so the comparison covers the recorded times, eta, inventory and both phases' profiles,
+# not just the interface.
 #
 # **Running.** Run the cells in order in a Jupyter or VS Code Interactive window; each workflow
 # step is its own cell. From a terminal: `python surrogate_lifecycle.py [--output-dir DIR] [--rebuild]`
@@ -113,19 +115,26 @@ def build_surrogate():
 def prepare_bundle(bundle_path, *, rebuild=False):
     """Build or strictly reload the bundle, as described in the notes above.
 
-    Returns ``(bundle, action)`` with ``action`` either ``"built"`` or ``"reloaded"``.
+    Builds only into a missing or empty folder, or when ``rebuild``. An incompatible or
+    damaged bundle, or a folder with files but no manifest, raises instead. Returns
+    ``(bundle, action)`` with ``action`` either ``"built"`` or ``"reloaded"``.
     """
     bundle_path = Path(bundle_path)
+    hint = f"Set REBUILD = True (or use --rebuild) to replace {bundle_path}."
 
     def builder():
         return build_surrogate(), {}  # the second item lists extra member files to store
 
-    if rebuild or not (bundle_path / "manifest.json").exists():
-        return prepare_surrogate_artifact(bundle_path, BUILD_SPEC, builder), "built"
-    try:
-        return prepare_surrogate_artifact(bundle_path, BUILD_SPEC, builder, reload=True), "reloaded"
-    except SurrogateArtifactCompatibilityError as exc:
-        raise SurrogateArtifactCompatibilityError(f"{exc}\nSet REBUILD = True (or use --rebuild) to replace {bundle_path}.") from exc
+    if not rebuild and (bundle_path / "manifest.json").exists():
+        try:
+            return prepare_surrogate_artifact(bundle_path, BUILD_SPEC, builder, reload=True), "reloaded"
+        except (SurrogateArtifactCompatibilityError, SurrogateArtifactIntegrityError) as exc:
+            raise type(exc)(f"{exc}\n{hint}") from exc
+    if not rebuild and bundle_path.is_dir() and any(bundle_path.iterdir()):
+        # Publishing writes the manifest last, so this is usually an interrupted build, but it
+        # may be a bundle whose manifest was lost; replacing either is the user's call.
+        raise SurrogateArtifactIntegrityError(f"{bundle_path} has files but no manifest.json.\n{hint}")
+    return prepare_surrogate_artifact(bundle_path, BUILD_SPEC, builder), "built"
 
 
 def integrity_demo(bundle_path):
@@ -184,9 +193,27 @@ def solve(config, surrogate):
     return model
 
 
-def interface_difference(model, other):
-    """Largest difference between two runs' recorded interface positions."""
-    return float(np.max(np.abs(recorded_history(model.interfaceData)[1] - recorded_history(other.interfaceData)[1])))
+def run_differences(model, other):
+    """Largest absolute differences between two two-phase runs, by quantity; all 0.0 if identical.
+
+    Compares the recorded times, interface position, eta and solute inventory, and both
+    phases' transformed states at every recorded time. Raises ``ValueError`` if the runs
+    recorded different numbers of steps, since they can't then be compared pointwise.
+    """
+    times, other_times = recorded_history(model.interfaceData)[0], recorded_history(other.interfaceData)[0]
+    if times.shape != other_times.shape:
+        raise ValueError(f"The runs recorded {len(times)} and {len(other_times)} steps.")
+    differences = {"times": float(np.max(np.abs(times - other_times)))}
+    for name, history in (("interface", "interfaceData"), ("eta", "etaData"), ("inventory", "inventoryData")):
+        values = np.asarray(recorded_history(getattr(model, history))[1], dtype=np.float64)
+        other_values = np.asarray(recorded_history(getattr(other, history))[1], dtype=np.float64)
+        differences[name] = float(np.max(np.abs(values - other_values)))
+    differences["profiles"] = max(
+        float(np.max(np.abs(np.asarray(state) - np.asarray(other_state))))
+        for time, other_time in zip(times, other_times)
+        for state, other_state in zip(model.getTransformedState(float(time)), other.getTransformedState(float(other_time)))
+    )
+    return differences
 
 
 def run(config=DEMO, *, output_dir=DEFAULT_OUTPUT, rebuild=False):
@@ -200,7 +227,7 @@ def run(config=DEMO, *, output_dir=DEFAULT_OUTPUT, rebuild=False):
         "action": action,
         "bundle": str(bundle.path),
         "build_fingerprint": bundle.manifest["build_fingerprint"],
-        "fresh_vs_reloaded_interface_abs": interface_difference(model, fresh),
+        "fresh_vs_reloaded_max_abs": run_differences(model, fresh),
         **integrity_demo(bundle_path),
     }
     return ExampleResult(config, model, None, metrics)
@@ -248,7 +275,7 @@ if __name__ == "__main__":
 # %%
 if __name__ == "__main__":
     fresh = solve(CONFIG, build_surrogate())
-    print("largest interface difference, fresh vs reloaded:", interface_difference(model, fresh))
+    print("largest differences, fresh vs reloaded:", run_differences(model, fresh))
 
 # %% [markdown]
 # 4. Show that a changed specification and a damaged file are both refused.
