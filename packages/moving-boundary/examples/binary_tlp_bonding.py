@@ -45,7 +45,9 @@
 #
 # **Things to try.** Make `solid_spacing_ratio` 1.0 (a uniform solid grid): the peak rises
 # about 0.08 um toward the bound, because a coarse solid grid under-resolves the phosphorus
-# the solid takes up early on. Halve `semi_log_dt` and double the node counts: the early-time
+# the solid takes up early on. The report's grid line compares the interface spacing with
+# the solid's diffusion length, and the plot markers show where the nodes are. Halve
+# `semi_log_dt` and double the node counts: the early-time
 # error falls about fourfold. Or change a diffusivity in `PARAMS`; the exact checks follow.
 #
 # **Running.** Run the cells in order in a Jupyter or VS Code Interactive window, editing the
@@ -252,13 +254,36 @@ def run(config=DEMO):
     return ExampleResult(config, model, exact_interface, evaluate(model, config))
 
 
+def grid_summary(config, p=PARAMS):
+    """Interface spacing of each phase at the start, in um, beside what it must resolve.
+
+    The solid's diffusion length ``sqrt(4 D t)`` at ``early_from`` is the scale its interface
+    interval has to resolve early on; ``solid_uniform_interval`` is the spacing a uniform grid
+    with the same node count would have. Intervals scale with each phase's width as the
+    interface moves.
+    """
+    u_grid, v_grid = grids(config)
+    return {
+        "liquid_interface_interval": p["s0"] * (u_grid[-1] - u_grid[-2]),
+        "solid_interface_interval": (p["R"] - p["s0"]) * (v_grid[1] - v_grid[0]),
+        "solid_far_interval": (p["R"] - p["s0"]) * (v_grid[-1] - v_grid[-2]),
+        "solid_uniform_interval": (p["R"] - p["s0"]) / (config.solid_nodes - 1),
+        "solid_diffusion_length_early": np.sqrt(4.0 * p["D_solid"] * config.early_from),
+    }
+
+
 def report(result):
-    """Print the metrics, with limits where they apply."""
+    """Print the metrics, with limits where they apply, then the grid spacing near the interface."""
     limits = DEMO_LIMITS if result.config == DEMO else {}
     if not limits:
         print("These settings have no limits; DEMO is the configuration to judge them by.")
     for name, value in result.metrics.items():
         print(f"{name}: {value:.6g}" + (f"  (limit {limits[name]:g})" if name in limits else ""))
+    grid = grid_summary(result.config)
+    print(f"grid at the start: solid interface interval {grid['solid_interface_interval']:.3g} um "
+          f"(far end {grid['solid_far_interval']:.3g} um; uniform would be {grid['solid_uniform_interval']:.3g} um) "
+          f"against a solid diffusion length of {grid['solid_diffusion_length_early']:.3g} um at "
+          f"t = {result.config.early_from:g} s; liquid interface interval {grid['liquid_interface_interval']:.3g} um")
 
 
 def profiles_at(model, config, time, p=PARAMS):
@@ -305,13 +330,14 @@ def plot(result):
     for target in targets:
         time = float(times[np.argmin(np.abs(times - target))])
         (x_l, c_l), (x_s, c_s) = profiles_at(model, config, time)
-        line, = middle.plot(x_l, 100.0 * c_l, label=f"t = {time:.3g} s")
-        right.plot(x_s - x_s[0], 100.0 * c_s, color=line.get_color())
-    middle.set(xlabel="position from joint centre (um)", ylabel="P (at.%)", title="Liquid", xlim=(0.0, None))
+        # Markers are the solver's nodes, which move with the interface (Landau transformation).
+        line, = middle.plot(x_l, 100.0 * c_l, ".-", ms=3, lw=1, label=f"t = {time:.3g} s")
+        right.plot(x_s - x_s[0], 100.0 * c_s, ".-", ms=3, lw=1, color=line.get_color())
+    middle.set(xlabel="position from joint centre (um)", ylabel="P (at.%)", title="Liquid (markers are nodes)", xlim=(0.0, None))
     middle.legend(fontsize=8)
     right.set_xscale("symlog", linthresh=1.0)
     right.set(xlabel="distance into the solid from the interface (um, linear below 1)", ylabel="P (at.%)",
-              title="Solid nickel", xlim=(0.0, PARAMS["R"]))
+              title="Solid nickel (markers are nodes)", xlim=(0.0, PARAMS["R"]))
     figure.tight_layout()
     return figure
 
