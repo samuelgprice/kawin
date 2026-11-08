@@ -23,6 +23,10 @@
 #   with realistic data and closure. It does **not** validate composition-dependent Fe-Cr-Ni
 #   physics.
 # - `FROZEN_FAST`: a very short frozen-matrix run with a minimal surrogate.
+# - `PRODUCTION_B`: the resolution, duration and thin-phase policy of the research case B run
+#   (see Limitations). It is **untested here** and, like the lagged demos, makes no accuracy
+#   claim. It skips the frozen twin. Extrapolated from short runs on one machine, not run end to
+#   end: about 5 min to sample and 4 min to solve.
 #
 # **Ordering, basis and units.** Elements are `[FE, CR, NI]` with FE dependent; compositions are
 # `[X_CR, X_NI]` mole fractions. BCC_A2 lies left of FCC_A1. Lengths are in m, times in s,
@@ -34,14 +38,20 @@
 # compatible bundle is reloaded without sampling; an incompatible or damaged one stops with an
 # error; `REBUILD = True` (or `--rebuild`) replaces it. Nothing is ever rebuilt silently.
 #
-# **Settings you would change:** `bulk_spacing` and `samples_per_side` (sampling cost against
-# accuracy), node counts, `semi_log_dt`, `duration`, the far-field compositions and
-# `terminal_thin_phase_policy` (`"raise"` stops at a thin-phase limit, `"continue"` proceeds past
-# it; neither changes the phase topology).
+# A bundle also records the installed `moving-boundary` version, so upgrading the package stops
+# reloads of bundles built by an earlier release. An editable install keeps one version while
+# its code changes, so there, use `REBUILD` after changing surrogate code.
 #
-# **Limitations.** These settings are deliberately coarse and not converged. A production case B
-# run uses about 101 tie lines, a 0.01 bulk grid (5151 points), 100/1000 nodes and
-# `semiLog_dt = 0.25 / 160` to 1000 h. Assumes equal molar volumes, no Kirkendall flow and a
+# **Settings you would change** (all fields of `Config`): `bulk_spacing` and `samples_per_side`
+# (sampling cost against accuracy), node counts, `semi_log_dt`, `duration`, the far-field
+# compositions, `terminal_thin_phase_policy` (`"raise"` stops at a thin-phase limit,
+# `"continue"` proceeds past it; neither changes the phase topology), and `compare_frozen`
+# (lagged runs only: also solve a frozen-matrix twin, roughly doubling the solve time).
+# Make a variant with `dataclasses.replace(LAGGED_DEMO, duration=...)`.
+#
+# **Limitations.** The demo settings are deliberately coarse and not converged. A production
+# case B run, `PRODUCTION_B`, uses about 101 tie lines, a 0.01 bulk grid (5151 points),
+# 100/1000 nodes and `semiLog_dt = 0.25 / 160` to 1000 h. Assumes equal molar volumes, no Kirkendall flow and a
 # fixed temperature. With `validity_policy="raise"` a bulk query lacking fit support raises an
 # error; with `"legacy"` it silently falls back to the nearest sample, so coverage is worth
 # checking (see `workflow_report`). Sampling also prints progress from the surrogate builder.
@@ -106,6 +116,9 @@ class Config:
 
     ``bulk_spacing`` is the composition grid for bulk diffusivities; ``None`` samples
     only the two far fields, which can't support simplex interpolation.
+    ``terminal_thin_phase_policy`` is passed to the solver unchanged. ``compare_frozen``
+    applies to lagged runs only and adds a frozen-matrix twin solve. ``min_dt_frac`` is
+    the solver's ``minDtFrac`` for every solve this configuration runs.
     """
 
     name: str
@@ -121,6 +134,9 @@ class Config:
     fixed_dt: float | None = None
     duration: float = 10.0 * 3600.0
     terminal_thin_phase_width: float = 1.0e-7
+    terminal_thin_phase_policy: str = "raise"
+    compare_frozen: bool = True
+    min_dt_frac: float = 1.0e-14
     semi_infinite: bool = False
     resize_after_probe: bool = False
     compare_from: float = 1.0e4
@@ -144,7 +160,11 @@ FROZEN_ANALYTIC = Config("FROZEN_ANALYTIC", frozen=True, left_nodes=50, right_no
 FROZEN_FAST = Config("FROZEN_FAST", frozen=True, bulk_spacing=None, samples_per_side=2, interpolation="nearest",
                      validity_policy="legacy", mesh_nodes=401, fixed_dt=600.0, duration=3600.0,
                      terminal_thin_phase_width=1.0e-9, semi_infinite=True, resize_after_probe=True)
-CONFIGS = {config.name: config for config in (LAGGED_DEMO, LAGGED_FAST, FROZEN_ANALYTIC, FROZEN_FAST)}
+# The research case B settings. Untested here; 50 per side gives about 101 tie lines.
+PRODUCTION_B = Config("PRODUCTION_B", bulk_spacing=0.01, samples_per_side=50, left_nodes=100, right_nodes=1000,
+                      semi_log_dt=0.25 / 160.0, duration=1000.0 * 3600.0, terminal_thin_phase_policy="continue",
+                      compare_frozen=False, min_dt_frac=1.0e-16)
+CONFIGS = {config.name: config for config in (LAGGED_DEMO, LAGGED_FAST, FROZEN_ANALYTIC, FROZEN_FAST, PRODUCTION_B)}
 
 # Numerical accuracy limits for FROZEN_ANALYTIC only: 50/200 nodes, semi_log_dt=0.04, t to
 # 100 h, window t >= 1e4 s, frozen matrices on a semi-infinite domain. k_rel: |k-k_exact| /
@@ -165,7 +185,7 @@ LAGGED_THRESHOLDS = {"inventory_rel_max": 1.0e-8, "matrix_spread_min": 0.2, "sim
 # ## Settings
 #
 # Set `TDB` to your database path (or leave it `None` and set `MB_EXAMPLE_TDB`), and pick a
-# configuration: `LAGGED_DEMO`, `LAGGED_FAST`, `FROZEN_ANALYTIC` or `FROZEN_FAST`.
+# configuration: `LAGGED_DEMO`, `LAGGED_FAST`, `FROZEN_ANALYTIC`, `FROZEN_FAST` or `PRODUCTION_B`.
 
 # %%
 TDB = None
@@ -201,14 +221,31 @@ def build_source(tdb):
     return create_pycalphad_thermodynamics_source(tdb, ELEMENTS, PHASES, use_default_phases=False, g_offset=0.0)
 
 
+def _project_to_simplex(z):
+    """Row-wise Euclidean projection onto ``{z >= 0, sum(z) = 1}`` (sort-based)."""
+    ordered = -np.sort(-z, axis=1)
+    cumulative = np.cumsum(ordered, axis=1) - 1.0
+    active = np.count_nonzero(ordered - cumulative / np.arange(1, z.shape[1] + 1) > 0, axis=1)
+    shift = cumulative[np.arange(len(z)), active - 1] / active
+    return np.maximum(z - shift[:, None], 0.0)
+
+
 def simplex_bulk_points(spacing, floor=1.0e-5):
-    """Regular grid of ``[X_CR, X_NI]`` over the ternary simplex, kept ``floor`` from its edges."""
+    """Regular grid of ``[X_CR, X_NI]`` over the ternary simplex, every component >= ``floor``.
+
+    Treats all three components alike: each grid point is projected onto the buffered simplex
+    with vertices such as ``(1 - 2 floor, floor, floor)``, so a component on an edge is raised
+    to ``floor`` at the equal expense of the other two. Points stay in grid order (X_CR, then
+    X_NI, ascending) and are rounded to 10 decimals. This reproduces the research pickles
+    ``allValid_3Element_compositions_<spacing>inc_projTo<floor>.pkl`` exactly, values and
+    order; order matters because the grid's cocircular points make Delaunay ties.
+    """
     count = int(round(1.0 / spacing))
-    points = np.array([[i * spacing, j * spacing] for i in range(count + 1) for j in range(count + 1 - i)])
-    points = np.maximum(points, floor)
-    over = points.sum(axis=1) > 1.0 - floor
-    points[over] *= (1.0 - floor) / points[over].sum(axis=1, keepdims=True)
-    return np.unique(points, axis=0)
+    grid = np.array([[i, j, count - i - j] for i in range(count + 1) for j in range(count + 1 - i)], dtype=np.float64) / count
+    scale = 1.0 - 3.0 * floor
+    z = np.maximum((grid - floor) / scale, 0.0)  # barycentric coordinates in the buffered simplex
+    z = np.where(z.sum(axis=1, keepdims=True) > 1.0, _project_to_simplex(z), z)
+    return np.round(floor + scale * z, 10)[:, :2]
 
 
 def _bulk_points(config):
@@ -237,10 +274,15 @@ def sample_surrogate(config, tdb):
 
 
 def build_spec(config, tdb):
-    """Everything that defines the sampled data; a reload requires an exact match."""
+    """Everything that defines the sampled data; a reload requires an exact match.
+
+    Records the installed ``moving-boundary`` version but not its source, so a bundle
+    survives code edits within one version (such as in an editable install).
+    """
     return {
         "system": {"elements": ELEMENTS, "phases": PHASES, "temperature": TEMPERATURE},
         "source": {"engine": "pycalphad", "version": importlib.metadata.version("pycalphad"), "database_sha256": database_digest(tdb)},
+        "package": {"moving_boundary": importlib.metadata.version("moving-boundary")},
         "tie_lines": {"probe_point": PROBE_POINT, "samples_per_side": config.samples_per_side},
         "bulk": {"points": _bulk_points(config), "interpolation": config.interpolation, "validity_policy": config.validity_policy},
     }
@@ -343,7 +385,7 @@ def make_model(config, thermodynamics, closure, s0, length, mode, *, time_option
         max_iterations=25,
         max_step_retries=8,
         terminal_thin_phase_width=config.terminal_thin_phase_width,
-        terminal_thin_phase_policy="raise",
+        terminal_thin_phase_policy=config.terminal_thin_phase_policy,
         record=True,
         record_pq_data=True,
         transformed_u_grid=u_grid,
@@ -481,7 +523,7 @@ def lagged_vs_frozen(model, surrogate, config):
     s0, length = case_geometry()
     frozen = make_model(config, FixedMatrixTernaryDiffusivity(interface_matrices(surrogate, model.initialEta), PHASES),
                         surrogate, s0, length, "phase_uniform")
-    frozen.solve(config.duration, minDtFrac=1e-14)
+    frozen.solve(config.duration, minDtFrac=config.min_dt_frac)
     times, lagged_s = recorded_history(model.interfaceData)
     frozen_times, frozen_s = recorded_history(frozen.interfaceData)
     if not np.array_equal(times, frozen_times):
@@ -508,7 +550,10 @@ def exact_solution(model, surrogate, matrices=None):
 
 
 def run(config=LAGGED_DEMO, *, tdb=None, output_dir=DEFAULT_OUTPUT, rebuild=False, surrogate=None):
-    """Prepare the surrogate (unless given), solve, and report what this configuration can show."""
+    """Prepare the surrogate (unless given), solve, and report what this configuration can show.
+
+    Lagged runs add ``lagged_vs_frozen`` to the metrics only when ``config.compare_frozen``.
+    """
     metrics = {}
     if surrogate is None:
         bundle, action = prepare_surrogate(config, tdb, output_dir=output_dir, rebuild=rebuild)
@@ -517,7 +562,7 @@ def run(config=LAGGED_DEMO, *, tdb=None, output_dir=DEFAULT_OUTPUT, rebuild=Fals
     if config.frozen:
         matrices, s0, length = freeze_matrices(config, surrogate)
         model = make_model(config, FixedMatrixTernaryDiffusivity(matrices, PHASES), surrogate, s0, length, "phase_uniform")
-        model.solve(config.duration, minDtFrac=1e-14)
+        model.solve(config.duration, minDtFrac=config.min_dt_frac)
         metrics["inventory_rel"] = inventory_relative_drift(model)
         metrics["validity_time_left"] = semi_infinite_validity_time(matrices[PHASES[0]], s0)
         metrics["validity_time_right"] = semi_infinite_validity_time(matrices[PHASES[1]], length - s0)
@@ -530,21 +575,54 @@ def run(config=LAGGED_DEMO, *, tdb=None, output_dir=DEFAULT_OUTPUT, rebuild=Fals
         return ExampleResult(config, model, exact, metrics)
     recorder = RecordingDiffusivity(surrogate)
     model = build_model(config, surrogate, thermodynamics=recorder)
-    model.solve(config.duration, minDtFrac=1e-14)
+    model.solve(config.duration, minDtFrac=config.min_dt_frac)
     metrics["inventory_rel_max"] = inventory_relative_drift(model)
     metrics["workflow"] = workflow_report(model, surrogate, recorder)
-    metrics["lagged_vs_frozen"] = lagged_vs_frozen(model, surrogate, config)
+    if config.compare_frozen:
+        metrics["lagged_vs_frozen"] = lagged_vs_frozen(model, surrogate, config)
     return ExampleResult(config, model, None, metrics)
 
 
+def check_limits(result):
+    """Compare metrics with the limits that apply; returns ``(name, value, rule, passed)`` rows.
+
+    ``FROZEN_ANALYTIC`` uses ``FROZEN_ANALYTIC_LIMITS`` (each metric at most its limit).
+    Lagged runs use ``LAGGED_THRESHOLDS``, workflow properties checked per phase as the
+    tests do; ``lagged_vs_frozen`` is checked only when present. Other frozen runs have no
+    limits and return no rows. The limits were set for their named settings only.
+    """
+    metrics, rows = result.metrics, []
+    if result.config == FROZEN_ANALYTIC:
+        for name, limit in FROZEN_ANALYTIC_LIMITS.items():
+            rows.append((name, metrics[name], f"<= {limit:g}", metrics[name] <= limit))
+        return rows
+    if result.config.frozen:
+        return rows
+    limits = LAGGED_THRESHOLDS
+    rows.append(("inventory_rel_max", metrics["inventory_rel_max"], f"< {limits['inventory_rel_max']:g}",
+                 metrics["inventory_rel_max"] < limits["inventory_rel_max"]))
+    for phase in PHASES:
+        phase_report = metrics["workflow"][phase]
+        for name, key, compare, symbol in (("matrix_spread", "matrix_spread_min", float.__gt__, ">"),
+                                           ("simplices_crossed", "simplices_crossed_min", float.__ge__, ">="),
+                                           ("interpolation_vs_nearest_median", "interpolation_vs_nearest_min", float.__gt__, ">")):
+            value = phase_report[name]
+            rows.append((f"{phase} {name}", value, f"{symbol} {limits[key]:g}", compare(float(value), float(limits[key]))))
+    if "lagged_vs_frozen" in metrics:
+        rows.append(("lagged_vs_frozen", metrics["lagged_vs_frozen"], f"> {limits['lagged_vs_frozen_min']:g}",
+                     metrics["lagged_vs_frozen"] > limits["lagged_vs_frozen_min"]))
+    return rows
+
+
 def report(result):
-    """Print the final state and the metrics, with limits or thresholds where they apply."""
+    """Print the final state, the metrics, and each applicable limit with whether it was met."""
     print(f"final interface {result.model.getInterfacePosition():.6e} m, eta {result.model.getInterfaceEta():.6f}")
     print(json.dumps(result.metrics, indent=2, default=float))
-    if result.config == FROZEN_ANALYTIC:
-        print("accuracy limits (numerics only):", FROZEN_ANALYTIC_LIMITS)
-    elif not result.config.frozen:
-        print("workflow thresholds (not accuracy):", LAGGED_THRESHOLDS)
+    rows = check_limits(result)
+    if rows:
+        print("accuracy limits (numerics only):" if result.config.frozen else "workflow thresholds (not accuracy):")
+        for name, value, rule, passed in rows:
+            print(f"  {name}: {value:.3g} {rule}: {'within limit' if passed else 'OUTSIDE LIMIT'}")
 
 
 def plot(result):
@@ -610,7 +688,7 @@ if __name__ == "__main__":
 
 # %% [markdown]
 # 2. Build the model, solve, and check what this configuration can show. Lagged runs also
-#    solve a frozen-matrix twin for comparison.
+#    solve a frozen-matrix twin for comparison, unless `compare_frozen` is off.
 
 # %%
 if __name__ == "__main__":
