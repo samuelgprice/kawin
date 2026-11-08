@@ -43,6 +43,24 @@ for other options.
 - **Molar volumes.** Binary and two-phase models assume equal constant volumes. Only the
   three-phase model accepts explicit unequal volumes.
 
+## Citing sources
+
+Every example cites the papers its values, equations, cases and comparison data come from.
+This applies to new examples and to changes to existing ones:
+
+- **In-line, numbered.** Cite where the information is used, in the notes, in a comment beside
+  the value or in a docstring, with a number in square brackets: `[1]`, or `[2, Table 3]` with
+  a table, figure, equation or page where it helps.
+- **A References cell at the end** of the file (`# %% [markdown]` then `## References`), as a
+  numbered list in order of first citation. Give authors, title, journal, volume, year and
+  pages, and a DOI when one is confirmed, followed by a short note of what the example takes
+  from that source.
+- **Check each reference against the source itself** or another reliable record, never from
+  memory. A source known only through another paper's reference list is marked "as cited in
+  [n]", and a detail that couldn't be confirmed is left out rather than guessed.
+- **Say when nothing comes from the literature.** A synthetic example states that its numbers
+  are synthetic, and cites only the sources of any method or exact solution it relies on.
+
 ## What these results do and don't show
 
 Each check supports a specific claim, and passing one doesn't imply the others.

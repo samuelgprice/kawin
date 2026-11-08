@@ -2,8 +2,11 @@
 # # How fast does a planar interface grow under diffusion control?
 #
 # Grows phase ALPHA into BETA with fixed interface compositions and compares the result
-# with the exact Zener solution, `s(t) = 2 j sqrt(D t)`. This is the place to start: it
-# shows meshes, phases, transformed grids and solving, with no thermodynamic database.
+# with the exact Zener solution [1], `s(t) = 2 j sqrt(D t)` (Eqs. (14)-(15) of [2]). This is
+# the place to start: it shows meshes, phases, transformed grids and solving, with no
+# thermodynamic database. The compositions, domain, diffusivity and start time
+# (`VALIDATION_PARAMS`) are the analytical validation case of Illingworth and Golosnoy [2]
+# (p. 219), the case behind their Fig. 4(a).
 #
 # **Assumptions.** Planar, constant equal diffusivities, equal molar volumes and a
 # semi-infinite BETA. ALPHA stays flat at its interface composition. Quantities are
@@ -115,7 +118,7 @@ class ConstantDiffusivity:
 
 def build_model(config=DEMO):
     """Build the solver from the exact state at ``config.t_start``; nothing is solved yet."""
-    p = VALIDATION_PARAMS
+    p = VALIDATION_PARAMS  # the validation case of [2], p. 219
     mesh = CartesianFD1D(["CR"], [0.0, p["R"]], config.mesh_nodes)
     mesh.setResponseProfile(ProfileBuilder([(PlanarExactProfile(config.t_start), "CR")]))
     return MovingBoundaryIllingworthFD1DModel(
@@ -225,3 +228,13 @@ if __name__ == "__main__" and PLOT:
 
     plot(result)
     plt.show()
+
+# %% [markdown]
+# ## References
+#
+# 1. C. Zener, "Theory of growth of spherical precipitates from solid solution," J. Appl.
+#    Phys. 20 (1949) 950-953. The exact growth solution.
+# 2. T. C. Illingworth, I. O. Golosnoy, "Numerical solutions of diffusion-controlled moving
+#    boundary problems which conserve solute," J. Comput. Phys. 209 (2005) 207-225,
+#    doi:10.1016/j.jcp.2005.02.031. The validation case (p. 219), Eqs. (14)-(15) and Fig. 4(a);
+#    the solver implements this paper's algorithm.

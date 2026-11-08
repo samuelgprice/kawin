@@ -3,7 +3,8 @@
 #
 # A layer B grows between semi-infinite phases A and C. Different coupled matrices, far fields
 # and two tie-line families give each interface its own parabolic rate, so neither mirrors the
-# other. An exact similarity solution exists for two cases:
+# other. An exact similarity solution, following the constant-diffusivity multiphase treatment
+# of Kirkaldy [1], exists for two cases:
 #
 # - `opposite`: the layer grows into both neighbours (`k_ab < 0 < k_bc`);
 # - `drift`: both interfaces move right (`0 < k_ab < k_bc`).
@@ -13,7 +14,8 @@
 # dependent, phases run `A | B | C` left to right, and compositions are mole fractions. A
 # closure maps `eta -> (c_left, c_right)` at its interface.
 #
-# **Two things to note.** More than one similarity root can exist: `drift` also has a thin
+# **Two things to note.** More than one similarity root can exist, as Maugis et al. showed for
+# two-phase ternary couples [2]: `drift` also has a thin
 # layer moving left, so this picks the root with the largest `k_ab`. And the model starts from
 # the exact state at `T0 > 0`, because a zero-width start is singular; model time `t`
 # corresponds to similarity time `T0 + t`.
@@ -267,3 +269,16 @@ if __name__ == "__main__" and PLOT:
 
     plot(result)
     plt.show()
+
+# %% [markdown]
+# ## References
+#
+# The numbers here are synthetic; the form of the exact solution, and the possibility of more
+# than one root, come from the literature.
+#
+# 1. J. S. Kirkaldy, "Diffusion in multicomponent metallic systems: III. The motion of planar
+#    phase interfaces," Can. J. Phys. 36 (1958) 917-925, doi:10.1139/p58-098. Unidimensional
+#    diffusion in multiphase, multicomponent systems with constant diffusivities.
+# 2. P. Maugis, W. D. Hopfe, J. E. Morral, J. S. Kirkaldy, "Multiple interface velocity
+#    solutions for ternary biphase infinite diffusion couples," Acta Mater. 45 (1997)
+#    1941-1954. More than one interface velocity can satisfy the same two-phase couple.

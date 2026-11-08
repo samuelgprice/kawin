@@ -2,13 +2,13 @@
 # # How does a fast interstitial and a slow substitutional solute move an interface?
 #
 # A Fe-C-Mn-like couple: carbon diffuses about 100 times faster than manganese. With constant
-# matrices and a linear tie-line family the problem has an exact similarity solution, so this
+# matrices and a linear tie-line family the problem has an exact similarity solution [1, 2], so this
 # checks numerics without any thermodynamic data. The numbers are synthetic and are not real
 # Fe-C-Mn properties.
 #
 # **Composition basis is the main lesson.** Elements are `[FE, C, MN]` with FE dependent and
 # interstitials listed after it. The solver's state is in u-fractions,
-# `u_k = x_k / sum(substitutional x)`. So here:
+# `u_k = x_k / sum(substitutional x)` [3, Eq. (9)]. So here:
 #
 # - the diffusivity matrices, closure and exact solution are in u;
 # - the closure declares `composition_basis="u"` (a closure in x would be converted);
@@ -19,7 +19,7 @@
 # Compare with the exact solution in u, as `compare_model_to_similarity` does. The plot shows
 # why: the mole-fraction view of carbon differs from u by about u²/(1+u).
 #
-# **Assumptions.** Planar, constant matrices, constant volume per substitutional atom, no bulk
+# **Assumptions.** Planar, constant matrices, constant volume per substitutional atom [3], no bulk
 # flow, effectively semi-infinite phases. Units are nondimensional. ALPHA lies left and BETA
 # right; the interface moves right, with parabolic `s = s0 + k sqrt(t)` and a constant tie
 # line `eta`.
@@ -191,7 +191,8 @@ def build_model(config=DEMO, *, grids=None):
 
 # %%
 def exact_solution(config):
-    """The unique similarity root; ``k_bounds`` is needed because the eigenvalues are far apart."""
+    """The similarity root, checked to be unique (several can exist in general [4]); ``k_bounds``
+    is needed because the eigenvalues are far apart."""
     d = diffusivities(config.ratio)
     roots = solve_similarity_roots(d["ALPHA"], d["BETA"], U_LEFT_FAR, U_RIGHT_FAR, closure(), s0=config.s0,
                                    k_bounds=(1.0e-6, 0.3), n_k=2001)
@@ -294,3 +295,23 @@ if __name__ == "__main__" and PLOT:
 
     plot(result)
     plt.show()
+
+# %% [markdown]
+# ## References
+#
+# The numbers here are synthetic; the exact solution and the composition basis come from the
+# literature.
+#
+# 1. J. S. Kirkaldy, "Diffusion in multicomponent metallic systems: III. The motion of planar
+#    phase interfaces," Can. J. Phys. 36 (1958) 917-925, doi:10.1139/p58-098. Similarity
+#    solutions for planar interfaces in multicomponent systems with constant diffusivities.
+# 2. D. E. Coates, J. S. Kirkaldy, "Morphological stability of alpha-beta phase interfaces in
+#    the Cu-Zn-Ni system at 775 C," Metall. Trans. 2 (1971) 3467-3477,
+#    doi:10.1007/BF02811629. Applies the ternary two-phase similarity solution.
+# 3. J.-O. Andersson, J. Agren, "Models for numerical treatment of multicomponent diffusion in
+#    simple phases," J. Appl. Phys. 72 (1992) 1350-1355, doi:10.1063/1.351745. The u-fraction
+#    definition (Eq. (9)), and the assumption that only substitutional elements take up volume
+#    (Eqs. (4)-(5)).
+# 4. P. Maugis, W. D. Hopfe, J. E. Morral, J. S. Kirkaldy, "Multiple interface velocity
+#    solutions for ternary biphase infinite diffusion couples," Acta Mater. 45 (1997)
+#    1941-1954. More than one interface velocity can satisfy the same couple.

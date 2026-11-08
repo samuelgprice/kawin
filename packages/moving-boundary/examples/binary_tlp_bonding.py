@@ -4,9 +4,10 @@
 # Transient liquid phase bonding: a Ni-19 at.% P interlayer between nickel plates melts at the
 # bonding temperature. The liquid first dissolves nickel and widens; phosphorus then diffuses
 # into the solid nickel, and the liquid solidifies isothermally. This is the Ni-P case of Zhou
-# and North, as reproduced in Fig. 3 of Illingworth and Golosnoy, J. Comput. Phys. 209 (2005)
-# 207-225, whose solute-conserving algorithm this solver implements. All inputs are from that
-# paper (p. 213): interface compositions 10.223 at.% P (liquid) and 0.166 at.% P (solid), an
+# and North [2], as reproduced in Fig. 3 of Illingworth and Golosnoy [1], whose
+# solute-conserving algorithm this solver implements. The inputs are from [1] (p. 213), and
+# match Table 1 of [2]:
+# interface compositions 10.223 at.% P (liquid) and 0.166 at.% P (solid), an
 # initial liquid half-width of 12.5 um at 19 at.% P, phosphorus-free nickel, D = 500 um^2/s in
 # the liquid and 18 um^2/s in the solid, and a half-domain of 3012.5 um.
 #
@@ -14,20 +15,20 @@
 # are three exact checks:
 #
 # 1. *Early times.* While neither diffusion field has reached a boundary, the step start is the
-#    two-sided similarity problem: `s = s0 + k sqrt(t)`, with `k` from the interface flux
+#    two-sided similarity problem [3]: `s = s0 + k sqrt(t)`, with `k` from the interface flux
 #    balance (`similarity_growth_constant`). The liquid field reaches the symmetry plane after
 #    about 0.014 s (`liquid_validity_time`), so this window covers roughly the first 15% of
 #    the widening. The solid stays effectively semi-infinite for about 10^4 s. The check
 #    starts at `early_from` = 1e-3 s, after the start-up transient of the singular step start.
 # 2. *A width bound.* The liquid can never be wider than if it held all the phosphorus at its
-#    interface composition, `s0 c0 / c_liquid` = 23.23 um. The paper's point is that
+#    interface composition, `s0 c0 / c_liquid` = 23.23 um ([1], p. 213). That paper's point is that
 #    non-conservative schemes overshoot this bound; a conservative one stays just below it,
 #    because the solid takes up a little phosphorus during the widening.
 # 3. *Conservation* of the total phosphorus. The scheme conserves it to rounding; what drift
 #    remains comes from the interface iteration tolerance.
 #
 # The long solidification stage (hours) has no exact solution; compare it qualitatively with
-# the paper's Fig. 3 ("present work"), which peaks just below the bound within a few seconds
+# Fig. 3 of [1] ("present work"), which peaks just below the bound within a few seconds
 # and is nearly solidified by 10^5 s. With `DEMO` the half-width peaks at about 23.10 um
 # after about 2.7 s and is about 2.5 um at 7x10^4 s. A convergence study (linear and power
 # grids, space and time refined) gives a converged peak of 23.110 um, so DEMO's peak is about
@@ -38,7 +39,7 @@
 # left end is the symmetry plane at the centre of the joint, so this is half of the joint.
 # Elements are `[NI, P]` with P the solute; LIQUID lies left of FCC_A1. Compositions are mole
 # fractions; lengths are in um and times in s (any consistent units work). The temperature is
-# Zhou and North's bonding temperature, 1150 C (Illingworth and Golosnoy do not state it); the
+# Zhou and North's bonding temperature, 1150 C [2] ([1] does not state it); the
 # API requires one, but the constant diffusivities here ignore it.
 #
 # **Limitations.** The solver cannot remove a vanishing phase, so runs stop before the liquid
@@ -75,7 +76,7 @@ from moving_boundary.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 from moving_boundary.mesh.TransformedGrids import two_phase_landau_grids
 from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel
 
-# Illingworth and Golosnoy (2005), p. 213. Compositions are mole fractions of P.
+# Illingworth and Golosnoy [1], p. 213. Compositions are mole fractions of P.
 PARAMS = {
     "c_liquid0": 0.19,         # initial liquid
     "c_solid0": 0.0,           # initial solid nickel
@@ -86,7 +87,7 @@ PARAMS = {
     "s0": 12.5,                # initial liquid half-width, um
     "R": 3012.5,               # half-domain, um
 }
-TEMPERATURE = 1423.15  # K: 1150 C, Zhou and North's bonding temperature; unused by constant diffusivities
+TEMPERATURE = 1423.15  # K: 1150 C, Zhou and North's bonding temperature [2]; unused by constant diffusivities
 
 
 # %% [markdown]
@@ -145,7 +146,7 @@ PLOT = True
 
 # %%
 def similarity_growth_constant(p=PARAMS):
-    """``k`` in ``s = s0 + k sqrt(t)`` for a step start with both phases semi-infinite.
+    """``k`` in ``s = s0 + k sqrt(t)`` for a step start with both phases semi-infinite [3].
 
     Solves the interface balance ``(cL - cS) k/2 = J_liquid + J_solid`` with erfc profiles
     in each phase. ``erfcx`` keeps the ``exp/erfc`` ratios finite for any ``k``.
@@ -177,7 +178,7 @@ def liquid_validity_time(p=PARAMS, tail=1.0e-3):
 
 
 def width_bound(p=PARAMS):
-    """Largest possible liquid half-width: all phosphorus in liquid at its interface composition."""
+    """Largest possible liquid half-width: all phosphorus in liquid at its interface composition ([1], p. 213)."""
     return (p["s0"] * p["c_liquid0"] + (p["R"] - p["s0"]) * p["c_solid0"]) / p["c_liquid"]
 
 
@@ -376,3 +377,19 @@ if __name__ == "__main__" and PLOT:
 
     plot(result)
     plt.show()
+
+# %% [markdown]
+# ## References
+#
+# 1. T. C. Illingworth, I. O. Golosnoy, "Numerical solutions of diffusion-controlled moving
+#    boundary problems which conserve solute," J. Comput. Phys. 209 (2005) 207-225,
+#    doi:10.1016/j.jcp.2005.02.031. All inputs (p. 213), the width bound (p. 213) and Fig. 3;
+#    the solver implements this paper's algorithm.
+# 2. Y. Zhou, T. H. North, "Kinetic modelling of diffusion-controlled, two-phase moving
+#    interface problems," Modell. Simul. Mater. Sci. Eng. 1 (1993) 505-516. The original Ni-P
+#    bonding case: TLP bonding of nickel with Ni-19 at.% P filler at 1150 C, and its input
+#    parameters (Table 1).
+# 3. J. S. Kirkaldy, "Diffusion in multicomponent metallic systems: III. The motion of planar
+#    phase interfaces," Can. J. Phys. 36 (1958) 917-925, doi:10.1139/p58-098. Similarity
+#    solutions for planar interfaces with constant diffusivities; the early-time check is the
+#    binary, two-phase case.

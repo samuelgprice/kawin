@@ -1,16 +1,18 @@
 # %% [markdown]
 # # How does a Fe-Cr-Ni couple evolve with composition-dependent diffusivity?
 #
-# A Lee & Oh (1996) case B couple at 1373 K: a thin BCC layer against FCC. Thermodynamics and
-# mobilities come from a CALPHAD database through pycalphad, sampled once into a reusable
-# surrogate. This is the full workflow:
+# Couple B of the gamma/alpha/gamma Fe-Cr-Ni diffusion couples of Kajihara, Lim and Kikuchi
+# [1] at 1373 K, as simulated by Lee and Oh [2] (their Table 3): a thin BCC layer against FCC.
+# Thermodynamics and mobilities come from a CALPHAD database through pycalphad, sampled once
+# into a reusable surrogate. This is the full workflow:
 #
 #     select source -> sample surrogate -> save -> reload -> build model -> solve -> inspect
 #
 # **You supply the database**: set `TDB` in the Settings cell (or `MB_EXAMPLE_TDB`, or `--tdb`
 # from a terminal). It needs FE, CR and NI, BCC_A2 and FCC_A1, and mobilities. This example was
-# developed with a Fe-Cr-Ni database assembled from Lee (1993) with Lee & Oh (1996) mobilities;
-# see `examples/README.md` for why it isn't included yet.
+# developed with a Fe-Cr-Ni database assembled from Lee's thermodynamic assessment [3] with the
+# mobilities listed by Lee and Oh [2] (Table 1), which they took from Hoglund et al. [4], based
+# on data of Fridberg et al. [5]; see `examples/README.md` for why it isn't included yet.
 #
 # **Configurations, and what each one can tell you:**
 #
@@ -19,7 +21,8 @@
 #   solution, so these make **no accuracy claim**. They show that the workflow runs, conserves
 #   solute, stays inside the sampled data, and really uses composition-dependent matrices.
 # - `FROZEN_ANALYTIC`: frozen matrices sampled from the same surrogate, on an effectively
-#   semi-infinite domain, compared with the exact similarity solution. This checks the numerics
+#   semi-infinite domain, compared with the exact similarity solution [6], the kind of analytical
+#   solution Kajihara and Kikuchi [7] applied to these couples. This checks the numerics
 #   with realistic data and closure. It does **not** validate composition-dependent Fe-Cr-Ni
 #   physics.
 # - `FROZEN_FAST`: a very short frozen-matrix run with a minimal surrogate.
@@ -104,10 +107,13 @@ from moving_boundary.surrogates import TernaryMovingBoundaryThermodynamicsSurrog
 ELEMENTS = ["FE", "CR", "NI"]
 INDEPENDENT = ["CR", "NI"]
 PHASES = ["BCC_A2", "FCC_A1"]  # left, right
-TEMPERATURE = 1373.0
+TEMPERATURE = 1373.0  # [1, 2]
 PROBE_POINT = np.array([0.45, 0.21])  # a composition inside the two-phase region
+# Couple B [2, Table 3], from [1]: alpha 38 wt.% Cr; gamma 13 wt.% Cr, 15 wt.% Ni; converted to
+# mole fractions with the database's atomic masses. Ni in alpha is 1e-4 rather than the nominal 0.
 A_BULK = np.array([0.39696, 0.0001])  # far-field [X_CR, X_NI] in BCC_A2 (case B)
 B_BULK = np.array([0.139297, 0.142387])  # far-field [X_CR, X_NI] in FCC_A1 (case B)
+# Half of the symmetric couple [2, Table 3]: half of the 124.1 um alpha sheet and the 2000 um gamma plate.
 HALF_LENGTH = 2000.0e-6 + 124.1e-6 / 2.0
 B_PHASE_LENGTH = 2000.0e-6
 SIZING_TIME = 100.0 * 3600.0  # semi-infinite domains are sized for this time
@@ -563,7 +569,8 @@ def inventory_relative_drift(model):
 # %%
 
 def exact_solution(model, surrogate, matrices=None):
-    """The exact solution for frozen matrices, using the root closest to the initial tie line."""
+    """The exact solution for frozen matrices, using the root closest to the initial tie line
+    (more than one root can exist [8])."""
     matrices = interface_matrices(surrogate, model.initialEta) if matrices is None else matrices
     roots = solve_similarity_roots(matrices[PHASES[0]], matrices[PHASES[1]], A_BULK, B_BULK, surrogate, s0=model.initialInterfacePosition)
     return min(roots, key=lambda root: abs(root.eta - float(model.initialEta)))
@@ -748,3 +755,28 @@ if __name__ == "__main__" and PLOT:
 
     plot(result)
     plt.show()
+
+# %% [markdown]
+# ## References
+#
+# 1. M. Kajihara, C.-B. Lim, M. Kikuchi, "Experimental study on dissolution of alpha phase in
+#    gamma/alpha/gamma diffusion couples of the Fe-Cr-Ni system," ISIJ International 33 (1993)
+#    498-507. Source of the diffusion couples and their 1373 K anneals.
+# 2. B.-J. Lee, K. H. Oh, "Numerical treatment of the moving interface in diffusional
+#    reactions," Z. Metallkd. 87 (1996) 195-204. Table 3 (couple compositions and thicknesses,
+#    from [1]) and Table 1 (mobilities, from [4]).
+# 3. B.-J. Lee, J. Korean Inst. Met. Mater. 31 (1993) 107 (Fe-Cr-Ni thermodynamic assessment,
+#    as cited in [2], note it is difficult to find a copy of thisn online).
+# 4. L. Hoglund, B. Jonsson, J. Agren, TRITA-MAC-0444, Royal Institute of Technology,
+#    Stockholm (1990), as cited in [2].
+# 5. J. Fridberg, L.-E. Torndahl, M. Hillert, Jernkont. Ann. 153 (1969) 263, as cited in [2].
+# 6. J. S. Kirkaldy, "Diffusion in multicomponent metallic systems: III. The motion of planar
+#    phase interfaces," Can. J. Phys. 36 (1958) 917-925, doi:10.1139/p58-098. Similarity
+#    solutions for planar interfaces with constant diffusivities (FROZEN_ANALYTIC).
+# 7. M. Kajihara, M. Kikuchi, "Analysis of dissolution of alpha phase in gamma/alpha/gamma
+#    diffusion couples of the Fe-Cr-Ni system using analytical solutions for semi-infinite
+#    diffusion couples," Acta Metall. Mater. 43 (1995) 807-820. The same couples analysed with
+#    constant-diffusivity semi-infinite solutions.
+# 8. P. Maugis, W. D. Hopfe, J. E. Morral, J. S. Kirkaldy, "Multiple interface velocity
+#    solutions for ternary biphase infinite diffusion couples," Acta Mater. 45 (1997)
+#    1941-1954. More than one interface velocity can satisfy the same couple.
