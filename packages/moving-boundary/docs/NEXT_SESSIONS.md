@@ -37,8 +37,7 @@ the new ignored O06 fixture pair was captured; all 89 older files are unchanged.
 quick-check settings with existing frozen fixtures; it isn't part of `acceptance.py`, whose inputs
 and fixtures are unchanged. After adding `analytic`, an unchanged full gate gave 40 runs and 5
 contracts bit-identical, 34 repeat pairs, 570 s (not recorded). All ten example cases (E01–E10)
-are bit-identical with matching settings; last run 2026-11-08 on the code committed as 4006f1e.
-Later commits changed no E-case inputs.
+are bit-identical with matching settings; last run 2026-11-08 on 4aac448 (83.5 s).
 
 Changes on 2026-11-07/08 (commits 22114b7 to 22c8645):
 
