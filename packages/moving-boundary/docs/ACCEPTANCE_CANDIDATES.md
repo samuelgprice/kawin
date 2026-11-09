@@ -215,7 +215,7 @@ O05/O04 construct semi-log then switch to fixed steps, while the example constru
 directly, so the unused semi-log values differ.
 
 **E11, not captured:** `LAGGED_FAST` (bulk spacing 0.05, 8 samples per side, 21/41 nodes,
-`semiLog_dt` 0.05, 10 h). Order: freeze config and limits; prepare one bundle on detached 06dc7b4
+`semiLog_dt` 0.05, 10 h). Order: freeze config and limits; prepare one bundle on the detached oracle (90700be since 2026-11-09)
 at `PYTHONHASHSEED=0`; capture the reference and an unseeded repeat pair with overwrite refused;
 run the parity comparison. Both hosts reload the same bundle and solve unseeded. Needs explicit
 go-ahead. A full gate run before this isn't the completed expanded suite. Since this plan was

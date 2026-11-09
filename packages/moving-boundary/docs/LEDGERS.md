@@ -185,7 +185,7 @@ error is 4.75e-4. `analytic/` is ported from that commit. The 06dc7b4 acceptance
 unchanged: `collect` doesn't use this helper, and existing `exact/*` arrays come from their
 own branches.
 
-## Research numerical issue R06: binary interface iteration stalls above its tolerance (fixed on a research branch 2026-11-09 at `25bf6cd`; binary ported; oracle refresh pending)
+## Research numerical issue R06: binary interface iteration stalls above its tolerance (binary fixed: research `25bf6cd`, merged to research main `90700be`, ported, oracle moved 2026-11-09)
 
 Found with `examples/binary_tlp_bonding.py` (Ni-P bonding, um and s units), 2026-11-08. Late in
 the solidification stage, the binary Illingworth model's interface fixed point stops reducing
@@ -311,10 +311,31 @@ originated binary differences, no ternary or three-phase change.
   complete with the ported solver. The example's notes and drift comments are updated; limits
   and settings are unchanged.
 
-**Pending (user decision):** the bitwise oracle. `exact` gates, `LEGACY` and E01/E02 need the
-acceptance oracle moved from detached `06dc7b4` to a research commit containing `25bf6cd`
-(with the regenerated baseline), as a separate reviewed reference change; a full gate was not
-run.
+**Research merges and oracle move (2026-11-09, user-approved).** Research main gained
+`10615ad` (merge of R05 `bc62481`) and `90700be` (merge of R06 `25bf6cd`), both `--no-ff` from
+`5f4ad57`; 531 Illingworth/similarity tests pass on main. The acceptance oracle moved from
+detached `06dc7b4` to a new clean detached worktree `...\code\mb-ref-90700be`:
+
+- `acceptance_manifest.json`: top-level `reference_commit` and the 6 changed of 82
+  `source_sha256` entries (the two similarity examples, `make_illingworth_substitutional_baseline.py`,
+  `test_illingworth_binary_variable_diffusivity.py` and `test_illingworth_ternary.py` from R05/R06;
+  `test_illingworth_ternary_three_phase.py` from `5f4ad57`). `acceptance.py` `REFERENCE` points at
+  the new worktree. O06/O08 keep their frozen 06dc7b4 fixtures and hashes (untouched).
+- Capture of 43 cases (all but O06/O08) passed in 245.6 s; old references are kept locally in
+  `.verification/acceptance/reference-06dc7b4-backup`. Bytes changed only for binary-solver
+  cases: C01-C04, C13-C15, C25, C29, C30, C31, F04, LEGACY and O07 (Fe-C `fe_c_exb1a`, at most
+  9e-14 relative); every ternary, three-phase and sampling reference is byte-identical.
+- `exact` quick: 30 runs and 5 contracts bit-identical, 88 tests, 33 repeat pairs, 520.8 s.
+  `exact` full: 40 runs (O06 included, nothing skipped) and 5 contracts bit-identical, 88 tests,
+  34 repeat pairs, 686.1 s. `acceptance_examples.py run --skip-tests`: E01-E10 pass, 99.1 s.
+- Public quick and full with `--record` (same counts, 493.7 s and 625.2 s) updated
+  `docs/acceptance.json` and `docs/acceptance-deviations.json`: the reference commit, run times,
+  and the recorded inventory allowance of C09, C10 and C20-C23. The old reference JSONs lacked
+  `minimum_molar_volume`, so `compare()` used its default of 1; recaptured references carry it,
+  so the existing rule (atol x length scale / minimum molar volume) now applies: 6.7e-13
+  (volume 1.5) and, for C23, 1.4e-7 (volume 7.2e-6, inventory in moles). No tolerance setting
+  changed and every run is bit-identical, but C23's public-mode inventory allowance is looser
+  in absolute terms than the old recorded 1e-12.
 
 ## Release review follow-ups R07-R12 (open)
 

@@ -31,7 +31,8 @@ C32 reaches a configured terminal retry stop under explicit continue with real
 retries, not a fake callback. Binary/two-phase unequal volumes are unsupported;
 three-phase volumes and all supported interstitial families are covered.
 
-References and C25-C29 contract outputs come from clean detached 06dc7b4;
+References and C25-C29 contract outputs come from clean detached 90700be (moved from
+06dc7b4 on 2026-11-09; O06/O08 fixtures stay from 06dc7b4; see LEDGERS.md R06);
 every reference worker asserts its origin. The older ae9fb29 binary fixture and
 12 bulk probes remain checked. Source inputs/tolerances were frozen first. Real
 O05 sampling runs afresh with only its Python hash seed fixed; third-party

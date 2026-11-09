@@ -13,7 +13,7 @@ from functools import lru_cache
 
 PROJECT = Path(__file__).resolve().parents[1]
 OUTPUT = PROJECT / ".verification/acceptance"
-REFERENCE = PROJECT.parents[2] / "mb-ref-06dc7b4"
+REFERENCE = PROJECT.parents[2] / "mb-ref-90700be"
 MANIFEST = PROJECT / "tools/acceptance_manifest.json"
 
 
