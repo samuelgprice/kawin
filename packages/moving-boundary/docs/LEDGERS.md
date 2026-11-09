@@ -204,6 +204,150 @@ The example works around it: DEMO uses 81/321 linear-graded nodes, `semiLog_dt` 
 tolerance 1e-8 um, and its notes warn that finer grids run to the full duration can fail late.
 No solver code was changed. Any fix starts on the research branch, per the policy above.
 
+## Release review follow-ups R07-R12 (open)
+
+Recorded 2026-11-08 from the core Illingworth review; extraction branch tip
+`f9bfd6b2fc3cc648bfda3693c2730d406297ab9c`. These are investigation items, not
+implemented fixes or changes to the frozen acceptance contract. R07/R08 are the
+highest-priority numerical findings; R09-R12 concern output, lifecycle and input
+contracts. Diagnostic cases below are synthetic checks, not production benchmarks.
+
+Evidence: 23 focused package tests passed using the activated kawin interpreter
+with extracted package sources and stock kawin 0.5.0 host modules on the import
+path. Additional diagnostic runs reproduced the observations below. Small binary,
+interstitial two-phase and three-phase runs also completed with Numba imports
+blocked. The full installed-wheel acceptance suite was not rerun for this review.
+Scientific fixes must follow the existing authoritative-source/port policy; do not
+refresh reference fixtures or widen tolerances to conceal changed behavior.
+
+### R07: outer maximum timestep can invalidate an implicit step
+
+**Status:** open; high priority before release. **Scope:** binary and two-phase
+ternary. Three-phase already limits the trial timestep before solving and verifies
+its pending candidate during acceptance.
+
+`binary.py:_compute_dt` and `ternary.py:_compute_dt` do not include the outer
+maximum timestep. After the complete implicit solve returns an increment divided
+by its trial dt, `compatibility/solver.py:DESolver._getdXdt` can shorten dt to
+`_dtmax`. The driver then scales that increment, committing a state for which the
+implicit equations were not solved. Both solver families reproduced the mechanism.
+
+Binary reproduction: use `examples/binary_constant.py` inputs, with constant phase
+D values ALPHA=1e-3 and BETA=1e-1, `tolerance=1e-10`, `max_step_retries=15`, and
+`solve(0.1, minDtFrac=1e-14)`. With `time_step=0.1, maxDtFrac=0.1`, the final
+interface was 1.1029278493730248 and relative inventory drift was 2.511e-4.
+Actually solving at `time_step=0.01, maxDtFrac=1` gave 1.1246627054903873 and
+drift 9.111e-12. The clamped run's interface advance was about 17% smaller.
+
+**Investigate:** honor the outer maximum before each nonlinear solve and verify
+that the committed timestep/state matches its converged candidate, following the
+three-phase approach. Add regression coverage for fixed and semi-log schedules,
+retry-reduced steps, and exact final remainders. A clamped run should agree with a
+run explicitly configured to take the same smaller steps.
+
+### R08: binary convergence tolerance depends on length units
+
+**Status:** open; high priority before release. **Scope:** binary fixed-point
+interface iteration in `binary.py:_take_implicit_step_planar`.
+
+The convergence test is `abs(previous_future_s - future_s) <= tolerance`, without
+a conservative residual acceptance test. The default 1e-8 is an absolute length:
+it means 10 nm for metre coordinates. Equivalent unit representations can stop
+at different iteration counts and give materially different conservation/advance.
+
+Reproduction: rescale the binary R07 problem to R=5e-6, s0=1e-6, D values 1e-15
+and 1e-13; retain 501 physical mesh nodes, 100 nodes per phase, initial left/right
+compositions 0.8/0.4, interface compositions 0.6/0, `time_step=0.1`,
+`max_step_retries=15`, and solve to 0.5 with `minDtFrac=1e-14`.
+With `tolerance=1e-8`, final s/R was 0.2610915910 and relative inventory drift
+1.75484e-3 (about 0.18%; final step took two fixed-point passes). Scaling the
+tolerance to 1e-14 gave s/R=0.2581334961 and drift 1.22648e-9 (11 passes),
+matching the corresponding unscaled problem. Interface advance differed by about 5%.
+
+**Investigate:** combine a dimensionless or explicit absolute/relative position
+criterion with a conservative interface-residual criterion using the same bulk
+fluxes. Document tolerance units and semantics. Test equivalent length-unit
+representations and per-step as well as cumulative inventory errors. R06's
+fine-grid iteration floor is related context, but not established as the same cause.
+
+### R09: sparse recording mixes live state with recorded snapshots
+
+**Status:** open; medium priority. **Scope:** binary history classes, shared
+`_ScalarHistory`/`_ArrayHistory`, and solver getters that delegate to them.
+
+With recording every third step, the binary `getInterfacePosition()` returned
+1.0 during accepted steps whose live positions were 1.0000498908 and
+1.0000996877. The no-time history lookup returns the last stored row rather than
+`currentY`. Related profile/eta getters need the same current-state audit; the
+three-phase transformed-state getter already accesses live profiles directly.
+
+Finalization has a separate confirmed defect: a one-step binary run with recording
+interval 3 left interface and transformed-profile time arrays equal to `[0.1]`,
+overwriting the initial record. Forced recording computes its destination from
+`int(currentIndex / recordInterval)` instead of independently appending a snapshot.
+
+**Investigate:** distinguish live state from explicitly requested historical
+snapshots, preserve the initial record, and append forced final records without
+corrupting the sampling cadence. Cover intervals greater than one, runs shorter
+than the interval, continued solves, disabled recording and disabled profile
+history. Check synchronization of interface, eta, profile and inventory histories.
+
+### R10: failed initialization or output preparation can leave partial state
+
+**Status:** open; medium priority. **Scope:** all three setup methods; binary and
+two-phase ternary accepted-state preparation/commit paths.
+
+Each solver calls host `setup()` before completing initialization; the host sets
+`isSetup=True`. A diagnostic ternary diffusivity-provider failure left
+`isSetup=True` and `_p_curr=None`. After restoring the provider, a second setup
+returned immediately without completing initialization.
+
+Binary/two-phase `postProcess` also calls `GenericModel.postProcess` before all
+output preparation succeeds. Injecting a binary reconstruction failure advanced
+`currentTime` from 0 to 0.1 while its accepted interface remained at the old value.
+Three-phase already separates preparation and atomic commit.
+
+**Investigate:** mark setup complete only after successful initialization, or
+restore a coherent uninitialized state on failure. Prepare/validate outputs before
+advancing accepted time/state and histories; audit trial-only diagnostics such as
+`_lastAcceptedDt` too. Test recovery after provider, validation, recording and
+coupled-model failures without silently advancing accepted state.
+
+### R11: inherited deserialization does not restore the solver state
+
+**Status:** open; medium priority. **Scope:** binary and two-phase ternary
+`fromDict` inherited from the host; ternary `toDict` documentation.
+
+Host deserialization restores physical snapshots and time without restoring the
+transformed profiles, interface, eta, previous-step state or reference inventory.
+A binary dictionary saved at t=0.1, s=1.0000498908 loaded without error into a
+freshly set-up model at t=0.1, but its internal/reported interface stayed at 1.0
+and its transformed profile remained initial. Two-phase ternary has the same
+inherited loader; its `toDict` docstring incorrectly calls the output a restart
+dictionary. Three-phase already rejects incomplete restart loading explicitly.
+
+**Investigate:** reject unsupported restart clearly in binary/two-phase, and
+correct the output-dictionary documentation. Full restart can be separate work;
+if implemented, verify complete state restoration and continued-solve equivalence.
+Historical output loading should have an explicit contract distinct from restart.
+
+### R12: ternary numerical controls lack consistent validation
+
+**Status:** open; medium priority. **Scope:** both ternary configuration validators;
+compare binary's existing checks and three-phase solve-argument checks.
+
+A diagnostic two-phase constructor accepted `residual_tolerance=inf`; its
+configuration validator also accepted `tolerance=inf`. Static inspection found no
+positive-finite checks for the ternary semi-log spacing/initial-target parameters,
+beyond checking their presence in semi-log mode. A negative log spacing can leave
+no interior scheduled targets before the final target is appended.
+
+**Investigate:** require positive finite convergence tolerances and active semi-log
+parameters. Validate solve duration and min/max timestep fractions consistently
+across families. Add active-mode checks for zero, negative, NaN and infinity, and
+ensure invalid inputs fail before setup/state mutation or schedule allocation.
+The active semi-log failure variants still need dedicated reproduction tests.
+
 ## Example acceptance (pending tier approval)
 
 See [ACCEPTANCE_CANDIDATES.md](ACCEPTANCE_CANDIDATES.md#proposed-example-cases-pending-approval)
