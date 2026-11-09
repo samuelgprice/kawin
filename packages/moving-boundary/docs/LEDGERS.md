@@ -185,7 +185,7 @@ error is 4.75e-4. `analytic/` is ported from that commit. The 06dc7b4 acceptance
 unchanged: `collect` doesn't use this helper, and existing `exact/*` arrays come from their
 own branches.
 
-## Research numerical issue R06: binary interface iteration stalls above its tolerance (open, not investigated)
+## Research numerical issue R06: binary interface iteration stalls above its tolerance (fixed on a research branch 2026-11-09 at `25bf6cd`, not ported)
 
 Found with `examples/binary_tlp_bonding.py` (Ni-P bonding, um and s units), 2026-11-08. Late in
 the solidification stage, the binary Illingworth model's interface fixed point stops reducing
@@ -203,6 +203,88 @@ its error just above `tolerance` and raises after `max_iterations`:
 The example works around it: DEMO uses 81/321 linear-graded nodes, `semiLog_dt` 0.005 and
 tolerance 1e-8 um, and its notes warn that finer grids run to the full duration can fail late.
 No solver code was changed. Any fix starts on the research branch, per the policy above.
+
+**Diagnosis (2026-11-09; scratch scripts and a monkeypatch prototype, no repo code changed).**
+The stall is round-off in the fixed-point map, not slow or cyclic iteration dynamics:
+
+- At the first stalled step of DEMO at tolerance 1e-9 um (t = 30,166.6 s, dt = 151.2 s,
+  s = 9.641 um, interface cells 0.024 um liquid and 0.094 um solid) the map
+  `s_new = G(s_trial)` is a strong contraction (`G'` about 0.002-0.008). It converges to about
+  1e-9 in three passes, then cycles among values up to 7e-9 apart.
+- Evaluated at 11 trial positions 1e-12 um apart, the float `G` spreads over 3.5e-9 um; the
+  same `G` with assembly, Thomas solve and interface formula in 50-digit `decimal` arithmetic
+  spreads over 7e-15 um (smooth). Exact solves of the float-assembled systems, and an exact
+  interface formula on the float profiles, both stay noisy (3.4e-9, 3.5e-9 um).
+- The noise is in the liquid node next to the interface. The exact `c_L - p[-2]` is 4e-21
+  (the liquid is uniform), but float `p[-2]` is 1-5 ulps of `c_L` (1e-17 to 7e-17) away from
+  it. The flux `(c_L - p[-2]) / (1 - u[-2]) * D_L * dt / s` multiplies that by about 3e7 here,
+  giving spurious liquid flux of about 1e-10 against a solid flux of 3.4e-3 (composition um)
+  and nanometre noise in `s`. The amplification scales with `dt / dz`, which matches the pattern
+  above (smaller interface cells or larger steps fail earlier). The drift growing with
+  refinement has the same cause.
+
+**Candidate fix, prototyped only.** Solve each phase for the deviation from its interface
+composition, `w = p - c_L` (left) and `w = q - c_S` (right). Every row of the bulk systems sums
+to its old-volume coefficient, so the deviation system has the same matrix and the same
+right-hand side with `p_old - c` in place of `p_old` (an exact identity). The interface update
+then uses `w[-2]` and `w[1]` directly. As a monkeypatch on the Ni-P example this finished every
+case above (baseline / deviation form):
+
+| Case | Baseline | Deviation form |
+|---|---|---|
+| DEMO, tol 1e-8 | ok, drift 7.5e-9 | ok, drift 2.1e-9 |
+| DEMO, tol 1e-9 | fails at 30,167 s | ok, drift 8.2e-11 |
+| DEMO, tol 1e-10 | fails at 4,767 s | ok, drift 1.4e-11 |
+| 161/641 linear, `semiLog_dt` 0.01, tol 1e-8 | fails at 63,863 s | ok, drift 1.0e-9 |
+| 161/641 power 2/2 to 1e4 s, tol 1e-8 | fails at 8,951 s | ok, drift 1.3e-9 |
+| 81/321 power 3/2 to 1e4 s, tol 5e-8 | fails at 5,190 s | ok, drift 3.6e-9 |
+
+On common steps the widths differ by at most 1.3e-6 um; the DEMO final width converges to
+2.53782703 um (baseline at 1e-8: 2.53782721). The changes originate in round-off, but the
+flux amplification makes them far larger than a few ulps of the outputs (up to 1.3e-6 um in
+width here), so they need deliberate validation and baseline review: the binary entries of
+`kawin/tests/data/illingworth_substitutional_baseline.npz` (bitwise) would change. The dimensionless residual test that R08 proposes would not remove this floor:
+the two-phase ternary documents the same limit (`ternary.py` class docstring, "Resolution
+limit", noise `eps * sum_j |D_kj| * |u_j| * dt / dz`) and retries instead. The `|u_j|` factor
+suggests the deviation form would help there too (not tested).
+
+**Status and decisions (user, 2026-11-09):** binary first, on by default; ternary afterwards as
+a separate prototype (its interface compositions vary with eta, and the three-phase middle phase
+has two interface compositions); R08 as a separate change after R06.
+
+**Research fix (2026-11-09, commit `25bf6cd`, not merged):** worktree `...\code\kawin-r06`,
+branch `fix/r06-binary-deviation-solve` from research `main` `5f4ad57`. In
+`kawin/diffusion/MovingBoundaryIllingworthFDM.py`, both phase solves assemble the deviation
+right-hand side directly and return the deviation; `_BinaryBulkSolveResult` carries the
+interface-adjacent deviation; `_new_interface_planar` takes the deviations; Picard still queries
+D and measures its update with absolute compositions. Verification on that branch:
+
+- New `kawin/tests/test_illingworth_binary_deviation_form.py`: the row-sum identity on every
+  row for both motion directions and scalar or face D; exact preservation of a state at the
+  interface compositions in all three diffusivity modes; Ni-P at tolerance 1e-10 um to 6,000 s
+  (drift < 1e-10); smoothness of the interface map at 30,000 s. The preservation and Ni-P tests
+  fail on `main` (the Ni-P run stalls). A further 12-case test compares one step with 50-digit
+  arithmetic where profiles are far from or cross their interface compositions (including
+  `c = 0` and `c` near 1 beside bulk near 0), both directions, scalar and face D: profiles and
+  deviations within 1.6 ulps of the composition scale (bound 8), interface update correctly
+  rounded (bound 4 ulps of `s`), so the shift costs nothing where it gains nothing.
+- 50-digit `decimal` evaluation of the interface map at four Ni-P steps (two growing, two
+  shrinking): float minus exact at most 1.8e-15 um (about one ulp of `s`), against 3.5e-9 before.
+- Bitwise substitutional baseline: only binary arrays changed, by at most 1e-15 relative; every
+  binary interface history, right-phase profile, ternary and three-phase array is unchanged.
+  Regenerated deliberately and logged in `make_illingworth_substitutional_baseline.py`.
+- Python versus the authors' MAP C++ (`compare_illingworth2005_planar.main()`, author default
+  case): identical to `main`, max interface difference 4.74e-6 relative on both.
+- The Fig. 3 "present work" run of that harness (paper Ni-P, about 1e5 steps) stalls on `main`
+  ("10000 iterations; final interface error was 1.264e-10") and completes on the fix branch.
+- All 517 `kawin/tests` Illingworth tests pass after one deliberate change, approved by the user:
+  `test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case` compared the
+  ternary with the binary interface to 1e-10 um and the gap became 1.7e-10. A 50-digit march of
+  that case (same time points) gives errors against the exact discrete solution of 2.0e-10 um
+  for the old binary, 3.1e-11 for the fixed binary and 2.0e-10 for the ternary: the old
+  agreement came from shared absolute-form round-off. The bound is now 3e-10, with a comment to
+  restore 1e-10 once the ternary also solves in deviation form. This is also direct evidence
+  that the ternary carries the same round-off error.
 
 ## Release review follow-ups R07-R12 (open)
 
@@ -268,7 +350,7 @@ matching the corresponding unscaled problem. Interface advance differed by about
 criterion with a conservative interface-residual criterion using the same bulk
 fluxes. Document tolerance units and semantics. Test equivalent length-unit
 representations and per-step as well as cumulative inventory errors. R06's
-fine-grid iteration floor is related context, but not established as the same cause.
+fine-grid iteration floor has a different cause (round-off in the interface flux; see R06).
 
 ### R09: sparse recording mixes live state with recorded snapshots
 
