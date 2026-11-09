@@ -11,10 +11,12 @@ Source authority for every row: samuelgprice/kawin
 AST, documentation, exception and unit conventions; import/module placement
 changes and two whitespace-only binary edits are recorded. The older ae9fb29
 fixture remains a separate oracle. No frozen source is developed or refreshed.
+Exception: `solvers/illingworth/binary.py` carries the R06 deviation-form solve
+ported from research 25bf6cd60732ed34ed6f70b94716a515c76b714c (see LEDGERS.md R06).
 
 | Package path | Source path / extraction | Changes |
 |---|---|---|
-| solvers/illingworth/binary.py | kawin/diffusion/MovingBoundaryIllingworthFDM.py | module placement/imports only |
+| solvers/illingworth/binary.py | kawin/diffusion/MovingBoundaryIllingworthFDM.py | module placement/imports only; R06 port from 25bf6cd |
 | solvers/illingworth/numerics/binary.py | kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py | module placement/imports only |
 | mesh/FDM1D.py | kawin/diffusion/mesh/FDM1D.py | module placement/imports only |
 | mesh/TransformedGrids.py | kawin/diffusion/mesh/TransformedGrids.py | module placement/imports only |

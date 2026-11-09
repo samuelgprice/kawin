@@ -71,8 +71,10 @@ the Ni-P example), whether the Ni-P example gets an E case, go-ahead for the E11
 (its inputs changed in 22114b7, so freeze the config first), Lee TDB redistribution, and merging
 the R05 branch. E11 isn't captured, so no gate is yet the completed expanded suite. Linux and
 golden tolerance work hasn't been done. Thermo-Calc (NiTiNb) remains a later optional extension.
-Open solver findings: R06 in LEDGERS.md (binary interface iteration stalls on fine grids),
-and [release review follow-ups R07-R12](LEDGERS.md#release-review-follow-ups-r07-r12-open)
+R06 in LEDGERS.md (binary interface iteration stalls on fine grids) is fixed by the
+deviation-form solve from research 25bf6cd, ported to `binary.py` 2026-11-09; the ternary
+counterpart is a separate later prototype. Open solver findings:
+[release review follow-ups R07-R12](LEDGERS.md#release-review-follow-ups-r07-r12-open)
 (2026-11-08): outer timestep clamping, binary tolerance scaling, sparse histories,
 failure recovery, incomplete restart loading and numerical-control validation.
 R07/R08 are the highest-priority numerical investigations; none of these six is fixed.

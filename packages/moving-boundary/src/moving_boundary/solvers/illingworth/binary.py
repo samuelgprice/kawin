@@ -1,4 +1,4 @@
-# Relocated from samuelgprice/kawin 06dc7b4ab56f67226ceabfde41ebf2690c088841
+# Relocated from samuelgprice/kawin 25bf6cd60732ed34ed6f70b94716a515c76b714c (R06 correction on top of main 5f4ad57).
 # Source: kawin/diffusion/MovingBoundaryIllingworthFDM.py; import changes only. See NOTICE and docs/LEDGERS.md.
 import warnings
 from dataclasses import dataclass
@@ -42,13 +42,18 @@ class _BinaryBulkSolveResult:
 
     ``interface_D`` is the diffusivity on the face adjacent to the interface
     (a scalar in every mode), which the next interface update uses to form the
-    phase-side diffusive flux.
+    phase-side diffusive flux. ``interface_deviation`` is the solved deviation
+    of the interface-adjacent node from the interface composition (``w[-2]``
+    on the left, ``w[1]`` on the right). The interface update must use it
+    rather than recomputing ``profile - c_interface``: that difference loses
+    the digits below the rounding unit of ``c_interface`` (ledger R06).
     """
 
     profile: np.ndarray
     interface_D: float
     inner_iterations: int = 0
     inner_update_norm: float = 0.0
+    interface_deviation: float = np.nan
 
 
 def _validate_binary_diffusivity(values, phase, context="binary Illingworth diffusivity"):
@@ -226,7 +231,8 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
 
     - ``'phase_uniform'`` (default) evaluates one diffusivity per phase at that
       phase's (fixed) interface composition. For constant-diffusivity
-      thermodynamics this reproduces the MAP-verified recurrence bitwise. When
+      thermodynamics this is the MAP-verified recurrence (solved in deviation
+      form, see below, so not bitwise identical to the MAP solve). When
       the temperature is constant these values cannot change, so they are
       evaluated once in ``setup()`` and reused; otherwise they are re-evaluated
       each step at the interface temperature.
@@ -247,6 +253,19 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     retried with ``dt *= retry_factor`` up to ``max_step_retries`` total
     attempts; the default of one attempt keeps the original raise-on-failure
     behavior.
+
+    Each phase is solved for its deviation from the interface composition and
+    the interface balance uses the solved interface-adjacent deviations. This
+    is algebraically the MAP scheme, but it keeps the interface fluxes
+    accurate when the near-interface profile is close to the interface
+    composition: forming ``c_interface - p[-2]`` from absolute compositions
+    leaves round-off of order ``eps * |c|``, which the flux amplifies by
+    ``D dt / dz`` into noise in the interface position. With small interface
+    cells and long semi-log steps that noise exceeded ``tolerance`` and the
+    fixed point stalled (issue R06 in the moving-boundary package's
+    ``docs/LEDGERS.md``). Stored profiles remain absolute compositions, so
+    each step's old deviation is rounded once, to the unit of
+    ``c_interface``. ``tolerance`` is still an absolute length (ledger R08).
     The transformed profile histories ``pData`` and ``qData`` are recorded by
     default, but may be disabled with ``record_pq_data=False`` to reduce
     memory use in long runs. Recording arrays can also be preallocated once the
@@ -943,11 +962,17 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             return np.inf
         return max(1e-15, float(self._semiLogTimes[self._semiLogNextIndex] - float(t)))
 
-    def _new_interface_planar(self, p_future, q_future, s, old_s, future_s, dt, pass_number, D_left_int, D_right_int):
+    def _new_interface_planar(self, left_deviation, right_deviation, s, old_s, future_s, dt, pass_number, D_left_int, D_right_int):
         """
         Returns the next fixed-point estimate of the future interface position.
 
-        This is the MAP/paper planar conservative interface balance.
+        This is the MAP/paper planar conservative interface balance, written in
+        terms of the interface-adjacent deviations ``left_deviation = p[-2] -
+        c_left`` and ``right_deviation = q[1] - c_right`` (see
+        ``_BinaryBulkSolveResult.interface_deviation``). Algebraically it is the
+        MAP expression; using the solved deviations avoids the cancellation in
+        ``c_left - p[-2]``, which ``D dt / dz`` amplifies into round-off noise
+        in the interface position (ledger R06).
         ``D_left_int`` and ``D_right_int`` are the scalar diffusivities on the
         interface-adjacent faces (left face ``-1``, right face ``0``) used by
         the most recent bulk solves, so the interface flux matches the bulk
@@ -960,25 +985,21 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         else:
             velocity_sign_probe = future_s - s
 
-        diff_l = (c_left_int - p_future[-2]) / (1.0 - self._u_grid[-2])
+        diff_l = -left_deviation / (1.0 - self._u_grid[-2])
         diff_l = diff_l * D_left_int / future_s
-        diff_r = (q_future[1] - c_right_int) / self._v_grid[1]
+        diff_r = right_deviation / self._v_grid[1]
         diff_r = diff_r * D_right_int / (self._R - future_s)
         rhs = (diff_r - diff_l) * dt
 
         if velocity_sign_probe >= 0:
-            lhs = c_left_int
-            lhs = lhs - q_future[1] * (1.0 - self._v_grid[1] / 2.0)
-            lhs = lhs - c_right_int * self._v_grid[1] / 2.0
+            lhs = (c_left_int - c_right_int) - right_deviation * (1.0 - self._v_grid[1] / 2.0)
         else:
-            lhs = p_future[-2] * (0.5 + self._u_grid[-2] / 2.0)
-            lhs = lhs + c_left_int * (0.5 - self._u_grid[-2] / 2.0)
-            lhs = lhs - c_right_int
+            lhs = (c_left_int - c_right_int) + left_deviation * (0.5 + self._u_grid[-2] / 2.0)
         if abs(lhs) <= 1e-300:
             raise ZeroDivisionError("Illingworth interface update encountered a zero denominator.")
         return float(s + rhs / lhs)
 
-    def _new_concentration_left_planar(self, p, s, future_s, dt, D_left):
+    def _new_concentration_left_planar(self, p, s, future_s, dt, D_left, return_deviation=False):
         """
         Solves the left transformed concentration profile for one implicit step.
 
@@ -986,12 +1007,25 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         the MAP implementation. Interior rows are assembled with vectorized
         slices, but the boundary rows retain the original one-sided forms.
 
+        The system is solved for the deviation ``w = p_new - c_left`` from the
+        interface composition. Every non-Dirichlet row sums to its old-volume
+        coefficient (``-s * width / 2``), so the deviation system has the same
+        matrix and the same right-hand side with ``p - c_left`` in place of
+        ``p`` and a zero Dirichlet value: an exact identity, assembled directly
+        rather than as ``rhs - A c_left``. Near-interface deviations then carry
+        relative rather than absolute precision; the discretization is
+        unchanged but the results differ from the MAP absolute-composition
+        solve by amplified round-off (ledger R06). Returns ``w + c_left``, or
+        ``(w + c_left, w)`` when ``return_deviation`` is true.
+
         ``D_left`` is either a scalar phase-uniform diffusivity, assembled with
-        the original MAP expressions so constant-D results are bitwise
-        unchanged, or a face array of shape ``(len(p) - 1,)`` where face ``j``
-        lies between nodes ``j`` and ``j + 1`` and the interface face is
-        ``D_left[-1]``. The upwind and cell-volume terms do not depend on D.
+        the original MAP expressions, or a face array of shape
+        ``(len(p) - 1,)`` where face ``j`` lies between nodes ``j`` and
+        ``j + 1`` and the interface face is ``D_left[-1]``. The upwind and
+        cell-volume terms do not depend on D.
         """
+        c_left = self.interfaceCompositions[0]
+        w_old = np.asarray(p, dtype=np.float64) - c_left
         n = len(p)
         lo = np.zeros(n, dtype=np.float64)
         diag = np.zeros(n, dtype=np.float64)
@@ -1024,27 +1058,29 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         if future_s >= s:
             diag[0] = -A_first / u[1] - future_s * u[1] / 2.0
             up[0] = A_first / u[1] + tmpB * u[1] / 2.0
-            rhs[0] = -p[0] * s * u[1] / 2.0
+            rhs[0] = -w_old[0] * s * u[1] / 2.0
             lo[1:-1] = A_lo
             diag[1:-1] = A_diag - tmpB * left_sum / 2.0
             diag[1:-1] = diag[1:-1] - future_s * cell_width / 2.0
             up[1:-1] = A_up + tmpB * right_sum / 2.0
-            rhs[1:-1] = -s * p[1:-1] * cell_width / 2.0
+            rhs[1:-1] = -s * w_old[1:-1] * cell_width / 2.0
         else:
             diag[0] = -A_first / u[1] + tmpB * u[1] / 2.0 - future_s * u[1] / 2.0
             up[0] = A_first / u[1]
-            rhs[0] = -p[0] * s * u[1] / 2.0
+            rhs[0] = -w_old[0] * s * u[1] / 2.0
             lo[1:-1] = A_lo - tmpB * left_sum / 2.0
             diag[1:-1] = A_diag + tmpB * right_sum / 2.0
             diag[1:-1] = diag[1:-1] - future_s * cell_width / 2.0
             up[1:-1] = A_up
-            rhs[1:-1] = -s * p[1:-1] * cell_width / 2.0
+            rhs[1:-1] = -s * w_old[1:-1] * cell_width / 2.0
 
         diag[-1] = -1.0
-        rhs[-1] = -self.interfaceCompositions[0]
-        return solve_illingworth_tridiagonal(lo, diag, up, rhs)
+        rhs[-1] = 0.0
+        w = solve_illingworth_tridiagonal(lo, diag, up, rhs)
+        profile = w + c_left
+        return (profile, w) if return_deviation else profile
 
-    def _new_concentration_right_planar(self, q, s, future_s, dt, D_right):
+    def _new_concentration_right_planar(self, q, s, future_s, dt, D_right, return_deviation=False):
         """
         Solves the right transformed concentration profile for one implicit step.
 
@@ -1052,11 +1088,20 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         assembly is vectorized while preserving the MAP code's boundary rows and
         tridiagonal sign convention.
 
+        As in ``_new_concentration_left_planar`` the system is solved for the
+        deviation ``w = q_new - c_right``: every non-Dirichlet row (including the
+        zero-flux far-boundary row) sums to its old-volume coefficient, so the
+        right-hand side uses ``q - c_right`` and the Dirichlet value is zero.
+        Returns ``w + c_right``, or ``(w + c_right, w)`` when
+        ``return_deviation`` is true.
+
         ``D_right`` is either a scalar phase-uniform diffusivity (original MAP
-        expressions, bitwise unchanged) or a face array of shape
-        ``(len(q) - 1,)`` where the interface face is ``D_right[0]`` and the
-        zero-flux far-boundary row uses ``D_right[-1]``.
+        expressions) or a face array of shape ``(len(q) - 1,)`` where the
+        interface face is ``D_right[0]`` and the zero-flux far-boundary row uses
+        ``D_right[-1]``.
         """
+        c_right = self.interfaceCompositions[1]
+        w_old = np.asarray(q, dtype=np.float64) - c_right
         n = len(q)
         lo = np.zeros(n, dtype=np.float64)
         diag = np.zeros(n, dtype=np.float64)
@@ -1088,33 +1133,35 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             A_diag = -(A_up + A_lo)
 
         diag[0] = -1.0
-        rhs[0] = -self.interfaceCompositions[1]
+        rhs[0] = 0.0
 
         if future_s >= s:
             lo[1:-1] = A_lo
             diag[1:-1] = A_diag - tmpB * (1.0 - left_sum / 2.0)
             diag[1:-1] = diag[1:-1] - span * cell_width / 2.0
             up[1:-1] = A_up + tmpB * (1.0 - right_sum / 2.0)
-            rhs[1:-1] = -(self._R - s) * q[1:-1] * cell_width / 2.0
+            rhs[1:-1] = -(self._R - s) * w_old[1:-1] * cell_width / 2.0
 
             tmp = v[-2]
             lo[-1] = A_last / (1.0 - tmp)
             diag[-1] = -A_last / (1.0 - tmp) - tmpB * (1.0 - (1.0 + tmp) / 2.0)
             diag[-1] = diag[-1] - span * (1.0 - tmp) / 2.0
-            rhs[-1] = -q[-1] * (self._R - s) * (1.0 - tmp) / 2.0
+            rhs[-1] = -w_old[-1] * (self._R - s) * (1.0 - tmp) / 2.0
         else:
             lo[1:-1] = A_lo - tmpB * (1.0 - left_sum / 2.0)
             diag[1:-1] = A_diag + tmpB * (1.0 - right_sum / 2.0)
             diag[1:-1] = diag[1:-1] - span * cell_width / 2.0
             up[1:-1] = A_up
-            rhs[1:-1] = -(self._R - s) * q[1:-1] * cell_width / 2.0
+            rhs[1:-1] = -(self._R - s) * w_old[1:-1] * cell_width / 2.0
 
             tmp = v[-2]
             lo[-1] = A_last / (1.0 - tmp) - tmpB * (1.0 - (1.0 + tmp) / 2.0)
             diag[-1] = -A_last / (1.0 - tmp) - span * (1.0 - tmp) / 2.0
-            rhs[-1] = -q[-1] * (self._R - s) * (1.0 - tmp) / 2.0
+            rhs[-1] = -w_old[-1] * (self._R - s) * (1.0 - tmp) / 2.0
 
-        return solve_illingworth_tridiagonal(lo, diag, up, rhs)
+        w = solve_illingworth_tridiagonal(lo, diag, up, rhs)
+        profile = w + c_right
+        return (profile, w) if return_deviation else profile
 
     def _bulk_picard_relative_tolerance(self):
         """Returns the effective relative tolerance for implicit bulk Picard solves."""
@@ -1142,16 +1189,21 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         trial face positions for ``future_s``), performs the linear tridiagonal
         solve, and checks the update norm. With ``bulk_picard_relaxation == 1``
         the loop also stops when the re-evaluated face values are unchanged.
+        Diffusivities and the update norm use physical (absolute) compositions;
+        only the linear solve works in deviation form, and the returned result
+        carries the final solve's interface-adjacent deviation.
         Non-convergence raises ``RuntimeError`` so the step-retry logic can
         reduce ``dt``.
         """
         if phase_side == "left":
+            deviation_index = -2
             interface_index = -1
             c_interface = self.interfaceCompositions[0]
             face_diffusivities = self._left_face_diffusivities
             linear_solve = self._new_concentration_left_planar
             interface_D = self._left_interface_D
         else:
+            deviation_index = 1
             interface_index = 0
             c_interface = self.interfaceCompositions[1]
             face_diffusivities = self._right_face_diffusivities
@@ -1163,15 +1215,15 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         update_norm = np.inf
         D_faces = face_diffusivities(iterate, future_s, self.currentTime)
         for iteration in range(1, self.bulkPicardMaxIterations + 1):
-            profile = linear_solve(old_profile, s, future_s, dt, D_faces)
+            profile, deviation = linear_solve(old_profile, s, future_s, dt, D_faces, return_deviation=True)
             update_norm = float(np.max(np.abs(profile - iterate)))
             if self._bulk_picard_update_has_converged(update_norm, profile):
-                return _BinaryBulkSolveResult(profile, interface_D(D_faces), iteration, update_norm)
+                return _BinaryBulkSolveResult(profile, interface_D(D_faces), iteration, update_norm, float(deviation[deviation_index]))
             next_iterate = iterate + self.bulkPicardRelaxation * (profile - iterate)
             next_iterate[interface_index] = c_interface
             D_next = face_diffusivities(next_iterate, future_s, self.currentTime)
             if self.bulkPicardRelaxation == 1.0 and np.array_equal(D_next, D_faces):
-                return _BinaryBulkSolveResult(profile, interface_D(D_faces), iteration, 0.0)
+                return _BinaryBulkSolveResult(profile, interface_D(D_faces), iteration, 0.0, float(deviation[deviation_index]))
             iterate = next_iterate
             D_faces = D_next
 
@@ -1194,9 +1246,11 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
                 self._solve_bulk_picard(p, s, future_s, dt, "left"),
                 self._solve_bulk_picard(q, s, future_s, dt, "right"),
             )
+        p_future, w_left = self._new_concentration_left_planar(p, s, future_s, dt, D_left, return_deviation=True)
+        q_future, w_right = self._new_concentration_right_planar(q, s, future_s, dt, D_right, return_deviation=True)
         return (
-            _BinaryBulkSolveResult(self._new_concentration_left_planar(p, s, future_s, dt, D_left), self._left_interface_D(D_left)),
-            _BinaryBulkSolveResult(self._new_concentration_right_planar(q, s, future_s, dt, D_right), self._right_interface_D(D_right)),
+            _BinaryBulkSolveResult(p_future, self._left_interface_D(D_left), interface_deviation=float(w_left[-2])),
+            _BinaryBulkSolveResult(q_future, self._right_interface_D(D_right), interface_deviation=float(w_right[1])),
         )
 
     def _take_implicit_step_planar(self, p, q, s, old_s, dt):
@@ -1208,12 +1262,18 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         position. Convergence requires at least two passes and
         ``|delta s| <= tolerance``. Per-step diffusivities are evaluated once at
         the old state (see ``_step_diffusivities``); in implicit mode they only
-        provide the pass-zero interface-face values.
+        provide the pass-zero interface-face values. Pass zero takes the
+        interface-adjacent deviations from the old profiles; later passes use
+        the deviations returned by the bulk solves at the current trial
+        position, so they always belong to the candidate being iterated.
 
         Returns ``(p_future, q_future, s_future, D_left_int, D_right_int)``.
         """
         p_future = np.asarray(p, dtype=np.float64).copy()
         q_future = np.asarray(q, dtype=np.float64).copy()
+        c_left_int, c_right_int = self.interfaceCompositions
+        left_deviation = float(p_future[-2] - c_left_int)
+        right_deviation = float(q_future[1] - c_right_int)
         future_s = float(s)
         error = np.inf
         D_left, D_right = self._step_diffusivities(p, q, s, self.currentTime)
@@ -1222,12 +1282,14 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
 
         for count in range(self.maxIterations):
             previous_future_s = future_s
-            future_s = self._new_interface_planar(p_future, q_future, s, old_s, future_s, dt, count, D_left_int, D_right_int)
+            future_s = self._new_interface_planar(left_deviation, right_deviation, s, old_s, future_s, dt, count, D_left_int, D_right_int)
             if not np.isfinite(future_s):
                 raise ValueError("Illingworth interface update produced a non-finite position.")
             left_result, right_result = self._solve_bulk_phases(p, q, s, future_s, dt, D_left, D_right)
             p_future = left_result.profile
             q_future = right_result.profile
+            left_deviation = left_result.interface_deviation
+            right_deviation = right_result.interface_deviation
             D_left_int = left_result.interface_D
             D_right_int = right_result.interface_D
             error = abs(previous_future_s - future_s)

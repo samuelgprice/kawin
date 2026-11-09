@@ -185,7 +185,7 @@ error is 4.75e-4. `analytic/` is ported from that commit. The 06dc7b4 acceptance
 unchanged: `collect` doesn't use this helper, and existing `exact/*` arrays come from their
 own branches.
 
-## Research numerical issue R06: binary interface iteration stalls above its tolerance (fixed on a research branch 2026-11-09 at `25bf6cd`, not ported)
+## Research numerical issue R06: binary interface iteration stalls above its tolerance (fixed on a research branch 2026-11-09 at `25bf6cd`; binary ported; oracle refresh pending)
 
 Found with `examples/binary_tlp_bonding.py` (Ni-P bonding, um and s units), 2026-11-08. Late in
 the solidification stage, the binary Illingworth model's interface fixed point stops reducing
@@ -285,6 +285,36 @@ D and measures its update with absolute compositions. Verification on that branc
   agreement came from shared absolute-form round-off. The bound is now 3e-10, with a comment to
   restore 1e-10 once the ternary also solves in deviation form. This is also direct evidence
   that the ternary carries the same round-off error.
+
+**Port (2026-11-09).** Source `25bf6cd60732ed34ed6f70b94716a515c76b714c`; affected functions
+`_BinaryBulkSolveResult`, `_new_interface_planar`, `_new_concentration_left_planar`,
+`_new_concentration_right_planar`, `_solve_bulk_picard`, `_solve_bulk_phases`,
+`_take_implicit_step_planar` and the class docstring of `solvers/illingworth/binary.py`. The
+research diff applied unchanged (offset only); the module now equals the source apart from its
+header and imports. `tests/test_binary_deviation_form.py` ports the 21 research tests with the
+research helpers reproduced locally. Rationale and expected changes as above: round-off-
+originated binary differences, no ternary or three-phase change.
+
+- Package tests: the 21 ported tests plus bridge/tridiagonal/compatibility (34 passed);
+  `tests/test_examples.py` 46 passed, 1 slow deselected.
+- `acceptance.py quick` (public tolerance, 06dc7b4 oracle, 487.7 s): 29 runs pass, 20 bit-identical
+  and 9 within tolerance (C01-C04, C13-C15, C30, C31; worst C04 analytic error 5.7e-15 against
+  1e-12, none within 10x); contracts 3 bit-identical, 2 within tolerance (C25, C29; worst
+  4.4e-16); 88 tests; 32 repeat pairs identical. `LEGACY` fails by design: it compares binary
+  output bitwise with the 06dc7b4 substitutional baseline (`binary_phase_uniform__data_y`
+  first; 460/3507 elements differ).
+- `acceptance_examples.py run --skip-tests`: E03-E10 pass; E01 (vs C04) and E02 (vs F04) fail
+  their bitwise fixture comparison, with differences at most 2.7e-14 absolute (interface 3e-13
+  relative).
+- Ni-P DEMO: unchanged except inventory drift 7.5e-9 -> 2.1e-9; the R06 grids (161/641
+  `semiLog_dt` 0.01 to 7e4 s; 161/641 power 2/2 and 81/321 power 3/2 to 1e4 s; DEMO at 1e-10)
+  complete with the ported solver. The example's notes and drift comments are updated; limits
+  and settings are unchanged.
+
+**Pending (user decision):** the bitwise oracle. `exact` gates, `LEGACY` and E01/E02 need the
+acceptance oracle moved from detached `06dc7b4` to a research commit containing `25bf6cd`
+(with the regenerated baseline), as a separate reviewed reference change; a full gate was not
+run.
 
 ## Release review follow-ups R07-R12 (open)
 

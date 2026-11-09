@@ -252,4 +252,4 @@ marked below aren't from a source test and need approval before they are treated
 | FeCrNi `LAGGED_DEMO` | Same checks | Same | 1.4e-10; 1.00, 1.06; 22, 15; 0.0054, 0.0068; 0.027; 0; 1.02; 1.0; 2e-11 | Same |
 | Ni-P DEMO: 81/321 nodes, `semiLog_dt` 0.005, t → 7e4 s | Early interface error / motion, 1e-3 s ≤ t ≤ 0.0144 s | 3e-3 | 1.1e-3 | **Proposed** accuracy |
 | | Peak / mass-balance bound | < 1 | 0.9941 | Exact limit |
-| | Inventory rel | 2e-8 | 7.5e-9 (set by the 1e-8 um iteration tolerance) | **Proposed** conservation |
+| | Inventory rel | 2e-8 | 2.1e-9 (set by the 1e-8 um iteration tolerance; 7.5e-9 before the R06 port) | **Proposed** conservation |
