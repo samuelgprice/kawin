@@ -331,11 +331,20 @@ detached `06dc7b4` to a new clean detached worktree `...\code\mb-ref-90700be`:
 - Public quick and full with `--record` (same counts, 493.7 s and 625.2 s) updated
   `docs/acceptance.json` and `docs/acceptance-deviations.json`: the reference commit, run times,
   and the recorded inventory allowance of C09, C10 and C20-C23. The old reference JSONs lacked
-  `minimum_molar_volume`, so `compare()` used its default of 1; recaptured references carry it,
-  so the existing rule (atol x length scale / minimum molar volume) now applies: 6.7e-13
-  (volume 1.5) and, for C23, 1.4e-7 (volume 7.2e-6, inventory in moles). No tolerance setting
-  changed and every run is bit-identical, but C23's public-mode inventory allowance is looser
-  in absolute terms than the old recorded 1e-12.
+  `minimum_molar_volume` (captured by an earlier worker; the three-phase solver is unchanged),
+  so `compare()` used its default of 1; recaptured references carry it. `compare()` then divided
+  every inventory-group array by it, although the manifest's rule is "initial domain length;
+  divided by minimum explicit Vm for mole inventories". That loosened C23's composition-based
+  inventories (`inventoryData`, `state/_initialInventory`, about 0.2) from an absolute floor of
+  1e-12 to 1.4e-7. Fixed the same day: `acceptance.py` `inventory_scale()` divides only the mole
+  arrays (`molarInventoryData`, `totalMolesData`, `dependentMoleClosureErrorData`, all in moles)
+  by the minimum molar volume, matching the manifest, with a unit test; the records were
+  re-recorded. No result changed; every run is bit-identical.
+- Re-record with `inventory_scale()` (public quick 528.4 s and full 647.0 s; 30/40 runs and 5
+  contracts bit-identical, 89 tests, 33/34 repeat pairs identical): C09, C10, C20-C23 and C32 now
+  record two inventory allowances, 1e-12 x length for composition-based arrays and that divided
+  by the minimum molar volume for mole arrays (C23: 1e-12 and 1.4e-7); cases without explicit
+  volumes are unchanged.
 
 ## Release review follow-ups R07-R12 (open)
 

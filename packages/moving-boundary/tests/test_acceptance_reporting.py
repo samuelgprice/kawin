@@ -97,3 +97,20 @@ def test_record_rejects_non_public_or_partial_runs(tmp_path, monkeypatch, argv):
         tool.main(argv)
     assert error.value.code==2
     assert not tool.OUTPUT.exists()
+
+
+def test_inventory_scale_divides_only_mole_arrays_by_molar_volume():
+    """Manifest rule: length scale; divided by minimum explicit Vm for mole inventories only."""
+    project=Path(__file__).parents[1]
+    spec=importlib.util.spec_from_file_location('inventory_scale_tool',project/'tools/acceptance.py')
+    tool=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    explicit=dict(length_scale=2.,minimum_molar_volume=7.2e-6)
+    for key in ('molarInventoryData/values','totalMolesData/values','dependentMoleClosureErrorData/values',
+                'model3/totalMolesData/values'):
+        assert tool.quantity(key)=='inventory'
+        assert tool.inventory_scale(key,explicit)==2./7.2e-6
+    for key in ('inventoryData/values','state/_initialInventory','concData/values','model0/state/_initialInventory'):
+        assert tool.quantity(key)=='inventory'
+        assert tool.inventory_scale(key,explicit)==2.
+    assert tool.inventory_scale('totalMolesData/values',dict(length_scale=5.))==5.

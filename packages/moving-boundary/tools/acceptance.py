@@ -210,6 +210,24 @@ def quantity(key):
     return "profiles"
 
 
+MOLAR_INVENTORY_NAMES = ("molarInventoryData", "totalMolesData", "dependentMoleClosureErrorData")
+
+
+def inventory_scale(key, expected):
+    """Absolute-tolerance scale for one inventory-group array.
+
+    Arrays in moles (component moles, total moles and the dependent-mole closure
+    error of explicit-volume models) scale with length / minimum molar volume.
+    Composition-based inventories (``inventoryData``, ``state/_initialInventory``,
+    ``concData``) are composition times length in every model, so they scale with
+    length only. Without a recorded minimum molar volume both reduce to length.
+    """
+    scale = expected.get("length_scale", 1.)
+    if any(name in key for name in MOLAR_INVENTORY_NAMES):
+        scale /= expected.get("minimum_molar_volume", 1.)
+    return scale
+
+
 def compare(case, package, *, tolerance="exact", require=()):
     """Keep frozen gates; O06/O08 require bytes even in public mode.
 
@@ -259,7 +277,7 @@ def compare(case, package, *, tolerance="exact", require=()):
             elif group == "accepted_times":
                 scale = max(1., expected.get("requested_duration", 1.))
             elif group == "inventory":
-                scale = expected.get("length_scale", 1.) / expected.get("minimum_molar_volume", 1.)
+                scale = inventory_scale(key, expected)
             measured[group][key] = metrics.array_metrics(wanted,value,
                 rtol=settings["rtol"] if tolerance == "public" and case not in {"O06","O08"} else 0.,
                 atol=settings["atol"]*scale if tolerance == "public" and case not in {"O06","O08"} else 0.)
