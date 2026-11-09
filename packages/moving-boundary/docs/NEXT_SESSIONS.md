@@ -32,20 +32,48 @@ the new ignored O06 fixture pair was captured; all 89 older files are unchanged.
 
 ## Real-usage examples (implemented; tiers pending approval)
 
-`examples/` has five installed-API examples with teaching docs, and `moving_boundary.analytic`
-provides exact solutions. `tools/acceptance_examples.py` compares their quick-check settings with
-existing frozen fixtures; it isn't part of `acceptance.py`, whose inputs and fixtures are unchanged.
-After adding `analytic`, an unchanged full gate gave 40 runs and 5 contracts bit-identical, 34
-repeat pairs, 570 s (not recorded). All ten example cases are bit-identical with matching settings.
+`examples/` has six installed-API teaching examples plus the minimal `binary_constant.py`, and
+`moving_boundary.analytic` provides exact solutions. `tools/acceptance_examples.py` compares their
+quick-check settings with existing frozen fixtures; it isn't part of `acceptance.py`, whose inputs
+and fixtures are unchanged. After adding `analytic`, an unchanged full gate gave 40 runs and 5
+contracts bit-identical, 34 repeat pairs, 570 s (not recorded). All ten example cases (E01–E10)
+are bit-identical with matching settings; last run 2026-11-08 on the code committed as 4006f1e.
+Later commits changed no E-case inputs.
 
-Reviewer simulation (fresh venv outside all checkouts, wheel plus PyPI kawin 0.5.0, Windows, private
-paths blocked): 117 passed, 8 expected skips (5 local contracts, 3 needing a database), 167 s;
-37 example/analytic tests pass in about 290 s with a supplied database and no Numba cache.
+Changes on 2026-11-07/08 (commits 22114b7 to 22c8645):
 
-Awaiting decisions: E-case tiers and proposed limits (ACCEPTANCE_CANDIDATES.md), go-ahead for the
-E11 lagged fixture, Lee TDB redistribution, and merging the R05 branch. E11 isn't captured, so no
-gate is yet the completed expanded suite. Linux and golden tolerance work hasn't been done.
-Thermo-Calc (NiTiNb) remains a later optional extension.
+- **Fe-Cr-Ni.** `Config` gained `terminal_thin_phase_policy`, `compare_frozen` and `min_dt_frac`
+  (defaults leave solver inputs unchanged; E05/E06 stayed bit-identical). `PRODUCTION_B` has
+  the research case B settings, untested end to end (about 5 min sampling plus 4 min solve,
+  extrapolated). The build spec records the `moving-boundary` version. `simplex_bulk_points()`
+  now projects symmetrically onto the buffered simplex and reproduces the research
+  `allValid_3Element_compositions_*_projTo*.pkl` grids exactly, values and order.
+  `check_limits()` evaluates every workflow check the tests assert, from `LAGGED_THRESHOLDS`,
+  for `LAGGED_FAST` and `LAGGED_DEMO` only. These change the `LAGGED_*` surrogate inputs, so
+  existing lagged bundles need `REBUILD`.
+- **Bundles.** Both bundle-building examples refuse a non-empty folder without `manifest.json`
+  and give a rebuild hint for damaged bundles. `surrogate_lifecycle.run_differences()` compares
+  times, interface, eta, inventory and both phases' profiles.
+- **New `binary_tlp_bonding.py`.** The Ni-P bonding case of Zhou and North as reproduced in
+  Illingworth and Golosnoy Fig. 3, with an early-time exact solution, the mass-balance width
+  bound and conservation as checks. DEMO (81/321 nodes, `semiLog_dt` 0.005, to 7e4 s) takes about
+  2 s. A space and time convergence sweep gave a converged peak of 23.1096 um; DEMO's is 0.06% low.
+  It has tests but no E case or fixture.
+- **Citations.** Every example cites its literature sources in-line with a References cell;
+  `examples/README.md` ("Citing sources") makes this the practice for new and changed examples.
+
+Tests: `tests/test_examples.py` 46 passed and the slow test deselected, about 90–120 s, with
+`MB_EXAMPLE_TDB` set (2026-11-08). The reviewer simulation above (117 passed, 8 expected skips,
+167 s, on a fresh venv with the wheel and PyPI kawin 0.5.0) predates these changes and hasn't
+been rerun.
+
+Awaiting decisions: E-case tiers and proposed limits (ACCEPTANCE_CANDIDATES.md, now including
+the Ni-P example), whether the Ni-P example gets an E case, go-ahead for the E11 lagged fixture
+(its inputs changed in 22114b7, so freeze the config first), Lee TDB redistribution, and merging
+the R05 branch. E11 isn't captured, so no gate is yet the completed expanded suite. Linux and
+golden tolerance work hasn't been done. Thermo-Calc (NiTiNb) remains a later optional extension.
+Open solver finding: R06 in LEDGERS.md (the binary interface iteration stalls above its
+tolerance on fine grids).
 
 ## Installed solving and research-owned generation
 

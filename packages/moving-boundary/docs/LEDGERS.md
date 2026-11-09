@@ -185,6 +185,25 @@ error is 4.75e-4. `analytic/` is ported from that commit. The 06dc7b4 acceptance
 unchanged: `collect` doesn't use this helper, and existing `exact/*` arrays come from their
 own branches.
 
+## Research numerical issue R06: binary interface iteration stalls above its tolerance (open, not investigated)
+
+Found with `examples/binary_tlp_bonding.py` (Ni-P bonding, um and s units), 2026-11-08. Late in
+the solidification stage, the binary Illingworth model's interface fixed point stops reducing
+its error just above `tolerance` and raises after `max_iterations`:
+
+- Tolerance 1e-9 um, DEMO settings: stalls at exactly 2.027e-9, with 200 or 2000 iterations.
+- Tolerance 1e-8 um: power-law grids with exponent 2 in the liquid fail between 2,820 s and
+  8,951 s (floors 1.0–2.0e-8), and exponent 3 fails even at 5e-8; 161/641 linear-graded nodes
+  at `semiLog_dt` 0.01 fail at 63,863 s (floor 2.1e-7). Coarser grids and smaller steps complete.
+- The floor rises as the smallest cell shrinks, and for a fixed grid, larger time steps fail
+  earlier. The relative inventory drift also grows with refinement (about 1e-8 to 1e-7 at the
+  finest grids, against 5e-9 at DEMO), consistent with the drift being set by the iteration
+  tolerance rather than the scheme.
+
+The example works around it: DEMO uses 81/321 linear-graded nodes, `semiLog_dt` 0.005 and
+tolerance 1e-8 um, and its notes warn that finer grids run to the full duration can fail late.
+No solver code was changed. Any fix starts on the research branch, per the policy above.
+
 ## Example acceptance (pending tier approval)
 
 See [ACCEPTANCE_CANDIDATES.md](ACCEPTANCE_CANDIDATES.md#proposed-example-cases-pending-approval)
@@ -198,7 +217,9 @@ Known gaps: O04, O05 and O06 use frozen matrices, so lagged composition-dependen
 needs a new fixture that isn't captured yet. Its shared-bundle design won't compare grid
 sampling between hosts. Database-dependent tests skip in reviewer installs until a database
 is cleared for redistribution. Linux and other tested-version behaviour hasn't been checked,
-so no thermodynamic golden is frozen.
+so no thermodynamic golden is frozen. `binary_tlp_bonding` has no E case or fixture; only its
+tests check it. Three Fe-Cr-Ni references (Lee 1993, Hoglund et al. 1990, Fridberg et al. 1969)
+are cited only as listed by Lee and Oh, not checked against the originals.
 
 An unused local `tieTriangle_dict` with hard-coded compositions remains in
 `from_database`'s seed-point scan, with its other uses commented out. It's inert and shared

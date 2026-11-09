@@ -218,7 +218,15 @@ directly, so the unused semi-log values differ.
 `semiLog_dt` 0.05, 10 h). Order: freeze config and limits; prepare one bundle on detached 06dc7b4
 at `PYTHONHASHSEED=0`; capture the reference and an unseeded repeat pair with overwrite refused;
 run the parity comparison. Both hosts reload the same bundle and solve unseeded. Needs explicit
-go-ahead. A full gate run before this isn't the completed expanded suite.
+go-ahead. A full gate run before this isn't the completed expanded suite. Since this plan was
+written, 22114b7 changed the `LAGGED_*` inputs: the bulk grid is now the symmetric buffered-simplex
+projection (matching the research pickles), the build spec records the package version, and
+`Config` has three new fields whose defaults leave solver inputs unchanged. Freeze the config
+after these, not before.
+
+**`binary_tlp_bonding` has no E case.** No existing fixture covers it; it is checked by its own
+tests (DEMO limits below, and the growth constant against the flux balance). Whether it gets a
+fixture and a tier is pending.
 
 Proposed limits are in each example, with their configuration, normalization and window. Those
 marked below aren't from a source test and need approval before they are treated as frozen.
@@ -237,5 +245,11 @@ marked below aren't from a source test and need approval before they are treated
 | | eta abs; profile L∞; inventory rel | 2e-3; 2e-2; 1e-8 | 5e-4; 8.7e-3; 2.4e-11 | Same |
 | Three-phase DEMO: 81 nodes, mesh 6001, semi-log .025, t ≥ 4·T0 | k rel; eta abs; profile L∞; inventory | 2.5e-2; 1.5e-2; 1e-2; 1e-9 | 1.7e-2; 1.0e-2; 8.0e-3; 1.3e-10 | Source test |
 | Two-phase test: 21/.05 and 41/.025 | As in source | As in source | Test passes | Source test |
-| FeCrNi `LAGGED_FAST` | Inventory rel; matrix spread; simplices crossed | 1e-8; ≥ 0.2; ≥ 3 | 1.7e-10; about 1.0 in each phase; 7 in each phase | **Proposed** workflow, measured on the package |
-| | Interpolation vs nearest (median); lagged vs frozen | ≥ 1e-3; ≥ 5e-3 | ≥ 0.017; 0.036 | **Proposed** workflow, measured on the package |
+| FeCrNi `LAGGED_FAST` (and `LAGGED_DEMO`; no other settings) | Inventory rel; matrix spread; simplices crossed | 1e-8; > 0.2; ≥ 3 | 1.7e-10; 1.00 BCC, 1.06 FCC; 5 BCC, 7 FCC | **Proposed** workflow, measured on the package, 2026-11-08 grid |
+| | Interpolation vs nearest (median); lagged vs frozen | > 1e-3; > 5e-3 | 0.016 BCC, 0.017 FCC; 0.035 | Same |
+| | Accepted and attempted queries outside the hull; retained / requested points | 0; > 0.9 | 0; 1.07 (tie-line ends are added) | Same; previously test-only |
+| | Centroids within vertex range; training-point rel error | > 0.9; < 1e-8 | 1.0; 8e-13 | Same; previously test-only |
+| FeCrNi `LAGGED_DEMO` | Same checks | Same | 1.4e-10; 1.00, 1.06; 22, 15; 0.0054, 0.0068; 0.027; 0; 1.02; 1.0; 2e-11 | Same |
+| Ni-P DEMO: 81/321 nodes, `semiLog_dt` 0.005, t → 7e4 s | Early interface error / motion, 1e-3 s ≤ t ≤ 0.0144 s | 3e-3 | 1.1e-3 | **Proposed** accuracy |
+| | Peak / mass-balance bound | < 1 | 0.9941 | Exact limit |
+| | Inventory rel | 2e-8 | 7.5e-9 (set by the 1e-8 um iteration tolerance) | **Proposed** conservation |
