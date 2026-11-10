@@ -11,7 +11,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | Batch | Content | Status |
 |---|---|---|
 | M0 | Classification, materializer, `expected_artifacts` hashes | done 2026-11-10 (see log) |
-| M1 | Definitions for C01-C23, C30-C32, LEGACY | not started |
+| M1 | Definitions for C01-C23, C30-C32, LEGACY | done 2026-11-10 (see log) |
 | M2 | C25-C29 assertions + item 7 per-model scales | not started |
 | M3 | C24 + `prepare` | not started |
 | M4 | F04/F11/F12, O01-O08 | not started |
@@ -50,6 +50,20 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
     scripts through their source: deferred with FUTURE_PORTS entry 6 (recorded there).
   - *Unreferenced input:* `inputs/pycalphad.npz` (2026-11-05 18:51, 19 621 bytes, differs from
     `pycalphad-reference.npz`) is not adopted and was left untouched.
+- **M1 (2026-11-10, uncommitted).**
+  - 20 definition files (11 top-level entries, `ternary_two_phase_similarity_matrix` because M1
+    definitions load it, and 8 nested), all AST-equal; `docs/definitions-provenance.json`.
+    Stems and headers come from recording the whole table, so they don't depend on the batch.
+  - `tools/definitions/_bindings.py` (`Context`, `SourceKey`); worker `PACKAGE_DEFINITIONS`
+    covers C01-C23, C30-C32 and LEGACY in the package role and asserts that `acceptance_inputs`
+    was not imported.
+  - F5: worker's research-npz assertion is reference-role only. One-time proof: `LEGACY.npz`
+    `binary_*` (33 arrays, key sets equal) bit-identical with research
+    `kawin/tests/data/illingworth_substitutional_baseline.npz` (blob `faa85c8`, sha256
+    `4d51e6b8…65ad`) at clean `7af24f4`.
+  - Exact gate: `quick --tolerance exact --cases <27>`: 27/27 bit-identical; 27 reference
+    repeat pairs, 0 differences; 358 s. Tests: `test_definitions_bindings.py` (4) +
+    materializer (2) pass in `mb-public-050`.
 
 ## Decisions
 

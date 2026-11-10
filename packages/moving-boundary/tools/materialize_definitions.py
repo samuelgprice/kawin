@@ -171,7 +171,9 @@ def record_bindinputs(root, entries):
             else:
                 entry["stem"] = stem
             entry["cases"].update(cases)
+    top_level = {lookup_key(*spec[:6]): stem for stem, spec in entries.items()}
     for key, call in calls.items():
+        call["stem"] = top_level.get(key, call["stem"])
         if call["stem"] is None:
             tail = Path(call["path"]).stem
             call["stem"] = "_nested_" + tail + "_" + "_".join(sorted(n.strip("_") for n in call["names"])) + \
@@ -437,10 +439,16 @@ def main(argv=None):
     unknown = set(args.entries or ()) - set(ENTRIES)
     if unknown:
         parser.error("unknown entries: " + ", ".join(sorted(unknown)))
-    entries = {stem: ENTRIES[stem] for stem in (args.entries or ENTRIES)}
     sys.path.insert(0, str(args.research.resolve()))
-    calls, _ = record_bindinputs(args.research, entries)
+    # Always record the whole table, so stems, headers (cases, nested_by) and hashes don't depend
+    # on which entries a run writes; --entries only restricts the files written or checked.
+    calls, _ = record_bindinputs(args.research, ENTRIES)
     files, provenance = materialize(args.research, calls, manifest["reference_commit"], manifest["source_sha256"])
+    if args.entries:
+        wanted = set(args.entries)
+        keep = {stem for stem, entry in provenance.items() if stem in wanted or wanted & set(entry["nested_by"])}
+        files = {stem: data for stem, data in files.items() if stem in keep}
+        provenance = {stem: entry for stem, entry in provenance.items() if stem in keep}
     for stem, entry in provenance.items():
         print(f"{stem}: AST equal; {len(entry['transforms'])} transforms; cases {','.join(entry['cases'])}"
               + (f"; nested by {','.join(entry['nested_by'])}" if entry["nested_by"] else "")
@@ -469,6 +477,8 @@ def main(argv=None):
                      "acceptance_inputs.CaseInputs.load compiles at research_commit; no normalization"))
     document.setdefault("definitions", {}).update(provenance)
     document["definitions"] = dict(sorted(document["definitions"].items()))
+    keys = [entry["key"] for entry in document["definitions"].values()]
+    assert len(keys) == len(set(keys)), "two definition files registered for one load key"
     PROVENANCE.write_bytes((json.dumps(document, indent=1) + "\n").encode("utf-8"))
     print(f"wrote {len(files)} definition files and {PROVENANCE.relative_to(PROJECT)}")
     return 0

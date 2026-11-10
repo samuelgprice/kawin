@@ -12,6 +12,9 @@ import traceback
 
 HERE = Path(__file__).resolve().parent
 runpy.run_path(str(HERE / "batch_safety.py"))["forbid_input"]()
+# Cases whose package role builds from tools/definitions (materialized, hash-checked) instead of
+# the historical acceptance_inputs AST loader; the reference role always keeps the loader.
+PACKAGE_DEFINITIONS = {f"C{n:02d}" for n in list(range(1, 24)) + [30, 31, 32]} | {"LEGACY"}
 
 
 def module(name, path):
@@ -24,7 +27,14 @@ def module(name, path):
 
 
 def main():
-    """Assert import origins before case construction and save local numeric output."""
+    """Assert import origins before case construction and save local numeric output.
+
+    In the package role, cases in ``PACKAGE_DEFINITIONS`` take their inputs from
+    ``tools/definitions/_bindings.Context``: ``acceptance_inputs`` is never imported (asserted
+    after the run) and no research file is read. LEGACY's research baseline-npz assertion runs in
+    the reference role only; the package role relies on ``compare()`` against the hashed
+    ``reference/LEGACY.npz`` (decision F5) and keeps the recorded stop status label.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", choices=("reference", "package"), required=True)
     parser.add_argument("--root", type=Path, required=True)
@@ -54,9 +64,13 @@ def main():
         import moving_boundary
         assert Path(moving_boundary.__file__).resolve().is_relative_to(args.target.resolve())
         assert not any(Path(p).resolve() == args.root.resolve() for p in sys.path if p)
-    inputs_module = module("acceptance_inputs", HERE / "acceptance_inputs.py")
     cases = module("acceptance_cases", HERE / "acceptance_cases.py")
-    inputs = inputs_module.CaseInputs(args.root, args.role)
+    definitions = args.role == "package" and args.case in PACKAGE_DEFINITIONS
+    if definitions:
+        inputs = module("definitions_bindings", HERE / "definitions/_bindings.py").Context()
+    else:
+        inputs_module = module("acceptance_inputs", HERE / "acceptance_inputs.py")
+        inputs = inputs_module.CaseInputs(args.root, args.role)
     number = int(args.case[1:]) if args.case.startswith("C") else -1
     if args.case in {"LEGACY","F04","O07"} or number in list(range(1,5))+[13,14,15,25,30,31]:
         inputs.family = "binary"
@@ -106,16 +120,17 @@ def main():
             report.update(contracts=completed, providers=inputs.providers, stop_status="contract_assertions_passed")
             np.savez_compressed(args.output.with_suffix(".npz"), **arrays)
         elif args.case == "LEGACY":
-            source = inputs.load(args.root / "kawin/tests/illingworth_baseline_cases.py", ["_binary_model", "_collect"])
+            source = inputs.load(inputs.root / "kawin/tests/illingworth_baseline_cases.py", ["_binary_model", "_collect"])
             arrays = {}
             for mode in ("phase_uniform", "composition_dependent_lagged", "composition_dependent_implicit"):
                 model = source._binary_model(mode, mode != "phase_uniform")
                 model.solve(.5, minDtFrac=1e-14)
                 arrays.update(source._collect("binary_" + mode, model, ("interfaceData","concData","pData","qData")))
-            with np.load(args.root / "kawin/tests/data/illingworth_substitutional_baseline.npz") as fixture:
-                assert set(arrays) == {key for key in fixture.files if key.startswith("binary_")}
-                for key in arrays:
-                    np.testing.assert_array_equal(arrays[key], fixture[key], err_msg=key)
+            if args.role == "reference":
+                with np.load(args.root / "kawin/tests/data/illingworth_substitutional_baseline.npz") as fixture:
+                    assert set(arrays) == {key for key in fixture.files if key.startswith("binary_")}
+                    for key in arrays:
+                        np.testing.assert_array_equal(arrays[key], fixture[key], err_msg=key)
             bulk = module("binary_bulk_cases", HERE / "binary_cases.py")
             arrays.update(bulk.run_bulk_cases(inputs.model("MovingBoundaryIllingworthFD1DModel")))
             report.update(providers=inputs.providers, stop_status="fixture_and_bulk_passed")
@@ -166,6 +181,9 @@ def main():
             assert audit["guarded"] and not audit["examples_imported"] and not audit["examples_read"]
             assert Path(audit["adapter_origin"]).resolve().is_relative_to(args.target.resolve())
             report["thermocalc_generation" if args.case == "O06" else "pycalphad_generation"] = audit
+        if definitions:
+            assert "acceptance_inputs" not in sys.modules, "package-owned definitions imported the historical loader"
+            report["case_definitions"] = "tools/definitions"
         report.update(status="PASS", arrays=len(arrays))
     except Exception:
         report.update(status="FAIL", error=traceback.format_exc())
