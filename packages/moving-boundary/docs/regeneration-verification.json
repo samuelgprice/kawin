@@ -1,0 +1,148 @@
+{
+ "adopted_unchanged": true,
+ "backends": {
+  "comparable": true,
+  "generation": {
+   "_note": "probed 2026-11-10 at M5b, not recorded when the adopted files were generated",
+   "kawin": "0.4.0",
+   "numpy": "2.4.3",
+   "pycalphad": "0.11.1",
+   "scipy": "1.17.1",
+   "symengine": "0.13.0"
+  },
+  "here": {
+   "kawin": "0.5.0",
+   "numpy": "2.4.3",
+   "pycalphad": "0.11.1",
+   "scipy": "1.17.1",
+   "symengine": "0.13.0"
+  },
+  "reason": null
+ },
+ "checks": {
+  "deferred": {
+   "exb5.json": {
+    "outcome": "deferred",
+    "reason": "no package generation path (deferred): research Thermo-Calc study workflow"
+   },
+   "fec.json": {
+    "outcome": "deferred",
+    "reason": "no package generation path (deferred): research Thermo-Calc study workflow"
+   },
+   "fecrni.surrogate": {
+    "outcome": "deferred",
+    "reason": "no package generation path (deferred): research pycalphad study workflow"
+   },
+   "femnc.json": {
+    "outcome": "deferred",
+    "reason": "no package generation path (deferred): research Thermo-Calc study workflow"
+   }
+  },
+  "example_settings": {
+   "C04": {
+    "byte_identical": true,
+    "fields": 62,
+    "json_equal": true,
+    "outcome": "verified",
+    "reason": null
+   },
+   "C11": {
+    "byte_identical": true,
+    "fields": 102,
+    "json_equal": true,
+    "outcome": "verified",
+    "reason": null
+   },
+   "C12": {
+    "byte_identical": true,
+    "fields": 102,
+    "json_equal": true,
+    "outcome": "verified",
+    "reason": null
+   },
+   "C16": {
+    "byte_identical": true,
+    "fields": 111,
+    "json_equal": true,
+    "outcome": "verified",
+    "reason": null
+   },
+   "C24": {
+    "byte_identical": true,
+    "fields": 111,
+    "json_equal": true,
+    "outcome": "verified",
+    "reason": null
+   },
+   "F04": {
+    "byte_identical": true,
+    "fields": 62,
+    "json_equal": true,
+    "outcome": "verified",
+    "reason": null
+   },
+   "F11": {
+    "byte_identical": true,
+    "fields": 102,
+    "json_equal": true,
+    "outcome": "verified",
+    "reason": null
+   },
+   "F12": {
+    "byte_identical": true,
+    "fields": 102,
+    "json_equal": true,
+    "outcome": "verified",
+    "reason": null
+   },
+   "O04": {
+    "byte_identical": true,
+    "fields": 111,
+    "json_equal": true,
+    "outcome": "verified",
+    "reason": null
+   },
+   "O05": {
+    "byte_identical": true,
+    "fields": 111,
+    "json_equal": true,
+    "outcome": "verified",
+    "reason": null
+   }
+  },
+  "open-surrogate.npz": {
+   "arrays_bit_identical": 35,
+   "container": {
+    "byte_identical": true,
+    "members_equal": true
+   },
+   "key_sets_equal": true,
+   "keys_compared": 35,
+   "metadata_differing": 0,
+   "metadata_fields": 0,
+   "outcome": "verified",
+   "reason": null
+  },
+  "pycalphad-reference.npz": {
+   "arrays_bit_identical": 35,
+   "container": {
+    "byte_identical": true,
+    "members_equal": true
+   },
+   "key_sets_equal": true,
+   "keys_compared": 35,
+   "metadata_differing": 0,
+   "metadata_fields": 30,
+   "outcome": "verified",
+   "reason": null,
+   "reference_O05_provider": {
+    "arrays": 21,
+    "bit_identical": 21,
+    "key_sets_equal": true
+   }
+  }
+ },
+ "open_items": {},
+ "plan": "AUTHORITY_SWITCH_PLAN.md section 3a (M5b)",
+ "schema": 1
+}

@@ -3,7 +3,9 @@
 Package role: build an example through the installed API, record its effective settings,
 solve, and save parity arrays and the settings separately. Reference role: build the
 accepted case on the frozen source only to record its settings; existing fixtures are
-never written. Example metrics are not parity arrays: they would break the frozen schema.
+never written. Package role with ``--settings-only``: build the accepted case from the
+package-owned ``tools/definitions`` instead and record only its settings (regeneration
+verification, plan §3a); seeded sampling cases (O05) then run under ``PYTHONHASHSEED=0``. Example metrics are not parity arrays: they would break the frozen schema.
 """
 from pathlib import Path
 import argparse
@@ -84,6 +86,24 @@ def reference_settings(entry, args, cases, settings):
     historical capture cannot rewrite the adopted ``pycalphad-reference.npz`` (E05's input).
     """
     inputs = module("acceptance_inputs", HERE / "acceptance_inputs.py").CaseInputs(args.root, "reference")
+    return accepted_case_settings(inputs, entry, args, cases, settings)
+
+
+def definitions_settings(entry, args, cases, settings):
+    """Package role: build the accepted case from ``tools/definitions`` and record its settings.
+
+    The package generation path for the adopted settings files (plan §3a): the same builder as
+    ``reference_settings`` on the materialized definitions (``_bindings.Context``), never solved,
+    without reading research files or importing ``acceptance_inputs``.
+    """
+    inputs = module("definitions_bindings", HERE / "definitions/_bindings.py").Context()
+    record = accepted_case_settings(inputs, entry, args, cases, settings)
+    assert "acceptance_inputs" not in sys.modules, "package-owned definitions imported the historical loader"
+    return record
+
+
+def accepted_case_settings(inputs, entry, args, cases, settings):
+    """Build ``entry``'s accepted case with ``inputs`` and return its effective settings."""
     inputs.artifacts = args.artifacts
     inputs.pycalphad_sample = args.output.with_name(args.output.name + ".pycalphad.npz")
     case = entry["reference"]
@@ -107,14 +127,22 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--target", type=Path)
     parser.add_argument("--host", type=Path)
+    parser.add_argument("--settings-only", action="store_true",
+                        help="package role: record the accepted case's settings from tools/definitions; no solve")
     args = parser.parse_args()
     sys.path.extend(site.getsitepackages())
+    manifest = json.loads((HERE / "example_manifest.json").read_text(encoding="utf-8"))
+    entry = manifest["cases"][args.case]
+    assert not args.settings_only or args.role == "package", "--settings-only is a package-role mode"
     if args.role == "reference":
         sys.path.insert(0, str(args.root.resolve()))
     else:
         sys.path[:0] = [str(args.target.resolve()), str(args.host.resolve())]
         sys.meta_path.insert(0, NoResearchImports())
-        assert "PYTHONHASHSEED" not in os.environ, "Example solves must be unseeded"
+        if args.settings_only and entry["reference"] in {"O05", "O08"}:
+            assert os.environ.get("PYTHONHASHSEED") == "0", "seeded sampling cases build under PYTHONHASHSEED=0"
+        else:
+            assert "PYTHONHASHSEED" not in os.environ, "Example solves must be unseeded"
     import kawin
     expected = args.root if args.role == "reference" else args.host
     assert Path(kawin.__file__).resolve() == (expected / "kawin/__init__.py").resolve(), kawin.__file__
@@ -125,14 +153,13 @@ def main():
         assert Path(moving_boundary.__file__).resolve().is_relative_to(args.target.resolve())
         assert not any(Path(p).resolve() == args.root.resolve() for p in sys.path if p)
     import numpy as np
-    manifest = json.loads((HERE / "example_manifest.json").read_text(encoding="utf-8"))
-    entry = manifest["cases"][args.case]
     cases = module("acceptance_cases", HERE / "acceptance_cases.py")
     settings = module("example_settings", HERE / "example_settings.py")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    if args.role == "reference":
-        record = reference_settings(entry, args, cases, settings)
+    if args.role == "reference" or args.settings_only:
+        build = reference_settings if args.role == "reference" else definitions_settings
+        record = build(entry, args, cases, settings)
         args.output.with_suffix(".settings.json").write_text(json.dumps(record, indent=1, sort_keys=True), encoding="utf-8")
     else:
         model, arrays, record = package_case(entry, args, cases, settings)
