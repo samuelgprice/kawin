@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "reference_commit": "720d122d04b56fc6527615c6483b29b78d47be36",
+  "reference_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
   "prior_fixture_commit": "ae9fb2971a9fd49132f71ddc883a5bd5406644b6",
   "quick": [
     "C01",
@@ -146,7 +146,7 @@
     "kawin/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "kawin/tests/datasets.py": "f9f3da9c007ffa6de5c329530326d15cfb18156fdd123afa0464e63ed63776ba",
     "kawin/tests/illingworth_baseline_cases.py": "2a31c47b5f54e43337b769f5410577795ec796038bfac18b64b6783da11c7842",
-    "kawin/tests/make_illingworth_substitutional_baseline.py": "8213f99d0e51751333b2ef5ec0e16e63107fa44c64350555615f785f298752c9",
+    "kawin/tests/make_illingworth_substitutional_baseline.py": "3c72f4f21c8be45b280b17f19542f45a2d2dd943849e430d8c0c856bcaa1273b",
     "kawin/tests/test_PBM.py": "33297dfa9b119bd90226eb63f4b3bee5c3379b472b852b53724375a8d0c2895e",
     "kawin/tests/test_benchmark_wtife_surrogate_runtime.py": "266551834ecfcc7379c74194b712e596b66a1c17039b151604903745dfd54748",
     "kawin/tests/test_diffusion.py": "d346c28e1795cfb07b7478a827d36669d26703541b532ea929561dd13a148671",

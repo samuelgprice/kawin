@@ -118,9 +118,10 @@ full a 1200-second cap, well below 30 minutes. `verify.py` delegates to quick;
 offline setup operation, outside the quick budget. Use tools/setup_public_environment.py
 through the same activation wrapper to rebuild that offline clone from the cached wheel.
 
-References are captured from the clean detached `mb-ref-720d122` worktree at
-720d122d04b56fc6527615c6483b29b78d47be36 (research main with the R05 and binary and two-phase
-ternary R06 merges; moved from 06dc7b4 via 90700be on 2026-11-09, see docs/LEDGERS.md R06). The
+References are captured from the clean detached `mb-ref-7af24f4` worktree at
+7af24f4b0a41b588824ecff22a9d664475602fcc (research main with the R05 and binary, two-phase
+ternary and three-phase R06 merges; moved from 06dc7b4 via 90700be and 720d122 on 2026-11-09/10,
+see docs/LEDGERS.md R06). The
 frozen O08 fixture remains from detached 06dc7b4; the frozen O06 fixture was deliberately
 recaptured from 720d122 (R06). Every reference worker asserts its
 kawin import origin. The extraction's older kawin/examples/root packaging remain

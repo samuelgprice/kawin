@@ -244,7 +244,8 @@ The approved numerical oracle is the clean detached 90700be worktree (`mb-ref-90
 research main with the R05 and R06 merges, moved from 06dc7b4 on 2026-11-09 (LEDGERS.md
 R06); the frozen O06/O08 fixtures stay from 06dc7b4. Since the same day the oracle is
 `mb-ref-720d122` (adds the two-phase ternary R06 merge); O06 was recaptured there, O08 stays
-from 06dc7b4. Do not merge research HEAD into
+from 06dc7b4. Since 2026-11-10 the oracle is `mb-ref-7af24f4` (adds the three-phase R06 merge;
+O06 and O08 fixtures unchanged). Do not merge research HEAD into
 the extraction or develop scientific repairs independently in both locations.
 Preserve floating-point order, x/u and volume conventions, R=8.3145 where used,
 and temperature-array hours. Never regenerate references to hide a difference.

@@ -185,7 +185,7 @@ error is 4.75e-4. `analytic/` is ported from that commit. The 06dc7b4 acceptance
 unchanged: `collect` doesn't use this helper, and existing `exact/*` arrays come from their
 own branches.
 
-## Research numerical issue R06: binary interface iteration stalls above its tolerance (binary fixed: research `25bf6cd`, merged to research main `90700be`, ported, oracle moved 2026-11-09; two-phase ternary fixed: research `2741135`, merged `720d122`, ported, oracle moved 2026-11-09; three-phase fixed: research `fae6149`, merged `7af24f4`, ported 2026-11-10)
+## Research numerical issue R06: binary interface iteration stalls above its tolerance (binary fixed: research `25bf6cd`, merged to research main `90700be`, ported, oracle moved 2026-11-09; two-phase ternary fixed: research `2741135`, merged `720d122`, ported, oracle moved 2026-11-09; three-phase fixed: research `fae6149`, merged `7af24f4`, ported, oracle moved 2026-11-10)
 
 Found with `examples/binary_tlp_bonding.py` (Ni-P bonding, um and s units), 2026-11-08. Late in
 the solidification stage, the binary Illingworth model's interface fixed point stops reducing
@@ -559,6 +559,31 @@ verbatim and exposed as `tpt`/`sim` (interstitial helpers prefixed, the similari
   tolerance, so the oracle move below adopts it deliberately (user decision, 2026-11-10); no
   tolerance was changed. Open question: whether contracts should apply the molar-volume scale to
   mole arrays, as `inventory_scale()` does for run cases.
+
+**Oracle move to 7af24f4 (2026-11-10, user-approved).** The acceptance oracle moved from detached
+`720d122` to a new clean detached worktree `...\code\mb-ref-7af24f4` (research main with the
+three-phase merge):
+
+- `acceptance_manifest.json`: top-level `reference_commit` and the 1 changed of 82 `source_sha256`
+  entries (`make_illingworth_substitutional_baseline.py`; the solver modules are not hashed).
+  `acceptance.py` `REFERENCE` points at the new worktree. `thermocalc_sampling.reference_commit`
+  stays `720d122`: the O06 fixture is unchanged (two-phase results are bitwise unchanged).
+- Capture at `--tier full` of 43 cases passed in 214.0 s (O08 refused overwrite, as designed; O06
+  not recaptured); old references are kept locally in
+  `.verification/acceptance/reference-720d122-backup`. Array bytes (`.npz`) changed only for the
+  15 three-phase cases: C09-C12, C20-C23, C27, C28, C32, F11, F12, O02 (exb5 gamma/alpha/gamma)
+  and O03b (symmetric three-phase check). Every binary, two-phase ternary and LEGACY reference is
+  byte-identical; the JSON files differ only in `kawin_origin` and `elapsed_seconds`.
+- `exact` quick: 30 runs and 5 contracts bit-identical, 89 tests, 33 repeat pairs, 494.8 s.
+  `exact` full: 40 runs (O06 included with live Thermo-Calc, against its unchanged frozen fixture)
+  and 5 contracts bit-identical, 89 tests, 34 repeat pairs, 631.1 s. Public quick and full with
+  `--record` (same counts, all bit-identical, 471.9 s and 607.6 s) updated `docs/acceptance.json`
+  run times and `docs/acceptance-deviations.json` `reference_commit`.
+- `acceptance_examples.py run --skip-tests` first failed E07-E10 on "setting differs" only: the
+  derived local settings lacked the nine new three-phase projection-diagnostic attributes. They
+  were moved to `example_settings-720d122-backup` and recaptured from 7af24f4: C04, C16, C24, F04,
+  O04 and O05 are byte-identical, and C11, C12, F11 and F12 differ only by those nine added
+  attributes (none removed or changed). The rerun passes E01-E10 in 85.4 s (E11 pending).
 
 Ternary R06 handed off 2026-11-09 (prompt: ternary-r06-deviation-form).
 Handed off 2026-11-09 (prompt: r06-ternary-merge-port-threephase).
