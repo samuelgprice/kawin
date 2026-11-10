@@ -1,4 +1,4 @@
-# Complete shared helper section from samuelgprice/kawin 2741135c9a4ba2644a1facf6ad604112dba35309 (R06 ternary correction on top of main 90700be), MovingBoundaryIllingworthTernaryFDM.py
+# Complete shared helper section from samuelgprice/kawin fae6149ccc6ebfda2100c4ed5a9b99b962e77620 (R06 three-phase correction on top of main 720d122), MovingBoundaryIllingworthTernaryFDM.py
 import warnings
 from dataclasses import dataclass
 
@@ -336,13 +336,16 @@ def _profile_within_floor_bounds(profile, substitutional, floor):
     return 1.0 >= floor
 
 
-def _project_shift_roundoff_to_floor(profile, shift, deviation, interstitial_mask, min_composition, fixed_node, grid, length):
+def _project_shift_roundoff_to_floor(profile, shift, deviation, interstitial_mask, min_composition, fixed_node, grid, length, weights=None):
     """
     Moves composition-floor violations caused by deviation-form round-off onto the floor.
 
     A deviation-form phase solve reconstructs ``profile = deviation + shift``,
     so every component carries an absolute round-off of about
-    ``eps * (|shift| + |deviation|)`` regardless of its own size. A dilute
+    ``eps * (|shift| + |deviation|)`` regardless of its own size. ``shift`` is
+    either one 2-vector (a constant reference, as in the two-phase model) or a
+    per-node ``(n_nodes, 2)`` reference profile (the three-phase middle phase);
+    the threshold below then uses ``|shift_ik|`` node by node. A dilute
     value just above ``min_composition`` beside a large interface composition
     can therefore land just below the floor, where the composition validator
     (``composition_bound_violation``, an exact comparison) would reject it at
@@ -360,9 +363,12 @@ def _project_shift_roundoff_to_floor(profile, shift, deviation, interstitial_mas
     A node is committed only if it then passes ``composition_bound_violation``
     with the production arithmetic; otherwise it is left unchanged and the
     validator rejects the candidate as before. ``fixed_node`` (the Dirichlet
-    interface node) is never modified. Interstitial components are bounded
-    from below only. ``grid`` and ``length`` give the new-geometry trapezoidal
-    weights used for the returned ``_FloorProjection.inventory_change``.
+    interface node, or a sequence of such nodes) is never modified.
+    Interstitial components are bounded from below only. ``grid`` and
+    ``length`` give the new-geometry trapezoidal weights used for the returned
+    ``_FloorProjection.inventory_change``; a caller whose cell equations use
+    other (bitwise different) node weights passes them as ``weights``
+    instead, so the recorded change matches its own inventory.
 
     Returns ``(profile, projection)``; ``profile`` is the input array itself
     when nothing was projected. This is a controlled perturbation, unlike the
@@ -379,19 +385,19 @@ def _project_shift_roundoff_to_floor(profile, shift, deviation, interstitial_mas
     n = profile.shape[0]
     dependent = 1.0 - np.sum(profile[:, substitutional], axis=1)
     flagged = np.flatnonzero(np.any(profile < floor, axis=1) | (dependent < floor))
-    flagged = flagged[flagged != (int(fixed_node) % n)]
+    flagged = flagged[~np.isin(flagged, np.atleast_1d(np.asarray(fixed_node, dtype=np.intp)) % n)]
     if flagged.size == 0:
         return profile, _no_floor_projection()
 
     eps = np.finfo(np.float64).eps
-    shift = np.abs(np.asarray(shift, dtype=np.float64).reshape(2))
+    shift = np.abs(np.broadcast_to(np.asarray(shift, dtype=np.float64), profile.shape))
     deviation = np.asarray(deviation, dtype=np.float64)
     substitutional_indices = np.flatnonzero(substitutional)
     projected = profile.copy()
     mask = np.zeros((n, 3), dtype=bool)
     repairs = []
     for i in flagged:
-        scale = shift + np.abs(deviation[i])
+        scale = shift[i] + np.abs(deviation[i])
         threshold = _FLOOR_PROJECTION_ULPS * eps * scale
         row = profile[i].copy()
         node_mask = np.zeros(3, dtype=bool)
@@ -431,12 +437,15 @@ def _project_shift_roundoff_to_floor(profile, shift, deviation, interstitial_mas
 
     if not np.any(mask):
         return profile, _no_floor_projection()
-    grid = np.asarray(grid, dtype=np.float64).reshape(-1)
-    weights = np.zeros(n, dtype=np.float64)
-    half_widths = 0.5 * np.diff(grid)
-    weights[:-1] += half_widths
-    weights[1:] += half_widths
-    weights *= float(length)
+    if weights is None:
+        grid = np.asarray(grid, dtype=np.float64).reshape(-1)
+        weights = np.zeros(n, dtype=np.float64)
+        half_widths = 0.5 * np.diff(grid)
+        weights[:-1] += half_widths
+        weights[1:] += half_widths
+        weights *= float(length)
+    else:
+        weights = np.asarray(weights, dtype=np.float64).reshape(n)
     change = projected - profile
     return projected, _FloorProjection(
         inventory_change=weights @ change,

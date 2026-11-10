@@ -14,7 +14,10 @@ fixture remains a separate oracle. No frozen source is developed or refreshed.
 Exception: `solvers/illingworth/binary.py` carries the R06 deviation-form solve
 ported from research 25bf6cd60732ed34ed6f70b94716a515c76b714c (see LEDGERS.md R06), and
 `solvers/illingworth/ternary.py` with `solvers/illingworth/shared.py` carry the two-phase
-ternary R06 deviation-form solve ported from research 2741135c9a4ba2644a1facf6ad604112dba35309.
+ternary R06 deviation-form solve ported from research 2741135c9a4ba2644a1facf6ad604112dba35309;
+`solvers/illingworth/three_phase.py` carries the three-phase R06 deviation-form solve ported
+from research fae6149ccc6ebfda2100c4ed5a9b99b962e77620, which also generalised the floor-projection
+helper in `shared.py`.
 
 | Package path | Source path / extraction | Changes |
 |---|---|---|
@@ -23,12 +26,12 @@ ternary R06 deviation-form solve ported from research 2741135c9a4ba2644a1facf6ad
 | mesh/FDM1D.py | kawin/diffusion/mesh/FDM1D.py | module placement/imports only |
 | mesh/TransformedGrids.py | kawin/diffusion/mesh/TransformedGrids.py | module placement/imports only |
 | solvers/illingworth/_interstitials.py | kawin/diffusion/_illingworth_interstitials.py | module placement/imports only |
-| solvers/illingworth/shared.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | complete pre-class helper section; imports only; R06 port from 2741135 |
+| solvers/illingworth/shared.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | complete pre-class helper section; imports only; R06 port from 2741135, helper generalised from fae6149 |
 | solvers/illingworth/numerics/ternary.py | kawin/diffusion/mesh/MovingBoundaryIllingworthTernaryFD1D.py | module placement/imports only |
 | equilibrium.py | kawin/diffusion/MovingBoundaryEquilibrium.py | module placement/imports only |
 | _spectral_validation.py | kawin/diffusion/_spectral_validation.py | module placement/imports only |
 | solvers/illingworth/ternary.py | kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py | class body unchanged; complete shared helper section moved to solvers/illingworth/shared.py; R06 port from 2741135 |
-| solvers/illingworth/three_phase.py | kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py | module placement/imports only |
+| solvers/illingworth/three_phase.py | kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py | module placement/imports only; R06 port from fae6149 |
 | surrogates.py | kawin/diffusion/MovingBoundarySurrogates.py | Whole local provider module; imports and two inherited trailing-whitespace lines only; numerical AST identical |
 | surrogate_artifacts.py | kawin/diffusion/SurrogateArtifacts.py | Whole local provider/helper module; imports only |
 | _diffusivity_domain.py | kawin/diffusion/_diffusivity_domain.py | Whole local provider/helper module; imports only |

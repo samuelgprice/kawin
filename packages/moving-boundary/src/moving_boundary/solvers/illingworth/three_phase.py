@@ -1,4 +1,4 @@
-# Relocated from samuelgprice/kawin 06dc7b4ab56f67226ceabfde41ebf2690c088841
+# Relocated from samuelgprice/kawin fae6149ccc6ebfda2100c4ed5a9b99b962e77620 (R06 three-phase correction on top of main 720d122).
 # Source: kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py; import changes only. See NOTICE and docs/LEDGERS.md.
 import warnings
 from dataclasses import dataclass
@@ -25,9 +25,13 @@ from moving_boundary.solvers.illingworth.shared import (
     _COMPONENTWISE_ROUNDOFF_FACTOR,
     _INTERFACE_ETA_FD_STEP,
     _SUPPORTED_BULK_DIFFUSIVITY_MODES,
+    _FloorProjection,
     _bounded_finite_difference_perturbation,
     _coerce_bulk_diffusivity_mode,
     _loge_arange,
+    _no_floor_projection,
+    _profile_within_floor_bounds,
+    _project_shift_roundoff_to_floor,
     _validate_eta_bounds,
     _validate_ternary_diffusivity_matrix,
     _validate_ternary_diffusivity_stack,
@@ -54,7 +58,17 @@ class _ThreePhaseBulkResult:
     ``left_transfer`` and ``right_transfer`` are the total ALE plus diffusive transfers
     over the timestep on the interface-adjacent internal faces. They use the
     same orientation as the interval grid, from smaller to larger transformed
-    coordinate.
+    coordinate. They are evaluated in deviation form from the solved deviation
+    ``w = profile - reference`` (ledger R06; see ``_finish_interval_solve``),
+    never from differences of the stored absolute ``profile``.
+
+    ``projection`` records the round-off floor projection applied to
+    ``profile`` (see ``_project_floor_roundoff``); its ``inventory_change``
+    uses this phase's new cell widths and belongs to the returned profile.
+    ``projection_split`` is a ``(2, 2)`` array whose rows are the parts of
+    that change attributed to the phase's left and right interface residual
+    (they add up to ``inventory_change``). Both are required, so that every
+    return path, including the Picard exit, must forward them.
     """
 
     profile: np.ndarray
@@ -62,6 +76,8 @@ class _ThreePhaseBulkResult:
     right_transfer: np.ndarray
     left_face_matrix: np.ndarray | None
     right_face_matrix: np.ndarray | None
+    projection: _FloorProjection
+    projection_split: np.ndarray
     inner_iterations: int = 0
     inner_update_norm: float = 0.0
     diffusivity_evaluations: int = 0
@@ -112,7 +128,12 @@ class _ThreePhaseAcceptedState:
 
 @dataclass(frozen=True, slots=True)
 class _ThreePhasePendingState:
-    """Exact converged candidate awaiting verification and accepted-state commit."""
+    """Exact converged candidate awaiting verification and accepted-state commit.
+
+    ``projection`` stages the candidate's floor-projection totals
+    ``(inventory_change, absolute_change, projected_nodes)``; ``postProcess``
+    adds them to the cumulative totals only when the step is committed.
+    """
 
     profiles: tuple[np.ndarray, np.ndarray, np.ndarray]
     interfaces: np.ndarray
@@ -120,6 +141,7 @@ class _ThreePhasePendingState:
     right_boundary: float
     start_time: float
     dt: float
+    projection: tuple | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +249,43 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     ``initial_eta_componentwise_scaling`` scales each row of the startup eta
     balance separately (see ``_estimate_initial_etas``). The defaults leave
     results unchanged.
+
+    **Deviation form (ledger R06).** Each interval is solved for the deviation
+    ``w = C - r`` from a reference profile ``r``: the interface composition for
+    the outer phases A and C (as in the two-phase model) and, for the middle
+    phase B, the linear profile ``c_L + xi (c_R - c_L)`` between its two
+    interface compositions. Every free row of an interval system sums to its
+    old cell width times ``I``, so the matrix is unchanged; only the
+    right-hand side changes (``_solve_interval_planar``). The
+    interface-adjacent transfers are formed as ``d_f c + (face coefficient) @
+    (deviation terms)`` with the face displacement ``d_f``
+    (``_finish_interval_solve``), so the residual no longer contains
+    ``-A x0 + A x1`` with absolute compositions, whose round-off
+    ``eps |A| |c|`` (``A = dt D / (L dxi)``) exceeded the residual tolerance on
+    fine interface cells or long steps. Measured on the asymmetric similarity
+    case with 201 nodes per phase and 1e-12-scale interface cells: the scaled
+    residual's float error fell from 5e-11..3e-10 to below 1e-18, and the run
+    no longer retries. The error that remains comes from the solve itself
+    (conditioning, about ``eps |A| |w|``) and from the rounding of the input
+    geometry. Diffusivity queries, Picard iterates and norms, stored profiles
+    and the endpoint inventory terms stay in absolute compositions.
+
+    **Precision of stored compositions.** A stored profile ``r + w`` resolves
+    each component only to about ``eps (|r| + |w|)`` in absolute terms. A
+    dilute value just above ``minComposition`` beside a large interface
+    composition can therefore land a few ulps below the floor. Such
+    violations within the policy threshold
+    ``_FLOOR_PROJECTION_ULPS * eps * (|r_i| + |w_i|)`` (a fixed policy, not an
+    error bound) are moved onto the floor by ``_project_floor_roundoff``, with
+    the Dirichlet nodes never touched; larger ones are rejected by the
+    composition validator as before. The signed inventory change is added to
+    the interface residuals with the phase's density weight (the middle
+    phase's change is split node by node as ``(1 - xi_i, xi_i)`` between A|B
+    and B|C), so a converged residual describes the stored profiles. Totals
+    are reported per accepted step (``_lastStepProjection*``) and accumulated
+    over committed steps (``_cumulativeProjection*``,
+    ``_cumulativeProjectedNodes``; ``_cumulativeProjectedSolves`` also counts
+    discarded solves).
 
     ``print_diagnostics`` (default ``False``; also settable afterwards as
     ``printDiagnostics``) prints the last timestep retry of an attempt and the
@@ -409,6 +468,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._lastAcceptedDt = None
         self._laggedFaceDiffusivityCache = None
         self._interfaceCompositionCache = None
+        self._reset_projection_diagnostics()
         self._interstitialMaskCache = None
         # Reference seam: False forces the NumPy interval assembly (tests compare both).
         self._useCompiledIntervalAssembly = True
@@ -1617,14 +1677,36 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         ``None`` means the material external boundary has homogeneous zero
         relative transfer.
 
+        Deviation form (ledger R06): the system is solved for
+        ``w = C_new - r`` with the reference profile ``r`` of
+        ``_interval_reference`` (the interface composition for an outer phase,
+        linear in ``xi`` between the two interface compositions for the middle
+        phase). Every free row sums to ``L_old*DeltaXi*I`` (the face
+        displacements telescope and the diffusive terms cancel), so the matrix
+        is unchanged and free rows get
+        ``rhs_i = L_old*DeltaXi_i*(C_old_i - r_i) - lower_i@dr_{i-1} - upper_i@dr_{i+1}``
+        with ``dr_{i+-1} = (xi_{i+-1} - xi_i)*(c_R - c_L)`` formed from grid
+        differences (zero for the outer phases); Dirichlet rows get ``0``. The
+        right-hand side is assembled in that form, never as ``b - M r``. In
+        exact arithmetic the solution is the same as solving for ``C_new``;
+        in floating point the interface transfers no longer cancel absolute
+        compositions (see ``_finish_interval_solve``). Diffusivities passed in
+        ``D_faces`` are evaluated by the callers from absolute compositions.
+
         With Numba the system is assembled by the compiled
         ``_fill_three_phase_interval_system`` (same operations in the same
         order, so results are bitwise identical); otherwise by the vectorized
-        NumPy code below.
+        NumPy code below. Both receive ``C_old - r`` and zero fixed values; the
+        middle-phase ``dr`` correction is applied afterwards by the same NumPy
+        code on either path.
         """
         profile = validate_ternary_profile(profile, "interval profile")
         grid = np.asarray(grid, dtype=np.float64).reshape(-1)
         n = len(profile)
+        reference, delta = self._interval_reference(grid, n, left_value, right_value)
+        shifted = profile - reference
+        zero = np.zeros(2, dtype=np.float64)
+        reference_info = (reference, delta, grid, old_bounds, new_bounds, phase_frame_displacement)
         D_values = np.asarray(D_faces)
         D_faces = self._phase_face_diffusivity_matrices(D_values, n - 1, self.phases[phase_index]) if validate_diffusivity else np.asarray(D_values, dtype=np.float64)
         if D_faces.shape == (2, 2):
@@ -1642,16 +1724,16 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             upper = np.zeros((n, 2, 2), dtype=np.float64)
             rhs = np.zeros((n, 2), dtype=np.float64)
             end_coefficients = np.empty((2, 2, 2, 2), dtype=np.float64)
-            zero = np.zeros(2, dtype=np.float64)
             _fill_three_phase_interval_system(
-                lower, diagonal, upper, rhs, end_coefficients, profile, grid,
+                lower, diagonal, upper, rhs, end_coefficients, shifted, grid,
                 old_left, old_right, new_left, new_right, float(phase_frame_displacement),
                 float(self._currdt), np.ascontiguousarray(D_faces, dtype=np.float64),
-                left_value is not None, zero if left_value is None else np.asarray(left_value, dtype=np.float64),
-                right_value is not None, zero if right_value is None else np.asarray(right_value, dtype=np.float64),
+                left_value is not None, zero,
+                right_value is not None, zero,
             )
             face_coefficients = ((end_coefficients[0, 0], end_coefficients[0, 1]), (end_coefficients[1, 0], end_coefficients[1, 1]))
-            return self._finish_interval_solve(lower, diagonal, upper, rhs, face_coefficients, D_faces, left_value, right_value)
+            self._apply_reference_slope_correction(lower, upper, rhs, grid, delta)
+            return self._finish_interval_solve(lower, diagonal, upper, rhs, face_coefficients, D_faces, left_value, right_value, reference_info)
         face_xi = np.empty(n + 1, dtype=np.float64)
         face_xi[0] = 0.0
         face_xi[-1] = 1.0
@@ -1672,13 +1754,13 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
 
         free_rows = ~fixed_rows
         diagonal[free_rows] = new_widths[free_rows, None, None] * I
-        rhs[free_rows] = old_widths[free_rows, None] * profile[free_rows]
+        rhs[free_rows] = old_widths[free_rows, None] * shifted[free_rows]
         if right_value is not None:
             diagonal[-1] = I
-            rhs[-1] = np.asarray(right_value, dtype=np.float64)
+            rhs[-1] = zero
         if left_value is not None:
             diagonal[0] = I
-            rhs[0] = np.asarray(left_value, dtype=np.float64)
+            rhs[0] = zero
 
         face_displacements = self._internal_face_displacements(
             grid,
@@ -1705,26 +1787,176 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         diagonal[:-1][free_left] -= left_coeffs[free_left]
         upper[:-1][free_left] -= right_coeffs[free_left]
         face_coefficients = ((left_coeffs[0], right_coeffs[0]), (left_coeffs[-1], right_coeffs[-1]))
-        return self._finish_interval_solve(lower, diagonal, upper, rhs, face_coefficients, D_faces, left_value, right_value)
+        self._apply_reference_slope_correction(lower, upper, rhs, grid, delta)
+        return self._finish_interval_solve(lower, diagonal, upper, rhs, face_coefficients, D_faces, left_value, right_value, reference_info)
 
-    def _finish_interval_solve(self, lower, diagonal, upper, rhs, face_coefficients, D_faces, left_value, right_value):
-        """Solves an assembled interval system and evaluates its interface transfers."""
-        solved = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+    def _interval_reference(self, grid, n, left_value, right_value):
+        """
+        Returns the deviation-form reference profile ``r`` and slope ``c_R - c_L``.
+
+        An outer phase (one Dirichlet end) uses its interface composition at
+        every node, returned as a single 2-vector that broadcasts over the
+        nodes, and ``delta=None``. The middle phase uses the ``(n, 2)`` profile
+        ``r_i = c_L + xi_i*(c_R - c_L)`` with the end values set to ``c_L`` and
+        ``c_R`` exactly, so ``r + 0`` reproduces both Dirichlet values bitwise.
+        Interior ``r_i`` are rounded; the solve never uses differences of them
+        (see ``_apply_reference_slope_correction``). Without Dirichlet ends the
+        reference is zero (absolute form).
+        """
+        if left_value is not None and right_value is not None:
+            c_left = np.asarray(left_value, dtype=np.float64).reshape(2)
+            c_right = np.asarray(right_value, dtype=np.float64).reshape(2)
+            delta = c_right - c_left
+            reference = c_left + grid[:, None] * delta
+            reference[0] = c_left
+            reference[-1] = c_right
+            return reference, delta
+        if right_value is not None:
+            value = right_value
+        elif left_value is not None:
+            value = left_value
+        else:
+            return np.zeros(2, dtype=np.float64), None
+        return np.asarray(value, dtype=np.float64).reshape(2), None
+
+    def _apply_reference_slope_correction(self, lower, upper, rhs, grid, delta):
+        """
+        Adds the middle-phase reference-slope terms to the deviation right-hand side.
+
+        For free rows ``i = 1 .. n-2`` this subtracts
+        ``lower_i@dr_{i-1} + upper_i@dr_{i+1}`` with
+        ``dr_{i-1} = -(xi_i - xi_{i-1})*delta`` and
+        ``dr_{i+1} = (xi_{i+1} - xi_i)*delta``, using the assembled
+        off-diagonal blocks. The ``dr`` come from exact-input grid differences,
+        not from differences of the rounded reference values. Nothing is done
+        for an outer phase (``delta is None``), whose reference is constant.
+        """
+        if delta is None or len(grid) < 3:
+            return
+        dxi = grid[1:] - grid[:-1]
+        dr_lower = -(dxi[:-1, None] * delta)
+        dr_upper = dxi[1:, None] * delta
+        # Explicit 2x2 block-vector products (batched matmul is slow for 2x2 stacks).
+        lo, up = lower[1:-1], upper[1:-1]
+        rhs[1:-1] -= lo[:, :, 0] * dr_lower[:, 0, None] + lo[:, :, 1] * dr_lower[:, 1, None]
+        rhs[1:-1] -= up[:, :, 0] * dr_upper[:, 0, None] + up[:, :, 1] * dr_upper[:, 1, None]
+
+    def _finish_interval_solve(self, lower, diagonal, upper, rhs, face_coefficients, D_faces, left_value, right_value, reference_info):
+        """
+        Solves an assembled deviation system and evaluates its interface transfers.
+
+        ``reference_info = (r, delta, grid, old_bounds, new_bounds, frame)``
+        describes the reference of ``_interval_reference`` and the geometry.
+        The block solve returns ``w``; the retained profile is ``r + w``
+        (Dirichlet nodes exactly ``r``), followed by the floor projection of
+        ``_project_floor_roundoff``.
+
+        The end transfers use ``(L_f + R_f) = d_f I`` exactly, with the face
+        displacement ``d_f`` evaluated as in ``_internal_face_displacements`` (not
+        ``L_f + R_f`` recomputed in floating point), so they contain no
+        difference of absolute compositions:
+        ``H_left = d_0 c_L + R_0@(dr_1 + w_1)`` and
+        ``H_right = d_f c_R + L_f@(w_{n-2} - dr_{n-1})`` with
+        ``dr_1 = (xi_1 - xi_0)*delta`` and ``dr_{n-1} = (xi_{n-1} - xi_{n-2})*delta``
+        (zero for the outer phases, giving ``d c + R@w`` and ``d c + L@w``).
+        Their round-off is about ``eps*|H|`` instead of ``eps*|A|*|c|`` with
+        ``A = dt D / (L dxi)``.
+        """
+        reference, delta, grid, old_bounds, new_bounds, frame = reference_info
+        deviation = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+        n = deviation.shape[0]
+        fixed_nodes = []
+        if left_value is not None:
+            deviation[0] = 0.0
+            fixed_nodes.append(0)
+        if right_value is not None:
+            deviation[-1] = 0.0
+            fixed_nodes.append(n - 1)
+        profile = reference + deviation
         left_matrix = None if left_value is None else D_faces[0]
         right_matrix = None if right_value is None else D_faces[-1]
-        zero = np.zeros(2, dtype=np.float64)
+        # End-face displacements with the same scalar operations as
+        # ``_internal_face_displacements``.
+        old_left, old_right = float(old_bounds[0]), float(old_bounds[1])
+        new_left, new_right = float(new_bounds[0]), float(new_bounds[1])
+        d_left, d_right, frame = new_left - old_left, new_right - old_right, float(frame)
         if left_value is None:
-            left_transfer = zero.copy()
+            left_transfer = np.zeros(2, dtype=np.float64)
         else:
-            left_transfer = self._evaluate_face_transfer(*face_coefficients[0], solved[0], solved[1])
+            face_xi = 0.5 * (float(grid[0]) + float(grid[1]))
+            displacement = (1.0 - face_xi) * d_left + face_xi * d_right - frame
+            step = deviation[1] if delta is None else (grid[1] - grid[0]) * delta + deviation[1]
+            left_transfer = displacement * np.asarray(left_value, dtype=np.float64) + np.matmul(face_coefficients[0][1], step)
         if right_value is None:
-            right_transfer = zero.copy()
+            right_transfer = np.zeros(2, dtype=np.float64)
         else:
-            right_transfer = self._evaluate_face_transfer(*face_coefficients[-1], solved[-2], solved[-1])
-        return _ThreePhaseBulkResult(solved, left_transfer, right_transfer, left_matrix, right_matrix)
+            face_xi = 0.5 * (float(grid[-2]) + float(grid[-1]))
+            displacement = (1.0 - face_xi) * d_left + face_xi * d_right - frame
+            step = deviation[-2] if delta is None else deviation[-2] - (grid[-1] - grid[-2]) * delta
+            right_transfer = displacement * np.asarray(right_value, dtype=np.float64) + np.matmul(face_coefficients[-1][0], step)
+        new_length = new_right - new_left
+        profile, projection, split = self._project_floor_roundoff(profile, reference, deviation, fixed_nodes, grid, new_length, left_value is not None, right_value is not None)
+        return _ThreePhaseBulkResult(profile, left_transfer, right_transfer, left_matrix, right_matrix, projection, split)
+
+    def _interval_cell_widths(self, grid, length):
+        """Returns the new-geometry cell widths ``L*DeltaXi_i`` used by the interval assembly."""
+        face_xi = np.empty(len(grid) + 1, dtype=np.float64)
+        face_xi[0] = 0.0
+        face_xi[-1] = 1.0
+        face_xi[1:-1] = 0.5 * (grid[:-1] + grid[1:])
+        return float(length) * (face_xi[1:] - face_xi[:-1])
+
+    def _project_floor_roundoff(self, profile, reference, deviation, fixed_nodes, grid, length, has_left_interface, has_right_interface):
+        """
+        Applies the round-off floor projection to one deviation-form interval profile.
+
+        Uses the two-phase ``_project_shift_roundoff_to_floor`` with the per-node
+        reference ``r`` as shift (threshold
+        ``_FLOOR_PROJECTION_ULPS * eps * (|r_i| + |w_i|)``, a fixed policy, not
+        an error bound), never touching the Dirichlet nodes, and with this
+        model's cell widths as inventory weights, so the change matches the
+        cell equations. Larger violations are left for the composition
+        validator. Returns ``(profile, projection, split)``; ``split`` rows are
+        the parts of ``projection.inventory_change`` attributed to the phase's
+        left and right interface residual: all of it to the single interface
+        of an outer phase, and node by node ``(1 - xi_i, xi_i)`` for the middle
+        phase. Every projecting solve is counted at once in
+        ``_currentStepProjectedSolves`` and ``_cumulativeProjectedSolves``
+        (intermediate Picard solves and discarded candidates included).
+        """
+        no_split = np.zeros((2, 2), dtype=np.float64)
+        substitutional = ~np.asarray(self._interstitial_mask(), dtype=bool)
+        floor = float(self.constraints.minComposition)
+        if _profile_within_floor_bounds(profile, substitutional, floor):
+            return profile, _no_floor_projection(), no_split
+        weights = self._interval_cell_widths(grid, length)
+        projected, projection = _project_shift_roundoff_to_floor(
+            profile, reference, deviation, self._interstitial_mask(), floor, fixed_nodes, grid, length, weights=weights,
+        )
+        if projection.mask is None:
+            return projected, projection, no_split
+        self._currentStepProjectedSolves = getattr(self, "_currentStepProjectedSolves", 0) + 1
+        self._cumulativeProjectedSolves = getattr(self, "_cumulativeProjectedSolves", 0) + 1
+        if has_left_interface and has_right_interface:
+            left_fraction = 1.0 - grid
+        elif has_left_interface:
+            left_fraction = np.ones_like(grid)
+        else:
+            left_fraction = np.zeros_like(grid)
+        split = np.empty((2, 2), dtype=np.float64)
+        split[0] = (weights * left_fraction) @ (projected - profile)
+        split[1] = projection.inventory_change - split[0]
+        return projected, projection, split
 
     def _solve_interval_picard(self, profile, grid, old_bounds, new_bounds, phase_index, left_value, right_value, phase_frame_displacement=0.0):
-        """Solves one interval with composition-dependent Picard face matrices."""
+        """
+        Solves one interval with composition-dependent Picard face matrices.
+
+        Face diffusivities are queried from, and the update norm is measured
+        on, absolute compositions; each linear solve is in deviation form. The
+        converged result forwards the final linear solve's deviation-form
+        transfers, profile, ``projection`` and ``projection_split``.
+        """
         iterate = np.asarray(profile, dtype=np.float64).copy()
         if left_value is not None:
             iterate[0] = left_value
@@ -1756,6 +1988,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                     linear.right_transfer,
                     linear.left_face_matrix,
                     linear.right_face_matrix,
+                    linear.projection,
+                    linear.projection_split,
                     inner_iterations=iteration,
                     inner_update_norm=update_norm,
                     diffusivity_evaluations=len(profile) - 1,
@@ -1820,7 +2054,16 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         weights. Each phase block is weighted by ``rho_alpha / rho_A`` before
         combining the exact interface-adjacent transfers returned by the bulk
         solve. Thus the two residual blocks telescope exactly with the
-        density-weighted conservative bulk cell equations.
+        density-weighted conservative bulk cell equations. The transfers come
+        from the deviation-form solves (ledger R06), so they carry no
+        ``eps*|A|*|c|`` cancellation error.
+
+        Each phase's round-off floor projection (``projection_split`` of its
+        bulk result) is added with the phase's density weight: an outer
+        phase's change to its single interface, the middle phase's change
+        split node by node as ``(1 - xi_i, xi_i)`` between A|B and B|C. The
+        converged residual therefore describes the stored profiles, and the
+        two blocks still add up to the total density-weighted inventory change.
         """
         kinematics = self._step_kinematics(old_interfaces, new_interfaces) if kinematics is None else kinematics
         c_a_ab, c_b_ab = interface_compositions[0]
@@ -1850,6 +2093,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         residual_ab += density_b * (endpoint_b_left - bulk_results[1].left_transfer)
         residual_bc = density_b * (endpoint_b_right + bulk_results[1].right_transfer)
         residual_bc += density_c * (endpoint_c_left - bulk_results[2].left_transfer)
+        residual_ab += density_a * bulk_results[0].projection_split[1] + density_b * bulk_results[1].projection_split[0]
+        residual_bc += density_b * bulk_results[1].projection_split[1] + density_c * bulk_results[2].projection_split[0]
         return np.concatenate((residual_ab, residual_bc))
 
     def _endpoint_inventory_change(self, grid, old_profile, new_value, old_length, new_length, side):
@@ -2167,12 +2412,56 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             right_boundary=float(right_boundary),
             start_time=float(start_time),
             dt=float(trial_dt),
+            projection=(
+                self._lastStepProjectionInventoryChange.copy(),
+                self._lastStepProjectionAbsoluteChange.copy(),
+                int(self._lastStepProjectedNodes),
+            ),
         )
+
+    def _record_step_projection(self, candidate):
+        """
+        Sets the last-step round-off floor-projection diagnostics from an accepted candidate.
+
+        ``_lastStepProjectionInventoryChange`` and
+        ``_lastStepProjectionAbsoluteChange`` are the normalized-density-weighted
+        (``rho_alpha / rho_A``) sums over the three phases of the signed and
+        absolute componentwise inventory changes (the units of the interface
+        residual), and ``_lastStepProjectedNodes`` the projected node count.
+        ``_lastStepProjectedSolves`` counts every projecting linear solve of
+        this step attempt (rejected trials and Picard iterations included).
+        They reach the cumulative totals only when ``postProcess`` commits the
+        step.
+        """
+        inventory = np.zeros(2, dtype=np.float64)
+        absolute = np.zeros(2, dtype=np.float64)
+        nodes = 0
+        for density, result in zip(self._normalizedPhaseMolarDensities, candidate.bulk_results):
+            projection = getattr(result, "projection", None)
+            if projection is None or projection.mask is None:
+                continue
+            inventory = inventory + density * projection.inventory_change
+            absolute = absolute + density * projection.absolute_change
+            nodes += projection.projected_nodes
+        self._lastStepProjectionInventoryChange = inventory
+        self._lastStepProjectionAbsoluteChange = absolute
+        self._lastStepProjectedNodes = int(nodes)
+        self._lastStepProjectedSolves = int(getattr(self, "_currentStepProjectedSolves", 0))
+
+    def _commit_step_projection(self, pending):
+        """Adds a committed step's staged floor-projection totals to the cumulative ones."""
+        if pending is None or pending.projection is None:
+            return
+        inventory_change, absolute_change, nodes = pending.projection
+        self._cumulativeProjectionInventoryChange = self._cumulativeProjectionInventoryChange + inventory_change
+        self._cumulativeProjectionAbsoluteChange = self._cumulativeProjectionAbsoluteChange + absolute_change
+        self._cumulativeProjectedNodes += int(nodes)
 
     def _accept_step_candidate(self, profiles, interfaces, etas, candidate, trial_dt, retry, start_time=None):
         """Stores the exact pending root and returns its Euler-wrapper derivatives."""
         self._currdt = float(trial_dt)
         self._lastStepRetries = int(retry)
+        self._record_step_projection(candidate)
         self._store_pending_candidate(
             candidate,
             self.currentTime if start_time is None else start_time,
@@ -2258,6 +2547,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._pendingCandidate = None
         self._terminalThinPhaseStop = False
         self._terminalThinPhaseInfo = None
+        self._currentStepProjectedSolves = 0
         profiles = tuple(np.asarray(xCurr[i], dtype=np.float64).reshape((-1, 2)).copy() for i in range(3))
         interfaces = self._validate_interfaces(np.asarray(xCurr[3], dtype=np.float64), strict=True)
         etas = np.asarray(xCurr[4], dtype=np.float64).reshape(2)
@@ -2558,10 +2848,11 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return pending
 
     def postProcess(self, time, x):
-        self._verify_pending_candidate(time, x)
+        pending = self._verify_pending_candidate(time, x)
         try:
             accepted = self._prepare_accepted_state(x)
             self._commit_accepted_state(time, accepted)
+            self._commit_step_projection(pending)
         except Exception:
             self._terminalThinPhaseStop = False
             self._terminalThinPhaseInfo = None
@@ -2643,6 +2934,25 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._lastAcceptedDt = None
         self._laggedFaceDiffusivityCache = None
         self._interfaceCompositionCache = None
+        self._reset_projection_diagnostics()
+
+    def _reset_projection_diagnostics(self):
+        """
+        Clears the round-off floor-projection diagnostics.
+
+        Last accepted step (see ``_record_step_projection``), and cumulative
+        totals over committed steps; ``_cumulativeProjectedSolves`` counts
+        every projecting linear solve, discarded ones included.
+        """
+        self._lastStepProjectionInventoryChange = np.zeros(2, dtype=np.float64)
+        self._lastStepProjectionAbsoluteChange = np.zeros(2, dtype=np.float64)
+        self._lastStepProjectedNodes = 0
+        self._lastStepProjectedSolves = 0
+        self._currentStepProjectedSolves = 0
+        self._cumulativeProjectionInventoryChange = np.zeros(2, dtype=np.float64)
+        self._cumulativeProjectionAbsoluteChange = np.zeros(2, dtype=np.float64)
+        self._cumulativeProjectedNodes = 0
+        self._cumulativeProjectedSolves = 0
 
     def getInterfacePositions(self, time=None):
         """Returns the two recorded interface positions ``[s_AB, s_BC]``."""

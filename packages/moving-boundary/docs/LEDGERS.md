@@ -185,7 +185,7 @@ error is 4.75e-4. `analytic/` is ported from that commit. The 06dc7b4 acceptance
 unchanged: `collect` doesn't use this helper, and existing `exact/*` arrays come from their
 own branches.
 
-## Research numerical issue R06: binary interface iteration stalls above its tolerance (binary fixed: research `25bf6cd`, merged to research main `90700be`, ported, oracle moved 2026-11-09; two-phase ternary fixed: research `2741135`, merged `720d122`, ported, oracle moved 2026-11-09; three-phase open)
+## Research numerical issue R06: binary interface iteration stalls above its tolerance (binary fixed: research `25bf6cd`, merged to research main `90700be`, ported, oracle moved 2026-11-09; two-phase ternary fixed: research `2741135`, merged `720d122`, ported, oracle moved 2026-11-09; three-phase fixed: research `fae6149`, merged `7af24f4`, ported 2026-11-10)
 
 Found with `examples/binary_tlp_bonding.py` (Ni-P bonding, um and s units), 2026-11-08. Late in
 the solidification stage, the binary Illingworth model's interface fixed point stops reducing
@@ -476,6 +476,93 @@ two-phase ternary merge):
   `example_settings-90700be-backup` and recaptured from 720d122: C04, C11, C12, F04, F11 and F12
   are byte-identical, and C16, C24, O04 and O05 differ only by those ten added attributes (no
   removed or changed entries). The rerun passes E01-E10 in 85.4 s (E11 pending).
+
+**Three-phase research fix (2026-11-10, commit `fae6149`, merged to research main as `7af24f4`,
+user-approved).** Branch `fix/r06-three-phase-deviation-solve` (worktree `...\code\kawin-r06tp`)
+from research main `720d122`; the `--no-ff` merge `7af24f4` has the same tree as `fae6149`. Six
+files: `kawin/diffusion/MovingBoundaryIllingworthTernaryThreePhaseFDM.py`, the floor-projection
+helper in `kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py`, new
+`kawin/tests/test_illingworth_ternary_three_phase_deviation_form.py` (93 tests),
+`kawin/tests/make_illingworth_substitutional_baseline.py` (log entry), the regenerated
+`kawin/tests/data/illingworth_substitutional_baseline.npz`, and a three-phase section in
+`R06_deviation_form_explainer.md`.
+
+- Mechanism: the interface-adjacent transfers were `L x0 + R x1` from absolute compositions, so
+  each carried `eps * |A| * |c|` with `A = dt D / (L dxi)`. Each interval is now solved for
+  `w = C - r`, with `r` the interface composition in the outer phases and, in the middle phase,
+  `c_L + xi (c_R - c_L)` with exact end values. Every free row sums to `old_w I`, so the matrix is
+  unchanged; free rows get `old_w (p_old - r) - lower dr_{i-1} - upper dr_{i+1}` (`dr` from grid
+  differences), Dirichlet rows 0. The compiled fill receives `p - r` and zero fixed values; the
+  middle-phase slope terms are added after either fill, which stay bitwise equal. End transfers
+  use `(L + R)_f = d_f I` exactly: `H_0 = d_0 c_L + R_0 (dr_1 + w_1)`,
+  `H_f = d_f c_R + L_f (w_{n-2} - dr_{n-1})`.
+- Floor projection as in the two-phase fix. The shared helper accepts a per-node shift (threshold
+  `16 eps (|r_i| + |w_i|)`, unchanged policy), several fixed nodes and optional node weights;
+  two-phase results are bitwise unchanged. Outer phases add their signed change to their own
+  interface residual; the middle phase splits its change node by node `(1 - xi, xi)` between A|B
+  and B|C (user decision). `projection`/`projection_split` are required `_ThreePhaseBulkResult`
+  fields; totals are staged with the pending candidate and committed in `postProcess`.
+
+Verification (fix branch; 680 Illingworth/similarity tests and the 3 three-phase example tests
+pass there, and 681 + 3 on main after the merge, 163 s):
+
+- Fine-grid probe (similarity "opposite", 201 nodes per phase, end spacing ratio 1e-8, tolerance
+  1e-11): scaled residual float minus 50-digit evaluation 5e-11..3e-10 -> at most 6.8e-19; retries
+  401 in 645 steps -> 0 in 396; march 23.6 s -> 4.5 s. Default grids: 1.8e-18 -> 1.5e-19, no
+  retries either way.
+- Single intervals against 50-digit arithmetic (15 cases, all three phases): transfer errors 14 to
+  1e7 times smaller, profile errors at most 9e-15 (were up to 4e-12). On graded grids the remaining
+  transfer error is about `eps (|H| + |A| |w|)` plus input-geometry rounding, not `eps |H|`.
+- Full runs with the middle phase projecting (B interior held at the composition floor by a 1e-8
+  Y diffusivity beside interface Y values of 0.15/0.20; static and moving interfaces; all three
+  diffusivity modes): 100 steps, no retries, the A|B/B|C split sums to the total, no diffusivity
+  query below the floor. The moving case fails at its first step on `720d122` and with the
+  projection disabled.
+- Similarity convergence metrics unchanged. Substitutional baseline: only the 36 three-phase arrays
+  moved (eta histories at most 1.2e-10 relative / 5.7e-11 absolute, interface 4.4e-12, profiles
+  2.5e-11), regenerated deliberately and logged. Cost: default-grid march +12% wall time.
+
+**Three-phase port (2026-11-10).** Source `fae6149ccc6ebfda2100c4ed5a9b99b962e77620` (merged to
+research main as `7af24f4`). The research diff applied with exact context at uniform offsets: 18
+hunks to `solvers/illingworth/three_phase.py` (+2 lines) and 4 hunks to the helper in
+`solvers/illingworth/shared.py` (+1). `three_phase.py` now equals research `fae6149` apart from its
+header and import paths; the `shared.py` helper section is identical to `fae6149` (only the helper
+changed there since `2741135`, so `ternary.py` still equals the source class). Affected functions:
+in `three_phase.py`, the class docstring, `_ThreePhaseBulkResult` (`projection`,
+`projection_split`), `_ThreePhasePendingState` (`projection`), `__init__`/`reset` and the new
+`_reset_projection_diagnostics`, `_solve_interval_planar`, the new `_interval_reference`,
+`_apply_reference_slope_correction`, `_interval_cell_widths` and `_project_floor_roundoff`,
+`_finish_interval_solve`, `_solve_interval_picard`, `_interface_residuals`, `getdXdt`,
+`_store_pending_candidate`, the new `_record_step_projection`/`_commit_step_projection`,
+`_accept_step_candidate` and `postProcess`; in `shared.py`, `_project_shift_roundoff_to_floor`.
+The compiled fills are unchanged. `tests/test_three_phase_deviation_form.py` ports the 93 research
+tests: bodies unchanged apart from package imports and calling the interstitial builder directly;
+the helpers the research file took from three other research test modules are reproduced
+verbatim and exposed as `tpt`/`sim` (interstitial helpers prefixed, the similarity `CASES` renamed
+`_SIMILARITY_CASES`, to avoid clashes in one module).
+
+- Package tests (`mb-public-050`, `src` on `PYTHONPATH`, `MB_EXAMPLE_TDB` set to the acceptance
+  copy): the 93 ported tests pass (19.7 s); full `tests/` 311 passed, 5 skipped, 1 deselected
+  (112.4 s).
+- `acceptance.py quick` against the `720d122` oracle (public tolerance, 475.8 s) **fails for
+  three-phase cases, as the solver change predicts**: 21 runs bit-identical, 7 within tolerance,
+  2 failed; 87 of 89 pytest tests pass. Every binary, two-phase ternary, LEGACY, O05 and O08 run
+  passes. C09 and C10 fail on eta: 5.72e-11 against an allowance of 4.69e-11 (C09 interface 3.1e-12,
+  profiles 5.7e-12 absolute / 2.5e-11 relative, all within tolerance), digit for digit the change
+  logged for the research baseline's three-phase cases. Contract C27 (three-phase lifecycle) fails
+  on eta in 3 of its 5 models. Contract C28 (stationary unequal-volume three-phase) fails on
+  `dependentMoleClosureErrorData`: 1.46e-11 = 2^-36, one ulp of a total of about 1e5 mol/m^2,
+  against an absolute allowance of 1e-12 that is not scaled by the minimum molar volume in this
+  contract (compare C23's recorded mole allowance, 1.4e-7). The eta shift is at the interface
+  Newton tolerance: the accurate residual stops Newton at a slightly different root than the
+  noisy one did. Unlike the two earlier R06 moves, this change is larger than the public
+  tolerance, so the oracle move below adopts it deliberately (user decision, 2026-11-10); no
+  tolerance was changed. Open question: whether contracts should apply the molar-volume scale to
+  mole arrays, as `inventory_scale()` does for run cases.
+
+Ternary R06 handed off 2026-11-09 (prompt: ternary-r06-deviation-form).
+Handed off 2026-11-09 (prompt: r06-ternary-merge-port-threephase).
+Three-phase R06 option (a) handed off 2026-11-09 (prompt: three-phase-r06-option-a).
 
 ## Release review follow-ups R07-R12 (open)
 
