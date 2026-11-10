@@ -121,6 +121,53 @@ def validate_expected(cases):
     return manifest
 
 
+def load_private_inputs():
+    """The parsed local ``inputs/private-inputs.json``, or ``None`` when this machine has none."""
+    path = OUTPUT / "inputs/private-inputs.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def private_input_problems(name, recorded):
+    """Hash problems for one *available* private input (file or directory) under ``inputs/``.
+
+    ``recorded`` is ``load_private_inputs()``. An input that is present on disk must be fully
+    and correctly recorded, so this never passes silently: a missing ``private-inputs.json``, a
+    missing entry, an empty or malformed ``sha256`` map, a digest that is not 64 lowercase hex
+    characters, a record that does not name exactly the file (or every file of the directory),
+    and a missing or changed member are each reported. Absent optional inputs are the caller's
+    documented skip and are not checked here. Returns a list of messages (empty when valid).
+    """
+    import re
+    location = OUTPUT / "inputs" / name
+    assert location.exists(), "private_input_problems checks available inputs only: " + name
+    if recorded is None:
+        return ["private-inputs.json missing; cannot verify available input: " + name]
+    entry = recorded.get(name)
+    if entry is None:
+        return ["input not hashed in private-inputs.json: " + name]
+    digests = entry.get("sha256") if isinstance(entry, dict) else None
+    if not isinstance(digests, dict) or not digests:
+        return ["input hash record empty or malformed: " + name]
+    malformed = sorted(str(key) for key, value in digests.items()
+                       if not (isinstance(key, str) and isinstance(value, str) and re.fullmatch("[0-9a-f]{64}", value)))
+    if malformed:
+        return [f"input hash record malformed: {name}/{key}" for key in malformed]
+    if location.is_dir():
+        base = location
+        on_disk = {path.relative_to(location).as_posix() for path in location.rglob("*") if path.is_file()}
+    else:
+        base = location.parent
+        on_disk = {name}
+    problems = [f"input file not hashed: {name}/{key}" for key in sorted(on_disk - set(digests))]
+    for key, digest in sorted(digests.items()):
+        path = base / key
+        if key not in on_disk or not path.is_file():
+            problems.append(f"input file missing: {name}/{key}")
+        elif hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            problems.append(f"input changed: {name}/{key}")
+    return problems
+
+
 def validate_research_checkout(reference):
     """Historical actions only: the detached, clean frozen commit and its research source hashes."""
     assert reference is not None, "historical actions need --research <frozen research checkout>"
@@ -666,21 +713,18 @@ def main(argv=None):
                 cases.append(case)
             else:
                 skipped[case] = "cached input missing"
-    # Private hashes never enter committed evidence. Present corrupted inputs
-    # fail instead of being disguised as missing licensed/provider coverage.
-    inputs_manifest = OUTPUT / "inputs/private-inputs.json"
-    if inputs_manifest.exists():
-        enabled_inputs = {"O01":"exb5.json", "O02":"exb5.json", "O03a":"femnc.json",
-            "O03b":"femnc.json", "O04":"fecrni.surrogate", "O05":"FeCrNi.tdb", "O07":"fec.json", "O08":"FeCrNi.tdb"}
-        recorded = json.loads(inputs_manifest.read_text(encoding="utf-8"))
-        for case in cases:
-            name = enabled_inputs.get(case)
-            if name is not None and name in recorded:
-                for relative, digest in recorded[name].get("sha256", {}).items():
-                    location = OUTPUT / "inputs"
-                    if (location / name).is_dir():
-                        location = location / name
-                    assert hashlib.sha256((location / relative).read_bytes()).hexdigest() == digest, case + " input changed"
+    # Private hashes never enter committed evidence. Every available input of an enabled case
+    # must be fully recorded and unchanged (a missing record fails); absent optional inputs keep
+    # their documented skips above. Corrupted or unrecorded inputs are never disguised as
+    # missing licensed/provider coverage.
+    enabled_inputs = {"O01":"exb5.json", "O02":"exb5.json", "O03a":"femnc.json",
+        "O03b":"femnc.json", "O04":"fecrni.surrogate", "O05":"FeCrNi.tdb", "O07":"fec.json", "O08":"FeCrNi.tdb"}
+    recorded = load_private_inputs()
+    for case in cases:
+        name = enabled_inputs.get(case)
+        if name is not None and (OUTPUT / "inputs" / name).exists():
+            problems = private_input_problems(name, recorded)
+            assert not problems, case + " input not verified: " + "; ".join(problems)
     if args.action == "setup":
         print(json.dumps(setup_targets()))
         return 0

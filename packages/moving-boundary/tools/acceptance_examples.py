@@ -83,15 +83,21 @@ def capture_settings(tool, manifest, research):
 
 
 def private_inputs(tool):
-    """The local private-input hash record, or ``{}`` when this machine has none."""
-    path = tool.OUTPUT / "inputs/private-inputs.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    """The local private-input hash record, or ``None`` when this machine has none."""
+    return tool.load_private_inputs()
 
 
 def settings_digests(manifest, private):
-    """Expected sha256 per adopted settings file name: committed, plus local private entries."""
+    """Expected sha256 per adopted settings file name: committed, plus local private entries.
+
+    With no (or a malformed) private record, the O04/O05 settings simply have no digest, so
+    ``check_settings_hash`` reports them as not hashed when their case runs.
+    """
     digests = dict(manifest["settings_sha256"])
-    digests.update(private.get("example_settings", {}).get("sha256", {}))
+    entry = (private or {}).get("example_settings")
+    recorded = entry.get("sha256") if isinstance(entry, dict) else None
+    if isinstance(recorded, dict):
+        digests.update(recorded)
     return digests
 
 
@@ -108,19 +114,13 @@ def check_settings_hash(path, digests):
 
 
 def check_input_hash(tool, name, private):
-    """Failures for a case's private surrogate input against ``private-inputs.json``.
+    """Failures for a case's available private input against ``private-inputs.json``.
 
-    A file or directory input must be recorded there (every recorded member hash must match);
-    an input this machine lacks is skipped by the caller before this check.
+    Delegates to ``acceptance.private_input_problems``: a missing record file, a missing entry,
+    an empty or malformed hash map, an unrecorded, missing or changed file all fail. An input
+    this machine lacks is skipped by the caller before this check.
     """
-    import hashlib
-    entry = private.get(name)
-    if entry is None:
-        return ["input not hashed in private-inputs.json: " + name]
-    location = tool.OUTPUT / "inputs" / name
-    base = location if location.is_dir() else location.parent
-    return ["input changed: " + name + "/" + relative for relative, digest in entry.get("sha256", {}).items()
-            if hashlib.sha256((base / relative).read_bytes()).hexdigest() != digest]
+    return tool.private_input_problems(name, private)
 
 
 def compare_case(tool, settings, case, entry, allowed, digests):

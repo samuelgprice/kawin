@@ -227,6 +227,21 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
      checking each pin against `mb-public-050`: numpy was pinned 2.4.5 but 2.4.3 is installed and
      recorded by every run, so it was corrected to 2.4.3 (all other pins matched).
      Both must be in place before the migration is declared complete.
+  4. *Private-input records must never pass silently (user review after M6; fixed).* Before the
+     fix, `acceptance.py` skipped hash checks when `private-inputs.json` or an input's entry was
+     missing (pre-M6 behaviour), and the M5 example helper accepted an empty hash map. Now one
+     helper, `acceptance.private_input_problems`, used by `acceptance.py`, `acceptance_examples.py`
+     and `acceptance_regeneration.py`, fails an *available* input of an enabled case for a missing
+     record file, a missing entry, an empty or malformed `sha256` map, a malformed digest, a record
+     that doesn't name exactly the file (or every file of a directory), and a missing or changed
+     member. Absent optional inputs keep their documented skips.
+  5. *Examples over-require C24's input (for correction and verification in M9).*
+     `acceptance_examples.py run` calls `validate_expected` with every mapped reference, so a
+     missing `inputs/open-surrogate.npz` (`required_by` C24) fails example acceptance, although E04
+     builds its own surrogate (`lifecycle`) and only compares against C24's frozen *output*. The
+     examples should validate the reference artifacts they compare with, not the original inputs of
+     those reference cases. Correct it and verify it in the M9 missing-resource matrix (missing
+     `open-surrogate.npz`: C24 fails acceptance; E04 still runs).
 
 ## Decisions
 

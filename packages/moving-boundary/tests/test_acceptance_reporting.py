@@ -115,3 +115,28 @@ def test_inventory_scale_divides_only_mole_arrays_by_molar_volume():
         assert tool.quantity(key)=='inventory'
         assert tool.inventory_scale(key,explicit)==2.
     assert tool.inventory_scale('totalMolesData/values',dict(length_scale=5.))==5.
+
+
+@pytest.mark.parametrize('record, message', [
+    (None, 'O01 input not verified: private-inputs.json missing; cannot verify available input: exb5.json'),
+    ({}, 'O01 input not verified: input not hashed in private-inputs.json: exb5.json'),
+    ({'exb5.json':{'status':'PRESENT','sha256':{}}}, 'O01 input not verified: input hash record empty or malformed: exb5.json')])
+def test_available_private_input_without_valid_record_fails_the_run(tmp_path, monkeypatch, record, message):
+    """An available input of an enabled case is never run unverified; absent ones keep their skip."""
+    tool=isolated_runner(tmp_path,monkeypatch)
+    inputs=tool.OUTPUT/'inputs'
+    inputs.mkdir(parents=True)
+    (inputs/'exb5.json').write_text('{}')
+    if record is not None:
+        (inputs/'private-inputs.json').write_text(json.dumps(record))
+    with pytest.raises(AssertionError) as error:
+        tool.main(['full'])
+    assert str(error.value).startswith(message)
+    assert not (tool.OUTPUT/'package').exists()
+
+
+def test_absent_private_inputs_keep_their_documented_skip(tmp_path, monkeypatch):
+    tool=isolated_runner(tmp_path,monkeypatch)
+    assert tool.main(['full'])==0
+    skipped=json.loads((tool.OUTPUT/'full-summary.json').read_text())['skipped']
+    assert skipped['O01']=='cached input missing' and skipped['O05']=='database input missing'
