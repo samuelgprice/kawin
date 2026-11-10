@@ -1,4 +1,4 @@
-# Complete shared helper section from 06dc7b4ab56f67226ceabfde41ebf2690c088841, MovingBoundaryIllingworthTernaryFDM.py
+# Complete shared helper section from samuelgprice/kawin 2741135c9a4ba2644a1facf6ad604112dba35309 (R06 ternary correction on top of main 90700be), MovingBoundaryIllingworthTernaryFDM.py
 import warnings
 from dataclasses import dataclass
 
@@ -167,8 +167,22 @@ _MOTION_BRANCH_ATOL = 1e-15
 # grid). 1e-6 keeps the step well inside one segment of a tabulated tie-line
 # closure (hundreds of segments over eta_hat in [0, 1]), so the truncation error
 # stays negligible. The s step is unchanged: it must stay small relative to the
-# step displacement so it does not cross zero motion.
+# step displacement so it does not cross zero motion. The phase solves now work
+# in deviation form (ledger R06), which removes most of that noise; the step is
+# kept unchanged so the Jacobian is not retuned by the same change.
 _INTERFACE_ETA_FD_STEP = 1.0e-6
+
+# Policy threshold for treating a composition-floor violation of a
+# deviation-form reconstruction ``profile = w + c`` as round-off of the shift
+# (see ``_project_shift_roundoff_to_floor``). A component may be moved onto the
+# floor only if it is short of it by at most
+# ``_FLOOR_PROJECTION_ULPS * eps * (|c| + |w|)``. This is a fixed, conservative
+# policy, not a proven bound on the solve error; larger violations are left
+# for the composition validator to reject as before.
+_FLOOR_PROJECTION_ULPS = 16.0
+# Directed-rounding steps allowed to finish a dependent-component repair whose
+# deficit is below half an ulp of the component that absorbs it.
+_FLOOR_PROJECTION_MAX_NEXTAFTER_STEPS = 4
 
 
 def _select_interface_motion_branch(s, old_s, future_s, atol=_MOTION_BRANCH_ATOL):
@@ -253,6 +267,183 @@ class _InterfaceCandidate:
     left_inner_update_norm: float = 0.0
     right_inner_update_norm: float = 0.0
     bulk_diffusivity_evaluations: int = 0
+    left_projection: "_FloorProjection | None" = None
+    right_projection: "_FloorProjection | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class _FloorProjection:
+    """
+    Record of the round-off floor projection applied to one phase solve.
+
+    ``inventory_change`` is the signed componentwise change of the phase
+    inventory, ``sum_i weight_i * (projected - unprojected)_i`` with the
+    new-geometry trapezoidal weights; the interface residual adds it so that
+    the residual describes the profile that is stored. ``absolute_change`` is
+    the same sum of absolute changes (a diagnostic of numerical intervention).
+    ``mask`` is ``None`` when nothing was projected, otherwise an
+    ``(n_nodes, 3)`` boolean array marking projected independent components
+    (columns 0, 1) and repaired dependent components (column 2). ``repairs``
+    lists ``(node, absorbing_component, nextafter_steps)`` for each dependent
+    repair.
+    """
+
+    inventory_change: np.ndarray
+    absolute_change: np.ndarray
+    mask: np.ndarray | None = None
+    repairs: tuple = ()
+
+    @property
+    def projected_nodes(self):
+        """Number of nodes with at least one projected component."""
+        return 0 if self.mask is None else int(np.count_nonzero(np.any(self.mask, axis=1)))
+
+
+def _read_only_zeros(n):
+    values = np.zeros(n, dtype=np.float64)
+    values.setflags(write=False)
+    return values
+
+
+# Shared record for the (usual) case of a phase solve with nothing to project;
+# its arrays are read-only so the shared instance cannot be modified in place.
+_NO_FLOOR_PROJECTION = _FloorProjection(_read_only_zeros(2), _read_only_zeros(2))
+
+
+def _no_floor_projection():
+    """Returns the (shared, read-only) record of a phase solve that needed no floor projection."""
+    return _NO_FLOOR_PROJECTION
+
+
+def _profile_within_floor_bounds(profile, substitutional, floor):
+    """
+    Fast exact screen: returns True when no node of ``profile`` violates the floor.
+
+    Uses the same arithmetic as ``composition_bound_violation``: each component
+    against ``floor``, and the dependent component ``1 - sum(substitutional)``.
+    For two substitutional columns the validator's row sum of a length-2 row is
+    exactly ``p0 + p1``; for one, ``min(1 - x) == 1 - max(x)`` because the
+    rounded subtraction is monotone. A ``False`` result (including NaN input)
+    only means the exact per-node path must run.
+    """
+    if not profile.min() >= floor:
+        return False
+    count = int(np.count_nonzero(substitutional))
+    if count == 2:
+        return bool((1.0 - (profile[:, 0] + profile[:, 1])).min() >= floor)
+    if count == 1:
+        return bool(1.0 - profile[:, int(np.flatnonzero(substitutional)[0])].max() >= floor)
+    return 1.0 >= floor
+
+
+def _project_shift_roundoff_to_floor(profile, shift, deviation, interstitial_mask, min_composition, fixed_node, grid, length):
+    """
+    Moves composition-floor violations caused by deviation-form round-off onto the floor.
+
+    A deviation-form phase solve reconstructs ``profile = deviation + shift``,
+    so every component carries an absolute round-off of about
+    ``eps * (|shift| + |deviation|)`` regardless of its own size. A dilute
+    value just above ``min_composition`` beside a large interface composition
+    can therefore land just below the floor, where the composition validator
+    (``composition_bound_violation``, an exact comparison) would reject it at
+    every timestep. This helper repairs only violations within the policy
+    threshold ``_FLOOR_PROJECTION_ULPS * eps * (|shift_k| + |deviation_k|)``:
+
+    - an independent component below the floor is set to the floor exactly;
+    - a dependent substitutional component ``1 - sum(substitutional u)`` short
+      of the floor (threshold summed over the substitutional components) has
+      its deficit subtracted from the largest substitutional independent
+      component at that node, followed by at most
+      ``_FLOOR_PROJECTION_MAX_NEXTAFTER_STEPS`` directed-rounding steps when the
+      deficit is below half an ulp of that component.
+
+    A node is committed only if it then passes ``composition_bound_violation``
+    with the production arithmetic; otherwise it is left unchanged and the
+    validator rejects the candidate as before. ``fixed_node`` (the Dirichlet
+    interface node) is never modified. Interstitial components are bounded
+    from below only. ``grid`` and ``length`` give the new-geometry trapezoidal
+    weights used for the returned ``_FloorProjection.inventory_change``.
+
+    Returns ``(profile, projection)``; ``profile`` is the input array itself
+    when nothing was projected. This is a controlled perturbation, unlike the
+    deviation transformation itself, which is algebraically exact. The common
+    case (no violation anywhere) is decided by ``_profile_within_floor_bounds``
+    with the validator's exact arithmetic, so it costs a few vector reductions.
+    """
+    profile = np.asarray(profile, dtype=np.float64)
+    floor = float(min_composition)
+    interstitial_mask = np.asarray(interstitial_mask, dtype=bool)
+    substitutional = ~interstitial_mask
+    if _profile_within_floor_bounds(profile, substitutional, floor):
+        return profile, _NO_FLOOR_PROJECTION
+    n = profile.shape[0]
+    dependent = 1.0 - np.sum(profile[:, substitutional], axis=1)
+    flagged = np.flatnonzero(np.any(profile < floor, axis=1) | (dependent < floor))
+    flagged = flagged[flagged != (int(fixed_node) % n)]
+    if flagged.size == 0:
+        return profile, _no_floor_projection()
+
+    eps = np.finfo(np.float64).eps
+    shift = np.abs(np.asarray(shift, dtype=np.float64).reshape(2))
+    deviation = np.asarray(deviation, dtype=np.float64)
+    substitutional_indices = np.flatnonzero(substitutional)
+    projected = profile.copy()
+    mask = np.zeros((n, 3), dtype=bool)
+    repairs = []
+    for i in flagged:
+        scale = shift + np.abs(deviation[i])
+        threshold = _FLOOR_PROJECTION_ULPS * eps * scale
+        row = profile[i].copy()
+        node_mask = np.zeros(3, dtype=bool)
+        repair = None
+        acceptable = True
+        for k in range(2):
+            if row[k] < floor:
+                if floor - row[k] <= threshold[k]:
+                    row[k] = floor
+                    node_mask[k] = True
+                else:
+                    acceptable = False
+        if acceptable and 1.0 - np.sum(row[substitutional]) < floor:
+            dependent_threshold = _FLOOR_PROJECTION_ULPS * eps * float(np.sum(scale[substitutional]))
+            deficit = floor - (1.0 - np.sum(row[substitutional]))
+            if substitutional_indices.size == 0 or deficit > dependent_threshold:
+                acceptable = False
+            else:
+                j = int(substitutional_indices[np.argmax(row[substitutional_indices])])
+                trial = row.copy()
+                trial[j] = row[j] - deficit
+                steps = 0
+                while 1.0 - np.sum(trial[substitutional]) < floor and steps < _FLOOR_PROJECTION_MAX_NEXTAFTER_STEPS:
+                    trial[j] = np.nextafter(trial[j], -np.inf)
+                    steps += 1
+                if 1.0 - np.sum(trial[substitutional]) >= floor and abs(trial[j] - row[j]) <= dependent_threshold:
+                    row = trial
+                    node_mask[2] = True
+                    repair = (int(i), j, steps)
+                else:
+                    acceptable = False
+        if acceptable and composition_bound_violation(row[np.newaxis, :], interstitial_mask, floor) is None:
+            projected[i] = row
+            mask[i] = node_mask
+            if repair is not None:
+                repairs.append(repair)
+
+    if not np.any(mask):
+        return profile, _no_floor_projection()
+    grid = np.asarray(grid, dtype=np.float64).reshape(-1)
+    weights = np.zeros(n, dtype=np.float64)
+    half_widths = 0.5 * np.diff(grid)
+    weights[:-1] += half_widths
+    weights[1:] += half_widths
+    weights *= float(length)
+    change = projected - profile
+    return projected, _FloorProjection(
+        inventory_change=weights @ change,
+        absolute_change=weights @ np.abs(change),
+        mask=mask,
+        repairs=tuple(repairs),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,12 +453,22 @@ class _BulkPhaseSolveResult:
 
     ``interface_flux`` is the physical diffusive flux at the face adjacent to
     the moving interface, computed from the same face matrix used in the linear
-    finite-volume assembly.
+    finite-volume assembly. ``interface_deviation`` is the solved deviation of
+    the interface-adjacent node from the trial interface composition
+    (``w[-2]`` on the left, ``w[1]`` on the right); the flux and the interface
+    residual must use it rather than recomputing ``profile - c``, which loses
+    the digits below the rounding unit of ``c`` (ledger R06). ``projection``
+    records the round-off floor projection applied to ``profile`` (see
+    ``_project_shift_roundoff_to_floor``); its ``inventory_change`` belongs to
+    this returned profile. Both are required so that every return path,
+    including the Picard exits, must forward them.
     """
 
     profile: np.ndarray
     interface_flux: np.ndarray
     interface_face_matrix: np.ndarray
+    interface_deviation: np.ndarray
+    projection: _FloorProjection
     inner_iterations: int = 0
     inner_update_norm: float = 0.0
     converged: bool = True

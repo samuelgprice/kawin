@@ -185,7 +185,7 @@ error is 4.75e-4. `analytic/` is ported from that commit. The 06dc7b4 acceptance
 unchanged: `collect` doesn't use this helper, and existing `exact/*` arrays come from their
 own branches.
 
-## Research numerical issue R06: binary interface iteration stalls above its tolerance (binary fixed: research `25bf6cd`, merged to research main `90700be`, ported, oracle moved 2026-11-09)
+## Research numerical issue R06: binary interface iteration stalls above its tolerance (binary fixed: research `25bf6cd`, merged to research main `90700be`, ported, oracle moved 2026-11-09; two-phase ternary fixed: research `2741135`, merged `720d122` 2026-11-09; three-phase open)
 
 Found with `examples/binary_tlp_bonding.py` (Ni-P bonding, um and s units), 2026-11-08. Late in
 the solidification stage, the binary Illingworth model's interface fixed point stops reducing
@@ -222,6 +222,15 @@ The stall is round-off in the fixed-point map, not slow or cyclic iteration dyna
   and nanometre noise in `s`. The amplification scales with `dt / dz`, which matches the pattern
   above (smaller interface cells or larger steps fail earlier). The drift growing with
   refinement has the same cause.
+
+**Correction (2026-11-09, recorded with the ternary fix; the bullet above is left as first
+written).** Two figures in the third bullet are wrong. (1) "nanometre noise in `s`": Ni-P runs
+in um, so the 3.5e-9 um spread is 3.5 femtometres. (2) "multiplies that by about 3e7": the
+factor `D * dt / dz` from the entry's own numbers (D = 500 um^2/s, dt = 151.2 s, interface cell
+0.024 um) is about 3.2e6 um, which also reproduces the stated spurious flux of about 1e-10 from
+the 1e-17 to 7e-17 error in `p[-2]`. The commit message of research `25bf6cd` has the same
+"nanometre" wording; the history is left unchanged. `R06_deviation_form_explainer.md` on research
+main uses the corrected figures.
 
 **Candidate fix, prototyped only.** Solve each phase for the deviation from its interface
 composition, `w = p - c_L` (left) and `w = q - c_S` (right). Every row of the bulk systems sums
@@ -345,6 +354,90 @@ detached `06dc7b4` to a new clean detached worktree `...\code\mb-ref-90700be`:
   record two inventory allowances, 1e-12 x length for composition-based arrays and that divided
   by the minimum molar volume for mole arrays (C23: 1e-12 and 1.4e-7); cases without explicit
   volumes are unchanged.
+
+**Ternary research fix (2026-11-09, commit `2741135`, merged to research main as `720d122`,
+user-approved).** Branch `fix/r06-ternary-deviation-solve` (worktree `...\code\kawin-r06t`) from
+research main `90700be`; the `--no-ff` merge `720d122` has the same tree as `2741135`. Six files:
+`kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py`, `kawin/tests/test_illingworth_ternary.py`,
+new `kawin/tests/test_illingworth_ternary_deviation_form.py` (57 tests),
+`kawin/tests/make_illingworth_substitutional_baseline.py` (log entry), the regenerated
+`kawin/tests/data/illingworth_substitutional_baseline.npz`, and new
+`R06_deviation_form_explainer.md` (binary and ternary, before and after). Two-phase ternary only;
+the three-phase solver is untouched.
+
+- Each phase solve is shifted by the trial candidate's `c(eta)`: the right-hand side uses
+  `p_old - c`, the Dirichlet row is 0, and the compiled fill receives `p - c`. The flux and the
+  residual's swept-inventory terms use the solved interface-adjacent deviation, carried by the
+  required `_BulkPhaseSolveResult.interface_deviation` and `.projection` fields. Diffusivity
+  queries, Picard norms and stored profiles stay absolute.
+- `w + c` resolves each component only to about `eps * (|c| + |w|)`, so a dilute value just above
+  `minComposition` can round below it. `_project_shift_roundoff_to_floor` moves such violations
+  onto the floor within a fixed policy threshold, `16 * eps * (|c| + |w|)` (a policy, not an
+  error bound), behind the fast exact screen `_profile_within_floor_bounds`. Its signed inventory
+  change is added to `_interface_residual`; projection totals are staged in
+  `_accept_step_result` and committed in `postProcess`. Cost: about 15 us per phase solve.
+
+Verification (fix branch unless stated; 588 Illingworth/similarity tests pass there, and again
+on main after the merge, 140.7 s, including the bitwise baseline test):
+
+- Residual noise (scaled carbon residual, float minus 50-digit evaluation of the same discrete
+  equations, one motion branch and one closure segment): Fe-Mn-C 3201/p3.7 at t = 1 s,
+  2.5e-11 -> 7.3e-16 at dln t 0.005 and 6.7e-11 -> 1.8e-15 at 0.01; at t = 1e-4 s,
+  4.6e-15 -> 1.3e-18. Synthetic Fe-C-Mn-like case at t = 30 s: 2.0e-10 -> 1.7e-17.
+- Brass quasi-binary: ternary-vs-binary interface gap 1.70e-10 -> 4.9e-11 um. Error against a
+  50-digit march: ternary 2.01e-10 -> 4.1e-11 um, binary 3.5e-11 um. The bound of
+  `test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case` is restored
+  from 3e-10 to 1e-10, as the binary record above anticipated.
+- Fe-Mn-C to 2 s, main -> fix: 1601/p3.7 at dln t 0.01, retries 2144 -> 554 and drift
+  1.9e-5 -> 9.3e-6; 3201/p3.7 at 0.01, retries 1470 -> 1619; at dln t 0.005, 0 retries on both
+  trees. Every late-time failure disappears (1601: all failures in [1e-4, 1e-3) s; 3201: the 8
+  at t >= 0.1 s). The remaining failures are all at t < 1e-3 s ("line search failed", best
+  residual 1-3e-10), where the residual is accurate to about 1e-18, so they are not round-off.
+  **Open, not R06** (possibly related to R07/R08); recorded only.
+- Synthetic 401/p3.5 to 100 s: retries 128 -> 0, carbon drift -3.8e-9 -> 9.0e-11. On 801/p3.7:
+  16,052 retries in 185 s -> 0 in 4.4 s.
+- Bitwise substitutional baseline: 28 of 151 keys changed, all in the four ternary cases, at
+  most 3.0e-15 relative. Interface and eta histories and all binary and three-phase arrays are
+  bitwise unchanged. Regenerated deliberately and logged in
+  `make_illingworth_substitutional_baseline.py`.
+- Existing tests changed: private-signature callers, two solver mocks, the branch-spy index, and
+  two outer-failure tests, which relied on a round-off residual of about 1e-23 and now start off
+  equilibrium.
+- **Open question:** k(2) shifts by about 1e-4 relative at dln t 0.005, where neither tree
+  retries, which suggests sensitivity to the 1e-10 acceptance tolerance. Unexplained.
+
+**Ternary port (2026-11-09).** Source `2741135c9a4ba2644a1facf6ad604112dba35309` (merged to research
+main as `720d122`). The package keeps the research module's class in `solvers/illingworth/ternary.py`
+and its pre-class helpers in `solvers/illingworth/shared.py`, both otherwise verbatim, so the
+research diff was applied by hand-placed hunks: the 32 class-body hunks applied with exact
+context at a uniform offset (-849 lines; a fuzzy apply misplaced six of them and was discarded),
+and the three module-level hunks went to `shared.py`. Both files now equal research `2741135`
+apart from their header comments and imports (`ternary.py` additionally imports
+`_project_shift_roundoff_to_floor` from `shared.py`). Affected functions: in `shared.py`,
+`_InterfaceCandidate` (projection fields), `_BulkPhaseSolveResult` (`interface_deviation`,
+`projection`), the new `_FloorProjection`, `_read_only_zeros`, `_no_floor_projection`,
+`_profile_within_floor_bounds`, `_project_shift_roundoff_to_floor`, `_FLOOR_PROJECTION_ULPS`,
+`_FLOOR_PROJECTION_MAX_NEXTAFTER_STEPS` and the `_INTERFACE_ETA_FD_STEP` comment (kept verbatim,
+although `three_phase.py` also imports the constant and is not in deviation form); in
+`ternary.py`, the class docstring, `__init__`/`reset` projection totals,
+`_reset_implicit_diagnostics`, `_record_implicit_success`/`_failure`, both interface-flux helpers,
+the new `_project_floor_roundoff`, both planar solves, both Picard solves, `_interface_residual`,
+`_evaluate_interface_candidate`, the new `_commit_pending_step_projection`, `_accept_step_result`
+and `postProcess`. The compiled fills (`numerics/ternary.py`) and the three-phase solver are
+unchanged. `tests/test_ternary_deviation_form.py` ports the 57 research tests; bodies are
+unchanged except that two helpers are read from `shared.py`, and the fine-grid model's research
+helpers (from `test_illingworth_interstitials_ternary.py`) are reproduced locally.
+`docs/relocation-map.json` still names 06dc7b4 and the old `shared.py` symbol list, as after the
+binary port.
+
+- Package tests: the 57 ported tests pass (47.7 s); full `tests/` 215 passed, 8 skipped,
+  1 deselected; `tests/test_examples.py` 46 passed, 1 slow deselected (with `MB_EXAMPLE_TDB` set
+  to the acceptance copy; 43 passed, 3 skipped without it).
+- `acceptance.py quick` (public tolerance, 90700be oracle, 516.8 s): 30 runs pass, 20 bit-identical
+  and 10 within tolerance (C05-C08, C16-C19, C24, O05; worst C18 profiles 7.2e-14 against
+  2.9e-12, none within 10x); contracts 4 bit-identical, 1 within tolerance (C26, 2.2e-16); 89
+  tests; 33 repeat pairs identical. Every binary, three-phase (C09-C12, C20-C23, C32) and LEGACY
+  run is bit-identical.
 
 ## Release review follow-ups R07-R12 (open)
 

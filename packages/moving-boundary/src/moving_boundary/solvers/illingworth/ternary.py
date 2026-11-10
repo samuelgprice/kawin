@@ -1,4 +1,5 @@
-# Relocated from 06dc7b4ab56f67226ceabfde41ebf2690c088841, kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py
+# Relocated from samuelgprice/kawin 2741135c9a4ba2644a1facf6ad604112dba35309 (R06 ternary correction on top of main 90700be).
+# Source: kawin/diffusion/MovingBoundaryIllingworthTernaryFDM.py (class section; module helpers in shared.py); import changes only. See NOTICE and docs/LEDGERS.md.
 import warnings
 from dataclasses import dataclass
 
@@ -55,6 +56,7 @@ from moving_boundary.solvers.illingworth.shared import (
     InitialEtaEstimate,
     _InterfaceCandidate,
     _BulkPhaseSolveResult,
+    _project_shift_roundoff_to_floor,
     _validate_ternary_diffusivity_matrix,
     _validate_ternary_diffusivity_stack,
     _select_converged_branch,
@@ -141,29 +143,48 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     ``printDiagnostics``) prints the startup eta estimate, each step that
     needed retries, and the state at a step that fails after all retries.
 
-    Resolution limit: the interface fluxes are difference quotients across the
-    interface-adjacent cells, so extremely small cells lose digits to
-    cancellation. With an interface cell of ~5e-18 m (3201-node power-law
-    austenite grid with exponent 3.7 on a 50 um domain) the scaled carbon
-    residual of the Fe-Mn-C benchmark carries round-off noise of ~5e-13 at
-    semi-log steps of dln t <= 0.005, rising to ~1e-10 at dln t = 0.01; the
-    1601-node grid (~7e-17 m) reaches the same limit at dln t = 0.01. Once that
-    noise approaches ``residual_tolerance`` the interface Newton cannot
-    converge and steps are retried at smaller ``dt``. Interface cells above
-    ~1e-16 m, or smaller steps, avoid this. The eta finite-difference step
-    (``_INTERFACE_ETA_FD_STEP``) is sized so this noise does not corrupt the
-    Jacobian below that limit.
+    Deviation form (ledger R06): each phase is solved for its deviation
+    ``w = c - c_interface(eta)`` from the trial candidate's interface
+    compositions, and the interface fluxes and swept-inventory terms use the
+    solved interface-adjacent deviations. This is algebraically the
+    absolute-composition scheme, but it removes a round-off floor: forming
+    ``c_interface - p[-2]`` from absolute compositions left an error of order
+    ``eps * |c|`` that the flux amplified by ``D dt / dz`` (noise
+    ``eps * sum_j |D_kj| * |u_j| * dt / dz`` per side, ``dz`` the interface
+    cell). On the Fe-Mn-C benchmark (3201-node power-law austenite grid,
+    exponent 3.7) the float error of the scaled carbon residual at t = 1 s was
+    2.5e-11 at dln t = 0.005 and 6.7e-11 at 0.01, close to the 1e-10
+    tolerance; it is now 7e-16 and 1.8e-15. On a synthetic Fe-C-Mn-like case
+    with a 1e-10 interface cell it fell from 2e-10 to 2e-17 and every step
+    retry disappeared. Fine Fe-Mn-C grids at dln t = 0.01 still retry steps
+    in the early transient (t < 1e-3 s), where the residual is evaluated to
+    ~1e-18 (scaled) but the interface Newton line search stops just above the
+    tolerance; that is not a round-off limit and its cause is not established.
+    Earlier observations attributed to the round-off floor (e.g. Fe-Mn-C on a
+    401-node exponent-3 grid near t ~ 1e6 s) were not re-measured. The eta
+    finite-difference step (``_INTERFACE_ETA_FD_STEP``) was sized against the
+    old noise and is unchanged.
 
-    The noise follows ``eps * sum_j |D_kj| * |u_j| * dt / dz`` per side of the
-    interface (``dz`` the interface cell): once ``D * dt / dz**2`` is large, the
-    interface cells' own mass balance falls below round-off. Semi-log steps
-    grow with time, so long runs reach this limit on any grid whose interface
-    cell is sized for the early, sharp transient: Fe-Mn-C on a 401-node grid
-    with exponent 3 (~8e-13 m) reaches it at t ~ 1e6 s (dt ~ 5e3 s). For runs
-    to equilibrium use a milder interface grid (e.g. exponent 1.5, ~6e-9 m),
-    which reaches full Fe-Mn-C equilibrium without this problem. Accepting
-    such noise-limited steps instead is not a substitute: on the fine grid the
-    noise grows to a large fraction of the per-step inventory change.
+    Precision of stored compositions: ``w + c`` resolves every component only
+    to about ``eps * (|c| + |w|)`` in absolute terms, so a dilute far-field
+    value beside a large interface composition keeps less relative precision
+    than an absolute-composition solve would give it (e.g. ~1e-12 relative
+    per step for 1e-4 beside 0.1). With the default numerical floor such
+    floor-level values usually stand for an absent component, but a user may
+    set ``minComposition`` near a physically meaningful concentration, and
+    then this limit applies to physical data. A value within that round-off
+    of the composition floor can land just below it, which the exact
+    composition validator would reject at every timestep. Such violations
+    are moved onto the floor within a fixed policy threshold
+    (``_project_shift_roundoff_to_floor``, ``_FLOOR_PROJECTION_ULPS``); larger
+    ones are rejected as before. Unlike the deviation transformation, this is
+    a small, explicitly controlled perturbation: its signed inventory change
+    is added to the interface residual, so the residual describes the stored
+    profiles, and the projections are reported (``_lastStepProjection*`` per
+    interface solve; ``_cumulativeProjection*`` and
+    ``_cumulativeProjectedNodes`` over committed steps only;
+    ``_cumulativeProjectedSolves`` over every linear phase solve that
+    projected, rejected and intermediate ones included).
 
     Limitations (the first three are enforced and raise):
 
@@ -299,6 +320,16 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._semiLogNextIndex = 0
         self._nearFinalNoop = False
         self._reset_implicit_diagnostics()
+        # Cumulative round-off floor projections over committed steps (signed and
+        # absolute inventory change, projected nodes; staged in
+        # ``_pendingStepProjection`` until ``postProcess`` commits a step) and
+        # over every linear phase solve (``_cumulativeProjectedSolves``,
+        # intermediate Picard solves and rejected or failed candidates included).
+        self._cumulativeProjectionInventoryChange = np.zeros(2, dtype=np.float64)
+        self._cumulativeProjectionAbsoluteChange = np.zeros(2, dtype=np.float64)
+        self._cumulativeProjectedNodes = 0
+        self._cumulativeProjectedSolves = 0
+        self._pendingStepProjection = None
         self._lastStepRetries = 0
         self._lastInterfaceCompositions = None
         self._terminalThinPhaseStop = False
@@ -533,6 +564,20 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         ``_lastImplicitForcedUpdateSkipped`` is true only when a step was
         accepted at its unchanged starting iterate because the mandatory
         Newton update could not be carried out.
+
+        Round-off floor projections (``_project_shift_roundoff_to_floor``):
+        ``_lastStepProjectionInventoryChange`` and
+        ``_lastStepProjectionAbsoluteChange`` are the signed and absolute
+        componentwise inventory changes of the accepted candidate's two
+        profiles, and ``_lastStepProjectedNodes`` its projected node count
+        (all zero unless the solve succeeds). ``_lastStepProjectedSolves``
+        counts every linear phase solve of this interface solve that projected
+        anything (accepted candidate, rejected Newton trials, intermediate
+        Picard solves and candidates that failed later). These describe one
+        interface solve; they reach the cumulative totals only when
+        ``postProcess`` commits the step. The signed change is already part of
+        the accepted residual, so conservation checks must not subtract it
+        again; these are diagnostics of numerical intervention only.
         """
         self._lastImplicitIterations = 0
         self._lastImplicitResidual = np.nan
@@ -559,6 +604,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._currentBulkDiffusivityProviderCalls = 0
         self._currentBulkFaceMatricesEvaluated = 0
         self._bulkDiffusivityCountingActive = False
+        self._lastStepProjectionInventoryChange = np.zeros(2, dtype=np.float64)
+        self._lastStepProjectionAbsoluteChange = np.zeros(2, dtype=np.float64)
+        self._lastStepProjectedNodes = 0
+        self._lastStepProjectedSolves = 0
+        self._currentStepProjectedSolves = 0
 
     def _record_implicit_success(self, iterations, candidate, candidate_evaluations, jacobian_evaluations, forced_update_skipped=False):
         """
@@ -590,6 +640,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._lastBulkConverged = True
         self._lastBulkFailureReason = None
         self._bulkDiffusivityCountingActive = False
+        projections = [p for p in (candidate.left_projection, candidate.right_projection) if p is not None]
+        self._lastStepProjectionInventoryChange = sum((p.inventory_change for p in projections), np.zeros(2, dtype=np.float64))
+        self._lastStepProjectionAbsoluteChange = sum((p.absolute_change for p in projections), np.zeros(2, dtype=np.float64))
+        self._lastStepProjectedNodes = int(sum(p.projected_nodes for p in projections))
+        self._lastStepProjectedSolves = int(getattr(self, "_currentStepProjectedSolves", 0))
 
     def _record_implicit_failure(self, iterations, best_scaled_norm, best_physical_norm, best_motion_branch, candidate_evaluations, jacobian_evaluations, reason):
         """Records diagnostics for a failed nonlinear interface solve."""
@@ -606,6 +661,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._lastBulkFaceMatricesEvaluated = int(self._currentBulkFaceMatricesEvaluated)
         self._lastBulkDiffusivityEvaluations = self._lastBulkFaceMatricesEvaluated
         self._bulkDiffusivityCountingActive = False
+        self._lastStepProjectedSolves = int(getattr(self, "_currentStepProjectedSolves", 0))
 
     def _record_completed_bulk_candidate(self, candidate):
         """Records bulk diagnostics from the latest fully evaluated interface candidate."""
@@ -674,6 +730,16 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._semiLogNextIndex = 0
         self._nearFinalNoop = False
         self._reset_implicit_diagnostics()
+        # Cumulative round-off floor projections over committed steps (signed and
+        # absolute inventory change, projected nodes; staged in
+        # ``_pendingStepProjection`` until ``postProcess`` commits a step) and
+        # over every linear phase solve (``_cumulativeProjectedSolves``,
+        # intermediate Picard solves and rejected or failed candidates included).
+        self._cumulativeProjectionInventoryChange = np.zeros(2, dtype=np.float64)
+        self._cumulativeProjectionAbsoluteChange = np.zeros(2, dtype=np.float64)
+        self._cumulativeProjectedNodes = 0
+        self._cumulativeProjectedSolves = 0
+        self._pendingStepProjection = None
         self._lastStepRetries = 0
         self._lastInterfaceCompositions = None
         self._terminalThinPhaseStop = False
@@ -1165,25 +1231,54 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             out[i] = _validate_ternary_diffusivity_matrix(matrix, phase, context=f"{context} face {i}")
         return out
 
-    def _left_interface_diffusive_flux(self, p_future, future_s, c_left, interface_face_matrix):
+    def _left_interface_diffusive_flux(self, interface_deviation, future_s, interface_face_matrix):
         """
         Returns the physical left-phase diffusive flux at the interface face.
 
         The interface-adjacent face is between ``p_future[-2]`` and the
-        Dirichlet endpoint ``c_left == p_future[-1]``.
+        Dirichlet endpoint ``c_left == p_future[-1]``. ``interface_deviation``
+        is the solved ``p_future[-2] - c_left`` (``w[-2]`` of the deviation
+        solve); it must not be recomputed from absolute compositions (ledger
+        R06), so the flux is ``D (-w[-2]) / ((1 - u[-2]) future_s)``.
         """
-        diff_l = _matvec_2x2(interface_face_matrix, (np.asarray(c_left, dtype=np.float64) - p_future[-2]) / (1.0 - self._u_grid[-2]))
+        diff_l = _matvec_2x2(interface_face_matrix, -np.asarray(interface_deviation, dtype=np.float64) / (1.0 - self._u_grid[-2]))
         return diff_l / float(future_s)
 
-    def _right_interface_diffusive_flux(self, q_future, future_s, c_right, interface_face_matrix):
+    def _right_interface_diffusive_flux(self, interface_deviation, future_s, interface_face_matrix):
         """
         Returns the physical right-phase diffusive flux at the interface face.
 
         The interface-adjacent face is between the Dirichlet endpoint
-        ``c_right == q_future[0]`` and ``q_future[1]``.
+        ``c_right == q_future[0]`` and ``q_future[1]``. ``interface_deviation``
+        is the solved ``q_future[1] - c_right`` (``w[1]``), so the flux is
+        ``D w[1] / (v[1] (R - future_s))``.
         """
-        diff_r = _matvec_2x2(interface_face_matrix, (q_future[1] - np.asarray(c_right, dtype=np.float64)) / self._v_grid[1])
+        diff_r = _matvec_2x2(interface_face_matrix, np.asarray(interface_deviation, dtype=np.float64) / self._v_grid[1])
         return diff_r / (self._R - float(future_s))
+
+    def _project_floor_roundoff(self, profile, shift, deviation, fixed_node, grid, length):
+        """
+        Applies ``_project_shift_roundoff_to_floor`` with this model's bounds and element order.
+
+        Every linear phase solve goes through here, so a solve that projects
+        anything is counted at once in ``_currentStepProjectedSolves`` and
+        ``_cumulativeProjectedSolves``, including intermediate Picard solves and
+        solves of candidates that are later discarded or fail.
+        """
+        profile, projection = _project_shift_roundoff_to_floor(
+            profile,
+            shift,
+            deviation,
+            independent_interstitial_mask(self.allElements),
+            self.constraints.minComposition,
+            fixed_node,
+            grid,
+            length,
+        )
+        if projection.mask is not None:
+            self._currentStepProjectedSolves = getattr(self, "_currentStepProjectedSolves", 0) + 1
+            self._cumulativeProjectedSolves = getattr(self, "_cumulativeProjectedSolves", 0) + 1
+        return profile, projection
 
     def _solve_concentration_left_planar(self, p, s, future_s, dt, c_left, D_left_faces, motion_branch, validate_diffusivity=True):
         """
@@ -1195,9 +1290,26 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         original Python assembly otherwise; both use neighboring grid spacing.
         Internal callers pass prevalidated matrices from the phase-uniform or
         face-diffusivity providers; external diagnostic calls validate by default.
+
+        The system is solved for the deviation ``w = p_new - c_left`` from the
+        trial interface composition. Every non-Dirichlet block row sums to its
+        old-volume coefficient times the identity (``-s * width / 2 * I``, on
+        both motion branches, for uniform and face matrices), so the deviation
+        system has the same matrix and the same right-hand side with
+        ``p - c_left`` in place of ``p`` and a zero Dirichlet value: an exact
+        identity, assembled directly rather than as ``rhs - A c_left``. The
+        shift is constant within this call; ``c_left`` may differ from the old
+        endpoint ``p[-1]`` (changing eta), which the shifted right-hand side
+        already contains. The interface flux and ``interface_deviation`` use
+        ``w[-2]`` (ledger R06). The returned profile is ``w + c_left`` after
+        ``_project_floor_roundoff``, which may move round-off-level
+        composition-floor violations onto the floor and records the signed
+        inventory change in ``projection``.
         """
         _validate_motion_branch(motion_branch)
         n = len(p)
+        c_left = np.asarray(c_left, dtype=np.float64).reshape(2)
+        w_old = np.asarray(p, dtype=np.float64) - c_left
         D_left_values = np.asarray(D_left_faces)
         phase_uniform = D_left_values.shape == (2, 2)
         if phase_uniform:
@@ -1222,7 +1334,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if _fill_ternary_left_planar_interior is not None:
             scaled_faces = np.broadcast_to(tmpA_uniform, (n - 1, 2, 2)) if phase_uniform else tmpA_faces
             _fill_ternary_left_planar_interior(
-                lower, diagonal, upper, rhs, p, u, scaled_faces,
+                lower, diagonal, upper, rhs, w_old, u, scaled_faces,
                 phase_uniform, motion_branch == "positive", s, future_s,
             )
         interior_rows = range(1, n - 1) if _fill_ternary_left_planar_interior is None else ()
@@ -1231,7 +1343,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             A_right = tmpA_uniform if phase_uniform else tmpA_faces[0]
             diagonal[0] = -A_right / u[1] - I * (future_s * u[1] / 2.0)
             upper[0] = A_right / u[1] + I * (tmpB * u[1] / 2.0)
-            rhs[0] = -p[0] * s * u[1] / 2.0
+            rhs[0] = -w_old[0] * s * u[1] / 2.0
             for i in interior_rows:
                 left_diff = u[i] - u[i - 1]
                 right_diff = u[i + 1] - u[i]
@@ -1247,12 +1359,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     diagonal[i] = -A_left / left_diff - A_right / right_diff
                 diagonal[i] += -I * (tmpB * left_sum / 2.0 + future_s * cell_width / 2.0)
                 upper[i] = A_right / right_diff + I * (tmpB * right_sum / 2.0)
-                rhs[i] = -s * p[i] * cell_width / 2.0
+                rhs[i] = -s * w_old[i] * cell_width / 2.0
         else:
             A_right = tmpA_uniform if phase_uniform else tmpA_faces[0]
             diagonal[0] = -A_right / u[1] + I * (tmpB * u[1] / 2.0 - future_s * u[1] / 2.0)
             upper[0] = A_right / u[1]
-            rhs[0] = -p[0] * s * u[1] / 2.0
+            rhs[0] = -w_old[0] * s * u[1] / 2.0
             for i in interior_rows:
                 left_diff = u[i] - u[i - 1]
                 right_diff = u[i + 1] - u[i]
@@ -1268,16 +1380,20 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     diagonal[i] = -A_left / left_diff - A_right / right_diff
                 diagonal[i] += I * (tmpB * right_sum / 2.0 - future_s * cell_width / 2.0)
                 upper[i] = A_right / right_diff
-                rhs[i] = -s * p[i] * cell_width / 2.0
+                rhs[i] = -s * w_old[i] * cell_width / 2.0
 
         diagonal[-1] = -I
-        rhs[-1] = -np.asarray(c_left, dtype=np.float64)
-        profile = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+        rhs[-1] = 0.0
+        deviation = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+        profile, projection = self._project_floor_roundoff(deviation + c_left, c_left, deviation, -1, u, future_s)
+        interface_deviation = deviation[-2].copy()
         interface_face_matrix = D_left_uniform if phase_uniform else np.asarray(D_left_faces[-1], dtype=np.float64)
         return _BulkPhaseSolveResult(
             profile=profile,
-            interface_flux=self._left_interface_diffusive_flux(profile, future_s, c_left, interface_face_matrix),
+            interface_flux=self._left_interface_diffusive_flux(interface_deviation, future_s, interface_face_matrix),
             interface_face_matrix=interface_face_matrix,
+            interface_deviation=interface_deviation,
+            projection=projection,
         )
 
     def _new_concentration_left_planar(self, p, s, future_s, dt, c_left, D_left, motion_branch):
@@ -1299,9 +1415,19 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         original Python assembly otherwise; both use neighboring grid spacing.
         Internal callers pass prevalidated matrices from the phase-uniform or
         face-diffusivity providers; external diagnostic calls validate by default.
+
+        As in ``_solve_concentration_left_planar`` the system is solved for the
+        deviation ``w = q_new - c_right``: every non-Dirichlet row, including
+        the zero-flux far-boundary row, sums to its old-volume coefficient times
+        the identity, so the right-hand side uses ``q - c_right`` and the
+        Dirichlet value is zero. The flux and ``interface_deviation`` use
+        ``w[1]``; the returned profile is ``w + c_right`` after
+        ``_project_floor_roundoff``.
         """
         _validate_motion_branch(motion_branch)
         n = len(q)
+        c_right = np.asarray(c_right, dtype=np.float64).reshape(2)
+        w_old = np.asarray(q, dtype=np.float64) - c_right
         D_right_values = np.asarray(D_right_faces)
         phase_uniform = D_right_values.shape == (2, 2)
         if phase_uniform:
@@ -1327,13 +1453,13 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if _fill_ternary_right_planar_interior is not None:
             scaled_faces = np.broadcast_to(tmpA_uniform, (n - 1, 2, 2)) if phase_uniform else tmpA_faces
             _fill_ternary_right_planar_interior(
-                lower, diagonal, upper, rhs, q, v, scaled_faces,
+                lower, diagonal, upper, rhs, w_old, v, scaled_faces,
                 phase_uniform, motion_branch == "positive", self._R - s, span, tmpB,
             )
         interior_rows = range(1, n - 1) if _fill_ternary_right_planar_interior is None else ()
 
         diagonal[0] = -I
-        rhs[0] = -np.asarray(c_right, dtype=np.float64)
+        rhs[0] = 0.0
         if motion_branch == "positive":
             for i in interior_rows:
                 left_diff = v[i] - v[i - 1]
@@ -1350,14 +1476,14 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     diagonal[i] = -A_right / right_diff - A_left / left_diff
                 diagonal[i] += -I * (tmpB * (1.0 - left_sum / 2.0) + span * cell_width / 2.0)
                 upper[i] = A_right / right_diff + I * (tmpB * (1.0 - right_sum / 2.0))
-                rhs[i] = -(self._R - s) * q[i] * cell_width / 2.0
+                rhs[i] = -(self._R - s) * w_old[i] * cell_width / 2.0
 
             tmp = v[-2]
             A_left = tmpA_uniform if phase_uniform else tmpA_faces[-1]
             lower[-1] = A_left / (1.0 - tmp)
             diagonal[-1] = -A_left / (1.0 - tmp)
             diagonal[-1] += -I * (tmpB * (1.0 - (1.0 + tmp) / 2.0) + span * (1.0 - tmp) / 2.0)
-            rhs[-1] = -q[-1] * (self._R - s) * (1.0 - tmp) / 2.0
+            rhs[-1] = -w_old[-1] * (self._R - s) * (1.0 - tmp) / 2.0
         else:
             for i in interior_rows:
                 left_diff = v[i] - v[i - 1]
@@ -1374,20 +1500,24 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     diagonal[i] = -A_right / right_diff - A_left / left_diff
                 diagonal[i] += I * (tmpB * (1.0 - right_sum / 2.0) - span * cell_width / 2.0)
                 upper[i] = A_right / right_diff
-                rhs[i] = -(self._R - s) * q[i] * cell_width / 2.0
+                rhs[i] = -(self._R - s) * w_old[i] * cell_width / 2.0
 
             tmp = v[-2]
             A_left = tmpA_uniform if phase_uniform else tmpA_faces[-1]
             lower[-1] = A_left / (1.0 - tmp) - I * (tmpB * (1.0 - (1.0 + tmp) / 2.0))
             diagonal[-1] = -A_left / (1.0 - tmp) - I * (span * (1.0 - tmp) / 2.0)
-            rhs[-1] = -q[-1] * (self._R - s) * (1.0 - tmp) / 2.0
+            rhs[-1] = -w_old[-1] * (self._R - s) * (1.0 - tmp) / 2.0
 
-        profile = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+        deviation = solve_illingworth_block_tridiagonal(lower, diagonal, upper, rhs)
+        profile, projection = self._project_floor_roundoff(deviation + c_right, c_right, deviation, 0, v, span)
+        interface_deviation = deviation[1].copy()
         interface_face_matrix = D_right_uniform if phase_uniform else np.asarray(D_right_faces[0], dtype=np.float64)
         return _BulkPhaseSolveResult(
             profile=profile,
-            interface_flux=self._right_interface_diffusive_flux(profile, future_s, c_right, interface_face_matrix),
+            interface_flux=self._right_interface_diffusive_flux(interface_deviation, future_s, interface_face_matrix),
             interface_face_matrix=interface_face_matrix,
+            interface_deviation=interface_deviation,
+            projection=projection,
         )
 
     def _new_concentration_right_planar(self, q, s, future_s, dt, c_right, D_right, motion_branch):
@@ -1437,6 +1567,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         an optional relaxation forms the next coefficient iterate. Nonconvergence
         raises ``RuntimeError`` so the surrounding timestep retry logic can
         reduce ``dt`` without changing the outer interface Newton algorithm.
+        Face matrices and the update norm use physical (absolute, projected)
+        compositions; only the linear solve works in deviation form. The
+        returned result carries the final linear solve's
+        ``interface_deviation`` and ``projection``, so the floor-projection
+        correction belongs to the returned profile and is never accumulated
+        over inner iterations.
         """
         iterate = self._left_candidate_initial_profile(p, c_left)
         update_norm = np.inf
@@ -1449,6 +1585,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     profile=linear.profile,
                     interface_flux=linear.interface_flux,
                     interface_face_matrix=linear.interface_face_matrix,
+                    interface_deviation=linear.interface_deviation,
+                    projection=linear.projection,
                     inner_iterations=iteration,
                     inner_update_norm=update_norm,
                 )
@@ -1460,6 +1598,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     profile=linear.profile,
                     interface_flux=linear.interface_flux,
                     interface_face_matrix=linear.interface_face_matrix,
+                    interface_deviation=linear.interface_deviation,
+                    projection=linear.projection,
                     inner_iterations=iteration,
                     inner_update_norm=0.0,
                 )
@@ -1488,6 +1628,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     profile=linear.profile,
                     interface_flux=linear.interface_flux,
                     interface_face_matrix=linear.interface_face_matrix,
+                    interface_deviation=linear.interface_deviation,
+                    projection=linear.projection,
                     inner_iterations=iteration,
                     inner_update_norm=update_norm,
                 )
@@ -1499,6 +1641,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     profile=linear.profile,
                     interface_flux=linear.interface_flux,
                     interface_face_matrix=linear.interface_face_matrix,
+                    interface_deviation=linear.interface_deviation,
+                    projection=linear.projection,
                     inner_iterations=iteration,
                     inner_update_norm=0.0,
                 )
@@ -1511,8 +1655,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
     def _interface_residual(
         self,
-        p_future,
-        q_future,
+        left_interface_deviation,
+        right_interface_deviation,
         s,
         old_s,
         future_s,
@@ -1524,6 +1668,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         left_interface_flux,
         right_interface_flux,
         motion_branch,
+        left_projection_inventory_change,
+        right_projection_inventory_change,
     ):
         """
         Returns the two-component planar interface inventory residual.
@@ -1536,16 +1682,30 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         change using the accepted old geometry ``s`` and the old discrete
         endpoint values from ``p[-1]`` and ``q[0]``. ``motion_branch`` must be
         the same branch used by both phase bulk solves for this residual.
+
+        The swept-inventory terms use the solved interface-adjacent deviations
+        ``left_interface_deviation = p_future[-2] - c_left`` and
+        ``right_interface_deviation = q_future[1] - c_right``
+        (``_BulkPhaseSolveResult.interface_deviation``). Algebraically this is
+        the absolute-composition expression, but without its cancellation
+        (ledger R06). The two ``*_projection_inventory_change`` terms
+        (``_FloorProjection.inventory_change``) are added so the residual equals
+        the inventory change of the profiles that are stored, including any
+        round-off floor projection; pass zeros for unprojected profiles.
         """
         _validate_motion_branch(motion_branch)
         diff_l = np.asarray(left_interface_flux, dtype=np.float64).reshape(2)
         diff_r = np.asarray(right_interface_flux, dtype=np.float64).reshape(2)
         rhs = (diff_r - diff_l) * dt
+        c_left = np.asarray(c_left, dtype=np.float64)
+        c_right = np.asarray(c_right, dtype=np.float64)
 
         if motion_branch == "positive":
-            lhs = c_left - q_future[1] * (1.0 - self._v_grid[1] / 2.0) - c_right * self._v_grid[1] / 2.0
+            w_right = np.asarray(right_interface_deviation, dtype=np.float64).reshape(2)
+            lhs = (c_left - c_right) - w_right * (1.0 - self._v_grid[1] / 2.0)
         else:
-            lhs = p_future[-2] * (0.5 + self._u_grid[-2] / 2.0) + c_left * (0.5 - self._u_grid[-2] / 2.0) - c_right
+            w_left = np.asarray(left_interface_deviation, dtype=np.float64).reshape(2)
+            lhs = (c_left - c_right) + w_left * (0.5 + self._u_grid[-2] / 2.0)
         residual = (future_s - s) * lhs - rhs
         left_endpoint_change = (
             float(s)
@@ -1559,7 +1719,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             * self._v_grid[1]
             * (np.asarray(c_right, dtype=np.float64) - np.asarray(c_right_old, dtype=np.float64))
         )
-        return residual + left_endpoint_change + right_endpoint_change
+        projection_change = (
+            np.asarray(left_projection_inventory_change, dtype=np.float64).reshape(2)
+            + np.asarray(right_projection_inventory_change, dtype=np.float64).reshape(2)
+        )
+        return residual + left_endpoint_change + right_endpoint_change + projection_change
 
     def _active_interface_variables(self):
         eta_lower, eta_upper = tuple(float(v) for v in self.interfaceEquilibrium.eta_bounds)
@@ -1813,8 +1977,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             )
         self._validate_candidate_profiles((left_result.profile, right_result.profile))
         residual = self._interface_residual(
-            left_result.profile,
-            right_result.profile,
+            left_result.interface_deviation,
+            right_result.interface_deviation,
             s,
             old_s,
             future_s,
@@ -1826,6 +1990,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             left_result.interface_flux,
             right_result.interface_flux,
             motion_branch,
+            left_result.projection.inventory_change,
+            right_result.projection.inventory_change,
         )
         scaled_residual = residual / residual_scale
         return _InterfaceCandidate(
@@ -1848,6 +2014,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             left_inner_update_norm=left_result.inner_update_norm,
             right_inner_update_norm=right_result.inner_update_norm,
             bulk_diffusivity_evaluations=left_result.diffusivity_evaluations + right_result.diffusivity_evaluations,
+            left_projection=left_result.projection,
+            right_projection=right_result.projection,
         )
 
     def _solve_interface_planar(self, p, q, s, old_s, eta, dt):
@@ -2170,12 +2338,37 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             v=self._v_grid,
         )
 
+    def _commit_pending_step_projection(self):
+        """
+        Adds the committed step's floor-projection totals to the cumulative ones.
+
+        ``_accept_step_result`` only stages them (``_pendingStepProjection``),
+        because ``getdXdt`` proposes a step that is committed later by
+        ``postProcess``; evaluating ``getdXdt`` again, or rejecting the
+        proposal, must not count its projections. Clears the staged values.
+        """
+        pending = getattr(self, "_pendingStepProjection", None)
+        if pending is None:
+            return
+        inventory_change, absolute_change, nodes = pending
+        self._cumulativeProjectionInventoryChange = self._cumulativeProjectionInventoryChange + inventory_change
+        self._cumulativeProjectionAbsoluteChange = self._cumulativeProjectionAbsoluteChange + absolute_change
+        self._cumulativeProjectedNodes += int(nodes)
+        self._pendingStepProjection = None
+
     def _accept_step_result(self, p, q, s, eta, result, trial_dt, retry):
         """Stores diagnostics and returns derivatives for an accepted implicit trial."""
         p_new, q_new, s_new, eta_new, c_left_new, c_right_new, D_left, D_right = result
         self._currdt = float(trial_dt)
         self._lastAcceptedDt = float(trial_dt)
         self._lastStepRetries = int(retry)
+        # Staged only: getdXdt proposes the step; postProcess commits it and
+        # adds these to the cumulative projection totals.
+        self._pendingStepProjection = (
+            self._lastStepProjectionInventoryChange.copy(),
+            self._lastStepProjectionAbsoluteChange.copy(),
+            int(self._lastStepProjectedNodes),
+        )
         self._lastInterfaceCompositions = (c_left_new.copy(), c_right_new.copy())
         self._D_left = D_left
         self._D_right = D_right
@@ -2312,6 +2505,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if self._nearFinalNoop:
             self.currentTime = time
             self._nearFinalNoop = False
+            self._pendingStepProjection = None
             return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr, self._eta_curr], True
         GenericModel.postProcess(self, time, x)
         p = np.asarray(x[0], dtype=np.float64).reshape((-1, 2)).copy()
@@ -2339,6 +2533,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._q_curr = q
         self._s_curr = float(s)
         self._eta_curr = float(eta)
+        self._commit_pending_step_projection()
         self.updateCoupledModels()
         if self._terminalThinPhaseStop:
             self.finalTime = time
