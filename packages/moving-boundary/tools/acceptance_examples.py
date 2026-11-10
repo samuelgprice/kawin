@@ -124,25 +124,37 @@ def check_input_hash(tool, name, private):
 
 
 def compare_case(tool, settings, case, entry, allowed, digests):
-    """Compare one package run with its frozen fixture; returns a list of failures."""
+    """Compare one package run with its expected fixture; returns a list of failures.
+
+    The fixture is ``tool.expected_reference(entry["reference"])``: ``reference/<case>`` with the
+    adopted ``example_settings`` file, or, for an approved case, the approval's arrays with the
+    package-captured settings stored and hashed beside them (an approved mapped case without
+    them fails).
+    """
     import numpy as np
     failures = []
     got = tool.OUTPUT / "package_examples" / case
-    reference = tool.OUTPUT / "reference" / entry["reference"]
-    recorded = tool.OUTPUT / "example_settings" / (entry["reference"] + ".settings.json")
-    if not recorded.exists():
-        failures.append("adopted reference settings missing: " + recorded.name)
-    elif check_settings_hash(recorded, digests):
-        failures.extend(check_settings_hash(recorded, digests))
+    selected = tool.expected_reference(entry["reference"])
+    if selected["source"] == "reference":
+        recorded = tool.OUTPUT / "example_settings" / (entry["reference"] + ".settings.json")
+    elif selected["settings"] is None:
+        recorded = None
+        failures.append(f"approved reference {selected['source']} has no captured settings for {entry['reference']}")
     else:
+        recorded = selected["settings"]
+        digests = {recorded.name: selected["settings_sha256"]}
+    problems = [] if recorded is None else (
+        ["adopted reference settings missing: " + recorded.name] if not recorded.exists() else check_settings_hash(recorded, digests))
+    failures.extend(problems)
+    if recorded is not None and not problems:
         found = settings.differences(json.loads(recorded.read_text(encoding="utf-8")),
                                      json.loads(got.with_suffix(".settings.json").read_text(encoding="utf-8")), allowed)
         failures.extend("setting differs: " + name for name in found)
-    expected = json.loads(reference.with_suffix(".json").read_text(encoding="utf-8"))
+    expected = json.loads(selected["json"].read_text(encoding="utf-8"))
     actual = json.loads(got.with_suffix(".json").read_text(encoding="utf-8"))
     if expected.get("stop_status") != actual["stop_status"]:
         failures.append("stop status differs")
-    with np.load(reference.with_suffix(".npz")) as ref, np.load(got.with_suffix(".npz")) as new:
+    with np.load(selected["npz"]) as ref, np.load(got.with_suffix(".npz")) as new:
         if set(ref.files) != set(new.files):
             failures.append(f"key set differs: missing {sorted(set(ref.files) - set(new.files))}, extra {sorted(set(new.files) - set(ref.files))}")
         for key in sorted(set(ref.files) & set(new.files)):

@@ -18,7 +18,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M5 | Example worker + hashed settings | done 2026-11-10 (see log) |
 | M5b | Regeneration verification of adopted inputs | done 2026-11-10 (12/12 verified; see log) |
 | M6 | Normal/historical split, package-role repeatability | done 2026-11-10 (see log) |
-| M7 | Approval path | in progress: M7a `approval_criteria` adopted (user-approved 2026-11-10); M7b approval path next |
+| M7 | Approval path | done 2026-11-10: M7a `approval_criteria` adopted (user-approved); M7b approval path (see log) |
 | M8 | Test port (item 16), 4 batches | not started |
 | M9 | Independence proof + missing-resource matrix | not started |
 | M10 | Docs + final recorded gates | not started |
@@ -218,6 +218,65 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
   points, zero reference, mesh mismatch) fails. `check` on today's references: all pass. Unit
   tests `tests/test_acceptance_criteria.py` (22); full `tests/`: 374 passed, 5 skipped, 1
   deselected.
+- **M7b (2026-11-10): approval path.** New `tools/acceptance_approval.py` (no Git):
+  `expected_reference` (one selection helper, used by `compare()`, `contract_assertions()` and
+  `acceptance_examples.compare_case()`; with no `approved_references` section it returns today's
+  `reference/<case>` paths and the O06/O08 frozen hashes), Git-free `validate` (called by
+  `validate_expected`), approval IDs `<UTC>-<sha7>-<counter>` that skip IDs used by records,
+  folders or reports, crash-safe `promote` (`.partial` → re-hash + reload → rename → report →
+  temp manifest + `os.replace` with OneDrive-lock retry, newline style preserved), `rollback`, and
+  `leftovers`. `acceptance.py approve --cases … --reason …` / `approve --rollback ID --reason …`.
+  Implementation choices to note:
+  - *Gates:* every run case at public tolerance; repeat pairs for the normal repeat set plus every
+    listed case (whose candidate must also equal its repeats) plus O05/O08 as seeded pairs;
+    `approval_criteria` on the candidate arrays (unmeasurable fails); the installed-target pytest
+    set, in which contracts gate on their assertion groups (`contract_assertions`: worker PASS,
+    `contract_assertions_passed`, same group names as the reference, matching count) and only a
+    *listed* contract's array comparison is reported instead of failed. Normal runs always clear
+    the candidate list, so they gate every comparison as before.
+  - *Fail fast:* approve stops at the first failed gate and writes nothing; the adoption procedure
+    already lists failing cases with a public quick first.
+  - *Budget:* approve has its own limit, 900 s (quick) / 1500 s (full), because it repeats more
+    cases than a normal gate. Measured: quick approve 420 s in the clone.
+  - *Rollback* undoes one approval (its cases return to what was in effect before it) and is
+    refused while a later approval of the same case is in effect (LIFO per case).
+  - *Not approvable:* O04/O05, whose example settings are hashed only in the private record.
+  - *Clean tree* = nothing under the package directory in `git status --porcelain
+    --untracked-files=all`. A real approval in this worktree therefore needs the user's
+    uncommitted package files (`NEXT_SESSIONS.md`, the example Settings lines,
+    `AUTHORITY_SWITCH_PROPOSAL.md`) set aside first.
+  - `docs/approvals/.gitattributes` pins `*.json text eol=lf`; reports must be force-added.
+  - `test_acceptance_approval.py` (41 tests, `tmp_path` projects) joined the installed-target
+    pytest set (97 → 138 in exact quick).
+
+  Validation:
+  - Unit and interruption tests: fault after every step and during the replace (persistent and
+    transient locks), after the commit point, rollback interrupted. Each time the old (or new)
+    state validates and a retry succeeds with the next counter.
+  - Worktree: exact quick 30/30 runs and 5/5 contracts bit-identical, 0 repeat differences,
+    pytest 138, 481 s of 600; full `tests/` 415 passed, 5 skipped, 1 deselected.
+  - Isolated clone (base `3ca6911`, test-only snapshot commit `0fb2ca7` with the 5 changed or new
+    files byte for byte; acceptance inputs, references, settings, pilot, numba cache, wheel and
+    environment file copied; `install-*` and run output not copied). It had to move from the
+    session scratchpad to `%TEMP%\claude\m7b`: there a pytest throwaway Git repo exceeded MAX_PATH
+    (270 > 260) and the first approve failed closed at its pytest gate, writing nothing.
+    Results:
+    - Synthetic change (test-only commit `d18ffdd`: C01 duration 0.5 → 0.45).
+      `approve --cases C01 C04` passed: C01 differs (12 arrays), C04 bit-identical, 33 unlisted
+      cases and contracts passed, 30 repeat pairs, pytest 138. C04's package-captured settings
+      have the adopted file's sha256; the CRLF manifest kept its newlines (50 lines inserted).
+    - Against the mixed set (exact C01/C04 approved, C02 reference): 3/3 bit-identical; examples
+      (quick tier) 6/6 with E01 against the approved C04.
+    - `git archive` export (`core.autocrlf=true`): `validate_expected` passes with an LF report.
+      With the pin removed, the report gets 812 CR bytes and validation fails ("approval report
+      changed").
+    - Rollback: no approved file moved; exact C01 then fails against `reference/` as expected and
+      C04 passes.
+    - Leak check: `approve --cases C04` with the changed C01 unlisted stopped at C01 in 13 s and
+      wrote nothing.
+  - Real paths (manifest, `docs/approvals/`, `docs/acceptance*.json`, `example_settings/`,
+    `reference/`, `reference-approved/`): sha256 and mtime unchanged (193 files). Local artifacts
+    equal the M5 baseline (207 files).
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -258,6 +317,12 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
      examples should validate the reference artifacts they compare with, not the original inputs of
      those reference cases. Correct it and verify it in the M9 missing-resource matrix (missing
      `open-surrogate.npz`: C24 fails acceptance; E04 still runs).
+  6. *Path-length headroom (found in M7b; not changed).* `test_verification.py::
+     test_frozen_content_guard` makes a throwaway Git repo under pytest's `--basetemp`
+     (`.verification/acceptance/pytest/…`). Its longest Git object path is 257 characters in this
+     worktree, 3 below Windows' MAX_PATH (`core.longpaths` is unset), and 270 in a clone under the
+     session scratchpad, where the test fails. M9's export and any other deeper checkout need a
+     short root, or the test needs a shorter temp location; decide in M9.
 
 ## Decisions
 
@@ -770,7 +835,8 @@ The authority-switch work is complete only when all of these hold, with results 
       acceptance (shown in the M9 missing-resource matrix); it is not skipped.
 - [ ] The independence proof (M9) passes with empty and nonempty approved sets, and the
       missing-resource matrix behaves as documented.
-- [ ] The approval path (M7) passes its unit, interruption and isolated-clone tests.
+- [x] The approval path (M7) passes its unit, interruption and isolated-clone tests (met
+      2026-11-10, M7b; see log).
 - [ ] `tooling_sha256` is removed; supersession is recorded in package docs only (LEDGERS,
       NEXT_SESSIONS definition of done, branch ledger).
 - [ ] Final recorded gates after all changes (M10): exact quick/full, public quick/full

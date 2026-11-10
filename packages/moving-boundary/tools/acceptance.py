@@ -10,6 +10,14 @@ Historical actions are explicit opt-ins on the frozen research checkout:
 any existing ``reference/`` file), and ``historical repeat --research PATH`` runs the reference
 role twice per case and requires both runs to equal the adopted ``reference/`` bit for bit.
 Both validate the checkout first (``validate_research_checkout``).
+
+Approval (plan §5) is the one action that uses Git, and only to check the development repository:
+``approve --cases ... --reason "LEDGERS Rxx"`` runs from a clean package tree, enforces the
+correctness gates on every case (package tests, contract assertion groups, two bit-identical
+package runs, ``approval_criteria``) and the public-tolerance comparison of every unlisted case,
+reports the listed cases' deviations, and promotes their candidate artifacts crash-safely
+(``tools/acceptance_approval.py``). ``approve --rollback ID --reason ...`` points those cases back.
+Normal runs read whichever reference is in effect (``expected_reference``) and stay Git-free.
 """
 from pathlib import Path
 import argparse
@@ -46,6 +54,39 @@ def thermocalc_tools():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@lru_cache(maxsize=1)
+def approval_tools():
+    """Load the approval module (reference selection, validation, promotion); it never runs Git."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("acceptance_approval", Path(__file__).resolve().parent / "acceptance_approval.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@lru_cache(maxsize=1)
+def criteria_tools():
+    """Load the approval correctness criteria (``approval_criteria`` measurements)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("acceptance_criteria", Path(__file__).resolve().parent / "acceptance_criteria.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def expected_reference(case, manifest=None):
+    """The expected artifacts ``case`` is compared with (one helper for every comparison).
+
+    Used by ``compare``, ``contract_assertions`` and ``acceptance_examples.compare_case``. With no
+    ``approved_references`` section, or the case not approved, this is ``reference/<case>`` exactly
+    as before (O06/O08 also carry their frozen hashes); an approved case reads its approval's
+    immutable folder and recorded hashes. See ``acceptance_approval.expected_reference``.
+    """
+    if manifest is None:
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    return approval_tools().expected_reference(case, manifest, OUTPUT)
 
 
 def comparison_array(case, key, value):
@@ -93,8 +134,12 @@ def validate_expected(cases):
     - each adopted input in ``adopted_inputs`` that exists must match its sha256; a missing one
       fails every case that ``requires`` it (``open-surrogate.npz`` is required by C24), and is
       never regenerated or skipped;
-    - every ``tools/definitions`` file against ``docs/definitions-provenance.json``.
+    - every ``tools/definitions`` file against ``docs/definitions-provenance.json``;
+    - ``approved_references`` when present (``acceptance_approval.validate``): every approval
+      record and its committed report hash, and the approved files of each of ``cases`` in effect.
+      No Git: ancestry is checked only when ``approve`` creates an approval.
 
+    ``reference/<case>`` is checked even for an approved case: it is never rewritten.
     ``private-inputs.json`` entries are checked by ``main`` for the enabled optional cases.
     Returns the manifest.
     """
@@ -118,6 +163,7 @@ def validate_expected(cases):
     for stem, entry in provenance["definitions"].items():
         data = (PROJECT / entry["file"]).read_bytes()
         assert hashlib.sha256(data).hexdigest() == entry["sha256"], "definitions file changed: " + entry["file"]
+    approval_tools().validate(manifest, cases, project=PROJECT, output=OUTPUT)
     return manifest
 
 
@@ -282,8 +328,12 @@ def regenerate_surrogate(state, directory):
     return result
 
 
-def _repeat_pair(case, role, *, folder, timeout, state=None, research=None):
-    """Run two fresh unseeded ``role`` processes into ``folder/{a,b}`` and compare them bitwise."""
+def _repeat_pair(case, role, *, folder, timeout, state=None, research=None, seed=None):
+    """Run two fresh ``role`` processes into ``folder/{a,b}`` and compare them bitwise.
+
+    Unseeded by default; ``seed="0"`` is only for O05/O08, whose workers always run under
+    ``PYTHONHASHSEED=0`` (``worker_environment``), and asserts that seed was used.
+    """
     import numpy as np
     started = time.monotonic()
     reports = []
@@ -292,7 +342,7 @@ def _repeat_pair(case, role, *, folder, timeout, state=None, research=None):
         assert remaining > 0, "Unseeded repeatability budget exceeded"
         report = worker(case, role, research=research, state=state,
                         output=folder / repeat, timeout=min(300 if case == "O06" else 60,remaining))
-        assert report["hash_seed"] is None and not report["numpy_seed_override"]
+        assert report["hash_seed"] == seed and not report["numpy_seed_override"]
         reports.append(report)
     with np.load(folder / "a.npz") as left, np.load(folder / "b.npz") as right:
         assert set(left.files) == set(right.files), case
@@ -437,18 +487,20 @@ def compare(case, package, *, tolerance="exact", require=()):
     Contracts (C25-C29) scale each ``model{i}/`` array by that model's validated
     ``contract_model_scales`` entry (``contract_scales``), exactly as run cases scale
     by their report's ``length_scale``/``minimum_molar_volume``.
+
+    The expected artifacts are whichever ``expected_reference`` selects (``reference/<case>``
+    unless an approval is in effect); hashes it returns (O06/O08 frozen, or approved) are checked
+    first. The local deviation record names that source.
     """
     import numpy as np
-    ref = OUTPUT / "reference" / case
     got = OUTPUT / "package" / case
-    if case in {"O06","O08"}:
-        section = "thermocalc_sampling" if case == "O06" else "default_phase_sampling"
-        frozen = json.loads(MANIFEST.read_text(encoding="utf-8"))[section]["reference_sha256"]
-        assert set(frozen) == {case+".json",case+".npz"}, case + " requires its frozen fixture hashes"
-        for filename,digest in frozen.items():
-            assert hashlib.sha256((ref.parent / filename).read_bytes()).hexdigest() == digest, case + " frozen fixture changed: " + filename
-    expected = json.loads(ref.with_suffix(".json").read_text(encoding="utf-8"))
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    selected = expected_reference(case, manifest)
+    for suffix, digest in (selected["sha256"] or {}).items():
+        path = selected[suffix]
+        label = " frozen fixture changed: " if selected["source"] == "reference" else " approved reference changed: "
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, case + label + path.name
+    expected = json.loads(selected["json"].read_text(encoding="utf-8"))
     assert expected["status"] == package["status"] == "PASS"
     assert expected.get("stop_status") == package.get("stop_status")
     if case == "O08":
@@ -461,7 +513,7 @@ def compare(case, package, *, tolerance="exact", require=()):
     structural = {}
     metrics = metric_tools()
     measured = {name:{} for name in metrics.QUANTITIES}
-    with np.load(ref.with_suffix(".npz")) as reference, np.load(got.with_suffix(".npz")) as actual:
+    with np.load(selected["npz"]) as reference, np.load(got.with_suffix(".npz")) as actual:
         assert set(reference.files) == set(actual.files), case
         models = contract_scales(case, package, reference.files, manifest) if case in manifest["contracts"] else {}
         for key in reference.files:
@@ -504,7 +556,7 @@ def compare(case, package, *, tolerance="exact", require=()):
     quantities = {group:metrics.quantity_metrics(arrays) for group,arrays in measured.items()}
     quantities["stop_status"] = dict(applicable=True,bit_identical=True,
         max_absolute_deviation=None,max_relative_deviation=None,tolerance="exact structural equality")
-    record = dict(case=case,tolerance_mode=tolerance,passed=not results.get("failed_keys"),
+    record = dict(case=case,reference=selected["source"],tolerance_mode=tolerance,passed=not results.get("failed_keys"),
         bit_identical=all(stats["bit_identical"] for stats in quantities.values() if stats["applicable"])
             and all(item["bit_identical"] for item in structural.values()), quantities=quantities)
     if structural:
@@ -603,15 +655,44 @@ def record_deviations(action, local, *, tolerance, evidence):
     write_report_json(path,acceptance)
 
 
+def contract_assertions(case, report, manifest=None):
+    """Correctness gate of one contract (C25-C29): its assertion groups ran and passed.
+
+    The assertion groups are the contract's test functions, executed inside the package worker
+    (an assertion failure fails the worker). Required: status ``PASS``, stop status
+    ``contract_assertions_passed``, the same non-empty list of assertion-group names as the
+    expected reference records, and a ``contracts/assertion_groups`` count equal to its length.
+    Separate from the array comparison (``compare``). Returns the group names.
+    """
+    import numpy as np
+    expected = json.loads(expected_reference(case, manifest)["json"].read_text(encoding="utf-8"))
+    assert report.get("status") == "PASS" and report.get("stop_status") == "contract_assertions_passed", \
+        (case, "contract assertions did not pass", report.get("status"), report.get("stop_status"))
+    groups = report.get("contracts")
+    assert groups and groups == expected.get("contracts"), (case, "assertion groups differ", groups, expected.get("contracts"))
+    with np.load(OUTPUT / "package" / (case + ".npz")) as data:
+        assert int(data["contracts/assertion_groups"]) == len(groups), (case, "assertion-group count differs")
+    return groups
+
+
 def contract_case(case, state=None, *, tolerance="exact", require=()):
-    """Entry point for package pytest: compare an isolated contract with its fixture."""
+    """Entry point for package pytest: a contract's assertion groups, then its array comparison.
+
+    ``contract_assertions`` always gates. The comparison with the expected reference gates too,
+    except for a contract listed in ``state["approval_candidates"]``, which only ``approve`` sets:
+    its differences are then recorded (``.deviations.json``) and reported, not failed. Normal runs
+    always clear that list.
+    """
     if state is None:
         state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8"))
     validate_expected([case])
     if state.get("repeatability_directory"):
         check_repeatability(case, state=state, directory=state["repeatability_directory"])
     report = worker(case, "package", state=state)
+    contract_assertions(case, report)
     result = compare(case, report, tolerance=tolerance, require=require)
+    if case in (state.get("approval_candidates") or ()):
+        return dict(result, comparison="reported: approval candidate")
     assert not result.get("failed_keys"), result
     return result
 
@@ -635,7 +716,7 @@ assert Path(kawin.__file__).resolve() == Path(sys.argv[2]) / 'kawin/__init__.py'
 import pytest
 raise SystemExit(pytest.main(sys.argv[3:]))
 """
-    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py", "test_acceptance_reporting.py", "test_pycalphad_provider.py", "test_default_phase_acceptance.py", "test_thermocalc_provider.py", "test_thermocalc_acceptance.py"]
+    tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py", "test_acceptance_reporting.py", "test_pycalphad_provider.py", "test_default_phase_acceptance.py", "test_thermocalc_provider.py", "test_thermocalc_acceptance.py", "test_acceptance_approval.py"]
     args = [sys.executable, "-I", "-S", "-c", code, state["target"], state["host"],
             *[str(PROJECT / "tests" / name) for name in tests],
             str(PROJECT / "tests/test_bridge.py") + "::test_namespace_import_is_lazy",
@@ -653,10 +734,333 @@ raise SystemExit(pytest.main(sys.argv[3:]))
     return counts
 
 
+PRIVATE_CASE_INPUTS = {"O01":"exb5.json", "O02":"exb5.json", "O03a":"femnc.json",
+    "O03b":"femnc.json", "O04":"fecrni.surrogate", "O05":"FeCrNi.tdb", "O07":"fec.json", "O08":"FeCrNi.tdb"}
+
+
+def normal_cases(manifest, *, full, explicit=None):
+    """The run cases of a quick or full gate, and the documented skips (no side effects).
+
+    ``explicit`` (``--cases``) runs exactly those. Otherwise: the quick list, C32 and LEGACY;
+    O05 when the TDB is present (quick only if its pilot fit a minute); O08 when its database is
+    present; full adds the F cases and the cached O cases whose inputs exist. O06 is added later,
+    after its availability probe.
+    """
+    cases = list(explicit) if explicit else list(manifest["quick"]) + ["C32", "LEGACY"]
+    # Real sampling fit the approved minute pilot; sampling runs afresh in O05.
+    if not explicit and (OUTPUT / "inputs/FeCrNi.tdb").exists():
+        pilot = OUTPUT / "pilot/O05-sampling.json"
+        if full or (pilot.exists() and json.loads(pilot.read_text())["elapsed_seconds"] <= 60):
+            cases.append("O05")
+    skipped = {}
+    default_case = manifest.get("default_phase_sampling")
+    if default_case and not explicit and (full or default_case["tier"] == "quick"):
+        if (OUTPUT / "inputs" / default_case["database_input"]).exists():
+            cases.append(default_case["case"])
+        else:
+            skipped[default_case["case"]] = "database input missing"
+    if not explicit and not (OUTPUT / "inputs/FeCrNi.tdb").exists():
+        skipped["O05"] = "database input missing"
+    if full and not explicit:
+        cases.extend(manifest["full_drift"])
+        private = {"O01":"exb5.json","O02":"exb5.json","O03a":"femnc.json","O03b":"femnc.json", "O04":"fecrni.surrogate","O07":"fec.json"}
+        for case, name in private.items():
+            if (OUTPUT / "inputs" / name).exists():
+                cases.append(case)
+            else:
+                skipped[case] = "cached input missing"
+    return cases, skipped
+
+
+def check_private_inputs(cases):
+    """Every available private input of an enabled case must be fully recorded and unchanged.
+
+    Private hashes never enter committed evidence. A missing record fails; absent optional
+    inputs keep their documented skips (``normal_cases``). Corrupted or unrecorded inputs are
+    never disguised as missing licensed/provider coverage.
+    """
+    recorded = load_private_inputs()
+    for case in cases:
+        name = PRIVATE_CASE_INPUTS.get(case)
+        if name is not None and (OUTPUT / "inputs" / name).exists():
+            problems = private_input_problems(name, recorded)
+            assert not problems, case + " input not verified: " + "; ".join(problems)
+
+
+# Approval (plan §5). Approve runs every case once more than a normal gate's repeat set needs
+# (the listed cases and O05/O08 are repeated too), so it has its own budget.
+APPROVE_BUDGET_SECONDS = {"quick": 900, "full": 1500}
+PRIVATE_SETTINGS_CASES = frozenset({"O04", "O05"})   # example settings hashed only in private-inputs.json
+
+
+def repository_checks():
+    """Approval only (Git): the package tree is clean, and every recorded approval is an ancestor of HEAD.
+
+    "Clean" means ``git status --porcelain --untracked-files=all`` reports nothing under the package
+    directory (ignored files such as ``.verification/`` don't count). Returns the HEAD sha.
+    """
+    status = run(["git", "status", "--porcelain", "--untracked-files=all", "--", "."], cwd=PROJECT, timeout=60)
+    assert not status.strip(), "approve needs a clean package tree; commit or set aside:\n" + status
+    head = run(["git", "rev-parse", "HEAD"], cwd=PROJECT, timeout=30).strip()
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    for approval_id, record in ((manifest.get("approved_references") or {}).get("approvals") or {}).items():
+        try:
+            run(["git", "merge-base", "--is-ancestor", record["package_commit"], head], cwd=PROJECT, timeout=30)
+        except RuntimeError as exc:
+            raise AssertionError(f"approval {approval_id}: package_commit {record['package_commit']} is not an ancestor of HEAD {head}") from exc
+    return head
+
+
+def candidate_matches_repeat(case, state):
+    """A listed case's candidate (``package/<case>``) must equal its first repeat run array for array."""
+    import numpy as np
+    folder = Path(state["repeatability_directory"]) / case
+    with np.load(OUTPUT / "package" / (case + ".npz")) as candidate, np.load(folder / "a.npz") as repeat:
+        assert set(candidate.files) == set(repeat.files), (case, "candidate and repeat key sets differ")
+        differing = [key for key in candidate.files
+                     if not bit_identical(comparison_array(case, key, candidate[key]), comparison_array(case, key, repeat[key]))]
+    assert not differing, (case, "candidate differs from its repeat runs", differing)
+
+
+def approval_repeat(case, *, listed, manifest, state, timeout):
+    """Approval's repeatability gate: two package runs bit-identical (``None`` when not repeated).
+
+    Repeated: everything a normal gate repeats (quick, C32, LEGACY, O06 when flagged), every listed
+    case, and O05/O08 as a seeded pair under their documented ``PYTHONHASHSEED=0`` rule.
+    """
+    repeated = set(manifest["quick"]) | {"C32", "LEGACY"} | set(listed)
+    if manifest.get("thermocalc_sampling", {}).get("repeat_unseeded"):
+        repeated.add("O06")
+    if case in {"O05", "O08"}:
+        folder = Path(state["repeatability_directory"]) / case
+        result, _ = _repeat_pair(case, "package", folder=folder, timeout=timeout, state=state, seed="0")
+        (folder / "comparison.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        assert not result["failed_keys"], ("Seeded package role is not repeatable", case, result["failed_keys"])
+    elif case in repeated:
+        result = check_repeatability(case, state=state, directory=state["repeatability_directory"], timeout=timeout)
+    else:
+        return None
+    if case in listed:
+        candidate_matches_repeat(case, state)
+    return result
+
+
+def criteria_results(case, manifest):
+    """``approval_criteria`` evaluated on the candidate ``package/<case>.npz`` (unmeasurable fails)."""
+    import numpy as np
+    tools = criteria_tools()
+    if not tools.criteria_for(case, manifest["approval_criteria"]):
+        return []
+    with np.load(OUTPUT / "package" / (case + ".npz"), allow_pickle=False) as data:
+        arrays = {key: data[key] for key in data.files}
+    return tools.evaluate(case, arrays, manifest["approval_criteria"])
+
+
+def capture_example_settings(cases, state, directory):
+    """Package-captured settings for each listed case an example maps to (``example_worker --settings-only``).
+
+    Built from ``tools/definitions`` on the installed wheel, never solved, written under
+    ``directory``. Returns ``{case: settings path}``.
+    """
+    examples = json.loads((PROJECT / "tools/example_manifest.json").read_text(encoding="utf-8"))
+    mapped = {}
+    for example, entry in examples["cases"].items():
+        if entry["reference"] in cases:
+            mapped.setdefault(entry["reference"], example)
+    captured = {}
+    for case, example in sorted(mapped.items()):
+        output = Path(directory) / case
+        run([sys.executable, "-P", "-S", str(PROJECT / "tools/example_worker.py"), "--role", "package",
+             "--case", example, "--examples", str(PROJECT / "examples"), "--artifacts", str(OUTPUT / "inputs"),
+             "--output", str(output), "--target", state["target"], "--host", state["host"], "--settings-only"],
+            env=worker_environment(case), timeout=120)
+        captured[case] = output.with_suffix(".settings.json")
+    return captured
+
+
+def public_deviations(case, record):
+    """Committed per-array deviations of a listed case against its previous expected artifact.
+
+    TC-derived cases (``acceptance_metrics.PRIVATE_CASES``) keep their numbers in ignored output.
+    """
+    metrics = metric_tools()
+    if case in metrics.PRIVATE_CASES:
+        return dict(private_metrics=True, passed_public_tolerance=record["passed"], bit_identical=record["bit_identical"])
+    arrays = {}
+    for quantity, stats in record["quantities"].items():
+        for key, item in (stats.get("arrays") or {}).items():
+            arrays[key] = dict(quantity=quantity, **{name: item.get(name) for name in (
+                "bit_identical", "max_absolute_deviation", "max_relative_deviation", "max_tolerance_fraction")})
+    return dict(reference=record.get("reference"), passed_public_tolerance=record["passed"],
+                bit_identical=record["bit_identical"], arrays=dict(sorted(arrays.items())))
+
+
+def public_criteria(case, results):
+    """Criteria results for the committed report (values of TC-derived cases are not exported)."""
+    if case in metric_tools().PRIVATE_CASES:
+        return [dict(criterion=item["criterion"], passed=item["passed"], private_metrics=True) for item in results]
+    return [{key: item.get(key) for key in ("criterion", "value", "limit", "passed", "error") if key in item} for item in results]
+
+
+def approve(listed, *, reason, tier="quick", reuse_targets=False, require=("binary", "ternary", "three_phase")):
+    """Approve the listed cases' package outputs as their new expected references (plan §5).
+
+    From a clean package tree (``repository_checks``), run the whole ``tier`` gate at public
+    tolerance and stop at the first failure (nothing is written then):
+
+    - correctness gates for every case, listed or not: two bit-identical package runs
+      (``approval_repeat``; a listed candidate must equal its repeats), ``approval_criteria``
+      (``criteria_results``), the package pytest set incl. the contract assertion groups;
+    - reference comparisons: every unlisted case must pass at public tolerance; a listed case's
+      differences against its previous expected artifact are reported, not failed.
+
+    Then re-check the tree and HEAD, capture package settings for listed cases an example maps to,
+    and promote crash-safely (``acceptance_approval.promote``) with a committed report in
+    ``docs/approvals/``. O04/O05 cannot be listed: their example settings are hashed only in the
+    private record. Returns 0 on success, 1 on a failed gate.
+    """
+    import datetime
+    tools = approval_tools()
+    listed = list(dict.fromkeys(listed))
+    assert listed, "approve needs at least one case"
+    refused = sorted(set(listed) & PRIVATE_SETTINGS_CASES)
+    assert not refused, "approving " + ", ".join(refused) + " is not supported: their example settings are private"
+    head = repository_checks()
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    full = tier == "full"
+    cases, skipped = normal_cases(manifest, full=full)
+    contracts = list(manifest["contracts"])
+    covered = set(cases) | set(contracts) | ({"O06"} if full else set())
+    unknown = sorted(set(listed) - covered)
+    assert not unknown, f"not run by approve --tier {tier} on this machine: {', '.join(unknown)}"
+    check_private_inputs(cases)
+    checked = list(dict.fromkeys(cases + contracts + (["O06"] if full else [])))
+    validate_expected(checked)
+    left = tools.leftovers(manifest, project=PROJECT, output=OUTPUT, manifest_path=MANIFEST)
+    if any(left.values()):
+        print("Leftovers from earlier attempts (not used; clean up by hand):", json.dumps(left), flush=True)
+    state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8")) if reuse_targets else setup_targets()
+    state["repeatability_directory"] = tempfile.mkdtemp(prefix="approve-unseeded-", dir=OUTPUT)
+    state["approval_candidates"] = sorted(set(listed) & set(contracts))
+    started, started_timestamp = time.monotonic(), time.time()
+    limit = APPROVE_BUDGET_SECONDS[tier]
+    gates = dict(repeatability={}, criteria={}, unlisted_passed=[], listed={})
+    failure = None
+    try:
+        if full:
+            probe = worker("O06", "package", state=state, output=Path(tempfile.mkdtemp(prefix="tc-availability-", dir=OUTPUT)) / "O06",
+                           probe_thermocalc=True, timeout=60)
+            if probe["thermocalc_availability"]["available"]:
+                cases.append("O06")
+            else:
+                skipped["O06"] = probe["thermocalc_availability"]["reason"]
+                assert "O06" not in listed, "O06 is listed but TC is unavailable: " + skipped["O06"]
+        for case in cases:
+            remaining = limit - (time.monotonic() - started)
+            assert remaining > 0, f"approve budget of {limit} s exceeded"
+            report = worker(case, "package", state=state,
+                            timeout=min(300 if case == "O06" else (180 if case.startswith("F") else 60), max(1, remaining)))
+            repeat = approval_repeat(case, listed=listed, manifest=manifest, state=state,
+                                     timeout=max(1, limit - (time.monotonic() - started)))
+            if repeat is not None:
+                gates["repeatability"][case] = dict(bit_identical=repeat["bit_identical"], arrays=repeat["arrays"])
+            comparison = compare(case, report, tolerance="public", require=require)
+            results = criteria_results(case, manifest)
+            gates["criteria"][case] = results
+            bad = [item for item in results if not item["passed"]]
+            assert not bad, (case, "approval_criteria failed", bad)
+            if case in listed:
+                gates["listed"][case] = "differs" if comparison.get("failed_keys") else "within public tolerance"
+            else:
+                assert not comparison.get("failed_keys"), (case, "unlisted case fails its public-tolerance comparison",
+                                                           comparison["failed_keys"])
+                gates["unlisted_passed"].append(case)
+            print(case, "listed" if case in listed else "unlisted", "PASS",
+                  gates["listed"].get(case, ""), flush=True)
+        remaining = limit - (time.monotonic() - started)
+        assert remaining > 0, f"approve budget of {limit} s exceeded"
+        gates["pytest"] = run_pytest(state, tolerance="public", require=require, timeout=max(1, remaining))
+        for case in contracts:
+            deviations = OUTPUT / "package" / (case + ".deviations.json")
+            assert deviations.exists() and deviations.stat().st_mtime >= started_timestamp, (case, "contract not compared in this run")
+            record = json.loads(deviations.read_text(encoding="utf-8"))
+            if case in listed:
+                candidate_matches_repeat(case, state)
+                gates["listed"][case] = "within public tolerance" if record["passed"] else "differs"
+            else:
+                assert record["passed"], (case, "unlisted contract fails its public-tolerance comparison")
+                gates["unlisted_passed"].append(case)
+        for case in listed:
+            for suffix in ("json", "npz"):
+                path = OUTPUT / "package" / f"{case}.{suffix}"
+                assert path.stat().st_mtime >= started_timestamp, (case, "candidate not written by this run")
+        validate_expected(checked)
+        assert repository_checks() == head, "HEAD changed during approve"
+    except Exception as exc:
+        failure = str(exc)[-3000:]
+    finally:
+        state["approval_candidates"] = []
+        (OUTPUT / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+    summary = dict(action="approve", listed=listed, reason=reason, tier=tier, package_commit=head, skipped=skipped,
+                   gates=gates, failure=failure, elapsed_seconds=time.monotonic() - started)
+    if failure:
+        (OUTPUT / "approve-summary.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+        print("APPROVE FAIL (nothing promoted):", failure, flush=True)
+        return 1
+    settings = capture_example_settings(listed, state, tempfile.mkdtemp(prefix="approve-settings-", dir=OUTPUT))
+    files = {case: dict(json=OUTPUT / "package" / f"{case}.json", npz=OUTPUT / "package" / f"{case}.npz") for case in listed}
+    for case, path in settings.items():
+        files[case]["settings"] = path
+    now = datetime.datetime.now(datetime.timezone.utc)
+    created = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    deviations = {case: json.loads((OUTPUT / "package" / (case + ".deviations.json")).read_text(encoding="utf-8")) for case in listed}
+    document = dict(schema=1, kind="approval", created_utc=created, package_commit=head, reason=reason, tier=tier,
+                    tolerance="public", cases=listed, skipped=skipped,
+                    gates=dict(pytest=gates["pytest"], repeatability=gates["repeatability"],
+                               criteria={case: public_criteria(case, results) for case, results in gates["criteria"].items() if results},
+                               contract_assertion_groups="passed for " + ", ".join(contracts),
+                               unlisted_cases_passed_public_tolerance=gates["unlisted_passed"]),
+                    listed_cases=gates["listed"],
+                    deviations_vs_previous={case: public_deviations(case, record) for case, record in deviations.items()},
+                    settings_captured=sorted(settings))
+    approval_id = tools.new_id(manifest, project=PROJECT, output=OUTPUT, package_commit=head, now=now)
+    record = dict(created_utc=created, package_commit=head, reason=reason, tier=tier, cases=listed)
+    tools.promote(project=PROJECT, output=OUTPUT, manifest_path=MANIFEST, approval_id=approval_id,
+                  record=record, files=files, report=document)
+    validate_expected(checked)
+    summary.update(approval_id=approval_id)
+    (OUTPUT / "approve-summary.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+    print(f"APPROVED {approval_id}: {', '.join(listed)} ({time.monotonic() - started:.1f}s)", flush=True)
+    print("Commit tools/acceptance_manifest.json and force-add the report: git add -f "
+          f"packages/moving-boundary/docs/approvals/{approval_id}.json", flush=True)
+    return 0
+
+
+def rollback_approval(approval_id, *, reason):
+    """``approve --rollback ID``: point the approval's cases back (atomic manifest replace; no file moves).
+
+    From a clean package tree, like ``approve``; the approval's cases are hash-validated before and
+    after (the restored selection must be intact). Returns 0.
+    """
+    import datetime
+    repository_checks()
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    record = ((manifest.get("approved_references") or {}).get("approvals") or {}).get(approval_id)
+    assert record is not None, "no such approval: " + approval_id
+    validate_expected(record["cases"])
+    utc = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    new = approval_tools().rollback(manifest_path=MANIFEST, approval_id=approval_id, reason=reason, utc=utc)
+    validate_expected(record["cases"])
+    restored = new["approved_references"]["history"][-1]["restored"]
+    print(f"ROLLED BACK {approval_id}: " + ", ".join(f"{case} -> {source}" for case, source in restored.items()), flush=True)
+    print("Commit tools/acceptance_manifest.json.", flush=True)
+    return 0
+
+
 def main(argv=None):
-    """Run quick/full acceptance (no research), or an explicit historical capture/repeat."""
+    """Run quick/full acceptance (no research), an explicit historical capture/repeat, or an approval."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", choices=("quick", "full", "setup", "historical"))
+    parser.add_argument("action", choices=("quick", "full", "setup", "historical", "approve"))
     parser.add_argument("step", nargs="?", choices=("capture", "repeat"), help="historical actions only")
     parser.add_argument("--research", type=Path, help="frozen research checkout; historical actions only")
     parser.add_argument("--cases", nargs="*")
@@ -666,9 +1070,20 @@ def main(argv=None):
     parser.add_argument("--tier", choices=("quick", "full"), default="quick")
     parser.add_argument("--record", action="store_true",
                         help="update committed reports after a passing complete public quick/full run")
+    parser.add_argument("--reason", help="approve only: the LEDGERS entry justifying the approval or rollback")
+    parser.add_argument("--rollback", metavar="APPROVAL_ID", help="approve only: point that approval's cases back")
     args = parser.parse_args(argv)
     if args.record and (args.action not in {"quick","full"} or args.tolerance != "public" or args.cases is not None):
         parser.error("--record requires a complete public-tolerance quick or full run")
+    if args.action == "approve":
+        if args.step is not None or args.research is not None or args.tolerance != "public":
+            parser.error("approve takes no historical step, no research checkout and only public tolerance")
+        if not (args.reason and args.reason.strip()):
+            parser.error('approve needs --reason "LEDGERS Rxx"')
+        if bool(args.cases) == (args.rollback is not None):
+            parser.error("approve needs exactly one of --cases CASE ... or --rollback APPROVAL_ID")
+    elif args.reason is not None or args.rollback is not None:
+        parser.error("--reason and --rollback belong to approve")
     historical = args.action == "historical"
     if historical and (args.step is None or args.research is None):
         parser.error("historical needs a step (capture or repeat) and --research <frozen research checkout>")
@@ -684,47 +1099,21 @@ def main(argv=None):
             prefix = executable.parent
             env["PATH"] = os.pathsep.join([str(prefix), str(prefix/"Library/bin"), str(prefix/"Scripts"), env.get("PATH", "")])
             env["CONDA_PREFIX"] = str(prefix)
+            timeout = (APPROVE_BUDGET_SECONDS[args.tier] + 300 if args.action == "approve"
+                       else 1250 if args.action == "full" else 650)
             return subprocess.run([str(executable), str(Path(__file__).resolve()), *(sys.argv[1:] if argv is None else argv)],
-                env=env, stdin=subprocess.DEVNULL, timeout=1250 if args.action=="full" else 650).returncode
+                env=env, stdin=subprocess.DEVNULL, timeout=timeout).returncode
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / "inputs").mkdir(exist_ok=True)
+    if args.action == "approve":
+        if args.rollback is not None:
+            return rollback_approval(args.rollback, reason=args.reason)
+        return approve(args.cases, reason=args.reason, tier=args.tier, reuse_targets=args.reuse_targets,
+                       require=args.require_family)
     manifest = validate_research_checkout(args.research) if historical else json.loads(MANIFEST.read_text(encoding="utf-8"))
     full = args.action == "full" or args.tier == "full"
-    cases = args.cases or list(manifest["quick"]) + ["C32", "LEGACY"]
-    # Real sampling fit the approved minute pilot; sampling runs afresh in O05.
-    if not args.cases and (OUTPUT / "inputs/FeCrNi.tdb").exists():
-        pilot = OUTPUT / "pilot/O05-sampling.json"
-        if full or (pilot.exists() and json.loads(pilot.read_text())["elapsed_seconds"] <= 60):
-            cases.append("O05")
-    skipped = {}
-    default_case = manifest.get("default_phase_sampling")
-    if default_case and not args.cases and (full or default_case["tier"] == "quick"):
-        if (OUTPUT / "inputs" / default_case["database_input"]).exists():
-            cases.append(default_case["case"])
-        else:
-            skipped[default_case["case"]] = "database input missing"
-    if not args.cases and not (OUTPUT / "inputs/FeCrNi.tdb").exists():
-        skipped["O05"] = "database input missing"
-    if full and not args.cases:
-        cases.extend(manifest["full_drift"])
-        private = {"O01":"exb5.json","O02":"exb5.json","O03a":"femnc.json","O03b":"femnc.json", "O04":"fecrni.surrogate","O07":"fec.json"}
-        for case, name in private.items():
-            if (OUTPUT / "inputs" / name).exists():
-                cases.append(case)
-            else:
-                skipped[case] = "cached input missing"
-    # Private hashes never enter committed evidence. Every available input of an enabled case
-    # must be fully recorded and unchanged (a missing record fails); absent optional inputs keep
-    # their documented skips above. Corrupted or unrecorded inputs are never disguised as
-    # missing licensed/provider coverage.
-    enabled_inputs = {"O01":"exb5.json", "O02":"exb5.json", "O03a":"femnc.json",
-        "O03b":"femnc.json", "O04":"fecrni.surrogate", "O05":"FeCrNi.tdb", "O07":"fec.json", "O08":"FeCrNi.tdb"}
-    recorded = load_private_inputs()
-    for case in cases:
-        name = enabled_inputs.get(case)
-        if name is not None and (OUTPUT / "inputs" / name).exists():
-            problems = private_input_problems(name, recorded)
-            assert not problems, case + " input not verified: " + "; ".join(problems)
+    cases, skipped = normal_cases(manifest, full=full, explicit=args.cases)
+    check_private_inputs(cases)
     if args.action == "setup":
         print(json.dumps(setup_targets()))
         return 0
@@ -744,6 +1133,7 @@ def main(argv=None):
     if not historical:
         state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8")) if args.reuse_targets else setup_targets()
         state["repeatability_directory"] = tempfile.mkdtemp(prefix="unseeded-", dir=OUTPUT)
+        state["approval_candidates"] = []   # normal runs gate every contract comparison
     elif args.step == "capture" and args.cases != ["O06"]:
         # Historical prepare writes to scratch; it never overwrites the adopted C24 input.
         worker("prepare", "reference", research=args.research, prepare=True,

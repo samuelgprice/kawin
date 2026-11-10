@@ -1,0 +1,4 @@
+# Approval reports are sha256-checked (acceptance_manifest.json approved_references) on every run,
+# so every checkout and archive must keep the exact LF bytes that were hashed, whatever core.autocrlf is.
+# The shared *.json exclude hides them from `git add`: commit each report with `git add -f`.
+*.json text eol=lf
