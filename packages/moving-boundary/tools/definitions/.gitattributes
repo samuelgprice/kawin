@@ -1,0 +1,3 @@
+# Materialized definitions are sha256-checked (docs/definitions-provenance.json) before they run,
+# so every checkout and archive must keep the exact LF bytes that were hashed, whatever core.autocrlf is.
+*.py text eol=lf
