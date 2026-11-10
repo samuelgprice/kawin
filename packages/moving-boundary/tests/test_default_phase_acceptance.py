@@ -31,7 +31,7 @@ def comparison_fixture(tmp_path, monkeypatch, actual):
         np.savez(tmp_path/'reference'/f'{case}.npz',**{key:wanted})
         np.savez(tmp_path/'package'/f'{case}.npz',**{key:actual})
     hashes={name:hashlib.sha256((tmp_path/'reference'/name).read_bytes()).hexdigest() for name in ['O08.json','O08.npz']}
-    manifest=dict(default_phase_sampling=dict(reference_sha256=hashes),
+    manifest=dict(default_phase_sampling=dict(reference_sha256=hashes),contracts=[],
         public_tolerances=dict(interface=dict(rtol=1e-10,atol=1e-12)))
     tool.MANIFEST.write_text(json.dumps(manifest))
     return tool,report,key

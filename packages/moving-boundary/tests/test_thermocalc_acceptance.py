@@ -33,7 +33,7 @@ def fixture(tmp_path, monkeypatch, actual):
     (tmp_path/'reference/O06.json').write_text(json.dumps(report))
     hashes = {name:hashlib.sha256((tmp_path/'reference'/name).read_bytes()).hexdigest()
               for name in ['O06.json','O06.npz']}
-    tool.MANIFEST.write_text(json.dumps(dict(thermocalc_sampling=dict(reference_sha256=hashes),
+    tool.MANIFEST.write_text(json.dumps(dict(thermocalc_sampling=dict(reference_sha256=hashes), contracts=[],
         public_tolerances=dict(interface=dict(rtol=1e-10,atol=1e-12), profiles=dict(rtol=1e-10,atol=1e-12)))))
     return tool, report, key
 
