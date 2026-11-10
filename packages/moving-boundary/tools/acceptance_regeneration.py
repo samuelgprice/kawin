@@ -164,7 +164,7 @@ def check_pycalphad_reference(tool, examples, state, scratch, comparable, privat
 def settings_worker(tool, state, case, output, reference):
     """Run ``example_worker.py --settings-only`` (package role) for one example case."""
     arguments = [sys.executable, "-P", "-S", str(PROJECT / "tools/example_worker.py"), "--role", "package",
-                 "--case", case, "--root", str(tool.REFERENCE), "--examples", str(PROJECT / "examples"),
+                 "--case", case, "--examples", str(PROJECT / "examples"),
                  "--artifacts", str(tool.OUTPUT / "inputs"), "--output", str(output),
                  "--target", state["target"], "--host", state["host"], "--settings-only"]
     return tool.run(arguments, env=tool.worker_environment(reference), timeout=300)
@@ -257,6 +257,7 @@ def main(argv=None):
                               env=env, stdin=subprocess.DEVNULL, timeout=1200).returncode
     examples = load("acceptance_examples", PROJECT / "tools/acceptance_examples.py")
     started = time.monotonic()
+    tool.validate_expected(["O05"])  # reference/O05.npz is read by the pycalphad check
     before = adopted_files(tool)
     state = json.loads((tool.OUTPUT / "state.json").read_text(encoding="utf-8")) if args.reuse_targets else tool.setup_targets()
     scratch = Path(tempfile.mkdtemp(prefix="regeneration-", dir=tool.OUTPUT))
@@ -267,6 +268,7 @@ def main(argv=None):
               "example_settings": check_settings(tool, examples, state, scratch, comparable, private),
               "deferred": {name: dict(outcome="deferred", reason=reason) for name, reason in DEFERRED.items()}}
     after = adopted_files(tool)
+    tool.validate_expected(["O05"])
     flat = {"open-surrogate.npz": checks["open-surrogate.npz"], "pycalphad-reference.npz": checks["pycalphad-reference.npz"],
             **{f"example_settings/{name}.settings.json": check for name, check in checks["example_settings"].items()}}
     open_items = {name: f"{check['outcome']}: {check.get('reason')}" for name, check in flat.items() if check["outcome"] != "verified"}

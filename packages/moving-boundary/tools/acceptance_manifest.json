@@ -193,16 +193,6 @@
     "examples/ThermoCalc/training_data.py": "7822fa7a427b2f75efe5639f2346981249b384246d3c1621504291dae5fe1b74",
     "examples/ThermoCalc/FeCrNi_TC_Python.py": "472516f2c131a83403b6d08ae530e2b65f6135de56a202c282e54edfb55b18e7"
   },
-  "tooling_sha256": {
-    "acceptance_inputs.py": "8df509b11a8edfdeda4aeb24970c6f8fea3a7209dea7c309387f295dc05b7b9a",
-    "acceptance_cases.py": "72197527dcacd4ec25d4a825c138ff0c9f11780f0693942340f6a4c34561e34e",
-    "acceptance_worker.py": "16507cd369cd81a122204a289cadecd87e608bf886db37adb6c2440a458ac355",
-    "acceptance_contracts.py": "0acd90fe540475db812be91bb90b7b5393586e13ce5cd0375fc21275e1c88604",
-    "acceptance.py": "697606a9b2515b607adf4af0892a5b96b335598aba056bf184b18c34533da868",
-    "acceptance_optional.py": "d5c5ca91122e7aac1b61c6da6fad6f73563f7cc0590bdcd9390b325b11a4d0dd",
-    "acceptance_metrics.py": "95a5024fc384645c3a371913e082fa94ea7f29b3bb2f9b8eccce28c41f41bdb9"
-  },
-  "tooling_revision_note": "Review items 1-2: scoped hash policy, unseeded repeatability and quantitative reporting; frozen numerical inputs/tolerances unchanged.",
   "terminal_pilot": {
     "case": "C32",
     "source": "_make_nonstationary_unequal_volume_model",
@@ -732,6 +722,19 @@
           "length_scale": 1.0,
           "minimum_molar_volume": 1.5
         }
+      }
+    }
+  },
+  "adopted_inputs": {
+    "description": "sha256 of adopted research-generated inputs that are synthetic (no TDB/TC data), hashed as-is; never regenerated in place. validate_expected() rejects any change; a missing file fails every case in required_by. The F7/M5b regeneration checks confirmed the package recreates it.",
+    "files": {
+      "open-surrogate.npz": {
+        "sha256": "c224e5f29cc4670c6cb4a2f736f4b3fb46488d51f924167bbb55d49f8aef693f",
+        "required_by": [
+          "C24"
+        ],
+        "made_by": "research _surrogate via reference-role prepare at 7af24f4",
+        "verified": "package prepare array- and byte-identical (M3 F7, M5b)"
       }
     }
   }

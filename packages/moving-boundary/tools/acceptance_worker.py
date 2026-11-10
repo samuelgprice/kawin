@@ -30,9 +30,10 @@ def module(name, path):
 def main():
     """Assert import origins before case construction and save local numeric output.
 
-    In the package role, cases in ``PACKAGE_DEFINITIONS`` take their inputs from
-    ``tools/definitions/_bindings.Context``: ``acceptance_inputs`` is never imported (asserted
-    after the run) and no research file is read. LEGACY's research baseline-npz assertion runs in
+    The package role takes no ``--root``; every case it accepts is in ``PACKAGE_DEFINITIONS``
+    and takes its inputs from ``tools/definitions/_bindings.Context``: ``acceptance_inputs`` is
+    never imported (asserted after the run) and no research file is read. The reference role
+    (historical only) needs ``--root``, the frozen research checkout. LEGACY's research baseline-npz assertion runs in
     the reference role only; the package role relies on ``compare()`` against the hashed
     ``reference/LEGACY.npz`` (decision F5) and keeps the recorded stop status label. Contracts
     (C25-C29) also report ``model_scales`` per ``model{i}/`` prefix, in both roles (item 7).
@@ -46,7 +47,7 @@ def main():
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", choices=("reference", "package"), required=True)
-    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--root", type=Path, help="frozen research checkout; reference (historical) role only")
     parser.add_argument("--target", type=Path)
     parser.add_argument("--host", type=Path)
     parser.add_argument("--case", required=True)
@@ -56,6 +57,11 @@ def main():
     parser.add_argument("--sample-pycalphad", action="store_true")
     parser.add_argument("--probe-thermocalc", action="store_true")
     args = parser.parse_args()
+    if args.role == "reference":
+        assert args.root is not None, "the reference role needs --root (historical)"
+    else:
+        assert args.root is None, "the package role takes no research root"
+        assert args.case in PACKAGE_DEFINITIONS, args.case + " has no package-owned definitions"
     sys.path.extend(site.getsitepackages())
     if args.role == "reference":
         sys.path.insert(0, str(args.root.resolve()))
@@ -72,9 +78,8 @@ def main():
         assert version("kawin") == "0.5.0"
         import moving_boundary
         assert Path(moving_boundary.__file__).resolve().is_relative_to(args.target.resolve())
-        assert not any(Path(p).resolve() == args.root.resolve() for p in sys.path if p)
     cases = module("acceptance_cases", HERE / "acceptance_cases.py")
-    definitions = args.role == "package" and args.case in PACKAGE_DEFINITIONS
+    definitions = args.role == "package"  # every package-role case is in PACKAGE_DEFINITIONS (asserted)
     if definitions:
         inputs = module("definitions_bindings", HERE / "definitions/_bindings.py").Context()
     else:

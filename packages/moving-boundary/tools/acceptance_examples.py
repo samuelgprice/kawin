@@ -13,12 +13,15 @@ use: non-private cases against ``settings_sha256`` in ``example_manifest.json``,
 (TDB/TC-derived) ones against ``example_settings`` in the local ``inputs/private-inputs.json``.
 A case's private surrogate input is checked against ``private-inputs.json`` the same way.
 
-``capture-settings`` is historical (reference role, frozen research checkout): it re-records
+``run`` needs no research checkout: the fixtures it compares with are hash-validated by
+``acceptance.validate_expected`` before and after.
+``capture-settings --research PATH`` is historical (reference role, frozen research checkout,
+validated by ``acceptance.validate_research_checkout``): it re-records
 every mapped case into a fresh ``settings-capture-*`` scratch folder, never into
 ``example_settings/``, and reports whether each capture equals the adopted file byte for byte.
 
 Commands (through the conda wrapper, from any directory):
-    python tools/acceptance_examples.py capture-settings
+    python tools/acceptance_examples.py capture-settings --research <frozen research checkout>
     python tools/acceptance_examples.py run [--tier quick|full] [--slow] [--reuse-targets]
 """
 from pathlib import Path
@@ -42,17 +45,23 @@ def load_tool():
     return tool
 
 
-def worker(tool, role, case, state, output, *, env_case, timeout=120):
-    """Run one bounded worker with the same isolation rules as acceptance.py."""
+def worker(tool, role, case, state, output, *, env_case, timeout=120, research=None):
+    """Run one bounded worker with the same isolation rules as acceptance.py.
+
+    Package-role workers get no research root; reference-role (historical) workers need one.
+    """
     arguments = [sys.executable, "-P", "-S", str(PROJECT / "tools/example_worker.py"), "--role", role, "--case", case,
-                 "--root", str(tool.REFERENCE), "--examples", str(PROJECT / "examples"),
+                 "--examples", str(PROJECT / "examples"),
                  "--artifacts", str(tool.OUTPUT / "inputs"), "--output", str(output)]
     if role == "package":
         arguments.extend(["--target", state["target"], "--host", state["host"]])
+    else:
+        assert research is not None, "reference-role example workers are historical and need --research"
+        arguments.extend(["--root", str(research)])
     return tool.run(arguments, env=tool.worker_environment(env_case), timeout=timeout)
 
 
-def capture_settings(tool, manifest):
+def capture_settings(tool, manifest, research):
     """Historical: re-record each mapped case's reference settings into a new scratch folder.
 
     Never writes ``example_settings/``. Prints, per case, whether the capture equals the adopted
@@ -64,7 +73,7 @@ def capture_settings(tool, manifest):
     verdicts = {}
     for case, entry in manifest["cases"].items():
         path = folder / entry["reference"]
-        worker(tool, "reference", case, None, path, env_case=entry["reference"])
+        worker(tool, "reference", case, None, path, env_case=entry["reference"], research=research)
         name = path.with_suffix(".settings.json").name
         old = adopted / name
         verdicts[entry["reference"]] = ("no adopted file" if not old.exists() else
@@ -183,7 +192,10 @@ def main(argv=None):
     parser.add_argument("--slow", action="store_true", help="also run tests marked slow, with their own timeout")
     parser.add_argument("--reuse-targets", action="store_true", help="reuse the last installed wheel")
     parser.add_argument("--skip-tests", action="store_true")
+    parser.add_argument("--research", type=Path, help="frozen research checkout; capture-settings (historical) only")
     args = parser.parse_args(argv)
+    if (args.action == "capture-settings") != (args.research is not None):
+        parser.error("--research is required by capture-settings and not accepted by run")
     tool = load_tool()
     config = json.loads((PROJECT / ".verification/public-environment.json").read_text())
     executable = Path(config["python"])
@@ -195,12 +207,15 @@ def main(argv=None):
         return subprocess.run([str(executable), str(Path(__file__).resolve()), *(sys.argv[1:] if argv is None else argv)],
                               env=env, stdin=subprocess.DEVNULL, timeout=900).returncode
     (tool.OUTPUT / "package_examples").mkdir(parents=True, exist_ok=True)
-    tool.validate_reference(tool.REFERENCE)
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     if args.action == "capture-settings":
-        _, verdicts = capture_settings(tool, manifest)
-        tool.validate_reference(tool.REFERENCE)
+        tool.validate_research_checkout(args.research)
+        _, verdicts = capture_settings(tool, manifest, args.research)
+        tool.validate_research_checkout(args.research)
         return 0 if all(verdict == "identical" for verdict in verdicts.values()) else 1
+    # The fixtures each example is compared with are hash-validated before and after (no research).
+    references = sorted({entry["reference"] for entry in manifest["cases"].values()})
+    tool.validate_expected(references)
     spec = importlib.util.spec_from_file_location("example_settings", PROJECT / "tools/example_settings.py")
     settings = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(settings)
@@ -237,7 +252,7 @@ def main(argv=None):
         tests = run_tests(tool, state, "no", timeout=420)
         if args.slow:
             tests = {"fast": tests, "slow": run_tests(tool, state, "only", timeout=300)}
-    tool.validate_reference(tool.REFERENCE)
+    tool.validate_expected(references)
     elapsed = time.monotonic() - started
     summary = dict(tier=args.tier, cases=len(manifest["cases"]), failures=failures, skipped=skipped, tests=tests,
                    pending_fixture=sorted(manifest["pending_fixture"]), elapsed_seconds=elapsed)

@@ -17,7 +17,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M4 | F04/F11/F12, O01-O08 | done 2026-11-10 (see log) |
 | M5 | Example worker + hashed settings | done 2026-11-10 (see log) |
 | M5b | Regeneration verification of adopted inputs | done 2026-11-10 (12/12 verified; see log) |
-| M6 | Normal/historical split, package-role repeatability | not started |
+| M6 | Normal/historical split, package-role repeatability | done 2026-11-10 (see log) |
 | M7 | Approval path | not started |
 | M8 | Test port (item 16), 4 batches | not started |
 | M9 | Independence proof + missing-resource matrix | not started |
@@ -171,6 +171,37 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
     local paths); full local report `.verification/acceptance/regeneration-9fc018a59afe.json`.
   - Unit tests `tests/test_acceptance_regeneration.py` (4); full `tests/`: 336 passed, 5 skipped,
     1 deselected (120 s). Run time 87-110 s.
+- **M6 (2026-11-10).**
+  - `acceptance.py`: normal actions (`quick`, `full`, `setup`) take no research checkout and run no
+    Git. `validate_expected(cases)` runs before and after: `expected_artifacts` hashes of every
+    case compared (contracts and O06 included), the new committed `adopted_inputs` section
+    (`open-surrogate.npz` sha256, `required_by` C24: a missing file fails C24 with "required input
+    missing: inputs/open-surrogate.npz (needed by C24; never regenerated)"), and every definitions
+    file against its provenance; `private-inputs.json` checks are unchanged. Historical actions
+    are `historical capture|repeat --research PATH` with today's checks renamed
+    `validate_research_checkout`; `capture` now refuses to overwrite any existing `reference/`
+    pair (previously only O06/O08); `repeat` runs the reference role twice per case and requires
+    both runs to equal each other and `reference/` (O05 once, seeded; O06/O08 not repeated).
+  - Unseeded repeatability runs two package-role processes per case (normal runs and contract
+    pytest). Package workers (`acceptance_worker.py`, `example_worker.py`) get no `--root`; the
+    package role accepts only `PACKAGE_DEFINITIONS` cases. `acceptance_examples.py run` uses
+    `validate_expected`; `capture-settings` needs `--research`. `REFERENCE` (the default oracle
+    path) is gone.
+  - `tooling_sha256` and `tooling_revision_note` removed from the manifest (nothing read them);
+    their supersession is recorded in the package docs in M10.
+  - Follow-up 2 done: `_bindings.py` has no research-solver fallback. `model()`, the
+    `CartesianFD1D` wrapper, `imported_module()` and `symbol()` for research-only (`MODULES`)
+    modules raise `LookupError` naming the missing package solver/module; ordinary imports
+    (stock kawin, third-party) are unchanged.
+  - Gates: **exact quick 30/30 bit-identical, contracts 5/5, contract pytest 93 passed** (89 + 4
+    new parser-rejection cases), package repeatability 33 cases × 2, 0 differences (464 s of 600);
+    **exact full 40/40, contracts 5/5, pytest 93, repeatability 34 cases (O06 live), 0
+    differences** (578 s of 1200; nothing skipped). `historical repeat --cases C01 C25`: both
+    reproduce `reference/` bit for bit; `historical capture --cases C01` refuses ("fixture is
+    frozen; refusing overwrite"). Examples E01-E10 10/10; regeneration 12/12 `verified` (summary
+    byte-identical to the committed one). Materializer `--check` OK. Full `tests/`: 347 passed,
+    5 skipped, 1 deselected (new `tests/test_validate_expected.py`, 7). Artifact hashes 207/207
+    unchanged.
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -179,7 +210,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
      `git status --porcelain --ignored`, not plain `--porcelain`; and the M9 `git archive` export
      must contain it (an export without it fails every package-definition case, which the M9 runs
      would expose). Also check any other new JSON (e.g. `docs/approvals/`) the same way.
-  2. *Remove research-solver fallbacks from `_bindings.py` (M6, before M9 independence).*
+  2. *Remove research-solver fallbacks from `_bindings.py` (M6, before M9 independence).* **Done in M6.**
      `model()` falls back to `kawin.diffusion.MovingBoundaryIllingworth*FDM`; `symbol()`'s
      `CartesianFD1D` wrapper falls back to `kawin.diffusion.mesh` when the solver or
      `moving_boundary.mesh` isn't found; `imported_module()` falls back to the research module

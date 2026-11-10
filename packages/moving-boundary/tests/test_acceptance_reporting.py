@@ -29,7 +29,7 @@ def isolated_runner(tmp_path, monkeypatch, *, failure=False):
     monkeypatch.setattr(tool,'PROJECT',tmp_path)
     monkeypatch.setattr(tool,'OUTPUT',output)
     monkeypatch.setattr(tool,'MANIFEST',tmp_path/'manifest.json')
-    monkeypatch.setattr(tool,'validate_reference',lambda reference:manifest)
+    monkeypatch.setattr(tool,'validate_expected',lambda cases:manifest)
     monkeypatch.setattr(tool,'setup_targets',lambda:dict(target='test-target',host='test-host'))
     monkeypatch.setattr(tool,'check_repeatability',lambda *args,**kwargs:None)
     monkeypatch.setattr(tool,'run_pytest',lambda *args,**kwargs:dict(tests=1,failures=0,errors=0,skipped=0))
@@ -87,11 +87,12 @@ def test_failed_record_run_cannot_replace_committed_report(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize('argv', [
-    ['capture','--record'],['setup','--record'],
+    ['historical','capture','--research','x','--record'],['setup','--record'],
     ['quick','--tolerance','exact','--record'],['full','--cases','C01','--record'],
-    ['quick','--cases','--record']])
+    ['quick','--cases','--record'],
+    ['quick','--research','x'],['full','repeat'],['historical','repeat'],['historical','--research','x']])
 def test_record_rejects_non_public_or_partial_runs(tmp_path, monkeypatch, argv):
-    """Invalid recording requests fail before environment setup or any report write."""
+    """Invalid recording requests, and normal/historical argument mixes, fail before setup or any write."""
     tool=isolated_runner(tmp_path,monkeypatch)
     with pytest.raises(SystemExit) as error:
         tool.main(argv)

@@ -1,7 +1,7 @@
 """Materialize package-owned case definitions from the frozen research checkout (historical only).
 
 Normal acceptance never runs this tool. It needs ``--research`` (the frozen oracle checkout,
-validated exactly as ``acceptance.validate_reference`` does) and the kawin Conda environment,
+validated exactly as ``acceptance.validate_research_checkout`` does) and the kawin Conda environment,
 because it executes today's unchanged ``acceptance_inputs.CaseInputs.load`` in the reference role.
 
 For every registered ``inputs.load(...)`` call (``ENTRIES``), and for every nested load those
@@ -435,7 +435,7 @@ def main(argv=None):
     mode.add_argument("--emit-to", type=Path, help="write the emitted files to this folder for review; no provenance")
     args = parser.parse_args(argv)
     tool = module("acceptance", PROJECT / "tools/acceptance.py")
-    manifest = tool.validate_reference(args.research)
+    manifest = tool.validate_research_checkout(args.research)
     unknown = set(args.entries or ()) - set(ENTRIES)
     if unknown:
         parser.error("unknown entries: " + ", ".join(sorted(unknown)))

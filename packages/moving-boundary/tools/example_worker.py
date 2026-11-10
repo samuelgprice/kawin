@@ -121,7 +121,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", choices=("reference", "package"), required=True)
     parser.add_argument("--case", required=True)
-    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--root", type=Path, help="frozen research checkout; reference (historical) role only")
     parser.add_argument("--examples", type=Path, required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -134,6 +134,7 @@ def main():
     manifest = json.loads((HERE / "example_manifest.json").read_text(encoding="utf-8"))
     entry = manifest["cases"][args.case]
     assert not args.settings_only or args.role == "package", "--settings-only is a package-role mode"
+    assert (args.root is not None) == (args.role == "reference"), "--root is required by, and only by, the reference role"
     if args.role == "reference":
         sys.path.insert(0, str(args.root.resolve()))
     else:
@@ -151,7 +152,6 @@ def main():
         assert version("kawin") == "0.5.0"
         import moving_boundary
         assert Path(moving_boundary.__file__).resolve().is_relative_to(args.target.resolve())
-        assert not any(Path(p).resolve() == args.root.resolve() for p in sys.path if p)
     import numpy as np
     cases = module("acceptance_cases", HERE / "acceptance_cases.py")
     settings = module("example_settings", HERE / "example_settings.py")

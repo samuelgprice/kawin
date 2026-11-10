@@ -17,5 +17,4 @@ def test_main_vs_package_contract(case):
     spec = importlib.util.spec_from_file_location("contract_runner", Path(__file__).parents[1] / "tools/acceptance.py")
     runner = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(runner)
-    runner.contract_case(case, state, reference=Path(state["reference"]),
-                         tolerance=state["tolerance"], require=state["require"])
+    runner.contract_case(case, state, tolerance=state["tolerance"], require=state["require"])

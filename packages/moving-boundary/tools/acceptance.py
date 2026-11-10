@@ -1,4 +1,16 @@
-"""Quick/full installed-package acceptance with explicit per-quantity outcomes."""
+"""Quick/full installed-package acceptance with explicit per-quantity outcomes.
+
+Normal actions (``quick``, ``full``, ``setup``) need no research checkout and no Git: package
+workers build from ``tools/definitions`` on the installed wheel, ``validate_expected`` checks
+every hash-recorded expected artifact and adopted input before and after the run, and unseeded
+repeatability runs two extra package-role processes per case.
+
+Historical actions are explicit opt-ins on the frozen research checkout:
+``historical capture --research PATH`` records reference-role fixtures (refusing to overwrite
+any existing ``reference/`` file), and ``historical repeat --research PATH`` runs the reference
+role twice per case and requires both runs to equal the adopted ``reference/`` bit for bit.
+Both validate the checkout first (``validate_research_checkout``).
+"""
 from pathlib import Path
 import argparse
 import hashlib
@@ -13,7 +25,6 @@ from functools import lru_cache
 
 PROJECT = Path(__file__).resolve().parents[1]
 OUTPUT = PROJECT / ".verification/acceptance"
-REFERENCE = PROJECT.parents[2] / "mb-ref-7af24f4"
 MANIFEST = PROJECT / "tools/acceptance_manifest.json"
 
 
@@ -72,8 +83,47 @@ def run_tc_worker(args, *, env, timeout):
     return stdout
 
 
-def validate_reference(reference):
-    """Require the requested detached commit, a clean tree, and frozen input hashes."""
+def validate_expected(cases):
+    """Normal-run validation without any research checkout or Git (plan §2).
+
+    Checks, failing on the first problem:
+
+    - each case's ``reference/<case>.{json,npz}`` against ``expected_artifacts`` (a case without an
+      entry fails; O06/O08 frozen hashes are also checked in ``compare``);
+    - each adopted input in ``adopted_inputs`` that exists must match its sha256; a missing one
+      fails every case that ``requires`` it (``open-surrogate.npz`` is required by C24), and is
+      never regenerated or skipped;
+    - every ``tools/definitions`` file against ``docs/definitions-provenance.json``.
+
+    ``private-inputs.json`` entries are checked by ``main`` for the enabled optional cases.
+    Returns the manifest.
+    """
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    expected = manifest["expected_artifacts"]["cases"]
+    for case in cases:
+        assert case in expected, case + ": no expected_artifacts entry"
+        for suffix in ("json", "npz"):
+            path = OUTPUT / "reference" / f"{case}.{suffix}"
+            assert path.exists(), f"{case}: expected artifact missing: reference/{path.name}"
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == expected[case][suffix], \
+                f"{case}: expected artifact changed: reference/{path.name}"
+    for name, entry in manifest["adopted_inputs"]["files"].items():
+        path = OUTPUT / "inputs" / name
+        if path.exists():
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"], "adopted input changed: inputs/" + name
+        else:
+            needed = sorted(set(entry["required_by"]) & set(cases))
+            assert not needed, f"required input missing: inputs/{name} (needed by {', '.join(needed)}; never regenerated)"
+    provenance = json.loads((PROJECT / "docs/definitions-provenance.json").read_text(encoding="utf-8"))
+    for stem, entry in provenance["definitions"].items():
+        data = (PROJECT / entry["file"]).read_bytes()
+        assert hashlib.sha256(data).hexdigest() == entry["sha256"], "definitions file changed: " + entry["file"]
+    return manifest
+
+
+def validate_research_checkout(reference):
+    """Historical actions only: the detached, clean frozen commit and its research source hashes."""
+    assert reference is not None, "historical actions need --research <frozen research checkout>"
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     assert run(["git", "rev-parse", "HEAD"], cwd=reference, timeout=30).strip() == manifest["reference_commit"]
     result = subprocess.run(["git", "symbolic-ref", "-q", "HEAD"], cwd=reference,
@@ -100,17 +150,21 @@ def worker_environment(case):
     return env
 
 
-def worker(case, role, *, reference=REFERENCE, state=None, prepare=False, timeout=60, output=None, probe_thermocalc=False):
+def worker(case, role, *, research=None, state=None, prepare=False, timeout=60, output=None, probe_thermocalc=False):
     """Execute an origin-checked worker; diagnostics use separate destinations.
 
-    O06/O08's registered reference destinations cannot overwrite an existing fixture.
+    Package-role workers get no research root. Reference-role workers (historical only) need
+    ``research``; their default ``reference/`` destination never overwrites an existing fixture,
+    for any case, since every ``reference/`` pair is an adopted, hash-recorded artifact.
     """
     path = Path(output) if output is not None else OUTPUT / ("reference" if role == "reference" else "package") / case
-    if role == "reference" and case in {"O06","O08"} and path.resolve() == (OUTPUT / "reference" / case).resolve():
+    if role == "reference" and path.resolve() == (OUTPUT / "reference" / case).resolve():
         assert not any(path.with_suffix(suffix).exists() for suffix in (".json",".npz")), case + " fixture is frozen; refusing overwrite"
     args = [sys.executable, "-P", "-S", str(PROJECT / "tools/acceptance_worker.py"),
-        "--role", role, "--root", str(reference), "--case", case, "--output", str(path),
-        "--artifacts", str(OUTPUT / "inputs")]
+        "--role", role, "--case", case, "--output", str(path), "--artifacts", str(OUTPUT / "inputs")]
+    if role == "reference":
+        assert research is not None, "reference-role workers are historical and need --research"
+        args.extend(["--root", str(research)])
     if state:
         args.extend(["--target", state["target"], "--host", state["host"]])
     if prepare:
@@ -165,7 +219,7 @@ def npz_identity(generated, adopted):
     return result
 
 
-def regenerate_surrogate(state, directory, *, reference=REFERENCE):
+def regenerate_surrogate(state, directory):
     """Rebuild ``open-surrogate.npz`` with a package-role ``prepare`` into ``directory`` (F7).
 
     The worker builds ``_surrogate`` from ``tools/definitions`` (no research file is read) and
@@ -173,7 +227,7 @@ def regenerate_surrogate(state, directory, *, reference=REFERENCE):
     Returns ``npz_identity(generated, adopted)`` plus the generated path and worker status.
     """
     output = Path(directory) / "prepare"
-    report = worker("prepare", "package", reference=reference, state=state, prepare=True, output=output)
+    report = worker("prepare", "package", state=state, prepare=True, output=output)
     assert report["status"] == "PASS", report.get("error")
     assert report.get("case_definitions") == "tools/definitions", "prepare did not use package definitions"
     result = npz_identity(output.with_suffix(".npz"), OUTPUT / "inputs/open-surrogate.npz")
@@ -181,32 +235,66 @@ def regenerate_surrogate(state, directory, *, reference=REFERENCE):
     return result
 
 
-def check_repeatability(case, *, reference, directory, timeout=120):
-    """Compare two fresh unseeded reference processes without changing any fixture.
-
-    Every unaffected quick run and pytest contract is checked. A difference fails
-    the gate; it must never trigger another seed exception automatically.
-    """
+def _repeat_pair(case, role, *, folder, timeout, state=None, research=None):
+    """Run two fresh unseeded ``role`` processes into ``folder/{a,b}`` and compare them bitwise."""
     import numpy as np
-    assert case not in {"O05","O08"}, "O05/O08 are documented hash-sensitive generation workflows"
     started = time.monotonic()
-    folder = Path(directory) / case
     reports = []
     for repeat in ("a", "b"):
         remaining = timeout - (time.monotonic()-started)
         assert remaining > 0, "Unseeded repeatability budget exceeded"
-        report = worker(case, "reference", reference=reference,
+        report = worker(case, role, research=research, state=state,
                         output=folder / repeat, timeout=min(300 if case == "O06" else 60,remaining))
         assert report["hash_seed"] is None and not report["numpy_seed_override"]
         reports.append(report)
     with np.load(folder / "a.npz") as left, np.load(folder / "b.npz") as right:
         assert set(left.files) == set(right.files), case
         failed = [key for key in left.files if not bit_identical(comparison_array(case,key,left[key]),comparison_array(case,key,right[key]))]
-        result = dict(case=case, bit_identical=not failed, arrays=len(left.files), failed_keys=failed,
-                      elapsed_seconds=time.monotonic()-started)
+        arrays = len(left.files)
     assert reports[0].get("stop_status") == reports[1].get("stop_status"), case
+    return dict(case=case, role=role, bit_identical=not failed, arrays=arrays, failed_keys=failed,
+                elapsed_seconds=time.monotonic()-started), reports
+
+
+def check_repeatability(case, *, state, directory, timeout=120):
+    """Compare two fresh unseeded package-role processes without changing any fixture (plan §2).
+
+    Every unaffected quick run and pytest contract is checked. A difference fails
+    the gate; it must never trigger another seed exception automatically.
+    """
+    assert case not in {"O05","O08"}, "O05/O08 are documented hash-sensitive generation workflows"
+    folder = Path(directory) / case
+    result, _ = _repeat_pair(case, "package", folder=folder, timeout=timeout, state=state)
     (folder / "comparison.json").write_text(json.dumps(result,indent=2),encoding="utf-8")
-    assert not failed, ("Unseeded reference is not repeatable",case,failed)
+    assert not result["failed_keys"], ("Unseeded package role is not repeatable",case,result["failed_keys"])
+    return result
+
+
+def historical_repeat(case, *, research, directory, timeout=300):
+    """Historical: two unseeded reference-role runs must equal each other and ``reference/<case>``.
+
+    O05 (seeded generation) runs once under ``PYTHONHASHSEED=0``; O06/O08 are hash-frozen
+    fixtures and are not repeated. Writes only under ``directory``.
+    """
+    import numpy as np
+    if case in {"O06", "O08"}:
+        return dict(case=case, skipped="hash-frozen fixture; not repeated")
+    folder = Path(directory) / case
+    if case == "O05":
+        reports = [worker(case, "reference", research=research, output=folder / "a", timeout=timeout)]
+        result = dict(case=case, role="reference", bit_identical=True, failed_keys=[])
+    else:
+        result, reports = _repeat_pair(case, "reference", folder=folder, timeout=timeout, research=research)
+    expected = json.loads((OUTPUT / "reference" / (case + ".json")).read_text(encoding="utf-8"))
+    with np.load(folder / "a.npz") as run_, np.load(OUTPUT / "reference" / (case + ".npz")) as adopted:
+        keys_equal = set(run_.files) == set(adopted.files)
+        differing = sorted(key for key in set(run_.files) & set(adopted.files)
+                           if not bit_identical(comparison_array(case, key, run_[key]), comparison_array(case, key, adopted[key])))
+        result.update(arrays=len(adopted.files))
+    result.update(reference_keys_equal=keys_equal, reference_differing=differing,
+                  reference_stop_status_equal=expected.get("stop_status") == reports[0].get("stop_status"),
+                  reproduces_reference=keys_equal and not differing and expected.get("stop_status") == reports[0].get("stop_status"))
+    (folder / "comparison.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
 
 
@@ -468,21 +556,22 @@ def record_deviations(action, local, *, tolerance, evidence):
     write_report_json(path,acceptance)
 
 
-def contract_case(case, state=None, *, reference=REFERENCE, tolerance="exact", require=()):
+def contract_case(case, state=None, *, tolerance="exact", require=()):
     """Entry point for package pytest: compare an isolated contract with its fixture."""
     if state is None:
         state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8"))
+    validate_expected([case])
     if state.get("repeatability_directory"):
-        check_repeatability(case, reference=reference, directory=state["repeatability_directory"])
-    report = worker(case, "package", reference=reference, state=state)
+        check_repeatability(case, state=state, directory=state["repeatability_directory"])
+    report = worker(case, "package", state=state)
     result = compare(case, report, tolerance=tolerance, require=require)
     assert not result.get("failed_keys"), result
     return result
 
 
-def run_pytest(state, *, reference, tolerance, require, timeout=180):
+def run_pytest(state, *, tolerance, require, timeout=180):
     """Run package contracts and kernel/tooling tests against the installed targets."""
-    state.update(reference=str(reference), tolerance=tolerance, require=list(require))
+    state.update(tolerance=tolerance, require=list(require))
     configured = OUTPUT / "state.json"
     configured.write_text(json.dumps(state, indent=2), encoding="utf-8")
     env = {key:value for key,value in os.environ.items() if not key.startswith("PYTHON")}
@@ -518,10 +607,11 @@ raise SystemExit(pytest.main(sys.argv[3:]))
 
 
 def main(argv=None):
-    """Capture fixtures or run quick/full acceptance with an explicit outcome table."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("capture", "quick", "full", "setup"))
-    parser.add_argument("--reference", type=Path, default=REFERENCE)
+    """Run quick/full acceptance (no research), or an explicit historical capture/repeat."""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("action", choices=("quick", "full", "setup", "historical"))
+    parser.add_argument("step", nargs="?", choices=("capture", "repeat"), help="historical actions only")
+    parser.add_argument("--research", type=Path, help="frozen research checkout; historical actions only")
     parser.add_argument("--cases", nargs="*")
     parser.add_argument("--reuse-targets", action="store_true")
     parser.add_argument("--require-family", nargs="*", default=["binary", "ternary", "three_phase"])
@@ -532,9 +622,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.record and (args.action not in {"quick","full"} or args.tolerance != "public" or args.cases is not None):
         parser.error("--record requires a complete public-tolerance quick or full run")
+    historical = args.action == "historical"
+    if historical and (args.step is None or args.research is None):
+        parser.error("historical needs a step (capture or repeat) and --research <frozen research checkout>")
+    if not historical and (args.step is not None or args.research is not None):
+        parser.error("normal actions take no historical step and no research checkout")
     # The parent is invoked after required Conda activation. The cloned runtime
     # inherits those native DLL paths; prepend the clone's equivalent locations.
-    if args.action != "capture":
+    if not historical:
         config = json.loads((PROJECT / ".verification/public-environment.json").read_text())
         executable = Path(config["python"])
         if Path(sys.executable).resolve() != executable.resolve():
@@ -546,7 +641,7 @@ def main(argv=None):
                 env=env, stdin=subprocess.DEVNULL, timeout=1250 if args.action=="full" else 650).returncode
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / "inputs").mkdir(exist_ok=True)
-    manifest = validate_reference(args.reference)
+    manifest = validate_research_checkout(args.research) if historical else json.loads(MANIFEST.read_text(encoding="utf-8"))
     full = args.action == "full" or args.tier == "full"
     cases = args.cases or list(manifest["quick"]) + ["C32", "LEGACY"]
     # Real sampling fit the approved minute pilot; sampling runs afresh in O05.
@@ -589,21 +684,50 @@ def main(argv=None):
     if args.action == "setup":
         print(json.dumps(setup_targets()))
         return 0
+    if historical and not args.cases:
+        cases = cases + manifest["contracts"]
+    # Everything this run may compare (or historically repeat) is hash-validated first; O06 is
+    # included for a complete full run even before its availability probe.
+    checked = []
+    if not (historical and args.step == "capture"):
+        checked = list(dict.fromkeys(cases + ([] if args.cases or historical else manifest["contracts"])
+                                     + (["O06"] if full and not args.cases and not historical else [])))
+        validate_expected(checked)
     started = time.monotonic()
     started_timestamp = time.time()
     results, failures = {}, []
     state = None
-    if args.action != "capture":
+    if not historical:
         state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8")) if args.reuse_targets else setup_targets()
         state["repeatability_directory"] = tempfile.mkdtemp(prefix="unseeded-", dir=OUTPUT)
-    elif args.cases != ["O06"]:
+    elif args.step == "capture" and args.cases != ["O06"]:
         # Historical prepare writes to scratch; it never overwrites the adopted C24 input.
-        worker("prepare", "reference", reference=args.reference, prepare=True,
+        worker("prepare", "reference", research=args.research, prepare=True,
                output=Path(tempfile.mkdtemp(prefix="prepare-", dir=OUTPUT)) / "prepare")
-    if full and not args.cases and args.action != "capture":
+    if historical and args.step == "repeat":
+        directory = Path(tempfile.mkdtemp(prefix="historical-repeat-", dir=OUTPUT))
+        for case in cases:
+            try:
+                result = historical_repeat(case, research=args.research, directory=directory)
+            except Exception as exc:
+                result = dict(case=case, error=str(exc)[-2000:])
+            results[case] = result
+            ok = "skipped" in result or (result.get("bit_identical") and result.get("reproduces_reference"))
+            if not ok:
+                failures.append(case)
+            print(case, "SKIPPED " + result["skipped"] if "skipped" in result else ("PASS" if ok else "FAIL"),
+                  result.get("error", ""), flush=True)
+        validate_research_checkout(args.research)
+        validate_expected(checked)
+        summary = dict(action="historical repeat", research=str(args.research), directory=str(directory),
+                       cases=results, failures=failures, elapsed_seconds=time.monotonic()-started)
+        (OUTPUT / "historical-repeat-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        print(f"Historical repeat: {len(results)} cases, {len(failures)} failures, {summary['elapsed_seconds']:.2f}s", flush=True)
+        return 1 if failures else 0
+    if full and not args.cases and not historical:
         probe_dir = Path(tempfile.mkdtemp(prefix="tc-availability-",dir=OUTPUT))
         try:
-            probe = worker("O06","package",reference=args.reference,state=state,
+            probe = worker("O06","package",state=state,
                            output=probe_dir / "O06",probe_thermocalc=True,timeout=60)
             assert probe["status"] == "PASS", "TC availability probe failed"
             availability = probe["thermocalc_availability"]
@@ -613,8 +737,6 @@ def main(argv=None):
             cases.append("O06")
         else:
             skipped["O06"] = availability["reason"]
-    if args.action == "capture" and not args.cases:
-        cases = cases + manifest["contracts"]
     for case in cases:
         limit = 1200 if full else 600
         remaining = limit - (time.monotonic() - started)
@@ -622,13 +744,13 @@ def main(argv=None):
             failures.append("overall timeout")
             break
         try:
-            report = worker(case, "reference" if args.action == "capture" else "package",
-                            reference=args.reference, state=state,
+            report = worker(case, "reference" if historical else "package",
+                            research=args.research, state=state,
                             timeout=min(300 if case == "O06" else (180 if case.startswith("F") else 60), max(1,remaining)))
-            if args.action in {"quick","full"} and case in set(manifest["quick"]) | {"C32","LEGACY"} | ({"O06"} if full and manifest["thermocalc_sampling"]["repeat_unseeded"] else set()):
-                check_repeatability(case, reference=args.reference, directory=state["repeatability_directory"],
+            if not historical and case in set(manifest["quick"]) | {"C32","LEGACY"} | ({"O06"} if full and manifest["thermocalc_sampling"]["repeat_unseeded"] else set()):
+                check_repeatability(case, state=state, directory=state["repeatability_directory"],
                     timeout=max(1,limit-(time.monotonic()-started)))
-            result = {"capture":True} if args.action == "capture" else compare(case, report,
+            result = {"capture":True} if historical else compare(case, report,
                 tolerance=args.tolerance, require=args.require_family)
             results[case] = result
             if result.get("failed_keys"):
@@ -643,15 +765,18 @@ def main(argv=None):
     if args.action in {"quick", "full"} and not args.cases:
         try:
             remaining = (1200 if full else 600) - (time.monotonic()-started)
-            tests = run_pytest(state, reference=args.reference, tolerance=args.tolerance,
+            tests = run_pytest(state, tolerance=args.tolerance,
                                require=args.require_family, timeout=max(1,remaining))
         except Exception as exc:
             failures.append("pytest")
             print("PYTEST FAIL", str(exc)[-3000:], flush=True)
     for case, reason in skipped.items():
         print(case, "SKIPPED", reason, flush=True)
-    validate_reference(args.reference)
-    summary = dict(action=args.action, cases=results, failures=failures, skipped=skipped,
+    if historical:
+        validate_research_checkout(args.research)
+    else:
+        validate_expected(checked)
+    summary = dict(action=args.action if not historical else "historical capture", cases=results, failures=failures, skipped=skipped,
                    pytest=tests, elapsed_seconds=time.monotonic()-started)
     if args.action in {"quick","full"}:
         summary["deviations"] = report_deviations(args.action,cases,
@@ -661,9 +786,9 @@ def main(argv=None):
     if state and state.get("repeatability_directory"):
         checks = [json.loads(path.read_text()) for path in Path(state["repeatability_directory"]).glob("*/comparison.json")]
         summary["unseeded_repeatability"] = {entry["case"]:entry for entry in checks}
-        print(f"Unseeded reference repeatability: {len(checks)} cases checked twice; "
+        print(f"Unseeded package repeatability: {len(checks)} cases checked twice; "
               f"{sum(not entry['bit_identical'] for entry in checks)} differences", flush=True)
-    (OUTPUT / (args.action + "-summary.json")).write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (OUTPUT / (("historical-capture" if historical else args.action) + "-summary.json")).write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"{len(results)} cases, {len(failures)} failures, {summary['elapsed_seconds']:.2f}s", flush=True)
     return 1 if failures else 0
 

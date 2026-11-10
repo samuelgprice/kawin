@@ -50,6 +50,15 @@ MODULES = {
 }
 
 
+def _package_solver(name):
+    """The relocated solver class ``moving_boundary.solvers.<name>``, or a ``LookupError``."""
+    cls = getattr(importlib.import_module("moving_boundary.solvers"), name, None)
+    if cls is None or not cls.__module__.startswith("moving_boundary."):
+        raise LookupError(f"package solver moving_boundary.solvers.{name} ({MODELS[name]}) is missing; "
+                          "package definitions have no research fallback")
+    return cls
+
+
 def lookup_key(path, names, constants, constructors, overrides, policy):
     """Same canonical key as ``materialize_definitions.lookup_key`` (asserted by the tests)."""
     return json.dumps([str(path), sorted(names), sorted([repr(k), repr(v)] for k, v in constants.items()),
@@ -109,14 +118,12 @@ class Context:
         self.registry = {entry["key"]: entry for entry in document["definitions"].values()}
 
     def model(self, name):
-        """Resolve a relocated solver class, or report the still-unrelocated host family."""
+        """Resolve a relocated solver class from ``moving_boundary.solvers``.
+
+        There is no research fallback: a missing package solver raises ``LookupError`` naming it.
+        """
         family = MODELS[name]
-        legacy = {"binary": "MovingBoundaryIllingworthFDM", "ternary": "MovingBoundaryIllingworthTernaryFDM",
-                  "three_phase": "MovingBoundaryIllingworthTernaryThreePhaseFDM"}[family]
-        try:
-            cls = getattr(importlib.import_module("moving_boundary.solvers"), name)
-        except AttributeError:
-            cls = getattr(importlib.import_module("kawin.diffusion." + legacy), name)
+        cls = _package_solver(name)
         self.providers[family] = cls.__module__
         if self.track_models:
             owner = self
@@ -129,23 +136,20 @@ class Context:
         return cls
 
     def symbol(self, module, name):
-        """Bind one name a definition imports; research modules map to materialized definitions."""
+        """Bind one name a definition imports; research modules map to materialized definitions.
+
+        Research-only modules (``MODULES``) and the solver mesh resolve to package code only; a
+        missing package counterpart raises ``LookupError``. Other names fall through to a plain
+        import of ``module`` (stock kawin 0.5.0 or a third-party library).
+        """
         if name in MODELS:
             return self.model(name)
         if name == "CartesianFD1D":
+            mesh_module = importlib.import_module("moving_boundary.mesh")
             def mesh(*args, **kwargs):
-                target_name = next(key for key, value in MODELS.items() if value == self.family)
-                try:
-                    cls = getattr(importlib.import_module("moving_boundary.solvers"), target_name)
-                    extracted = cls.__module__.startswith("moving_boundary.")
-                except AttributeError:
-                    extracted = False
-                module_name = "moving_boundary.mesh" if extracted else "kawin.diffusion.mesh"
-                return getattr(importlib.import_module(module_name), "CartesianFD1D")(*args, **kwargs)
-            try:
-                importlib.import_module("moving_boundary.mesh")
-            except ModuleNotFoundError:
-                return getattr(importlib.import_module("kawin.diffusion.mesh"), name)
+                # The case's solver family must be relocated; its mesh is the package mesh.
+                _package_solver(next(key for key, value in MODELS.items() if value == self.family))
+                return mesh_module.CartesianFD1D(*args, **kwargs)
             return mesh
         if module.startswith(("kawin.tests", "examples")):
             return getattr(self.load(self.root.joinpath(*module.split(".")).with_suffix(".py"), [name]), name)
@@ -165,16 +169,25 @@ class Context:
                 continue
             if hasattr(value, name):
                 return getattr(value, name)
+        if module in MODULES:
+            raise LookupError(f"{module}.{name} has no package counterpart in {MODULES[module]}; "
+                              "package definitions have no research fallback")
         return getattr(importlib.import_module(module), name)
 
     def imported_module(self, module):
-        """Resolve a qualified import locally; never register an alias under kawin."""
+        """Resolve a qualified import locally; never register an alias under kawin.
+
+        A research-only module maps to its package module; if that is missing, ``LookupError``
+        names it (no research fallback). Other modules are imported as they are.
+        """
         if module in MODULES:
             try:
                 return importlib.import_module(MODULES[module])
             except ModuleNotFoundError as exc:
                 if not MODULES[module].startswith(exc.name):
                     raise
+                raise LookupError(f"package module {MODULES[module]} (for research {module}) is missing; "
+                                  "package definitions have no research fallback") from exc
         return importlib.import_module(module)
 
     def load(self, path, names, *, constants=None, constructors=(), overrides=None):
