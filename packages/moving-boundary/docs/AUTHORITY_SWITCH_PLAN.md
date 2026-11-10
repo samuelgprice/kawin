@@ -13,7 +13,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M0 | Classification, materializer, `expected_artifacts` hashes | done 2026-11-10 (see log) |
 | M1 | Definitions for C01-C23, C30-C32, LEGACY | done 2026-11-10 (see log) |
 | M2 | C25-C29 assertions + item 7 per-model scales | done 2026-11-10 (scales approved by the user; see log) |
-| M3 | C24 + `prepare` | not started |
+| M3 | C24 + `prepare` | done 2026-11-10 (see log) |
 | M4 | F04/F11/F12, O01-O08 | not started |
 | M5 | Example worker + hashed settings | not started |
 | M5b | Regeneration verification of adopted inputs | not started |
@@ -84,6 +84,28 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
   - Gates: exact contracts 5/5 bit-identical (52 s); public contracts 5/5 bit-identical with the
     new allowances applied (C28 `model1/dependentMoleClosureErrorData` atol 1.47e-7; 42 s).
     `tests/test_contract_scales.py` (9) + reporting + bindings: 26 passed.
+- **M2 test-fixture fix (`3b4926c`).** M3's full-suite run showed that M2's `compare()` reads
+  `manifest["contracts"]`, which the synthetic manifests in `test_thermocalc_acceptance.py` (5
+  tests) and `test_default_phase_acceptance.py` (3) lacked (`KeyError`). The real manifest always
+  has the list, so no acceptance gate was affected; M2 had run only its targeted test files. Both
+  fixtures now carry `contracts=[]`; `compare()` stays strict. From M3 on, every batch runs the
+  full `tests/` suite.
+- **M3 (2026-11-10).**
+  - `tools/definitions/surrogate_artifacts.py` (`_surrogate`, 1 import transform), AST-equal;
+    C24 and `prepare` in `PACKAGE_DEFINITIONS`. Materializer `--check --entries <all 17
+    materialized stems>`: OK. (An unrestricted `--check` lists the 8 M4 stems not yet written.)
+  - `--prepare` loads through `inputs.root` and saves to the worker's own `--output` npz in both
+    roles, never to `--artifacts`; historical `capture` passes a scratch `prepare-*/` output, so
+    it no longer rewrites `inputs/open-surrogate.npz` (§3).
+  - F7: `acceptance.regenerate_surrogate` runs a package-role `prepare` into scratch and
+    `npz_identity` compares it with the adopted file (key sets; dtype, shape and bytes per key;
+    ZIP members reported separately). Result: 35/35 arrays bit-identical, key sets equal, and the
+    files are also byte-identical (container included; `savez_compressed` writes fixed member
+    timestamps). The adopted sha256 `c224e5f2…693f` is unchanged before/after. M5b records this
+    formally with the metadata payload. Unit tests: `tests/test_npz_identity.py` (3).
+  - Gates: `quick --tolerance exact --cases C24`: 1/1 bit-identical, package report
+    `case_definitions=tools/definitions`, reference repeat 0 differences (25 s). Full `tests/`:
+    329 passed, 5 skipped, 1 deselected (120 s). Artifact hashes: 207 files, 0 changed.
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -102,9 +124,13 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
      M6 exact quick/full gates.
   3. *Pre-existing ignored files found while checking `git status --ignored` (never committed):*
      `tools/example_manifest.json` (shared `*.json` exclude; needed by `acceptance_examples.py`
-     and `example_worker.py`) is force-added in the M5 commit. `examples/requirements-tested.txt`
-     (package `.gitignore` `*.txt`; referenced by `examples/README.md`) is outside this plan:
-     the user decides.
+     and `example_worker.py`) is force-added in the M5 commit, and M5's checks must run example
+     acceptance from a `git archive` export of that commit, so the committed file is exercised.
+     `examples/requirements-tested.txt` (package `.gitignore` `*.txt`; referenced by
+     `examples/README.md`) was committed on its own in `51414d8` at the user's request, after
+     checking each pin against `mb-public-050`: numpy was pinned 2.4.5 but 2.4.3 is installed and
+     recorded by every run, so it was corrected to 2.4.3 (all other pins matched).
+     Both must be in place before the migration is declared complete.
 
 ## Decisions
 

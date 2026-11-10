@@ -136,6 +136,51 @@ def bit_identical(left, right):
     return left.shape == right.shape and left.dtype == right.dtype and left.tobytes() == right.tobytes()
 
 
+def npz_identity(generated, adopted):
+    """Compare two ``.npz`` files array-wise, and their ZIP containers separately (F7, §3a).
+
+    Array identity means the same key set and, per key, the same dtype, shape and bytes
+    (``bit_identical``); arrays load with ``allow_pickle=False``. Container differences (member
+    order, timestamps, compression, sizes) are reported under ``container`` as metadata only and
+    never affect ``array_identical``. Nothing is written.
+    """
+    import numpy as np
+    with np.load(generated, allow_pickle=False) as left, np.load(adopted, allow_pickle=False) as right:
+        common = sorted(set(left.files) & set(right.files))
+        arrays = {key:dict(dtype=str(right[key].dtype), shape=list(right[key].shape),
+                           bit_identical=bit_identical(left[key], right[key])) for key in common}
+        result = dict(generated_only=sorted(set(left.files) - set(right.files)),
+                      adopted_only=sorted(set(right.files) - set(left.files)), arrays=arrays)
+    def members(path):
+        with zipfile.ZipFile(path) as archive:
+            return [dict(name=item.filename, date_time=list(item.date_time), compress_type=item.compress_type,
+                         compress_size=item.compress_size, file_size=item.file_size, crc=item.CRC)
+                    for item in archive.infolist()]
+    left_members, right_members = members(generated), members(adopted)
+    result["container"] = dict(byte_identical=Path(generated).read_bytes() == Path(adopted).read_bytes(),
+                               members_equal=left_members == right_members,
+                               generated=left_members, adopted=right_members)
+    result["array_identical"] = (not result["generated_only"] and not result["adopted_only"]
+                                 and all(item["bit_identical"] for item in arrays.values()))
+    return result
+
+
+def regenerate_surrogate(state, directory, *, reference=REFERENCE):
+    """Rebuild ``open-surrogate.npz`` with a package-role ``prepare`` into ``directory`` (F7).
+
+    The worker builds ``_surrogate`` from ``tools/definitions`` (no research file is read) and
+    saves to ``directory/prepare.npz``; the adopted ``inputs/open-surrogate.npz`` is only read.
+    Returns ``npz_identity(generated, adopted)`` plus the generated path and worker status.
+    """
+    output = Path(directory) / "prepare"
+    report = worker("prepare", "package", reference=reference, state=state, prepare=True, output=output)
+    assert report["status"] == "PASS", report.get("error")
+    assert report.get("case_definitions") == "tools/definitions", "prepare did not use package definitions"
+    result = npz_identity(output.with_suffix(".npz"), OUTPUT / "inputs/open-surrogate.npz")
+    result.update(generated=str(output.with_suffix(".npz")), worker_status=report["status"])
+    return result
+
+
 def check_repeatability(case, *, reference, directory, timeout=120):
     """Compare two fresh unseeded reference processes without changing any fixture.
 
@@ -552,7 +597,9 @@ def main(argv=None):
         state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8")) if args.reuse_targets else setup_targets()
         state["repeatability_directory"] = tempfile.mkdtemp(prefix="unseeded-", dir=OUTPUT)
     elif args.cases != ["O06"]:
-        worker("prepare", "reference", reference=args.reference, prepare=True)
+        # Historical prepare writes to scratch; it never overwrites the adopted C24 input.
+        worker("prepare", "reference", reference=args.reference, prepare=True,
+               output=Path(tempfile.mkdtemp(prefix="prepare-", dir=OUTPUT)) / "prepare")
     if full and not args.cases and args.action != "capture":
         probe_dir = Path(tempfile.mkdtemp(prefix="tc-availability-",dir=OUTPUT))
         try:

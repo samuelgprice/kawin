@@ -14,7 +14,7 @@ HERE = Path(__file__).resolve().parent
 runpy.run_path(str(HERE / "batch_safety.py"))["forbid_input"]()
 # Cases whose package role builds from tools/definitions (materialized, hash-checked) instead of
 # the historical acceptance_inputs AST loader; the reference role always keeps the loader.
-PACKAGE_DEFINITIONS = {f"C{n:02d}" for n in list(range(1, 24)) + list(range(25, 33))} | {"LEGACY"}
+PACKAGE_DEFINITIONS = {f"C{n:02d}" for n in range(1, 33)} | {"LEGACY", "prepare"}
 
 
 def module(name, path):
@@ -35,6 +35,11 @@ def main():
     the reference role only; the package role relies on ``compare()`` against the hashed
     ``reference/LEGACY.npz`` (decision F5) and keeps the recorded stop status label. Contracts
     (C25-C29) also report ``model_scales`` per ``model{i}/`` prefix, in both roles (item 7).
+
+    ``--prepare`` builds the synthetic ``_surrogate`` and saves it to this worker's own
+    ``--output`` npz, in both roles, never to ``--artifacts``: the adopted
+    ``inputs/open-surrogate.npz`` stays the hashed C24 input (decision F7) and is only compared
+    against, array-wise, by ``acceptance.regenerate_surrogate``.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", choices=("reference", "package"), required=True)
@@ -95,8 +100,8 @@ def main():
             report.update(thermocalc_availability=available, stop_status="tc_availability_checked")
             arrays = {}
         elif args.prepare:
-            source = inputs.load(args.root / "kawin/tests/test_surrogate_artifacts.py", ["_surrogate"])
-            source._surrogate().save(args.artifacts / "open-surrogate.npz")
+            source = inputs.load(inputs.root / "kawin/tests/test_surrogate_artifacts.py", ["_surrogate"])
+            source._surrogate().save(args.output.with_suffix(".npz"))
             arrays = {}
         elif args.case == "O08":
             optional = module("acceptance_optional", HERE / "acceptance_optional.py")

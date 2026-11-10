@@ -1010,6 +1010,37 @@
     }
    ]
   },
+  "surrogate_artifacts": {
+   "file": "tools/definitions/surrogate_artifacts.py",
+   "sha256": "e531e783d580ffb428792948e044ea3d1db57827b8d400189c5492a6db0cc293",
+   "source": "kawin/tests/test_surrogate_artifacts.py",
+   "source_sha256": "6e967c6a128d6ad3dc1785a73c7e057efee78c7f5be663f2e30dbce7d183ecd3",
+   "names": [
+    "_surrogate"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [],
+   "policy": "raise",
+   "cases": [
+    "C24",
+    "prepare"
+   ],
+   "nested_by": [],
+   "key": "[\"kawin/tests/test_surrogate_artifacts.py\", [\"_surrogate\"], [], [], [], \"raise\"]",
+   "ast_equal": true,
+   "ast_sha256": "d7562c600e168b6148666455265b5022743593b9b5997c3a43e07735dc0e0010",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 9,
+     "to": [
+      "TernaryMovingBoundaryThermodynamicsSurrogate = _input_symbol('kawin.diffusion', 'TernaryMovingBoundaryThermodynamicsSurrogate')"
+     ]
+    }
+   ]
+  },
   "ternary_two_phase_similarity_matrix": {
    "file": "tools/definitions/ternary_two_phase_similarity_matrix.py",
    "sha256": "29bd9f0d478434eaf90457aeb3e3dc1159d5fa0a8e36f2a209ba67a04526bc89",
