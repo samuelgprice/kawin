@@ -18,7 +18,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M5 | Example worker + hashed settings | done 2026-11-10 (see log) |
 | M5b | Regeneration verification of adopted inputs | done 2026-11-10 (12/12 verified; see log) |
 | M6 | Normal/historical split, package-role repeatability | done 2026-11-10 (see log) |
-| M7 | Approval path | not started |
+| M7 | Approval path | in progress: M7a `approval_criteria` adopted (user-approved 2026-11-10); M7b approval path next |
 | M8 | Test port (item 16), 4 batches | not started |
 | M9 | Independence proof + missing-resource matrix | not started |
 | M10 | Docs + final recorded gates | not started |
@@ -202,6 +202,22 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
     byte-identical to the committed one). Materializer `--check` OK. Full `tests/`: 347 passed,
     5 skipped, 1 deselected (new `tests/test_validate_expected.py`, 7). Artifact hashes 207/207
     unchanged.
+- **M7a (2026-11-10): `approval_criteria` adopted, user-approved.** The proposal shown at the M7 gate
+  was revised on review: the binary profile mask is frozen (centred on the reference's exact final
+  interface, half-width = approved interface limit + 2h; excluded nodes stored: C04 2-8, C31 3-7,
+  F04 27-42), and conservation limits are 10x current at two significant figures (floor 1e-13)
+  instead of the next decade. `tools/acceptance_criteria.py` is the single implementation:
+  `propose` measures the hash-validated references and applies the approved rules, `check`
+  evaluates them, and the manifest section equals a fresh proposal (tested). 74 limits: 18
+  analytic (C04, C31, F04 interface + masked profile; C11, C12, F11, F12 interface + eta + profile;
+  e.g. F04 profile 0.00277 → 0.0056) and 56 conservation across all three families (binary
+  transformed inventory; composition inventory for ternary and equal-volume three-phase cases;
+  component moles, total moles and closure for explicit volumes). Unequal-volume composition
+  inventories are reported only; ternary accuracy, contracts and O08 are recorded as not covered.
+  Any criterion that cannot be measured (missing/empty array or mask, NaN/inf, fewer than two
+  points, zero reference, mesh mismatch) fails. `check` on today's references: all pass. Unit
+  tests `tests/test_acceptance_criteria.py` (22); full `tests/`: 374 passed, 5 skipped, 1
+  deselected.
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only

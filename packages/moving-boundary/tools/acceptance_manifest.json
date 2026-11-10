@@ -737,5 +737,841 @@
         "verified": "package prepare array- and byte-identical (M3 F7, M5b)"
       }
     }
+  },
+  "approval_criteria": {
+    "description": "Approval correctness gates (plan section 5): analytic error against exact solutions and conservation of the physically conserved quantity. Fixed limits set once from the frozen references at their expected_artifacts hashes; never recomputed from a previous output. Metric definitions and the measurement code: tools/acceptance_criteria.py. A criterion that cannot be measured (missing array, empty array or mask, non-finite value, fewer than two history points, zero reference magnitude, mesh mismatch) fails.",
+    "approved": "user, 2026-11-10 (M7 gate): analytic 2x; frozen binary profile mask; C31 added; conservation 10x with 1e-13 floor; composition inventory for implicit equal-volume three-phase cases",
+    "rules": {
+      "analytic": "limit = 2 x current, rounded up to two significant figures",
+      "conservation": "limit = 10 x current relative drift, rounded up to two significant figures, at least 1e-13",
+      "binary_profile_mask": "exclude nodes within (approved interface-error limit + 2h) of the reference's exact final interface; the excluded node range is stored and fixed for every candidate"
+    },
+    "not_covered": {
+      "ternary_analytic": "no ternary reference records an exact-solution error; ternary accuracy is not gated here (conservation only); the planned similarity-test port remains the accuracy evidence",
+      "contracts": "C25-C29 are gated by their contract assertion groups",
+      "O08": "default-phase sampling only; no solve",
+      "single_step_evidence": "C22, C23 and C32 references hold one accepted step; their conservation limits rest on it"
+    },
+    "analytic": {
+      "C04": {
+        "interface": {
+          "arrays": [
+            "exact/interface_error"
+          ],
+          "current": 0.0017016579854645941,
+          "limit": 0.0035,
+          "metric": "max_abs"
+        },
+        "profile": {
+          "arrays": [
+            "exact/profile_error"
+          ],
+          "current": 0.038033488289956785,
+          "excluded_nodes": [
+            2,
+            8
+          ],
+          "limit": 0.077,
+          "mask": {
+            "centre": "exact final interface",
+            "exact_interface": 0.012240063619249677,
+            "h": 0.0025,
+            "half_width": 0.0085,
+            "mesh": "uniform 401 nodes on [0, 1.0]"
+          },
+          "metric": "max_abs_outside_nodes",
+          "nodes": 401
+        }
+      },
+      "C11": {
+        "eta": {
+          "arrays": [
+            "exact/eta_error"
+          ],
+          "current": 0.02563555761567038,
+          "limit": 0.052,
+          "metric": "max_abs"
+        },
+        "interface": {
+          "arrays": [
+            "exact/interface_error"
+          ],
+          "current": 0.0007851674498030037,
+          "limit": 0.0016,
+          "metric": "max_abs"
+        },
+        "profile": {
+          "arrays": [
+            "exact/profile_error0",
+            "exact/profile_error1",
+            "exact/profile_error2"
+          ],
+          "current": 0.021168965190825284,
+          "limit": 0.043,
+          "metric": "max_abs"
+        }
+      },
+      "C12": {
+        "eta": {
+          "arrays": [
+            "exact/eta_error"
+          ],
+          "current": 0.02730326732117505,
+          "limit": 0.055,
+          "metric": "max_abs"
+        },
+        "interface": {
+          "arrays": [
+            "exact/interface_error"
+          ],
+          "current": 0.0007900185122861059,
+          "limit": 0.0016,
+          "metric": "max_abs"
+        },
+        "profile": {
+          "arrays": [
+            "exact/profile_error0",
+            "exact/profile_error1",
+            "exact/profile_error2"
+          ],
+          "current": 0.02122624261501943,
+          "limit": 0.043,
+          "metric": "max_abs"
+        }
+      },
+      "C31": {
+        "interface": {
+          "arrays": [
+            "exact/interface_error"
+          ],
+          "current": 0.00041453312890013007,
+          "limit": 0.00083,
+          "metric": "max_abs"
+        },
+        "profile": {
+          "arrays": [
+            "exact/profile_error"
+          ],
+          "current": 0.015217443083188953,
+          "excluded_nodes": [
+            3,
+            7
+          ],
+          "limit": 0.031,
+          "mask": {
+            "centre": "exact final interface",
+            "exact_interface": 0.012240063619249677,
+            "h": 0.0025,
+            "half_width": 0.00583,
+            "mesh": "uniform 401 nodes on [0, 1.0]"
+          },
+          "metric": "max_abs_outside_nodes",
+          "nodes": 401
+        }
+      },
+      "F04": {
+        "interface": {
+          "arrays": [
+            "exact/interface_error"
+          ],
+          "current": 0.0070354696687893875,
+          "limit": 0.015,
+          "metric": "max_abs"
+        },
+        "profile": {
+          "arrays": [
+            "exact/profile_error"
+          ],
+          "current": 0.0027712597361227165,
+          "excluded_nodes": [
+            27,
+            42
+          ],
+          "limit": 0.0056,
+          "mask": {
+            "centre": "exact final interface",
+            "exact_interface": 0.08655031987326173,
+            "h": 0.0025,
+            "half_width": 0.02,
+            "mesh": "uniform 401 nodes on [0, 1.0]"
+          },
+          "metric": "max_abs_outside_nodes",
+          "nodes": 401
+        }
+      },
+      "F11": {
+        "eta": {
+          "arrays": [
+            "exact/eta_error"
+          ],
+          "current": 0.02563555761567038,
+          "limit": 0.052,
+          "metric": "max_abs"
+        },
+        "interface": {
+          "arrays": [
+            "exact/interface_error"
+          ],
+          "current": 0.002188472287251775,
+          "limit": 0.0044,
+          "metric": "max_abs"
+        },
+        "profile": {
+          "arrays": [
+            "exact/profile_error0",
+            "exact/profile_error1",
+            "exact/profile_error2"
+          ],
+          "current": 0.013733198006571357,
+          "limit": 0.028,
+          "metric": "max_abs"
+        }
+      },
+      "F12": {
+        "eta": {
+          "arrays": [
+            "exact/eta_error"
+          ],
+          "current": 0.02730326732117505,
+          "limit": 0.055,
+          "metric": "max_abs"
+        },
+        "interface": {
+          "arrays": [
+            "exact/interface_error"
+          ],
+          "current": 0.0022445461740739914,
+          "limit": 0.0045,
+          "metric": "max_abs"
+        },
+        "profile": {
+          "arrays": [
+            "exact/profile_error0",
+            "exact/profile_error1",
+            "exact/profile_error2"
+          ],
+          "current": 0.014037397089284198,
+          "limit": 0.029,
+          "metric": "max_abs"
+        }
+      }
+    },
+    "conservation": {
+      "C01": {
+        "inventory": {
+          "arrays": [
+            "concData/values"
+          ],
+          "current": 1.16087958848638e-16,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      },
+      "C02": {
+        "inventory": {
+          "arrays": [
+            "concData/values"
+          ],
+          "current": 8.731408437133744e-11,
+          "limit": 8.8e-10,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      },
+      "C03": {
+        "inventory": {
+          "arrays": [
+            "concData/values"
+          ],
+          "current": 4.508325664245667e-11,
+          "limit": 4.6e-10,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      },
+      "C04": {
+        "inventory": {
+          "arrays": [
+            "concData/values"
+          ],
+          "current": 4.542851551279906e-12,
+          "limit": 4.6e-11,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      },
+      "C05": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 1.789433494973977e-14,
+          "limit": 1.8e-13,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "C06": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 7.35235399804747e-16,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "C07": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 1.8333119097572857e-14,
+          "limit": 1.9e-13,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "C08": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 1.7896616261916362e-14,
+          "limit": 1.8e-13,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "C09": {
+        "closure": {
+          "arrays": [
+            "dependentMoleClosureErrorData/values",
+            "totalMolesData/values"
+          ],
+          "current": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "metric": "closure_relative",
+          "quantity": "dependent-mole closure error / total moles(0)"
+        },
+        "component_moles": {
+          "arrays": [
+            "molarInventoryData/values"
+          ],
+          "current": 1.1720350484400818e-09,
+          "limit": 1.2e-08,
+          "metric": "relative_drift",
+          "quantity": "component moles (explicit molar volumes)"
+        },
+        "total_moles": {
+          "arrays": [
+            "totalMolesData/values"
+          ],
+          "current": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "total moles (explicit molar volumes)"
+        }
+      },
+      "C10": {
+        "closure": {
+          "arrays": [
+            "dependentMoleClosureErrorData/values",
+            "totalMolesData/values"
+          ],
+          "current": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "metric": "closure_relative",
+          "quantity": "dependent-mole closure error / total moles(0)"
+        },
+        "component_moles": {
+          "arrays": [
+            "molarInventoryData/values"
+          ],
+          "current": 1.1720350484400818e-09,
+          "limit": 1.2e-08,
+          "metric": "relative_drift",
+          "quantity": "component moles (explicit molar volumes)"
+        },
+        "total_moles": {
+          "arrays": [
+            "totalMolesData/values"
+          ],
+          "current": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "total moles (explicit molar volumes)"
+        }
+      },
+      "C11": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 2.5026577937560134e-10,
+          "limit": 2.6e-09,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "C12": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 1.8495829921742875e-10,
+          "limit": 1.9e-09,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "C13": {
+        "inventory": {
+          "arrays": [
+            "concData/values"
+          ],
+          "current": 1.9154778225240055e-12,
+          "limit": 2e-11,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      },
+      "C14": {
+        "inventory": {
+          "arrays": [
+            "concData/values"
+          ],
+          "current": 1.9598374200299725e-12,
+          "limit": 2e-11,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      },
+      "C15": {
+        "inventory": {
+          "arrays": [
+            "concData/values"
+          ],
+          "current": 2.0202272770708057e-12,
+          "limit": 2.1e-11,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      },
+      "C16": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 6.717256000362792e-09,
+          "limit": 6.8e-08,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "C17": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 6.717270946867225e-09,
+          "limit": 6.8e-08,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "C18": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 6.717287987326384e-09,
+          "limit": 6.8e-08,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "C19": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 6.717270946867225e-09,
+          "limit": 6.8e-08,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "C20": {
+        "closure": {
+          "arrays": [
+            "dependentMoleClosureErrorData/values",
+            "totalMolesData/values"
+          ],
+          "current": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "metric": "closure_relative",
+          "quantity": "dependent-mole closure error / total moles(0)"
+        },
+        "component_moles": {
+          "arrays": [
+            "molarInventoryData/values"
+          ],
+          "current": 3.3668842903103264e-11,
+          "limit": 3.4e-10,
+          "metric": "relative_drift",
+          "quantity": "component moles (explicit molar volumes)"
+        },
+        "total_moles": {
+          "arrays": [
+            "totalMolesData/values"
+          ],
+          "current": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "total moles (explicit molar volumes)"
+        }
+      },
+      "C21": {
+        "closure": {
+          "arrays": [
+            "dependentMoleClosureErrorData/values",
+            "totalMolesData/values"
+          ],
+          "current": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "metric": "closure_relative",
+          "quantity": "dependent-mole closure error / total moles(0)"
+        },
+        "component_moles": {
+          "arrays": [
+            "molarInventoryData/values"
+          ],
+          "current": 3.3668842903103264e-11,
+          "limit": 3.4e-10,
+          "metric": "relative_drift",
+          "quantity": "component moles (explicit molar volumes)"
+        },
+        "total_moles": {
+          "arrays": [
+            "totalMolesData/values"
+          ],
+          "current": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "total moles (explicit molar volumes)"
+        }
+      },
+      "C22": {
+        "closure": {
+          "arrays": [
+            "dependentMoleClosureErrorData/values",
+            "totalMolesData/values"
+          ],
+          "current": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "metric": "closure_relative",
+          "quantity": "dependent-mole closure error / total moles(0)"
+        },
+        "component_moles": {
+          "arrays": [
+            "molarInventoryData/values"
+          ],
+          "current": 1.017844131958004e-11,
+          "limit": 1.1e-10,
+          "metric": "relative_drift",
+          "quantity": "component moles (explicit molar volumes)"
+        },
+        "total_moles": {
+          "arrays": [
+            "totalMolesData/values"
+          ],
+          "current": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "total moles (explicit molar volumes)"
+        }
+      },
+      "C23": {
+        "closure": {
+          "arrays": [
+            "dependentMoleClosureErrorData/values",
+            "totalMolesData/values"
+          ],
+          "current": 1.0477378964424132e-16,
+          "limit": 1e-13,
+          "metric": "closure_relative",
+          "quantity": "dependent-mole closure error / total moles(0)"
+        },
+        "component_moles": {
+          "arrays": [
+            "molarInventoryData/values"
+          ],
+          "current": 0.0,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "component moles (explicit molar volumes)"
+        },
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 0.0,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal explicit volumes)"
+        },
+        "total_moles": {
+          "arrays": [
+            "totalMolesData/values"
+          ],
+          "current": 0.0,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "total moles (explicit molar volumes)"
+        }
+      },
+      "C24": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 0.0,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "C30": {
+        "inventory": {
+          "arrays": [
+            "concData/values"
+          ],
+          "current": 1.0824187061039609e-11,
+          "limit": 1.1e-10,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      },
+      "C31": {
+        "inventory": {
+          "arrays": [
+            "concData/values"
+          ],
+          "current": 2.4054447102347595e-11,
+          "limit": 2.5e-10,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      },
+      "C32": {
+        "closure": {
+          "arrays": [
+            "dependentMoleClosureErrorData/values",
+            "totalMolesData/values"
+          ],
+          "current": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "metric": "closure_relative",
+          "quantity": "dependent-mole closure error / total moles(0)"
+        },
+        "component_moles": {
+          "arrays": [
+            "molarInventoryData/values"
+          ],
+          "current": 1.299134596557501e-10,
+          "limit": 1.3e-09,
+          "metric": "relative_drift",
+          "quantity": "component moles (explicit molar volumes)"
+        },
+        "total_moles": {
+          "arrays": [
+            "totalMolesData/values"
+          ],
+          "current": 0.0,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "total moles (explicit molar volumes)"
+        }
+      },
+      "F04": {
+        "inventory": {
+          "arrays": [
+            "concData/values"
+          ],
+          "current": 5.120745652565272e-10,
+          "limit": 5.2e-09,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      },
+      "F11": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 2.506153412914764e-10,
+          "limit": 2.6e-09,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "F12": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 1.85229598890565e-10,
+          "limit": 1.9e-09,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "LEGACY": {
+        "inventory_composition_dependent_implicit": {
+          "arrays": [
+            "binary_composition_dependent_implicit__concData_y"
+          ],
+          "current": 3.48263876545914e-16,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        },
+        "inventory_composition_dependent_lagged": {
+          "arrays": [
+            "binary_composition_dependent_lagged__concData_y"
+          ],
+          "current": 5.804397942431901e-16,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        },
+        "inventory_phase_uniform": {
+          "arrays": [
+            "binary_phase_uniform__concData_y"
+          ],
+          "current": 1.16087958848638e-16,
+          "limit": 1e-13,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      },
+      "O01": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 5.962861789714954e-09,
+          "limit": 6e-08,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "O02": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 1.3482992143065483e-08,
+          "limit": 1.4e-07,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "O03a": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 5.358828118692239e-09,
+          "limit": 5.4e-08,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "O03b": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 4.496856526396463e-09,
+          "limit": 4.5e-08,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "O04": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 1.6708851423965015e-12,
+          "limit": 1.7e-11,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "O05": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 1.5358481682540948e-12,
+          "limit": 1.6e-11,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "O06": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 2.0604828772178996e-12,
+          "limit": 2.1e-11,
+          "metric": "relative_drift",
+          "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "O07": {
+        "inventory": {
+          "arrays": [
+            "concData/values"
+          ],
+          "current": 1.177539157372048e-12,
+          "limit": 1.2e-11,
+          "metric": "relative_drift",
+          "quantity": "binary transformed inventory (concData = inventory / L)"
+        }
+      }
+    },
+    "reported_only": {
+      "C09": {
+        "quantity": "unweighted composition inventory (unequal molar volumes; not conserved)",
+        "relative_drift": 0.014282510298504685
+      },
+      "C10": {
+        "quantity": "unweighted composition inventory (unequal molar volumes; not conserved)",
+        "relative_drift": 0.014282510298504685
+      },
+      "C20": {
+        "quantity": "unweighted composition inventory (unequal molar volumes; not conserved)",
+        "relative_drift": 0.003158565748472562
+      },
+      "C21": {
+        "quantity": "unweighted composition inventory (unequal molar volumes; not conserved)",
+        "relative_drift": 0.003158565748472562
+      },
+      "C22": {
+        "quantity": "unweighted composition inventory (unequal molar volumes; not conserved)",
+        "relative_drift": 3.3324366886130144e-06
+      },
+      "C32": {
+        "quantity": "unweighted composition inventory (unequal molar volumes; not conserved)",
+        "relative_drift": 2.423108998691983e-10
+      }
+    }
   }
 }
