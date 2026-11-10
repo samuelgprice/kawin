@@ -340,8 +340,9 @@ def _repeat_pair(case, role, *, folder, timeout, state=None, research=None, seed
     for repeat in ("a", "b"):
         remaining = timeout - (time.monotonic()-started)
         assert remaining > 0, "Unseeded repeatability budget exceeded"
+        cap = 300 if case == "O06" else (180 if case.startswith("F") else 60)   # same caps as a gate run
         report = worker(case, role, research=research, state=state,
-                        output=folder / repeat, timeout=min(300 if case == "O06" else 60,remaining))
+                        output=folder / repeat, timeout=min(cap,remaining))
         assert report["hash_seed"] == seed and not report["numpy_seed_override"]
         reports.append(report)
     with np.load(folder / "a.npz") as left, np.load(folder / "b.npz") as right:
@@ -697,8 +698,15 @@ def contract_case(case, state=None, *, tolerance="exact", require=()):
     return result
 
 
-def run_pytest(state, *, tolerance, require, timeout=180):
-    """Run package contracts and kernel/tooling tests against the installed targets."""
+def run_pytest(state, *, tolerance, require, timeout=180, full_suite=False):
+    """Run package contracts and kernel/tooling tests against the installed targets.
+
+    Normal quick/full runs use the fixed list below. ``full_suite=True`` (``approve``) runs the
+    whole ``tests/`` directory instead, with the contracts configured and ``MB_EXAMPLE_TDB`` set,
+    so every package test, including ones added later, gates an approval. Either way the run must
+    have tests and no failures, errors or skips (``slow`` tests stay deselected by the project's
+    pytest options).
+    """
     state.update(tolerance=tolerance, require=list(require))
     configured = OUTPUT / "state.json"
     configured.write_text(json.dumps(state, indent=2), encoding="utf-8")
@@ -706,6 +714,8 @@ def run_pytest(state, *, tolerance, require, timeout=180):
     env.update(MB_ACCEPTANCE_STATE=str(configured), PYTHONDONTWRITEBYTECODE="1",
                PYTHONPATH=os.pathsep.join([state["target"], state["host"]]),
                NUMBA_CACHE_DIR=str(OUTPUT / "numba"))
+    if full_suite:
+        env["MB_EXAMPLE_TDB"] = str(OUTPUT / "inputs/FeCrNi.tdb")
     code = """
 import site, sys
 from pathlib import Path
@@ -717,11 +727,12 @@ import pytest
 raise SystemExit(pytest.main(sys.argv[3:]))
 """
     tests = ["test_acceptance_contracts.py", "test_tridiagonal.py", "test_batch_safety.py", "test_verification.py", "test_compatibility.py", "test_acceptance_reproducibility.py", "test_acceptance_metrics.py", "test_acceptance_reporting.py", "test_pycalphad_provider.py", "test_default_phase_acceptance.py", "test_thermocalc_provider.py", "test_thermocalc_acceptance.py", "test_acceptance_approval.py"]
-    args = [sys.executable, "-I", "-S", "-c", code, state["target"], state["host"],
-            *[str(PROJECT / "tests" / name) for name in tests],
-            str(PROJECT / "tests/test_bridge.py") + "::test_namespace_import_is_lazy",
-            str(PROJECT / "tests/test_bridge.py") + "::test_binary_example",
-            str(PROJECT / "tests/test_bridge.py") + "::test_missing_fork_error",
+    selection = [str(PROJECT / "tests")] if full_suite else [
+        *[str(PROJECT / "tests" / name) for name in tests],
+        str(PROJECT / "tests/test_bridge.py") + "::test_namespace_import_is_lazy",
+        str(PROJECT / "tests/test_bridge.py") + "::test_binary_example",
+        str(PROJECT / "tests/test_bridge.py") + "::test_missing_fork_error"]
+    args = [sys.executable, "-I", "-S", "-c", code, state["target"], state["host"], *selection,
             "--import-mode=importlib", "--basetemp", str(OUTPUT / "pytest"), "-q",
             "--junitxml", str(OUTPUT / "pytest.xml")]
     output = run(args, env=env, timeout=timeout)
@@ -787,8 +798,8 @@ def check_private_inputs(cases):
             assert not problems, case + " input not verified: " + "; ".join(problems)
 
 
-# Approval (plan §5). Approve runs every case once more than a normal gate's repeat set needs
-# (the listed cases and O05/O08 are repeated too), so it has its own budget.
+# Approval (plan §5). Approve repeats every case and runs the whole tests/ suite, more than a
+# normal gate, so it has its own budget.
 APPROVE_BUDGET_SECONDS = {"quick": 900, "full": 1500}
 PRIVATE_SETTINGS_CASES = frozenset({"O04", "O05"})   # example settings hashed only in private-inputs.json
 
@@ -823,23 +834,19 @@ def candidate_matches_repeat(case, state):
 
 
 def approval_repeat(case, *, listed, manifest, state, timeout):
-    """Approval's repeatability gate: two package runs bit-identical (``None`` when not repeated).
+    """Approval's repeatability gate: two package runs bit-identical, for every run case (plan §5).
 
-    Repeated: everything a normal gate repeats (quick, C32, LEGACY, O06 when flagged), every listed
-    case, and O05/O08 as a seeded pair under their documented ``PYTHONHASHSEED=0`` rule.
+    Every case in every tier (user decision after M7b): unseeded pairs, except O05/O08, which repeat
+    as a seeded pair under their documented ``PYTHONHASHSEED=0`` rule. A listed case's candidate
+    must also equal its repeats.
     """
-    repeated = set(manifest["quick"]) | {"C32", "LEGACY"} | set(listed)
-    if manifest.get("thermocalc_sampling", {}).get("repeat_unseeded"):
-        repeated.add("O06")
     if case in {"O05", "O08"}:
         folder = Path(state["repeatability_directory"]) / case
         result, _ = _repeat_pair(case, "package", folder=folder, timeout=timeout, state=state, seed="0")
         (folder / "comparison.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         assert not result["failed_keys"], ("Seeded package role is not repeatable", case, result["failed_keys"])
-    elif case in repeated:
-        result = check_repeatability(case, state=state, directory=state["repeatability_directory"], timeout=timeout)
     else:
-        return None
+        result = check_repeatability(case, state=state, directory=state["repeatability_directory"], timeout=timeout)
     if case in listed:
         candidate_matches_repeat(case, state)
     return result
@@ -910,7 +917,8 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
 
     - correctness gates for every case, listed or not: two bit-identical package runs
       (``approval_repeat``; a listed candidate must equal its repeats), ``approval_criteria``
-      (``criteria_results``), the package pytest set incl. the contract assertion groups;
+      (``criteria_results``), the whole package ``tests/`` suite on the freshly built targets
+      (``run_pytest(full_suite=True)``), incl. the contract assertion groups;
     - reference comparisons: every unlisted case must pass at public tolerance; a listed case's
       differences against its previous expected artifact are reported, not failed.
 
@@ -981,7 +989,7 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
                   gates["listed"].get(case, ""), flush=True)
         remaining = limit - (time.monotonic() - started)
         assert remaining > 0, f"approve budget of {limit} s exceeded"
-        gates["pytest"] = run_pytest(state, tolerance="public", require=require, timeout=max(1, remaining))
+        gates["pytest"] = run_pytest(state, tolerance="public", require=require, timeout=max(1, remaining), full_suite=True)
         for case in contracts:
             deviations = OUTPUT / "package" / (case + ".deviations.json")
             assert deviations.exists() and deviations.stat().st_mtime >= started_timestamp, (case, "contract not compared in this run")

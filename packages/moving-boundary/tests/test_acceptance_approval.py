@@ -402,6 +402,49 @@ def test_approve_always_builds_fresh_targets(tmp_path, monkeypatch):
     assert builds == [1] and targets == {"fresh-target"}
 
 
+def test_approve_gates_on_the_whole_test_suite(tmp_path, monkeypatch):
+    """User decision after M7b: approve runs all of tests/, not the normal gate's allowlist."""
+    tool, _, _ = _approve_project(tmp_path, monkeypatch, values=dict(C01=1.0, C02=2.0))
+    calls = []
+    monkeypatch.setattr(tool, "run_pytest", lambda state, **kwargs: calls.append(kwargs) or dict(tests=1, failures=0, errors=0, skipped=0))
+    assert tool.approve(["C02"], reason="LEDGERS R99") == 0
+    assert [call.get("full_suite") for call in calls] == [True] and calls[0]["tolerance"] == "public"
+
+
+def test_run_pytest_full_suite_selects_the_tests_directory(tmp_path, monkeypatch):
+    tool, _, output, _ = _project(tmp_path, monkeypatch)
+    monkeypatch.delenv("MB_EXAMPLE_TDB", raising=False)  # set when this suite itself runs as approve's gate
+    seen = {}
+    def run(args, env=None, timeout=None, **kwargs):
+        seen.update(args=args, env=env)
+        (output / "pytest.xml").write_text('<testsuites><testsuite tests="3" failures="0" errors="0" skipped="0"/></testsuites>')
+        return ""
+    monkeypatch.setattr(tool, "run", run)
+    state = dict(target="t", host="h")
+    assert tool.run_pytest(state, tolerance="public", require=[], full_suite=True)["tests"] == 3
+    assert str(tmp_path / "tests") in seen["args"] and not any("test_bridge.py::" in a for a in seen["args"])
+    assert seen["env"]["MB_EXAMPLE_TDB"].endswith("FeCrNi.tdb") and seen["env"]["MB_ACCEPTANCE_STATE"]
+    tool.run_pytest(state, tolerance="public", require=[])  # normal gates keep their allowlist
+    assert str(tmp_path / "tests") not in seen["args"] and "MB_EXAMPLE_TDB" not in seen["env"]
+    (output / "pytest.xml").write_text('<testsuites><testsuite tests="3" failures="0" errors="0" skipped="1"/></testsuites>')
+    monkeypatch.setattr(tool, "run", lambda args, **kwargs: "")
+    with pytest.raises(AssertionError, match="skipped"):
+        tool.run_pytest(state, tolerance="public", require=[], full_suite=True)
+
+
+@pytest.mark.parametrize("case, seeded", [("F04", False), ("O01", False), ("C01", False), ("O05", True), ("O08", True)])
+def test_approval_repeats_every_case(tmp_path, monkeypatch, case, seeded):
+    """User decision after M7b: every run case gets a repeat pair in every tier (O05/O08 seeded)."""
+    tool, _, _, _ = _project(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(tool, "check_repeatability", lambda c, **kwargs: calls.append((c, None)) or dict(bit_identical=True, arrays=1))
+    monkeypatch.setattr(tool, "_repeat_pair", lambda c, role, **kwargs: (calls.append((c, kwargs["seed"])) or (dict(bit_identical=True, arrays=1, failed_keys=[]), [])))
+    state = dict(target="t", host="h", repeatability_directory=str(tmp_path / "repeat"))
+    (tmp_path / "repeat" / case).mkdir(parents=True)
+    assert tool.approval_repeat(case, listed=[], manifest={}, state=state, timeout=100)["bit_identical"]
+    assert calls == [(case, "0" if seeded else None)]
+
+
 def test_approve_refuses_private_settings_cases_and_unrun_cases(tmp_path, monkeypatch):
     tool, _, _ = _approve_project(tmp_path, monkeypatch, values=dict(C01=1.0, C02=1.0))
     with pytest.raises(AssertionError, match="O05 is not supported"):

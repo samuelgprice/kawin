@@ -289,7 +289,19 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
   - Regression tests, which fail on `e86ff94`: rejected rollback leaves the manifest unchanged,
     through both the module and the CLI path; approve never reads a saved target; the CLI
     rejects the flag. 44 approval tests.
-  - Gate scope (follow-up 8) and the Git dependency (follow-up 7, M9 checklist) are recorded below.
+  - The Git dependency is follow-up 7, on the M9 checklist.
+- **M7b gate scope (user decision after the review; follow-up 8).**
+  - `approve` gates on the whole `tests/` suite and repeats every run case in every tier.
+  - Probe in the worktree, fresh targets: whole suite on the installed wheel 429 passed, 1
+    failed, 0 skipped. The failure was a new test that assumed `MB_EXAMPLE_TDB` absent from the
+    parent environment; the test was corrected.
+  - Clone (test-only commit `27fd12c` on top of the synthetic change):
+    `approve --tier full --cases C01` passed in 793 s of the 1500 s budget. Repeat pairs for all
+    40 run cases, including F04/F11/F12, O01-O04, O07 and live O06. Whole suite 430 passed, 0
+    skipped. 44 unlisted cases and contracts passed; nothing skipped.
+  - Quick approve was not re-measured. Estimate: 420 s measured with the allowlist, plus about
+    110-200 s for the whole suite, under its 900 s budget.
+  - Real paths unchanged (193 files); artifacts equal the M5 baseline.
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -340,12 +352,15 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
      The test behind follow-up 6 runs `git init` and disposable commits inside the installed-target
      pytest set. M9 separates it from the portable gate and verifies acceptance with Git invocation
      blocked, not merely from an export without `.git`.
-  8. *Which tests and repeat pairs gate an approval (user review after M7b; awaiting the user's
-     decision).* As built, `approve` enforces the installed-target pytest allowlist (138 tests),
-     not the full `tests/` suite (415), so tests ported in M8 would not gate approvals
-     automatically. A full-tier approval also repeats only the normal repeat set, the listed cases
-     and O05/O08: the F cases and cached O cases are run once unless listed, although §5 asks for
-     repeatability on every case. Either align these with §5 or record an agreed narrower scope.
+  8. *Which tests and repeat pairs gate an approval (user review after M7b; decided by the user
+     2026-11-10: align with §5).* `e86ff94` enforced the installed-target pytest allowlist (138
+     tests) instead of the whole `tests/` suite, and a full-tier approval repeated only the normal
+     repeat set, the listed cases and O05/O08. Now `approve` runs the **whole `tests/` suite** on
+     the freshly built targets (`run_pytest(full_suite=True)`: contracts configured,
+     `MB_EXAMPLE_TDB` set, no failures, errors or skips allowed; `slow` stays deselected), so the
+     tests ported in M8 gate approvals automatically. It also repeats **every run case in every
+     tier** (O05/O08 as seeded pairs; per-run caps 60 s, F 180 s, O06 300 s, as in a gate run).
+     Normal quick/full gates keep their allowlist and repeat set unchanged.
 
 ## Decisions
 
