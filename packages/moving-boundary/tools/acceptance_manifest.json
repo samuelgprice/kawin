@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "reference_commit": "90700be639ce2aef695cd4326ec2edcb61f50e3d",
+  "reference_commit": "720d122d04b56fc6527615c6483b29b78d47be36",
   "prior_fixture_commit": "ae9fb2971a9fd49132f71ddc883a5bd5406644b6",
   "quick": [
     "C01",
@@ -146,7 +146,7 @@
     "kawin/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "kawin/tests/datasets.py": "f9f3da9c007ffa6de5c329530326d15cfb18156fdd123afa0464e63ed63776ba",
     "kawin/tests/illingworth_baseline_cases.py": "2a31c47b5f54e43337b769f5410577795ec796038bfac18b64b6783da11c7842",
-    "kawin/tests/make_illingworth_substitutional_baseline.py": "528a9bce77ca5d4c9d99578e4ec21b2d46fb1fae7fe94e1423e9c59adf4a1bad",
+    "kawin/tests/make_illingworth_substitutional_baseline.py": "8213f99d0e51751333b2ef5ec0e16e63107fa44c64350555615f785f298752c9",
     "kawin/tests/test_PBM.py": "33297dfa9b119bd90226eb63f4b3bee5c3379b472b852b53724375a8d0c2895e",
     "kawin/tests/test_benchmark_wtife_surrogate_runtime.py": "266551834ecfcc7379c74194b712e596b66a1c17039b151604903745dfd54748",
     "kawin/tests/test_diffusion.py": "d346c28e1795cfb07b7478a827d36669d26703541b532ea929561dd13a148671",
@@ -159,7 +159,7 @@
     "kawin/tests/test_illingworth_interstitials_three_phase.py": "964239089a9166e1690eeb2317f3ac59974dff51b5f34aaf048a8d7f900bdd67",
     "kawin/tests/test_illingworth_setup_and_diagnostics.py": "94260d1059684f0f0d2689088656e921754c5901bc433c5c0e27ee2f63935908",
     "kawin/tests/test_illingworth_substitutional_baseline.py": "41c68a6b2ef593a4053f39f879b2da54e0ca1c6e353c99cfc30f071e6b151175",
-    "kawin/tests/test_illingworth_ternary.py": "b8365b6c3e9fb308da8a16e8329621bb153c3ad8dcc548947bc27afa586e0cc1",
+    "kawin/tests/test_illingworth_ternary.py": "0b8be1714dd79f429e1beb8402907b6538dc59d3e79cc1b4cda58bb739ad800a",
     "kawin/tests/test_illingworth_ternary_convergence.py": "7701c25904bb0e123e010b7a14c149aea1cfc97227c65e6244547eadc1bda264",
     "kawin/tests/test_illingworth_ternary_physical_scale.py": "2e21e019934aa2859b426917d7b3caf4a2777cc39ab88a997b3c87b18491e93e",
     "kawin/tests/test_illingworth_ternary_similarity.py": "63a627e4cde645cf07078927844880c77f5081c48091878de748430879177588",
@@ -308,10 +308,10 @@
     "worker_seconds": 300,
     "repeat_unseeded": true,
     "reference_sha256": {
-      "O06.json": "1b4c4a580b037b73db8cc8e4a5f84237082e37887d1e0d3eb6a4ae4ad4a50fa6",
-      "O06.npz": "cdde6600a7f376166299d6cfb72380451d8c0fdf25de09ca2fc9880dbc9aa12d"
+      "O06.json": "73068662aa71c8db4b26192fead02fd4954dcaaaf76f94d0b5b4de8b2facdf31",
+      "O06.npz": "6a0a563772935d0ccf6721505233113edbedf5b62d1e03c7db671c270a76333f"
     },
-    "reference_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
+    "reference_commit": "720d122d04b56fc6527615c6483b29b78d47be36",
     "comparison": {
       "numerical_arrays": "exact shape, dtype and bytes; no tolerance",
       "structural_arrays": "exact shape, dtype and bytes",

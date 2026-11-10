@@ -185,7 +185,7 @@ error is 4.75e-4. `analytic/` is ported from that commit. The 06dc7b4 acceptance
 unchanged: `collect` doesn't use this helper, and existing `exact/*` arrays come from their
 own branches.
 
-## Research numerical issue R06: binary interface iteration stalls above its tolerance (binary fixed: research `25bf6cd`, merged to research main `90700be`, ported, oracle moved 2026-11-09; two-phase ternary fixed: research `2741135`, merged `720d122` 2026-11-09; three-phase open)
+## Research numerical issue R06: binary interface iteration stalls above its tolerance (binary fixed: research `25bf6cd`, merged to research main `90700be`, ported, oracle moved 2026-11-09; two-phase ternary fixed: research `2741135`, merged `720d122`, ported, oracle moved 2026-11-09; three-phase open)
 
 Found with `examples/binary_tlp_bonding.py` (Ni-P bonding, um and s units), 2026-11-08. Late in
 the solidification stage, the binary Illingworth model's interface fixed point stops reducing
@@ -438,6 +438,44 @@ binary port.
   2.9e-12, none within 10x); contracts 4 bit-identical, 1 within tolerance (C26, 2.2e-16); 89
   tests; 33 repeat pairs identical. Every binary, three-phase (C09-C12, C20-C23, C32) and LEGACY
   run is bit-identical.
+
+**Oracle move to 720d122 (2026-11-09, user-approved).** The acceptance oracle moved from detached
+`90700be` to a new clean detached worktree `...\code\mb-ref-720d122` (research main with the
+two-phase ternary merge):
+
+- `acceptance_manifest.json`: top-level `reference_commit` and the 2 changed of 82 `source_sha256`
+  entries (`make_illingworth_substitutional_baseline.py`, `test_illingworth_ternary.py`; the
+  solver module itself is not hashed). `acceptance.py` `REFERENCE` points at the new worktree.
+- Capture of 43 cases (all but O06/O08) passed in 220.6 s; old references are kept locally in
+  `.verification/acceptance/reference-90700be-backup`. Array bytes (`.npz`) changed only for the
+  worker's two-phase ternary family: C05-C08, C16-C19, C24, C26, O01, O03a, O04 and O05. Every
+  binary, three-phase and LEGACY reference is byte-identical; the JSON files differ only in
+  `kawin_origin` and `elapsed_seconds`.
+- `exact` quick: 30 runs and 5 contracts bit-identical, 89 tests, 33 repeat pairs, 512.0 s.
+- **O06 fixture refresh (user decision).** The first `exact` full failed only O06 (Thermo-Calc
+  sampling, two-phase ternary), whose frozen 06dc7b4 fixture requires bytes in every mode: its
+  46 sampled provider arrays, accepted times and grids were byte-identical, and only the 11
+  solve-output arrays differed (profiles 3.4e-14 absolute / 4.5e-13 relative, eta 1.3e-15,
+  interface 8.7e-19, inventory 1.1e-19), as in the other two-phase ternary cases. The frozen
+  fixture was moved to `.verification/acceptance/reference-O06-06dc7b4-frozen` (hashes as
+  before) and O06 recaptured from `mb-ref-720d122` with live Thermo-Calc (24.8 s): the same 11
+  arrays changed by the same amounts, `provider/metadata_json` differs only in the normalized
+  `thermocalc_config.cache_dir`, and every other array is byte-identical. The manifest's
+  `thermocalc_sampling.reference_sha256` and `reference_commit` now name the new fixture and
+  720d122; the byte-only gate itself is unchanged. The TC sampling sources
+  (`examples/ThermoCalc/training_data.py`, the default-phase adapter) are unchanged between
+  06dc7b4 and 720d122. O08 keeps its frozen 06dc7b4 fixture. `docs/acceptance.json`
+  `stage_2c` still records the original O06 fixture hashes as the Stage 2C history.
+- `exact` full after the refresh: 40 runs (O06 included) and 5 contracts bit-identical, 89 tests,
+  34 repeat pairs, 620.8 s. Public quick and full with `--record` (same counts, 521.2 s and
+  620.3 s) updated `docs/acceptance.json` run times and `docs/acceptance-deviations.json`
+  `reference_commit`.
+- `acceptance_examples.py run --skip-tests` first failed E03-E06 on "setting differs" only: the
+  derived local reference settings (`.verification/acceptance/example_settings`, recorded once
+  from 90700be) lacked the ten new projection-diagnostic attributes. They were moved to
+  `example_settings-90700be-backup` and recaptured from 720d122: C04, C11, C12, F04, F11 and F12
+  are byte-identical, and C16, C24, O04 and O05 differ only by those ten added attributes (no
+  removed or changed entries). The rerun passes E01-E10 in 85.4 s (E11 pending).
 
 ## Release review follow-ups R07-R12 (open)
 

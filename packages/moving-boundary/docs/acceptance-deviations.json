@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "tier": "full",
-  "reference_commit": "90700be639ce2aef695cd4326ec2edcb61f50e3d",
+  "reference_commit": "720d122d04b56fc6527615c6483b29b78d47be36",
   "host_version": "0.5.0",
   "definitions": {
     "relative_error": "abs(actual-reference)/abs(reference); nonzero error at zero reference is unbounded (null plus flag)",
