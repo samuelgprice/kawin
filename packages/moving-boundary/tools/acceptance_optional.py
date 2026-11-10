@@ -147,7 +147,11 @@ def sample_pycalphad(inputs):
 
 
 def _sample_pycalphad(inputs, source):
-    """Keep the approved five-tie-line real sampling inputs and arithmetic unchanged."""
+    """Keep the approved five-tie-line real sampling inputs and arithmetic unchanged.
+
+    The sample is saved to ``inputs.pycalphad_sample`` (the worker's scratch output), never to
+    ``inputs.artifacts``: the adopted ``pycalphad-reference.npz`` is an E05 input (plan §3).
+    """
     database = Path(inputs.artifacts) / "FeCrNi.tdb"
     therm = source.create_pycalphad_thermodynamics_source(database, ["FE","CR","NI"],
         ["BCC_A2","FCC_A1"], use_default_phases=False, g_offset=0.)
@@ -157,5 +161,5 @@ def _sample_pycalphad(inputs, source):
         probe_point=[.45,.21], probe_samples_per_side=2, precipitate_phase="FCC_A1",
         diffusivity_bulk_points=np.array([[.39696,.0001],[.139297,.142387]]),
         validity_policy="legacy", min_composition=1e-10)
-    surrogate.save(Path(inputs.artifacts) / ("pycalphad-" + inputs.role + ".npz"))
+    surrogate.save(inputs.pycalphad_sample)
     return surrogate

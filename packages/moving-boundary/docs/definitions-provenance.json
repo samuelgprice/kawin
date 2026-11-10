@@ -289,6 +289,31 @@
    "module_dunder_names": [],
    "transforms": []
   },
+  "_nested_ternary_ferrite_growth_le_FerriteGrowthCase_continue": {
+   "file": "tools/definitions/_nested_ternary_ferrite_growth_le_FerriteGrowthCase_continue.py",
+   "sha256": "d41f868d28aa13b40173c844719be3f2b598632c9308e6a27cc1f59eb559c9bc",
+   "source": "examples/Interstitials/ternary_ferrite_growth_le.py",
+   "source_sha256": "2f602eaa607674c64f1bcaa3c4ea6995bf6ff41ab152c23d9500b75b25d3beab",
+   "names": [
+    "FerriteGrowthCase"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [],
+   "policy": "continue",
+   "cases": [
+    "O03a",
+    "O03b"
+   ],
+   "nested_by": [
+    "fe_mn_c_ferrite_case"
+   ],
+   "key": "[\"examples/Interstitials/ternary_ferrite_growth_le.py\", [\"FerriteGrowthCase\"], [], [], [], \"continue\"]",
+   "ast_equal": true,
+   "ast_sha256": "92f7e5f52703376d8a11d398087ebb0d284654684fc40a9e8f4a7ff88134fe0d",
+   "module_dunder_names": [],
+   "transforms": []
+  },
   "_nested_test_diffusion_ConstantBinaryThermodynamics": {
    "file": "tools/definitions/_nested_test_diffusion_ConstantBinaryThermodynamics.py",
    "sha256": "7656a0ef820cea142d0375f037af15a352fd3fc10a10221d98dd61037e673c89",
@@ -788,6 +813,471 @@
     }
    ]
   },
+  "exb5_run_kawin2": {
+   "file": "tools/definitions/exb5_run_kawin2.py",
+   "sha256": "3a48c5a3d6afd30fa88bf506320f88bb042c1bd09241c21640595accdf2b5a28",
+   "source": "examples/ternaryExamples/exb5_gamma_alpha_gamma.py",
+   "source_sha256": "e37f7772b69e67274991eec4b623a672e0eb89ef5566ea8f6937f967d852b821",
+   "names": [
+    "run_kawin2"
+   ],
+   "constants": [
+    [
+     "4001",
+     "401"
+    ],
+    [
+     "8001",
+     "801"
+    ],
+    [
+     "3600000.0",
+     "3600.0"
+    ]
+   ],
+   "constructors": [
+    "run_kawin2"
+   ],
+   "overrides": [],
+   "policy": "continue",
+   "cases": [
+    "O01"
+   ],
+   "nested_by": [],
+   "key": "[\"examples/ternaryExamples/exb5_gamma_alpha_gamma.py\", [\"run_kawin2\"], [[\"3600000.0\", \"3600.0\"], [\"4001\", \"401\"], [\"8001\", \"801\"]], [\"run_kawin2\"], [], \"continue\"]",
+   "ast_equal": true,
+   "ast_sha256": "be1f947fd6a9c3273e3cc3f7f6da507db818c6297f2409a6f776366f21614db8",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 52,
+     "to": [
+      "CallableTernaryInterfaceEquilibrium = _input_symbol('kawin.diffusion', 'CallableTernaryInterfaceEquilibrium')",
+      "MovingBoundaryIllingworthTernaryFD1DModel = _input_symbol('kawin.diffusion', 'MovingBoundaryIllingworthTernaryFD1DModel')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 57,
+     "to": [
+      "CartesianFD1D = _input_symbol('kawin.diffusion.mesh', 'CartesianFD1D')",
+      "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')",
+      "StepProfile1D = _input_symbol('kawin.diffusion.mesh', 'StepProfile1D')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 58,
+     "to": [
+      "landau_grid = _input_symbol('kawin.diffusion.mesh.TransformedGrids', 'landau_grid')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 59,
+     "to": [
+      "explicitEulerIterator = _input_symbol('kawin.solver', 'explicitEulerIterator')"
+     ]
+    },
+    {
+     "kind": "constant",
+     "line": 64,
+     "from": "3.6e6",
+     "to": "3600.0"
+    },
+    {
+     "kind": "constructor_cutoff",
+     "function": "run_kawin2",
+     "after_line": 318,
+     "removed_lines": [
+      319,
+      328
+     ]
+    },
+    {
+     "kind": "options_wrapped",
+     "line": 317,
+     "call": "MovingBoundaryIllingworthTernaryFD1DModel"
+    },
+    {
+     "kind": "policy_injected",
+     "line": 310,
+     "call": "MovingBoundaryIllingworthTernaryFD1DModel",
+     "policy": "continue"
+    },
+    {
+     "kind": "constant",
+     "line": 308,
+     "from": "4001",
+     "to": "401"
+    }
+   ]
+  },
+  "exb5_run_kawin3": {
+   "file": "tools/definitions/exb5_run_kawin3.py",
+   "sha256": "c0debf49f071ab5eab539d2981a2450366b13362c0b43b76477c0f015dbbb141",
+   "source": "examples/ternaryExamples/exb5_gamma_alpha_gamma.py",
+   "source_sha256": "e37f7772b69e67274991eec4b623a672e0eb89ef5566ea8f6937f967d852b821",
+   "names": [
+    "run_kawin3"
+   ],
+   "constants": [
+    [
+     "4001",
+     "401"
+    ],
+    [
+     "8001",
+     "801"
+    ],
+    [
+     "3600000.0",
+     "3600.0"
+    ]
+   ],
+   "constructors": [
+    "run_kawin3"
+   ],
+   "overrides": [],
+   "policy": "continue",
+   "cases": [
+    "O02"
+   ],
+   "nested_by": [],
+   "key": "[\"examples/ternaryExamples/exb5_gamma_alpha_gamma.py\", [\"run_kawin3\"], [[\"3600000.0\", \"3600.0\"], [\"4001\", \"401\"], [\"8001\", \"801\"]], [\"run_kawin3\"], [], \"continue\"]",
+   "ast_equal": true,
+   "ast_sha256": "3f2183cea18a3700b435076db4d2ddd7ba6a4437ddad01dd8731e70e91436348",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 52,
+     "to": [
+      "CallableTernaryInterfaceEquilibrium = _input_symbol('kawin.diffusion', 'CallableTernaryInterfaceEquilibrium')",
+      "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel = _input_symbol('kawin.diffusion', 'MovingBoundaryIllingworthTernaryThreePhaseFD1DModel')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 57,
+     "to": [
+      "CartesianFD1D = _input_symbol('kawin.diffusion.mesh', 'CartesianFD1D')",
+      "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 58,
+     "to": [
+      "landau_grid = _input_symbol('kawin.diffusion.mesh.TransformedGrids', 'landau_grid')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 59,
+     "to": [
+      "explicitEulerIterator = _input_symbol('kawin.solver', 'explicitEulerIterator')"
+     ]
+    },
+    {
+     "kind": "constant",
+     "line": 64,
+     "from": "3.6e6",
+     "to": "3600.0"
+    },
+    {
+     "kind": "constructor_cutoff",
+     "function": "run_kawin3",
+     "after_line": 358,
+     "removed_lines": [
+      359,
+      369
+     ]
+    },
+    {
+     "kind": "options_wrapped",
+     "line": 357,
+     "call": "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel"
+    },
+    {
+     "kind": "policy_injected",
+     "line": 347,
+     "call": "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel",
+     "policy": "continue"
+    },
+    {
+     "kind": "constant",
+     "line": 336,
+     "from": "8001",
+     "to": "801"
+    }
+   ]
+  },
+  "fe_c_exb1a": {
+   "file": "tools/definitions/fe_c_exb1a.py",
+   "sha256": "aafb7843a14de1aeeb5803bdea8a484bc643cd7aedbc387244d4e68db74a8856",
+   "source": "examples/Interstitials/fe_c_exb1a.py",
+   "source_sha256": "39f83ca18ee5ae0dbc0ca8857cfb378713859841fe862922c0ab5ee095e09140",
+   "names": [
+    "run_kawin"
+   ],
+   "constants": [
+    [
+     "4001",
+     "401"
+    ]
+   ],
+   "constructors": [
+    "run_kawin"
+   ],
+   "overrides": [],
+   "policy": "raise",
+   "cases": [
+    "O07"
+   ],
+   "nested_by": [],
+   "key": "[\"examples/Interstitials/fe_c_exb1a.py\", [\"run_kawin\"], [[\"4001\", \"401\"]], [\"run_kawin\"], [], \"raise\"]",
+   "ast_equal": true,
+   "ast_sha256": "74aad7ee01e68cad4b39ef197bdaf596295af33eebe1e6e391ee61a23a62aec8",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 50,
+     "to": [
+      "MovingBoundaryIllingworthFD1DModel = _input_symbol('kawin.diffusion', 'MovingBoundaryIllingworthFD1DModel')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 51,
+     "to": [
+      "TemperatureParameters = _input_symbol('kawin.diffusion.DiffusionParameters', 'TemperatureParameters')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 52,
+     "to": [
+      "CartesianFD1D = _input_symbol('kawin.diffusion.mesh', 'CartesianFD1D')",
+      "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')",
+      "StepProfile1D = _input_symbol('kawin.diffusion.mesh', 'StepProfile1D')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 53,
+     "to": [
+      "explicitEulerIterator = _input_symbol('kawin.solver', 'explicitEulerIterator')"
+     ]
+    },
+    {
+     "kind": "constructor_cutoff",
+     "function": "run_kawin",
+     "after_line": 232,
+     "removed_lines": [
+      233,
+      234
+     ]
+    },
+    {
+     "kind": "constant",
+     "line": 208,
+     "from": "4001",
+     "to": "401"
+    }
+   ]
+  },
+  "fe_mn_c_ferrite_case": {
+   "file": "tools/definitions/fe_mn_c_ferrite_case.py",
+   "sha256": "a2bd7c8ee2350a394284872fa4eb66fd1753f2b2d72b43af4b492f2c6dbdb153",
+   "source": "examples/Interstitials/fe_mn_c_ferrite.py",
+   "source_sha256": "d34949fac650ac3cc6c5eb7605eace922e61c32b417d15cf8094927b40fc480d",
+   "names": [
+    "CASE"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [],
+   "policy": "continue",
+   "cases": [
+    "O03a",
+    "O03b"
+   ],
+   "nested_by": [],
+   "key": "[\"examples/Interstitials/fe_mn_c_ferrite.py\", [\"CASE\"], [], [], [], \"continue\"]",
+   "ast_equal": true,
+   "ast_sha256": "7644bd4e3af22a9e618f17b7edf192015ef8262ba8aae4a387512f02144a6736",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 15,
+     "to": [
+      "FerriteGrowthCase = _input_symbol('examples.Interstitials.ternary_ferrite_growth_le', 'FerriteGrowthCase')"
+     ]
+    }
+   ]
+  },
+  "fecrni_analytic_comparison": {
+   "file": "tools/definitions/fecrni_analytic_comparison.py",
+   "sha256": "7cd9322f80732a100c3ae56d20c39a01e78dcf931fd4e0d353027cc904d03a8b",
+   "source": "examples/ternaryExamples/FeCrNi/IllingworthTernaryTwoPhase_FeCrNi_AnalyticComparison.py",
+   "source_sha256": "01baeb2144d3a181a4e5ae702f930af4540135e39a0becd72eddf5db78bdb27c",
+   "names": [
+    "build_comparison_model",
+    "comparison_geometry",
+    "interface_matrices_at_eta"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [
+    "PHASE_A",
+    "PHASE_B",
+    "PHYSICAL_NODES",
+    "surrogate"
+   ],
+   "policy": "raise",
+   "cases": [
+    "O04",
+    "O05",
+    "O06"
+   ],
+   "nested_by": [],
+   "key": "[\"examples/ternaryExamples/FeCrNi/IllingworthTernaryTwoPhase_FeCrNi_AnalyticComparison.py\", [\"build_comparison_model\", \"comparison_geometry\", \"interface_matrices_at_eta\"], [], [], [\"PHASE_A\", \"PHASE_B\", \"PHYSICAL_NODES\", \"surrogate\"], \"raise\"]",
+   "ast_equal": true,
+   "ast_sha256": "94afb1a5d67947e9adab1a784500c2e3fe80393c2f423c75419acd60d56fd63c",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 67,
+     "to": [
+      "MovingBoundaryIllingworthTernaryFD1DModel = _input_symbol('kawin.diffusion', 'MovingBoundaryIllingworthTernaryFD1DModel')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 69,
+     "to": [
+      "CartesianFD1D = _input_symbol('kawin.diffusion.mesh', 'CartesianFD1D')",
+      "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')",
+      "StepProfile1D = _input_symbol('kawin.diffusion.mesh', 'StepProfile1D')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 70,
+     "to": [
+      "two_phase_landau_grids = _input_symbol('kawin.diffusion.mesh.TransformedGrids', 'two_phase_landau_grids')"
+     ]
+    },
+    {
+     "kind": "policy_removed",
+     "line": 255,
+     "call": "MovingBoundaryIllingworthTernaryFD1DModel",
+     "text": "terminal_thin_phase_policy=\"continue\""
+    },
+    {
+     "kind": "policy_injected",
+     "line": 235,
+     "call": "MovingBoundaryIllingworthTernaryFD1DModel",
+     "policy": "raise"
+    }
+   ]
+  },
+  "ferrite_growth_le": {
+   "file": "tools/definitions/ferrite_growth_le.py",
+   "sha256": "073d22d291b455e6fd903dab88313827258b325a91e9a9c90f4c87e29d88770a",
+   "source": "examples/Interstitials/ternary_ferrite_growth_le.py",
+   "source_sha256": "2f602eaa607674c64f1bcaa3c4ea6995bf6ff41ab152c23d9500b75b25d3beab",
+   "names": [
+    "run_kawin",
+    "tie_line_closure",
+    "TabulatedTernaryDiffusivity"
+   ],
+   "constants": [
+    [
+     "2001",
+     "401"
+    ]
+   ],
+   "constructors": [
+    "run_kawin"
+   ],
+   "overrides": [],
+   "policy": "continue",
+   "cases": [
+    "O03a",
+    "O03b"
+   ],
+   "nested_by": [],
+   "key": "[\"examples/Interstitials/ternary_ferrite_growth_le.py\", [\"TabulatedTernaryDiffusivity\", \"run_kawin\", \"tie_line_closure\"], [[\"2001\", \"401\"]], [\"run_kawin\"], [], \"continue\"]",
+   "ast_equal": true,
+   "ast_sha256": "c03faf9a5ee47698d4bbf7095b6b40d859778c7be3232c3abdac1569f3dc1aa3",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 60,
+     "to": [
+      "CallableTernaryInterfaceEquilibrium = _input_symbol('kawin.diffusion', 'CallableTernaryInterfaceEquilibrium')",
+      "MovingBoundaryIllingworthTernaryFD1DModel = _input_symbol('kawin.diffusion', 'MovingBoundaryIllingworthTernaryFD1DModel')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 61,
+     "to": [
+      "CartesianFD1D = _input_symbol('kawin.diffusion.mesh', 'CartesianFD1D')",
+      "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')",
+      "StepProfile1D = _input_symbol('kawin.diffusion.mesh', 'StepProfile1D')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 62,
+     "to": [
+      "landau_grid = _input_symbol('kawin.diffusion.mesh.TransformedGrids', 'landau_grid')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 63,
+     "to": [
+      "explicitEulerIterator = _input_symbol('kawin.solver', 'explicitEulerIterator')"
+     ]
+    },
+    {
+     "kind": "constructor_cutoff",
+     "function": "run_kawin",
+     "after_line": 382,
+     "removed_lines": [
+      383,
+      404
+     ]
+    },
+    {
+     "kind": "policy_removed",
+     "line": 375,
+     "call": "MovingBoundaryIllingworthTernaryFD1DModel",
+     "text": "terminal_thin_phase_policy=\"continue\""
+    },
+    {
+     "kind": "policy_injected",
+     "line": 358,
+     "call": "MovingBoundaryIllingworthTernaryFD1DModel",
+     "policy": "continue"
+    },
+    {
+     "kind": "constant",
+     "line": 353,
+     "from": "2001",
+     "to": "401"
+    }
+   ]
+  },
   "illingworth2005_planar": {
    "file": "tools/definitions/illingworth2005_planar.py",
    "sha256": "713299c7c21d85d560682079e00ef4656279781f3d3a8908766129a66b6648ef",
@@ -1221,6 +1711,28 @@
      "to": "401"
     }
    ]
+  },
+  "three_phase_symmetric_closure": {
+   "file": "tools/definitions/three_phase_symmetric_closure.py",
+   "sha256": "e85439914d10d6e18b85736bd090cd050db6875b21c7d01333c9a1c25f130a73",
+   "source": "examples/Interstitials/three_phase_symmetric_check.py",
+   "source_sha256": "29ee9943b20545e4872901787efd0428309c2ec9b6327ebb1db39930b54f6573",
+   "names": [
+    "_AusteniteFerriteClosure"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [],
+   "policy": "continue",
+   "cases": [
+    "O03b"
+   ],
+   "nested_by": [],
+   "key": "[\"examples/Interstitials/three_phase_symmetric_check.py\", [\"_AusteniteFerriteClosure\"], [], [], [], \"continue\"]",
+   "ast_equal": true,
+   "ast_sha256": "d49f47d3c269c269bfb56afcb21d653fb3f0398dfd73b5ad68d53f21d2bd7fff",
+   "module_dunder_names": [],
+   "transforms": []
   },
   "three_phase_terminal": {
    "file": "tools/definitions/three_phase_terminal.py",

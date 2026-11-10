@@ -14,7 +14,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M1 | Definitions for C01-C23, C30-C32, LEGACY | done 2026-11-10 (see log) |
 | M2 | C25-C29 assertions + item 7 per-model scales | done 2026-11-10 (scales approved by the user; see log) |
 | M3 | C24 + `prepare` | done 2026-11-10 (see log) |
-| M4 | F04/F11/F12, O01-O08 | not started |
+| M4 | F04/F11/F12, O01-O08 | done 2026-11-10 (see log) |
 | M5 | Example worker + hashed settings | not started |
 | M5b | Regeneration verification of adopted inputs | not started |
 | M6 | Normal/historical split, package-role repeatability | not started |
@@ -106,6 +106,23 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
   - Gates: `quick --tolerance exact --cases C24`: 1/1 bit-identical, package report
     `case_definitions=tools/definitions`, reference repeat 0 differences (25 s). Full `tests/`:
     329 passed, 5 skipped, 1 deselected (120 s). Artifact hashes: 207 files, 0 changed.
+- **M4 (2026-11-10).**
+  - 8 definition files (7 top-level: `exb5_run_kawin2/3`, `fe_c_exb1a`, `ferrite_growth_le`,
+    `fe_mn_c_ferrite_case`, `three_phase_symmetric_closure`, `fecrni_analytic_comparison`; 1
+    nested), all AST-equal (F1 constants, F2 constructor cut-offs, F4 module-global overrides).
+    The unrestricted materializer `--check` is now OK for the whole table.
+  - F04, F11, F12 and O01-O08 in `PACKAGE_DEFINITIONS`. O05's pycalphad sample is saved to
+    `<output>.pycalphad.npz` beside the worker's output in both roles, so no run rewrites
+    `inputs/pycalphad-<role>.npz` (§3); the worker reads its `provider/*` arrays from there.
+  - Gate: `full --tolerance exact --cases F04 F11 F12 O01 O02 O03a O03b O04 O05 O06 O07 O08`:
+    **12/12 bit-identical** (O06 live TC, 6 accepted steps; O05/O08 under `PYTHONHASHSEED=0`, F8),
+    all reports `case_definitions=tools/definitions`, O05/O06/O08 generation audits guarded with
+    no `examples` import or read; 164 s. Artifact hashes: 207 files, 0 changed.
+  - Full `tests/`: 329 passed, 5 skipped, 1 deselected (212 s). Skipped: the 5
+    `test_acceptance_contracts.py::test_main_vs_package_contract[C25-C29]`, which need
+    `MB_ACCEPTANCE_STATE` and run only inside `acceptance.py quick|full` (by design; covered by
+    the M6/M10 gates). Deselected: `test_examples.py::test_three_phase_errors_converge_with_refinement`
+    (`slow` marker; `pyproject.toml` `addopts = -m 'not slow'`).
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -597,22 +614,28 @@ No case may fall back to research files; the guard turns any attempt into a fail
 
 Every step stays under 30 min; long runs go to the background.
 
-| Batch | Content | Validation | Est. |
-|---|---|---|---|
-| M0 | Classification (`verify.py`, surrogate tests), materializer, `expected_artifacts` hashes of current files | historical `repeat` confirms the research role still reproduces `reference/` before hashing | 15 min |
-| M1 | Definitions for C01-C23, C30-C32, LEGACY (F1-F3, F5) | AST equality; `quick --cases … --tolerance exact` | 8 min |
-| M2 | C25-C29 assertions + item 7 scales (F6) | assertion lists; exact contracts; scale table for the user | 5 min |
-| M3 | C24, prepare (F7) | array identity; exact C24 | 3 min |
-| M4 | F04/F11/F12, O01-O04, O07, O05/O08 (F8), O06 (F4, live TC) | exact full subset | 12 min |
-| M5 | Example worker + hashed settings; historical writes redirected to scratch | `acceptance_examples run --skip-tests`, E01-E10 | 2 min |
-| M5b | Regeneration verification (§3a): `open-surrogate.npz`, `pycalphad-reference.npz`, 10 settings files | adopted hashes unchanged; array identity + metadata per artifact; unavailable checks listed | 10 min |
-| M6 | Normal/historical split, package-role repeatability; remove `tooling_sha256` | exact quick + exact full (30/40 runs, 5 contracts, contract-pytest 89+N) | 20 min |
-| M7 | Approval path, `approval_criteria` (shown to the user before commit), contract assertion/comparison split | unit tests; interruption tests; synthetic approval and rollback in a temporary project clone; real-path hashes unchanged | 25 min |
-| M8 | Test port, 4 batches | each batch green; full `tests/` (311 + ported) | 4 × 3-8 min |
-| M9 | Independence proof (empty and nonempty approved sets) + missing-resource matrix | as §7 | 40 min, split into ≤12 min runs |
-| M10 | Docs; **final recorded gates after all changes**: exact quick/full, public quick/full `--record`, examples with tests, full `tests/` | all green; report | 45 min |
+Revised 2026-11-10 (user): from M3 on, every batch also runs the full package `tests/` suite in
+the working tree and from a `git archive` export of its commit (about 2 + 2.5 min). "Est." is the
+batch's own gates; "Est. incl. suites" adds roughly 4-6 min and is the figure the overrun stop
+condition is measured against (stop and report on a substantial unexpected overrun beyond it).
 
-About 3.5-4 h of gate time in total (M5b adds about 10 min).
+| Batch | Content | Validation | Est. | Est. incl. suites |
+|---|---|---|---|---|
+| M0 | Classification (`verify.py`, surrogate tests), materializer, `expected_artifacts` hashes of current files | historical `repeat` confirms the research role still reproduces `reference/` before hashing | 15 min | done |
+| M1 | Definitions for C01-C23, C30-C32, LEGACY (F1-F3, F5) | AST equality; `quick --cases … --tolerance exact` | 8 min | done |
+| M2 | C25-C29 assertions + item 7 scales (F6) | assertion lists; exact contracts; scale table for the user | 5 min | done |
+| M3 | C24, prepare (F7) | array identity; exact C24 | 3 min | done (~12 min measured) |
+| M4 | F04/F11/F12, O01-O04, O07, O05/O08 (F8), O06 (F4, live TC) | exact full subset | 12 min | 16-18 min |
+| M5 | Example worker + hashed settings; historical writes redirected to scratch | `acceptance_examples run --skip-tests`, E01-E10 | 2 min | 6-8 min |
+| M5b | Regeneration verification (§3a): `open-surrogate.npz`, `pycalphad-reference.npz`, 10 settings files | adopted hashes unchanged; array identity + metadata per artifact; unavailable checks listed | 10 min | 14-16 min |
+| M6 | Normal/historical split, package-role repeatability; remove `tooling_sha256` | exact quick + exact full (30/40 runs, 5 contracts, contract-pytest 89+N) | 20 min | 24-26 min |
+| M7 | Approval path, `approval_criteria` (shown to the user before commit), contract assertion/comparison split | unit tests; interruption tests; synthetic approval and rollback in a temporary project clone; real-path hashes unchanged | 25 min | 29-31 min |
+| M8 | Test port, 4 batches | each batch green; full `tests/` (311 + ported) | 4 × 3-8 min | 4 × 7-14 min |
+| M9 | Independence proof (empty and nonempty approved sets) + missing-resource matrix | as §7 | 40 min, split into ≤12 min runs | 44-46 min |
+| M10 | Docs; **final recorded gates after all changes**: exact quick/full, public quick/full `--record`, examples with tests, full `tests/` | all green; report | 45 min | 49-51 min |
+
+About 3.5-4 h of gate time in total (M5b adds about 10 min), plus about 45-65 min of full-suite
+runs from M3 on.
 
 ## Completion criteria
 

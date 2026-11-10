@@ -14,7 +14,8 @@ HERE = Path(__file__).resolve().parent
 runpy.run_path(str(HERE / "batch_safety.py"))["forbid_input"]()
 # Cases whose package role builds from tools/definitions (materialized, hash-checked) instead of
 # the historical acceptance_inputs AST loader; the reference role always keeps the loader.
-PACKAGE_DEFINITIONS = {f"C{n:02d}" for n in range(1, 33)} | {"LEGACY", "prepare"}
+PACKAGE_DEFINITIONS = ({f"C{n:02d}" for n in range(1, 33)} | {"LEGACY", "prepare", "F04", "F11", "F12"}
+                       | {"O01", "O02", "O03a", "O03b", "O04", "O05", "O06", "O07", "O08"})
 
 
 def module(name, path):
@@ -39,7 +40,9 @@ def main():
     ``--prepare`` builds the synthetic ``_surrogate`` and saves it to this worker's own
     ``--output`` npz, in both roles, never to ``--artifacts``: the adopted
     ``inputs/open-surrogate.npz`` stays the hashed C24 input (decision F7) and is only compared
-    against, array-wise, by ``acceptance.regenerate_surrogate``.
+    against, array-wise, by ``acceptance.regenerate_surrogate``. Likewise O05's pycalphad sample
+    is saved beside ``--output`` (``<output>.pycalphad.npz``) in both roles, so no run rewrites
+    ``inputs/pycalphad-<role>.npz``.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", choices=("reference", "package"), required=True)
@@ -85,6 +88,8 @@ def main():
     else:
         inputs.family = "three_phase"
     inputs.artifacts = args.artifacts
+    # O05's transient pycalphad sample goes next to this worker's output, never into --artifacts.
+    inputs.pycalphad_sample = args.output.with_name(args.output.name + ".pycalphad.npz")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     report = dict(case=args.case, role=args.role, kawin_origin=kawin.__file__,
@@ -158,8 +163,7 @@ def main():
             model.solve(duration, minDtFrac=1e-14)
             arrays = cases.collect(model, analytic)
             if args.case == "O05":
-                sampled = Path(inputs.artifacts) / ("pycalphad-" + args.role + ".npz")
-                with np.load(sampled) as saved:
+                with np.load(inputs.pycalphad_sample) as saved:
                     for key in saved.files:
                         if saved[key].dtype.kind in "bifcu":
                             arrays["provider/" + key] = saved[key]
