@@ -15,7 +15,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M2 | C25-C29 assertions + item 7 per-model scales | done 2026-11-10 (scales approved by the user; see log) |
 | M3 | C24 + `prepare` | done 2026-11-10 (see log) |
 | M4 | F04/F11/F12, O01-O08 | done 2026-11-10 (see log) |
-| M5 | Example worker + hashed settings | not started |
+| M5 | Example worker + hashed settings | done 2026-11-10 (see log) |
 | M5b | Regeneration verification of adopted inputs | not started |
 | M6 | Normal/historical split, package-role repeatability | not started |
 | M7 | Approval path | not started |
@@ -123,6 +123,28 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
     `MB_ACCEPTANCE_STATE` and run only inside `acceptance.py quick|full` (by design; covered by
     the M6/M10 gates). Deselected: `test_examples.py::test_three_phase_errors_converge_with_refinement`
     (`slow` marker; `pyproject.toml` `addopts = -m 'not slow'`).
+- **M5 (2026-11-10).**
+  - `tools/example_manifest.json` committed unchanged first (`chore` commit; sha256
+    `c2d77779…8951`, last modified 2026-11-06; it was hidden by the shared `*.json` exclude), then
+    edited in M5.
+  - Hashed settings: `example_manifest.json` `settings_sha256` covers the 8 non-private adopted
+    settings files (C04, C11, C12, C16, C24, F04, F11, F12). The O04/O05 settings (TC/TDB-derived)
+    and the adopted E05 surrogate `pycalphad-reference.npz` are hashed in the local
+    `inputs/private-inputs.json` (new keys `example_settings`, `pycalphad-reference.npz`; existing
+    entries unchanged, asserted). That file's sha256 therefore changes, by design, from
+    `19f26a29…` to `b623016b…`; it is the only local artifact change, and the new artifact baseline.
+  - `acceptance_examples.py run` checks each adopted settings file (unhashed or changed → case
+    fails) and each case's private surrogate input against `private-inputs.json` before running.
+  - Historical writes go to scratch: `capture-settings` re-records all 10 into a fresh
+    `settings-capture-*` folder and reports byte equality with the adopted files, never writing
+    `example_settings/`; `example_worker.py`'s reference-role O05 build saves its pycalphad sample
+    beside `--output`. (Since M4, `sample_pycalphad` needs `inputs.pycalphad_sample`; before M4 a
+    historical capture rewrote `inputs/pycalphad-reference.npz`.)
+  - Gates: `acceptance_examples.py run --skip-tests`: **E01-E10 10/10 PASS** (settings equal,
+    parity arrays bit-identical, stop status; 87 s). `capture-settings` (reference role at
+    `7af24f4`): **10/10 identical** with the adopted files (57 s). Unit tests
+    `tests/test_example_settings_hashes.py` (3). Full `tests/`: 332 passed, 5 skipped, 1
+    deselected (same as M4; 115 s). Artifact hashes: 207 files, only `private-inputs.json` changed.
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only

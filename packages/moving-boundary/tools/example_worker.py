@@ -78,9 +78,14 @@ def package_case(entry, args, cases, settings):
 
 
 def reference_settings(entry, args, cases, settings):
-    """Build the accepted case on the frozen reference and record its settings; never solve."""
+    """Build the accepted case on the frozen reference and record its settings; never solve.
+
+    O05's pycalphad sample is written beside ``--output``, never into ``--artifacts``, so a
+    historical capture cannot rewrite the adopted ``pycalphad-reference.npz`` (E05's input).
+    """
     inputs = module("acceptance_inputs", HERE / "acceptance_inputs.py").CaseInputs(args.root, "reference")
     inputs.artifacts = args.artifacts
+    inputs.pycalphad_sample = args.output.with_name(args.output.name + ".pycalphad.npz")
     case = entry["reference"]
     number = int(case[1:]) if case.startswith("C") else -1
     inputs.family = "binary" if case == "F04" or number in (4,) else ("ternary" if case in {"O04", "O05"} or number in (16, 24) else "three_phase")

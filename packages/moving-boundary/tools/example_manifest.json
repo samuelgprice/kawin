@@ -23,5 +23,16 @@
   "allowed_setting_differences": {
     "E05": {"semiLog_dt": "Reference constructs semi-log then switches to fixed steps afterwards; the example constructs fixed steps directly, so the unused value is absent", "semiLogT0": "Same reason as semiLog_dt"},
     "E06": {"semiLog_dt": "Same reason as E05", "semiLogT0": "Same reason as E05"}
-  }
+  },
+  "settings_sha256": {
+    "C04.settings.json": "129d1e198219df484b33c7be99fd51e1e39966416a672e193890effa361cb1ef",
+    "C11.settings.json": "28c5c1d9a82d2d560d3f7b8d60d18ec56506f301b8ac470641d7e86bbfddd159",
+    "C12.settings.json": "07a86dda11cbb1a0f730d946cc5470034109c622ecc04e5591fed42354e54e96",
+    "C16.settings.json": "2a8bb1af7f5ae6f4e656502df0e64ab9c7110966b85911641d6d6126d10dd5fc",
+    "C24.settings.json": "5be97d580e523abf0854b656b1d6287ae0530331f8027b92f91750ded8650c39",
+    "F04.settings.json": "14080d3492f872abb89eb763cd2d78bab41b475a7130e0daef8f584da39a649d",
+    "F11.settings.json": "c830e1669f74eec4e473628e3f83e5716fc3a3f2f223a760a66b689ad091b896",
+    "F12.settings.json": "871c39b35fbfe877fe5506aa3542817b66a0e1ea65ebb5b2cbdce8be2ea9c129"
+  },
+  "settings_sha256_private": "O04/O05 settings derive from TC/TDB data; their hashes are in the local inputs/private-inputs.json under example_settings"
 }

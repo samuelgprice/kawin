@@ -7,8 +7,15 @@ Each case runs an example's quick-check settings and requires:
 - the same stop status.
 
 Then it runs the portable example and analytic tests with ``MB_EXAMPLE_TDB`` set to the local
-database. ``acceptance_manifest.json`` and every existing fixture are only read. Reference
-settings are new derived local files under ``.verification/acceptance/example_settings``.
+database. ``acceptance_manifest.json`` and every existing fixture are only read. The adopted
+reference settings under ``.verification/acceptance/example_settings`` are hash-checked before
+use: non-private cases against ``settings_sha256`` in ``example_manifest.json``, the O04/O05
+(TDB/TC-derived) ones against ``example_settings`` in the local ``inputs/private-inputs.json``.
+A case's private surrogate input is checked against ``private-inputs.json`` the same way.
+
+``capture-settings`` is historical (reference role, frozen research checkout): it re-records
+every mapped case into a fresh ``settings-capture-*`` scratch folder, never into
+``example_settings/``, and reports whether each capture equals the adopted file byte for byte.
 
 Commands (through the conda wrapper, from any directory):
     python tools/acceptance_examples.py capture-settings
@@ -46,19 +53,68 @@ def worker(tool, role, case, state, output, *, env_case, timeout=120):
 
 
 def capture_settings(tool, manifest):
-    """Record reference settings once for each mapped case; never overwrites."""
-    folder = tool.OUTPUT / "example_settings"
+    """Historical: re-record each mapped case's reference settings into a new scratch folder.
+
+    Never writes ``example_settings/``. Prints, per case, whether the capture equals the adopted
+    file byte for byte, and returns ``(folder, {reference: verdict})``.
+    """
+    import tempfile
+    folder = Path(tempfile.mkdtemp(prefix="settings-capture-", dir=tool.OUTPUT))
+    adopted = tool.OUTPUT / "example_settings"
+    verdicts = {}
     for case, entry in manifest["cases"].items():
         path = folder / entry["reference"]
-        target = path.with_suffix(".settings.json")
-        if target.exists():
-            print(entry["reference"], "already recorded", flush=True)
-            continue
         worker(tool, "reference", case, None, path, env_case=entry["reference"])
-        print(entry["reference"], "recorded", flush=True)
+        name = path.with_suffix(".settings.json").name
+        old = adopted / name
+        verdicts[entry["reference"]] = ("no adopted file" if not old.exists() else
+                                        "identical" if old.read_bytes() == (folder / name).read_bytes() else "DIFFERS")
+        print(entry["reference"], "recorded in", folder.name, "-", verdicts[entry["reference"]], flush=True)
+    return folder, verdicts
 
 
-def compare_case(tool, settings, case, entry, allowed):
+def private_inputs(tool):
+    """The local private-input hash record, or ``{}`` when this machine has none."""
+    path = tool.OUTPUT / "inputs/private-inputs.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def settings_digests(manifest, private):
+    """Expected sha256 per adopted settings file name: committed, plus local private entries."""
+    digests = dict(manifest["settings_sha256"])
+    digests.update(private.get("example_settings", {}).get("sha256", {}))
+    return digests
+
+
+def check_settings_hash(path, digests):
+    """Failures for one adopted settings file: unhashed or changed (an absent file is reported elsewhere)."""
+    import hashlib
+    if not path.exists():
+        return []
+    if path.name not in digests:
+        return ["adopted settings not hashed: " + path.name]
+    if hashlib.sha256(path.read_bytes()).hexdigest() != digests[path.name]:
+        return ["adopted settings changed: " + path.name]
+    return []
+
+
+def check_input_hash(tool, name, private):
+    """Failures for a case's private surrogate input against ``private-inputs.json``.
+
+    A file or directory input must be recorded there (every recorded member hash must match);
+    an input this machine lacks is skipped by the caller before this check.
+    """
+    import hashlib
+    entry = private.get(name)
+    if entry is None:
+        return ["input not hashed in private-inputs.json: " + name]
+    location = tool.OUTPUT / "inputs" / name
+    base = location if location.is_dir() else location.parent
+    return ["input changed: " + name + "/" + relative for relative, digest in entry.get("sha256", {}).items()
+            if hashlib.sha256((base / relative).read_bytes()).hexdigest() != digest]
+
+
+def compare_case(tool, settings, case, entry, allowed, digests):
     """Compare one package run with its frozen fixture; returns a list of failures."""
     import numpy as np
     failures = []
@@ -66,7 +122,9 @@ def compare_case(tool, settings, case, entry, allowed):
     reference = tool.OUTPUT / "reference" / entry["reference"]
     recorded = tool.OUTPUT / "example_settings" / (entry["reference"] + ".settings.json")
     if not recorded.exists():
-        failures.append("reference settings not recorded; run capture-settings")
+        failures.append("adopted reference settings missing: " + recorded.name)
+    elif check_settings_hash(recorded, digests):
+        failures.extend(check_settings_hash(recorded, digests))
     else:
         found = settings.differences(json.loads(recorded.read_text(encoding="utf-8")),
                                      json.loads(got.with_suffix(".settings.json").read_text(encoding="utf-8")), allowed)
@@ -140,9 +198,9 @@ def main(argv=None):
     tool.validate_reference(tool.REFERENCE)
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     if args.action == "capture-settings":
-        capture_settings(tool, manifest)
+        _, verdicts = capture_settings(tool, manifest)
         tool.validate_reference(tool.REFERENCE)
-        return 0
+        return 0 if all(verdict == "identical" for verdict in verdicts.values()) else 1
     spec = importlib.util.spec_from_file_location("example_settings", PROJECT / "tools/example_settings.py")
     settings = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(settings)
@@ -150,6 +208,8 @@ def main(argv=None):
     started = time.monotonic()
     failures = {}
     skipped = {}
+    private = private_inputs(tool)
+    digests = settings_digests(manifest, private)
     for case, entry in manifest["cases"].items():
         if args.tier == "quick" and entry["tier"] != "quick":
             continue
@@ -158,9 +218,15 @@ def main(argv=None):
             skipped[case] = "local input missing: " + source
             print(case, "SKIPPED", skipped[case], flush=True)
             continue
+        names = {name for name in (source, entry.get("provider_arrays")) if name and name != "lifecycle"}
+        unverified = [failure for name in sorted(names) for failure in check_input_hash(tool, name, private)]
+        if unverified:
+            print(case, entry["example"], entry["config"], "vs", entry["reference"], "FAIL", *unverified, flush=True)
+            failures[case] = unverified
+            continue
         try:
             worker(tool, "package", case, state, tool.OUTPUT / "package_examples" / case, env_case=case)
-            found, seconds = compare_case(tool, settings, case, entry, manifest["allowed_setting_differences"].get(case, {}))
+            found, seconds = compare_case(tool, settings, case, entry, manifest["allowed_setting_differences"].get(case, {}), digests)
         except Exception as exc:
             found, seconds = ["worker failed: " + str(exc)[-1500:]], 0.0
         print(case, entry["example"], entry["config"], "vs", entry["reference"], "FAIL" if found else "PASS", f"{seconds:.1f}s", *found, flush=True)
