@@ -647,5 +647,92 @@
         "verified": "hash-frozen fixture (default_phase_sampling.reference_sha256)"
       }
     }
+  },
+  "contract_model_scales": {
+    "description": "Item 7 (approved by the user 2026-11-10): per-model tolerance scales for contract arrays under model{i}/, applied like run cases (interface x length_scale; mole inventories x length_scale/minimum_molar_volume; composition inventories x length_scale). Recorded from package-role runs and equal to a reference-role run at 7af24f4. compare() requires the package report to equal this exactly and the keys to equal the npz model{i}/ prefixes. Historical reference/C25-C29.json unchanged.",
+    "cases": {
+      "C25": {
+        "model0": {
+          "length_scale": 5.0
+        },
+        "model1": {
+          "length_scale": 5.0
+        },
+        "model2": {
+          "length_scale": 5.0
+        },
+        "model3": {
+          "length_scale": 5.0
+        },
+        "model4": {
+          "length_scale": 5.0
+        }
+      },
+      "C26": {
+        "model0": {
+          "length_scale": 1.0
+        },
+        "model1": {
+          "length_scale": 1.0
+        },
+        "model2": {
+          "length_scale": 1.0
+        },
+        "model3": {
+          "length_scale": 1.0
+        },
+        "model4": {
+          "length_scale": 1.0
+        }
+      },
+      "C27": {
+        "model0": {
+          "length_scale": 1.0,
+          "minimum_molar_volume": 1.5
+        },
+        "model1": {
+          "length_scale": 1.0,
+          "minimum_molar_volume": 1.5
+        },
+        "model2": {
+          "length_scale": 1.0,
+          "minimum_molar_volume": 1.5
+        },
+        "model3": {
+          "length_scale": 1.0,
+          "minimum_molar_volume": 1.5
+        },
+        "model4": {
+          "length_scale": 1.0,
+          "minimum_molar_volume": 1.5
+        }
+      },
+      "C28": {
+        "model0": {
+          "length_scale": 1.0,
+          "minimum_molar_volume": 6.8e-06
+        },
+        "model1": {
+          "length_scale": 1.0,
+          "minimum_molar_volume": 6.8e-06
+        }
+      },
+      "C29": {
+        "model0": {
+          "length_scale": 5.0
+        },
+        "model1": {
+          "length_scale": 5.0
+        },
+        "model2": {
+          "length_scale": 1.0,
+          "minimum_molar_volume": 1.5
+        },
+        "model3": {
+          "length_scale": 1.0,
+          "minimum_molar_volume": 1.5
+        }
+      }
+    }
   }
 }

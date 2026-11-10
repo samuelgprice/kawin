@@ -46,3 +46,21 @@ def run_contract(inputs, case_id, collect):
             arrays[f"model{i}/{key}"] = value
     arrays["contracts/assertion_groups"] = np.array(len(completed), dtype=int)
     return arrays, completed
+
+
+def model_scales(models):
+    """Per-model tolerance scales for the ``model{i}/`` array prefixes (item 7).
+
+    Mirrors what the worker records for run cases: ``length_scale`` is the physical mesh span
+    (``ptp(mesh.z)``) and ``minimum_molar_volume`` is ``min(_phaseMolarVolumes)``, present only
+    for models with explicit phase molar volumes (``inventory_scale`` then defaults to 1).
+    Measured after the contract assertions, from the same tracked models whose states are saved.
+    """
+    scales = {}
+    for i, model in enumerate(models):
+        entry = {"length_scale": float(np.ptp(np.ravel(model.mesh.z)))}
+        volumes = getattr(model, "_phaseMolarVolumes", None)
+        if volumes is not None:
+            entry["minimum_molar_volume"] = float(np.min(volumes))
+        scales[f"model{i}"] = entry
+    return scales

@@ -228,12 +228,35 @@ def inventory_scale(key, expected):
     return scale
 
 
+def contract_scales(case, package, keys, manifest):
+    """Validated per-model scales for a contract's ``model{i}/`` arrays (item 7).
+
+    The package report's ``model_scales`` must equal the manifest's ``contract_model_scales``
+    entry exactly, its keys must equal the npz's ``model{i}/`` prefixes (none missing, none
+    extra), and every value must be finite and positive; anything else fails the case. The
+    historical reference JSONs carry no scales and are not edited.
+    """
+    import math
+    recorded = manifest["contract_model_scales"]["cases"][case]
+    assert package.get("model_scales") == recorded, (case, "model_scales differ from contract_model_scales",
+                                                     package.get("model_scales"), recorded)
+    prefixes = {key.split("/", 1)[0] for key in keys if key.startswith("model")}
+    assert prefixes == set(recorded), (case, "model prefixes differ from contract_model_scales",
+                                       sorted(prefixes ^ set(recorded)))
+    for prefix, scales in recorded.items():
+        assert scales and all(isinstance(v, float) and math.isfinite(v) and v > 0 for v in scales.values()), (case, prefix, scales)
+    return recorded
+
+
 def compare(case, package, *, tolerance="exact", require=()):
     """Keep frozen gates; O06/O08 require bytes even in public mode.
 
     O06 compares every numerical array bitwise and all structural arrays after
     normalizing only metadata_json.thermocalc_config.cache_dir. Both new cases
     verify fixture hashes before comparison; existing tolerances are unchanged.
+    Contracts (C25-C29) scale each ``model{i}/`` array by that model's validated
+    ``contract_model_scales`` entry (``contract_scales``), exactly as run cases scale
+    by their report's ``length_scale``/``minimum_molar_volume``.
     """
     import numpy as np
     ref = OUTPUT / "reference" / case
@@ -260,6 +283,7 @@ def compare(case, package, *, tolerance="exact", require=()):
     measured = {name:{} for name in metrics.QUANTITIES}
     with np.load(ref.with_suffix(".npz")) as reference, np.load(got.with_suffix(".npz")) as actual:
         assert set(reference.files) == set(actual.files), case
+        models = contract_scales(case, package, reference.files, manifest) if case in manifest["contracts"] else {}
         for key in reference.files:
             wanted, value = comparison_array(case,key,reference[key]), comparison_array(case,key,actual[key])
             group = quantity(key)
@@ -271,13 +295,14 @@ def compare(case, package, *, tolerance="exact", require=()):
                     results.setdefault("failed_keys",[]).append(key)
                 continue
             settings = manifest["public_tolerances"][group]
+            scaling = models.get(key.split("/", 1)[0], expected)
             scale = 1.
             if group == "interface" or (group == "analytic_error" and key == "exact/interface_error"):
-                scale = expected.get("length_scale", 1.)
+                scale = scaling.get("length_scale", 1.)
             elif group == "accepted_times":
                 scale = max(1., expected.get("requested_duration", 1.))
             elif group == "inventory":
-                scale = inventory_scale(key, expected)
+                scale = inventory_scale(key, scaling)
             measured[group][key] = metrics.array_metrics(wanted,value,
                 rtol=settings["rtol"] if tolerance == "public" and case not in {"O06","O08"} else 0.,
                 atol=settings["atol"]*scale if tolerance == "public" and case not in {"O06","O08"} else 0.)

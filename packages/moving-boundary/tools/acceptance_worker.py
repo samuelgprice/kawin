@@ -14,7 +14,7 @@ HERE = Path(__file__).resolve().parent
 runpy.run_path(str(HERE / "batch_safety.py"))["forbid_input"]()
 # Cases whose package role builds from tools/definitions (materialized, hash-checked) instead of
 # the historical acceptance_inputs AST loader; the reference role always keeps the loader.
-PACKAGE_DEFINITIONS = {f"C{n:02d}" for n in list(range(1, 24)) + [30, 31, 32]} | {"LEGACY"}
+PACKAGE_DEFINITIONS = {f"C{n:02d}" for n in list(range(1, 24)) + list(range(25, 33))} | {"LEGACY"}
 
 
 def module(name, path):
@@ -33,7 +33,8 @@ def main():
     ``tools/definitions/_bindings.Context``: ``acceptance_inputs`` is never imported (asserted
     after the run) and no research file is read. LEGACY's research baseline-npz assertion runs in
     the reference role only; the package role relies on ``compare()`` against the hashed
-    ``reference/LEGACY.npz`` (decision F5) and keeps the recorded stop status label.
+    ``reference/LEGACY.npz`` (decision F5) and keeps the recorded stop status label. Contracts
+    (C25-C29) also report ``model_scales`` per ``model{i}/`` prefix, in both roles (item 7).
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", choices=("reference", "package"), required=True)
@@ -117,7 +118,8 @@ def main():
         elif args.case in {"C25", "C26", "C27", "C28", "C29"}:
             contracts = module("acceptance_contracts", HERE / "acceptance_contracts.py")
             arrays, completed = contracts.run_contract(inputs, args.case, cases.collect)
-            report.update(contracts=completed, providers=inputs.providers, stop_status="contract_assertions_passed")
+            report.update(contracts=completed, providers=inputs.providers, stop_status="contract_assertions_passed",
+                          model_scales=contracts.model_scales(inputs.models))
             np.savez_compressed(args.output.with_suffix(".npz"), **arrays)
         elif args.case == "LEGACY":
             source = inputs.load(inputs.root / "kawin/tests/illingworth_baseline_cases.py", ["_binary_model", "_collect"])

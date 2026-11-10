@@ -4,6 +4,130 @@
  "materializer": "tools/materialize_definitions.py",
  "equivalence": "ast.dump of each emitted module without its docstring equals the AST that the unchanged acceptance_inputs.CaseInputs.load compiles at research_commit; no normalization",
  "definitions": {
+  "_nested_illingworth_baseline_cases_CoupledTernaryThermodynamics": {
+   "file": "tools/definitions/_nested_illingworth_baseline_cases_CoupledTernaryThermodynamics.py",
+   "sha256": "a127756fa745c75338fa8a3fe7a193a35885d8e103be61dc29906a9680bc2ba6",
+   "source": "kawin/tests/illingworth_baseline_cases.py",
+   "source_sha256": "2a31c47b5f54e43337b769f5410577795ec796038bfac18b64b6783da11c7842",
+   "names": [
+    "_CoupledTernaryThermodynamics"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [],
+   "policy": "raise",
+   "cases": [
+    "C25",
+    "C26",
+    "C27"
+   ],
+   "nested_by": [
+    "contracts_setup_and_diagnostics"
+   ],
+   "key": "[\"kawin/tests/illingworth_baseline_cases.py\", [\"_CoupledTernaryThermodynamics\"], [], [], [], \"raise\"]",
+   "ast_equal": true,
+   "ast_sha256": "9f540034d768529c12fbc99c712bc69079db40ff5a70d21b6a16f91baba3cd99",
+   "module_dunder_names": [],
+   "transforms": []
+  },
+  "_nested_illingworth_baseline_cases_ternary_model": {
+   "file": "tools/definitions/_nested_illingworth_baseline_cases_ternary_model.py",
+   "sha256": "0c0574024b990a9dc3963c338616d9e0cefa728052c8f75729a547d792231775",
+   "source": "kawin/tests/illingworth_baseline_cases.py",
+   "source_sha256": "2a31c47b5f54e43337b769f5410577795ec796038bfac18b64b6783da11c7842",
+   "names": [
+    "_ternary_model"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [],
+   "policy": "raise",
+   "cases": [
+    "C25",
+    "C26",
+    "C27"
+   ],
+   "nested_by": [
+    "contracts_setup_and_diagnostics"
+   ],
+   "key": "[\"kawin/tests/illingworth_baseline_cases.py\", [\"_ternary_model\"], [], [], [], \"raise\"]",
+   "ast_equal": true,
+   "ast_sha256": "766d828593cce542a7fd856ea2a12ec25c3c1d6247dabeffee5e092bef944a2e",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 15,
+     "to": [
+      "MovingBoundaryIllingworthTernaryFD1DModel = _input_symbol('kawin.diffusion', 'MovingBoundaryIllingworthTernaryFD1DModel')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 21,
+     "to": [
+      "CartesianFD1D = _input_symbol('kawin.diffusion.mesh', 'CartesianFD1D')",
+      "MixedBoundary1D = _input_symbol('kawin.diffusion.mesh', 'MixedBoundary1D')",
+      "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')",
+      "StepProfile1D = _input_symbol('kawin.diffusion.mesh', 'StepProfile1D')"
+     ]
+    },
+    {
+     "kind": "policy_injected",
+     "line": 165,
+     "call": "MovingBoundaryIllingworthTernaryFD1DModel",
+     "policy": "raise"
+    }
+   ]
+  },
+  "_nested_illingworth_baseline_cases_three_phase_model": {
+   "file": "tools/definitions/_nested_illingworth_baseline_cases_three_phase_model.py",
+   "sha256": "19837557d7de80b5bd7dc0f73434d73408f566eaac94e61bdf08c31202f7b115",
+   "source": "kawin/tests/illingworth_baseline_cases.py",
+   "source_sha256": "2a31c47b5f54e43337b769f5410577795ec796038bfac18b64b6783da11c7842",
+   "names": [
+    "_three_phase_model"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [],
+   "policy": "raise",
+   "cases": [
+    "C25",
+    "C26",
+    "C27"
+   ],
+   "nested_by": [
+    "contracts_setup_and_diagnostics"
+   ],
+   "key": "[\"kawin/tests/illingworth_baseline_cases.py\", [\"_three_phase_model\"], [], [], [], \"raise\"]",
+   "ast_equal": true,
+   "ast_sha256": "b4f0cbcedc413e9ea41a42199ed5bdf9267a7fbe52bd60c8e4de0a634101b34e",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 15,
+     "to": [
+      "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel = _input_symbol('kawin.diffusion', 'MovingBoundaryIllingworthTernaryThreePhaseFD1DModel')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 21,
+     "to": [
+      "CartesianFD1D = _input_symbol('kawin.diffusion.mesh', 'CartesianFD1D')",
+      "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')"
+     ]
+    },
+    {
+     "kind": "policy_injected",
+     "line": 193,
+     "call": "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel",
+     "policy": "raise"
+    }
+   ]
+  },
   "_nested_ternaryThreePhaseSimilarity_SimilarityInitialProfile": {
    "file": "tools/definitions/_nested_ternaryThreePhaseSimilarity_SimilarityInitialProfile.py",
    "sha256": "a2995c1a55d46d433142878e218097a30fbd7566c96dddef073c5f7e6581c736",
@@ -470,6 +594,197 @@
       "VariableBinaryThermodynamics = _input_symbol('kawin.tests.test_diffusion', 'VariableBinaryThermodynamics')",
       "_build_illingworth_default_model = _input_symbol('kawin.tests.test_diffusion', '_build_illingworth_default_model')"
      ]
+    }
+   ]
+  },
+  "contracts_binary_retry": {
+   "file": "tools/definitions/contracts_binary_retry.py",
+   "sha256": "4aeaec94c31eb0a5d5a1e48b0f3bdb049b30bbc9d0ca86c540a09e4f94877683",
+   "source": "kawin/tests/test_illingworth_binary_variable_diffusivity.py",
+   "source_sha256": "1f5d605da0dc9b189eb72f94176e02072f8da13bd14a615291f8bc82406934cc",
+   "names": [
+    "test_failed_step_is_retried_with_smaller_dt",
+    "test_retry_exhaustion_reraises_last_error"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [],
+   "policy": "raise",
+   "cases": [
+    "C29"
+   ],
+   "nested_by": [],
+   "key": "[\"kawin/tests/test_illingworth_binary_variable_diffusivity.py\", [\"test_failed_step_is_retried_with_smaller_dt\", \"test_retry_exhaustion_reraises_last_error\"], [], [], [], \"raise\"]",
+   "ast_equal": true,
+   "ast_sha256": "c5d1103de08ebd0e2a944e95995e87de39ba82eb31464b2ff7727134d7353f5f",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 7,
+     "to": [
+      "explicitEulerIterator = _input_symbol('kawin.solver', 'explicitEulerIterator')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 8,
+     "to": [
+      "VariableBinaryThermodynamics = _input_symbol('kawin.tests.test_diffusion', 'VariableBinaryThermodynamics')",
+      "_build_illingworth_default_model = _input_symbol('kawin.tests.test_diffusion', '_build_illingworth_default_model')"
+     ]
+    }
+   ]
+  },
+  "contracts_setup_and_diagnostics": {
+   "file": "tools/definitions/contracts_setup_and_diagnostics.py",
+   "sha256": "e9e71b8c4b3362b04f1e77dcdf9cce4624d1d6b16f41de49a7eccb66af9ebf67",
+   "source": "kawin/tests/test_illingworth_setup_and_diagnostics.py",
+   "source_sha256": "94260d1059684f0f0d2689088656e921754c5901bc433c5c0e27ee2f63935908",
+   "names": [
+    "test_setup_is_idempotent",
+    "test_explicit_setup_then_solve_matches_solve",
+    "test_continued_solve_keeps_reference_inventory_and_history"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [],
+   "policy": "raise",
+   "cases": [
+    "C25",
+    "C26",
+    "C27"
+   ],
+   "nested_by": [],
+   "key": "[\"kawin/tests/test_illingworth_setup_and_diagnostics.py\", [\"test_continued_solve_keeps_reference_inventory_and_history\", \"test_explicit_setup_then_solve_matches_solve\", \"test_setup_is_idempotent\"], [], [], [], \"raise\"]",
+   "ast_equal": true,
+   "ast_sha256": "b85c8538be82edaea538be64e3810d5cf4345a16f5c23380ab4217ff80509abb",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 12,
+     "to": [
+      "_binary_model = _input_symbol('kawin.tests.illingworth_baseline_cases', '_binary_model')",
+      "_CoupledTernaryThermodynamics = _input_symbol('kawin.tests.illingworth_baseline_cases', '_CoupledTernaryThermodynamics')",
+      "_ternary_model = _input_symbol('kawin.tests.illingworth_baseline_cases', '_ternary_model')",
+      "_three_phase_model = _input_symbol('kawin.tests.illingworth_baseline_cases', '_three_phase_model')"
+     ]
+    }
+   ]
+  },
+  "contracts_three_phase_final_remainder": {
+   "file": "tools/definitions/contracts_three_phase_final_remainder.py",
+   "sha256": "123afcf268db648dd70e578fbd638eea2eb9900a5164500af279cbcc6491fbf2",
+   "source": "kawin/tests/test_illingworth_ternary_three_phase.py",
+   "source_sha256": "15ee4272cf4487f722aa576f29e4a90614d0c2540793cdd0c99d998122d9b5cd",
+   "names": [
+    "test_three_phase_final_remainder_below_outer_minimum_is_solved_and_accepted",
+    "test_three_phase_tiny_final_remainder_commits_all_histories_and_allows_continuation"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [],
+   "policy": "raise",
+   "cases": [
+    "C28"
+   ],
+   "nested_by": [],
+   "key": "[\"kawin/tests/test_illingworth_ternary_three_phase.py\", [\"test_three_phase_final_remainder_below_outer_minimum_is_solved_and_accepted\", \"test_three_phase_tiny_final_remainder_commits_all_histories_and_allows_continuation\"], [], [], [], \"raise\"]",
+   "ast_equal": true,
+   "ast_sha256": "e2afaea2ae8f92cfba5d4ca21cce77d983c12b0514a0f958a6637386d4314171",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 6,
+     "to": [
+      "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel = _input_symbol('kawin.diffusion', 'MovingBoundaryIllingworthTernaryThreePhaseFD1DModel')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 9,
+     "to": [
+      "_BULK_DIFFUSIVITY_PHASE_UNIFORM = _input_symbol('kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM', '_BULK_DIFFUSIVITY_PHASE_UNIFORM')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 15,
+     "to": [
+      "CartesianFD1D = _input_symbol('kawin.diffusion.mesh', 'CartesianFD1D')",
+      "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')"
+     ]
+    },
+    {
+     "kind": "options_wrapped",
+     "line": 135,
+     "call": "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel"
+    },
+    {
+     "kind": "policy_injected",
+     "line": 117,
+     "call": "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel",
+     "policy": "raise"
+    }
+   ]
+  },
+  "contracts_three_phase_retry": {
+   "file": "tools/definitions/contracts_three_phase_retry.py",
+   "sha256": "86eaf6d9f35ccd58d017e2f8134948ea7ae8e871c5bca67ed979626cc63e065d",
+   "source": "kawin/tests/test_illingworth_ternary_three_phase.py",
+   "source_sha256": "15ee4272cf4487f722aa576f29e4a90614d0c2540793cdd0c99d998122d9b5cd",
+   "names": [
+    "test_three_phase_failed_retries_do_not_mutate_accepted_boundary_or_histories",
+    "test_three_phase_retry_below_outer_minimum_is_rejected_before_wrapper"
+   ],
+   "constants": [],
+   "constructors": [],
+   "overrides": [],
+   "policy": "raise",
+   "cases": [
+    "C29"
+   ],
+   "nested_by": [],
+   "key": "[\"kawin/tests/test_illingworth_ternary_three_phase.py\", [\"test_three_phase_failed_retries_do_not_mutate_accepted_boundary_or_histories\", \"test_three_phase_retry_below_outer_minimum_is_rejected_before_wrapper\"], [], [], [], \"raise\"]",
+   "ast_equal": true,
+   "ast_sha256": "fb87f5ce2f2c04f1bdb4a93da1251a09cd8170ddda73e242bc057be1814fb204",
+   "module_dunder_names": [],
+   "transforms": [
+    {
+     "kind": "import",
+     "line": 6,
+     "to": [
+      "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel = _input_symbol('kawin.diffusion', 'MovingBoundaryIllingworthTernaryThreePhaseFD1DModel')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 9,
+     "to": [
+      "_BULK_DIFFUSIVITY_PHASE_UNIFORM = _input_symbol('kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM', '_BULK_DIFFUSIVITY_PHASE_UNIFORM')",
+      "_ThreePhaseCandidate = _input_symbol('kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM', '_ThreePhaseCandidate')"
+     ]
+    },
+    {
+     "kind": "import",
+     "line": 15,
+     "to": [
+      "CartesianFD1D = _input_symbol('kawin.diffusion.mesh', 'CartesianFD1D')",
+      "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')"
+     ]
+    },
+    {
+     "kind": "options_wrapped",
+     "line": 135,
+     "call": "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel"
+    },
+    {
+     "kind": "policy_injected",
+     "line": 117,
+     "call": "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel",
+     "policy": "raise"
     }
    ]
   },

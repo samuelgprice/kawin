@@ -12,7 +12,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 |---|---|---|
 | M0 | Classification, materializer, `expected_artifacts` hashes | done 2026-11-10 (see log) |
 | M1 | Definitions for C01-C23, C30-C32, LEGACY | done 2026-11-10 (see log) |
-| M2 | C25-C29 assertions + item 7 per-model scales | not started |
+| M2 | C25-C29 assertions + item 7 per-model scales | done 2026-11-10 (scales approved by the user; see log) |
 | M3 | C24 + `prepare` | not started |
 | M4 | F04/F11/F12, O01-O08 | not started |
 | M5 | Example worker + hashed settings | not started |
@@ -64,6 +64,47 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
   - Exact gate: `quick --tolerance exact --cases <27>`: 27/27 bit-identical; 27 reference
     repeat pairs, 0 differences; 358 s. Tests: `test_definitions_bindings.py` (4) +
     materializer (2) pass in `mb-public-050`.
+- **M1 commits:** M0 `7f7755f`, M1 `e3b9bfd`, then fix `8f74746`
+  (`tools/definitions/.gitattributes` `eol=lf`). Under `core.autocrlf=true` a `git archive`
+  export of `e3b9bfd` had CRLF definitions, failing their sha256 check (2 of 6 tests from the
+  export); with the pin the export has 0 CR bytes and 6/6 pass. Committed files that get
+  hash-checked later (M7 approval reports) need the same pin.
+- **M2 (2026-11-10).**
+  - 10 contract definition files (4 top-level, 3 new nested; shared files unchanged), AST-equal;
+    C25-C29 in `PACKAGE_DEFINITIONS`. F6: completed-assertion lists identical (package report,
+    `reference/C2x.json`, fresh reference-role run) for all five.
+  - Item 7: contracts report `model_scales` (`acceptance_contracts.model_scales`, both roles);
+    reference-role scales equal package scales. **The user approved the scale table on
+    2026-11-10**: no model is shorter than 1 m; the mole-inventory allowance tightens ×0.667 for
+    the Vm = 1.5 models (C27 model0-4, C29 model2-3); C28 loosens to 1.47e-7 (covers the old
+    1.46e-11 ulp failure); C25/C29 binary models (L = 5) loosen ×5 for interface and composition
+    inventories. Manifest `contract_model_scales` (21 models); `compare()` →
+    `contract_scales()` requires exact equality, exact `model{i}/` prefix sets and finite
+    positive values, then scales each prefix like a run case. `reference/C25-C29.json` untouched.
+  - Gates: exact contracts 5/5 bit-identical (52 s); public contracts 5/5 bit-identical with the
+    new allowances applied (C28 `model1/dependentMoleClosureErrorData` atol 1.47e-7; 42 s).
+    `tests/test_contract_scales.py` (9) + reporting + bindings: 26 passed.
+- **Follow-ups recorded 2026-11-10 (user review):**
+  1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
+     `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
+     because they were force-added. The loader needs it, so: stage it explicitly (`git add -f`) in
+     the M1/M2 commits; build the M7/M9 scratch snapshot from the owned-file list plus
+     `git status --porcelain --ignored`, not plain `--porcelain`; and the M9 `git archive` export
+     must contain it (an export without it fails every package-definition case, which the M9 runs
+     would expose). Also check any other new JSON (e.g. `docs/approvals/`) the same way.
+  2. *Remove research-solver fallbacks from `_bindings.py` (M6, before M9 independence).*
+     `model()` falls back to `kawin.diffusion.MovingBoundaryIllingworth*FDM`; `symbol()`'s
+     `CartesianFD1D` wrapper falls back to `kawin.diffusion.mesh` when the solver or
+     `moving_boundary.mesh` isn't found; `imported_module()` falls back to the research module
+     name. None was exercised in the M1/M2 runs (all providers `moving_boundary.*`). They become
+     clear errors naming the missing package solver; the final `importlib.import_module(module)`
+     for stock-kawin names stays. Guarded by a unit test (missing package solver raises) and the
+     M6 exact quick/full gates.
+  3. *Pre-existing ignored files found while checking `git status --ignored` (never committed):*
+     `tools/example_manifest.json` (shared `*.json` exclude; needed by `acceptance_examples.py`
+     and `example_worker.py`) is force-added in the M5 commit. `examples/requirements-tested.txt`
+     (package `.gitignore` `*.txt`; referenced by `examples/README.md`) is outside this plan:
+     the user decides.
 
 ## Decisions
 
