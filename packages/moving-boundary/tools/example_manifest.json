@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "status": "pending_tier_approval: run by tools/acceptance_examples.py, not yet part of acceptance.py quick or full",
+  "cases": {
+    "E01": {"example": "binary_planar_growth", "config": "FAST", "reference": "C04", "parity_analytic": "binary", "tier": "quick"},
+    "E02": {"example": "binary_planar_growth", "config": "COARSE_LONG", "reference": "F04", "parity_analytic": "binary", "tier": "full"},
+    "E03": {"example": "ternary_interstitial_similarity", "config": "FAST", "reference": "C16", "parity_analytic": null, "tier": "quick"},
+    "E04": {"example": "surrogate_lifecycle", "config": "FAST", "reference": "C24", "parity_analytic": null, "surrogate": "lifecycle", "tier": "quick"},
+    "E05": {"example": "ternary_fecrni_lee1996", "config": "FROZEN_FAST", "reference": "O05", "parity_analytic": null, "surrogate": "pycalphad-reference.npz", "provider_arrays": "pycalphad-reference.npz", "tier": "quick"},
+    "E06": {"example": "ternary_fecrni_lee1996", "config": "FROZEN_FAST", "reference": "O04", "parity_analytic": null, "surrogate": "fecrni.surrogate", "tier": "full"},
+    "E07": {"example": "three_phase_similarity", "config": "FAST", "reference": "C11", "parity_analytic": "three_phase", "tier": "quick"},
+    "E08": {"example": "three_phase_similarity", "config": "FAST_DRIFT", "reference": "C12", "parity_analytic": "three_phase", "tier": "quick"},
+    "E09": {"example": "three_phase_similarity", "config": "COARSE_LONG", "reference": "F11", "parity_analytic": "three_phase", "tier": "full"},
+    "E10": {"example": "three_phase_similarity", "config": "COARSE_LONG_DRIFT", "reference": "F12", "parity_analytic": "three_phase", "tier": "full"}
+  },
+  "pending_fixture": {
+    "E11": {
+      "example": "ternary_fecrni_lee1996",
+      "config": "LAGGED_FAST",
+      "plan": "Freeze config and limits; prepare one bundle on detached 06dc7b4 at PYTHONHASHSEED=0; both hosts reload it and solve unseeded, with a reference repeat pair. Not captured: awaiting explicit go-ahead."
+    }
+  },
+  "allowed_setting_differences": {
+    "E05": {"semiLog_dt": "Reference constructs semi-log then switches to fixed steps afterwards; the example constructs fixed steps directly, so the unused value is absent", "semiLogT0": "Same reason as semiLog_dt"},
+    "E06": {"semiLog_dt": "Same reason as E05", "semiLogT0": "Same reason as E05"}
+  }
+}
