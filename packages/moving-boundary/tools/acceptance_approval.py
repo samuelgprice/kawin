@@ -23,13 +23,15 @@ Promotion (``promote``) is crash-safe; the old manifest stays valid until the si
 2. re-hash every file and reload it (``np.load(allow_pickle=False)``, ``json.loads``);
 3. rename the folder to ``reference-approved/<id>/`` (never over an existing one);
    then write ``docs/approvals/<id>.json`` (temp file + replace; never over an existing report);
-4. write the new manifest to a temp file beside it and ``os.replace`` it over the manifest. A
+4. validate the selection the new manifest puts in effect, then write it to a temp file beside the
+   manifest and ``os.replace`` it over the manifest. A
    ``PermissionError`` (OneDrive sync lock) is retried briefly; then the temp file is removed and
    ``ApprovalError`` is raised with the old manifest unchanged.
 
 Approved folders and reports are immutable: nothing here overwrites or deletes them, and nothing
 writes under ``reference/``. ``rollback`` is one more atomic manifest replace that points the
-approval's cases back at what was in effect before it; no file moves. Leftovers of interrupted
+approval's cases back at what was in effect before it; no file moves, and it is refused with the
+manifest unchanged if the restored selection does not validate. Leftovers of interrupted
 attempts are listed by ``leftovers`` and cleaned up only by hand.
 
 This module never runs Git; the ancestry and clean-tree checks belong to ``acceptance.py approve``.
@@ -334,16 +336,34 @@ def promote(*, project, output, manifest_path, approval_id, record, files, repor
                                              report=dict(path=f"{REPORTS}/{approval_id}.json", sha256=hashlib.sha256(data).hexdigest()))
     section["in_effect"] = dict(sorted({**section["in_effect"], **{case: approval_id for case in cases}}.items()))
     section["history"].append(dict(event="approve", approval_id=approval_id, utc=record["created_utc"], cases=cases))
+    _check_proposed(manifest, section, cases, project=project, output=output, what="approval")
     new = write_manifest(manifest_path, section, approval_id, fault=fault)
     fault("replaced")
     return new
 
 
-def rollback(*, manifest_path, approval_id, reason, utc, fault=None):
+def _check_proposed(manifest, section, cases, *, project, output, what):
+    """Validate the selection a new section would put in effect, before anything is replaced.
+
+    Runs ``validate`` on the manifest as it would be after the replace, for ``cases``: every
+    record and report, and the files each case would then read (e.g. the earlier approval a
+    rollback restores). A problem raises ``ApprovalError``; the manifest is still untouched.
+    """
+    proposed = dict(manifest)
+    proposed[SECTION] = section
+    try:
+        validate(proposed, cases, project=project, output=output)
+    except AssertionError as exc:
+        raise ApprovalError(f"{what} refused, the manifest is unchanged: the selection it would put in effect is invalid: {exc}") from exc
+
+
+def rollback(*, project, output, manifest_path, approval_id, reason, utc, fault=None):
     """Point ``approval_id``'s cases back at what was in effect before it (an atomic manifest replace).
 
     Refused unless the approval is in effect for every one of its cases (roll back later approvals
-    of the same cases first). No file is moved or deleted. Returns the new manifest.
+    of the same cases first), and refused, with the manifest unchanged, unless the restored
+    selection validates (``_check_proposed``: e.g. the earlier approval's files are present with
+    their recorded hashes). No file is moved or deleted. Returns the new manifest.
     """
     manifest_path = Path(manifest_path)
     manifest = json.loads(manifest_path.read_bytes().decode("utf-8"))
@@ -366,4 +386,5 @@ def rollback(*, manifest_path, approval_id, reason, utc, fault=None):
             section["in_effect"][case] = restored[case]
     section["in_effect"] = dict(sorted(section["in_effect"].items()))
     section["history"].append(dict(event="rollback", approval_id=approval_id, utc=utc, reason=reason, restored=restored))
+    _check_proposed(manifest, section, record["cases"], project=project, output=output, what="rollback")
     return write_manifest(manifest_path, section, "rollback-" + approval_id, fault=fault)

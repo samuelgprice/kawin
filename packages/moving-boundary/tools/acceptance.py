@@ -902,7 +902,7 @@ def public_criteria(case, results):
     return [{key: item.get(key) for key in ("criterion", "value", "limit", "passed", "error") if key in item} for item in results]
 
 
-def approve(listed, *, reason, tier="quick", reuse_targets=False, require=("binary", "ternary", "three_phase")):
+def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "three_phase")):
     """Approve the listed cases' package outputs as their new expected references (plan §5).
 
     From a clean package tree (``repository_checks``), run the whole ``tier`` gate at public
@@ -914,7 +914,9 @@ def approve(listed, *, reason, tier="quick", reuse_targets=False, require=("bina
     - reference comparisons: every unlisted case must pass at public tolerance; a listed case's
       differences against its previous expected artifact are reported, not failed.
 
-    Then re-check the tree and HEAD, capture package settings for listed cases an example maps to,
+    The installed targets are always built afresh from the clean tree (``setup_targets``), never
+    reused from ``state.json``, so every candidate comes from the ``package_commit`` recorded with
+    the approval. Then re-check the tree and HEAD, capture package settings for listed cases an example maps to,
     and promote crash-safely (``acceptance_approval.promote``) with a committed report in
     ``docs/approvals/``. O04/O05 cannot be listed: their example settings are hashed only in the
     private record. Returns 0 on success, 1 on a failed gate.
@@ -939,7 +941,7 @@ def approve(listed, *, reason, tier="quick", reuse_targets=False, require=("bina
     left = tools.leftovers(manifest, project=PROJECT, output=OUTPUT, manifest_path=MANIFEST)
     if any(left.values()):
         print("Leftovers from earlier attempts (not used; clean up by hand):", json.dumps(left), flush=True)
-    state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8")) if reuse_targets else setup_targets()
+    state = setup_targets()   # fresh build from the clean tree at `head`; never a saved target
     state["repeatability_directory"] = tempfile.mkdtemp(prefix="approve-unseeded-", dir=OUTPUT)
     state["approval_candidates"] = sorted(set(listed) & set(contracts))
     started, started_timestamp = time.monotonic(), time.time()
@@ -1049,7 +1051,8 @@ def rollback_approval(approval_id, *, reason):
     assert record is not None, "no such approval: " + approval_id
     validate_expected(record["cases"])
     utc = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    new = approval_tools().rollback(manifest_path=MANIFEST, approval_id=approval_id, reason=reason, utc=utc)
+    new = approval_tools().rollback(project=PROJECT, output=OUTPUT, manifest_path=MANIFEST,
+                                    approval_id=approval_id, reason=reason, utc=utc)
     validate_expected(record["cases"])
     restored = new["approved_references"]["history"][-1]["restored"]
     print(f"ROLLED BACK {approval_id}: " + ", ".join(f"{case} -> {source}" for case, source in restored.items()), flush=True)
@@ -1078,6 +1081,8 @@ def main(argv=None):
     if args.action == "approve":
         if args.step is not None or args.research is not None or args.tolerance != "public":
             parser.error("approve takes no historical step, no research checkout and only public tolerance")
+        if args.reuse_targets:
+            parser.error("approve always builds fresh targets from HEAD; --reuse-targets is for diagnostic runs")
         if not (args.reason and args.reason.strip()):
             parser.error('approve needs --reason "LEDGERS Rxx"')
         if bool(args.cases) == (args.rollback is not None):
@@ -1108,8 +1113,7 @@ def main(argv=None):
     if args.action == "approve":
         if args.rollback is not None:
             return rollback_approval(args.rollback, reason=args.reason)
-        return approve(args.cases, reason=args.reason, tier=args.tier, reuse_targets=args.reuse_targets,
-                       require=args.require_family)
+        return approve(args.cases, reason=args.reason, tier=args.tier, require=args.require_family)
     manifest = validate_research_checkout(args.research) if historical else json.loads(MANIFEST.read_text(encoding="utf-8"))
     full = args.action == "full" or args.tier == "full"
     cases, skipped = normal_cases(manifest, full=full, explicit=args.cases)

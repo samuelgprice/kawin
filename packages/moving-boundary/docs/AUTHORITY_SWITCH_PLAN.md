@@ -277,6 +277,19 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
   - Real paths (manifest, `docs/approvals/`, `docs/acceptance*.json`, `example_settings/`,
     `reference/`, `reference-approved/`): sha256 and mtime unchanged (193 files). Local artifacts
     equal the M5 baseline (207 files).
+- **M7b follow-up fix (user review of `e86ff94`).**
+  - *Rollback:* a rollback whose restored selection does not validate, e.g. an earlier approval's
+    file is missing, used to replace the manifest and only then fail, leaving acceptance pointed
+    at a missing artifact. `rollback` now validates the proposed section (`_check_proposed`)
+    before the replace and refuses with the manifest byte-for-byte unchanged. `promote` runs the
+    same check before its replace.
+  - *Build provenance:* `approve --reuse-targets` accepted a saved `state.json` target that could
+    come from another commit. `approve` now always builds fresh targets from the clean tree at
+    HEAD; the CLI rejects `--reuse-targets` for approve, which stays available for diagnostic runs.
+  - Regression tests, which fail on `e86ff94`: rejected rollback leaves the manifest unchanged,
+    through both the module and the CLI path; approve never reads a saved target; the CLI
+    rejects the flag. 44 approval tests.
+  - Gate scope (follow-up 8) and the Git dependency (follow-up 7, M9 checklist) are recorded below.
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -323,6 +336,16 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
      worktree, 3 below Windows' MAX_PATH (`core.longpaths` is unset), and 270 in a clone under the
      session scratchpad, where the test fails. M9's export and any other deeper checkout need a
      short root, or the test needs a shorter temp location; decide in M9.
+  7. *Normal acceptance invokes Git indirectly (user review after M7b; on the M9 checklist, §7).*
+     The test behind follow-up 6 runs `git init` and disposable commits inside the installed-target
+     pytest set. M9 separates it from the portable gate and verifies acceptance with Git invocation
+     blocked, not merely from an export without `.git`.
+  8. *Which tests and repeat pairs gate an approval (user review after M7b; awaiting the user's
+     decision).* As built, `approve` enforces the installed-target pytest allowlist (138 tests),
+     not the full `tests/` suite (415), so tests ported in M8 would not gate approvals
+     automatically. A full-tier approval also repeats only the normal repeat set, the listed cases
+     and O05/O08: the F cases and cached O cases are run once unless listed, although §5 asks for
+     repeatability on every case. Either align these with §5 or record an agreed narrower scope.
 
 ## Decisions
 
@@ -742,6 +765,13 @@ separate "approve references" commit.
     root's `kawin/` and `examples/`, or any `mb-ref-*`.
   - `REFERENCE` is unset. Unit tests prove the guard catches a deliberate read and a deliberate import.
 - **The export has no `.git`,** so any Git call in normal acceptance fails the run.
+- **Git invocation blocked, not only absent (user review after M7b, follow-up 7):** an export
+  without `.git` does not catch a test that runs `git init` itself. The installed-target pytest
+  set includes `test_verification.py::test_frozen_content_guard`, which makes disposable
+  repositories and commits, so normal acceptance still depends on Git. M9 moves that historical
+  test out of the portable gate, and runs normal acceptance with every `git` invocation blocked
+  (e.g. a `git` shim first on `PATH` that fails loudly, plus an audit hook on `subprocess`).
+  Any Git call outside `approve`, `historical` and the scratch tools fails the run.
 - **Runs:** package `tests/`, normal `quick` and `full` (exact), and
   `acceptance_examples.py run --skip-tests`, then with tests.
 - **Nonempty approved set:** a second export carries a synthetic approval (made in the M7 scratch

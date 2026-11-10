@@ -235,13 +235,13 @@ def test_rollback_points_back_without_moving_files(tmp_path, monkeypatch):
     assert first != second
     files = _snapshot(output / "reference-approved")
     with pytest.raises(approval.ApprovalError, match="not in effect"):
-        approval.rollback(manifest_path=path, approval_id=first, reason="LEDGERS R99", utc="2026-11-10T13:00:00Z")
+        approval.rollback(project=tmp_path, output=output, manifest_path=path, approval_id=first, reason="LEDGERS R99", utc="2026-11-10T13:00:00Z")
     with pytest.raises(approval.ApprovalError, match="needs a reason"):
-        approval.rollback(manifest_path=path, approval_id=second, reason=" ", utc="2026-11-10T13:00:00Z")
-    approval.rollback(manifest_path=path, approval_id=second, reason="LEDGERS R99", utc="2026-11-10T13:00:00Z")
+        approval.rollback(project=tmp_path, output=output, manifest_path=path, approval_id=second, reason=" ", utc="2026-11-10T13:00:00Z")
+    approval.rollback(project=tmp_path, output=output, manifest_path=path, approval_id=second, reason="LEDGERS R99", utc="2026-11-10T13:00:00Z")
     tool.validate_expected(["C01"])
     assert tool.expected_reference("C01")["source"] == first
-    approval.rollback(manifest_path=path, approval_id=first, reason="LEDGERS R99", utc="2026-11-10T13:01:00Z")
+    approval.rollback(project=tmp_path, output=output, manifest_path=path, approval_id=first, reason="LEDGERS R99", utc="2026-11-10T13:01:00Z")
     tool.validate_expected(["C01"])
     assert tool.expected_reference("C01")["source"] == "reference"
     section = json.loads(path.read_text(encoding="utf-8"))["approved_references"]
@@ -251,15 +251,34 @@ def test_rollback_points_back_without_moving_files(tmp_path, monkeypatch):
 
 
 def test_rollback_interrupted_during_the_replace_keeps_the_manifest(tmp_path, monkeypatch):
-    tool, approval, _, path = _project(tmp_path, monkeypatch)
+    tool, approval, output, path = _project(tmp_path, monkeypatch)
     approval_id = _promote(tool, approval, {"C01": _pair(tmp_path / "a", "C01", 2.0)})
     old = path.read_bytes()
     with pytest.raises(RuntimeError, match="injected"):
-        approval.rollback(manifest_path=path, approval_id=approval_id, reason="LEDGERS R99", utc="2026-11-10T13:00:00Z",
+        approval.rollback(project=tmp_path, output=output, manifest_path=path, approval_id=approval_id, reason="LEDGERS R99", utc="2026-11-10T13:00:00Z",
                           fault=_interrupt_at("manifest-temp-written"))
     assert path.read_bytes() == old and not list(path.parent.glob(".*.tmp"))
     tool.validate_expected(["C01"])
     assert tool.expected_reference("C01")["source"] == approval_id
+
+
+def test_rejected_rollback_leaves_the_manifest_byte_for_byte_unchanged(tmp_path, monkeypatch):
+    """Review finding: rolling back to an approval whose files are gone must fail before the replace."""
+    tool, approval, output, path = _project(tmp_path, monkeypatch)
+    first = _promote(tool, approval, {"C01": _pair(tmp_path / "a", "C01", 2.0)})
+    second = _promote(tool, approval, {"C01": _pair(tmp_path / "b", "C01", 3.0)})
+    (output / "reference-approved" / first / "C01.npz").unlink()
+    old = path.read_bytes()
+    with pytest.raises(approval.ApprovalError, match=f"rollback refused, the manifest is unchanged.*approved artifact missing: reference-approved/{first}/C01.npz"):
+        approval.rollback(project=tmp_path, output=output, manifest_path=path, approval_id=second,
+                          reason="LEDGERS R99", utc="2026-11-10T13:00:00Z")
+    assert path.read_bytes() == old and not list(path.parent.glob(".*.tmp"))
+    monkeypatch.setattr(tool, "repository_checks", lambda: SHA)
+    with pytest.raises(approval.ApprovalError, match="rollback refused"):
+        tool.rollback_approval(second, reason="LEDGERS R99")
+    assert path.read_bytes() == old
+    tool.validate_expected(["C01"])  # the selection in effect (the newer approval) is still intact
+    assert tool.expected_reference("C01")["source"] == second
 
 
 def _tamper(tmp_path, output, section, approval_id, how):
@@ -369,6 +388,20 @@ def test_approve_writes_nothing_when_a_gate_fails(tmp_path, monkeypatch, values,
     assert message in json.loads((output / "approve-summary.json").read_text(encoding="utf-8"))["failure"]
 
 
+def test_approve_always_builds_fresh_targets(tmp_path, monkeypatch):
+    """Review finding: a saved target in state.json (possibly from another commit) is never used."""
+    tool, output, _ = _approve_project(tmp_path, monkeypatch, values=dict(C01=1.0, C02=2.0))
+    import inspect
+    assert "reuse_targets" not in inspect.signature(tool.approve).parameters  # no path to a saved target
+    (output / "state.json").write_text(json.dumps(dict(target="stale-target", host="h")), encoding="utf-8")
+    builds, targets = [], set()
+    monkeypatch.setattr(tool, "setup_targets", lambda: builds.append(1) or dict(target="fresh-target", host="h"))
+    worker = tool.worker
+    monkeypatch.setattr(tool, "worker", lambda case, role, **kwargs: targets.add(kwargs["state"]["target"]) or worker(case, role, **kwargs))
+    assert tool.approve(["C02"], reason="LEDGERS R99") == 0
+    assert builds == [1] and targets == {"fresh-target"}
+
+
 def test_approve_refuses_private_settings_cases_and_unrun_cases(tmp_path, monkeypatch):
     tool, _, _ = _approve_project(tmp_path, monkeypatch, values=dict(C01=1.0, C02=1.0))
     with pytest.raises(AssertionError, match="O05 is not supported"):
@@ -398,6 +431,7 @@ def test_repository_checks_need_a_clean_tree_and_ancestry(tmp_path, monkeypatch)
     ["approve", "--cases", "C01", "--rollback", "20261110T120000Z-0123456-1", "--reason", "r"],
     ["approve", "--cases", "C01", "--reason", "r", "--tolerance", "exact"],
     ["approve", "--cases", "C01", "--reason", "r", "--research", "x"], ["approve", "repeat", "--cases", "C01", "--reason", "r"],
+    ["approve", "--cases", "C01", "--reason", "r", "--reuse-targets"],
     ["quick", "--reason", "r"], ["full", "--rollback", "20261110T120000Z-0123456-1"]])
 def test_cli_rejects_malformed_approval_requests(tmp_path, monkeypatch, argv):
     tool, _, output, _ = _project(tmp_path, monkeypatch)
