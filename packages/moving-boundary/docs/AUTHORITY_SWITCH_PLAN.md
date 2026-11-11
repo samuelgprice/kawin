@@ -20,7 +20,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M6 | Normal/historical split, package-role repeatability | done 2026-11-10 (see log) |
 | M7 | Approval path | done 2026-11-10: M7a `approval_criteria` adopted (user-approved); M7b approval path (see log) |
 | M8 | Test port (item 16), 4 batches | done 2026-11-10: 301 of 314 research tests ported, 13 deferred (see log) |
-| M9 | Independence proof + missing-resource matrix | runs done 2026-11-11, all green from Git-blocked exports (empty and active approved sets); one §7 table row (E05) awaits the user's decision (see log) |
+| M9 | Independence proof + missing-resource matrix | done 2026-11-11: all green from Git-blocked exports (empty and active approved sets); E05 table row corrected (user-approved); editable install removed (see log) |
 | M10 | Docs + final recorded gates | not started |
 
 ### Implementation log
@@ -533,6 +533,33 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
     after the estimate: the separate ported runs and the active-approval repeats (user review
     after M8), a fresh approval under the whole-suite approve gate (M7b scope decision), and
     the skip rows each needing a real quick or full gate.
+- **M9c (2026-11-11): user decisions applied; M9 done.**
+  - The user approved the E05 correction. The §7 table now says that removing `FeCrNi.tdb`
+    skips O05 and O08, and that removing `pycalphad-reference.npz` skips E05. Both were
+    observed in M9b.
+  - Follow-up 11 is resolved. At the user's request, only the editable `moving-boundary`
+    install was removed from `mb-public-050` (`pip uninstall moving-boundary`).
+    - It removed `__editable__.moving_boundary-0.0.1.dev0.pth` and the `dist-info`.
+    - `pip freeze` differs only by that line. Stock `kawin` is unchanged, and the source tree is
+      untouched (32 files). The research `kawin` env was only read.
+    - `setup_public_environment.py` never installed the package, so it is unchanged.
+  - Normal start from a fresh export of `d879153`, with the guard on and Git blocked (driver
+    kind `tool`: no `-S`, no injected `PYTHONPATH`); 0 violations in every run:
+    - `acceptance.py quick --tolerance exact`: 30/30 runs and 5 contracts bit-identical, in
+      432 s. The target matches the export's `src`.
+    - `acceptance_examples.py run` with tests: 10/10 plus the tests, in 150 s.
+    - Worker and test isolation (`-P -S` workers, `-I -S` gate pytest) is unchanged.
+  - *Developer test command corrected (README "Local acceptance").*
+    - `PYTHONPATH=<package>/src python -m pytest tests` now fails 5 FeCrNi example tests:
+      `PackageNotFoundError: moving-boundary`. The example records
+      `importlib.metadata.version("moving-boundary")` in its bundle provenance, and the editable
+      install used to supply that metadata.
+    - The documented command is now a private non-editable install
+      (`pip install <package> --no-deps --no-build-isolation --no-index --target <scratch>`) on
+      `PYTHONPATH`. From the export, guarded, that gives 1036 passed, 5 skipped, 4 deselected,
+      0 violations.
+    - The example is unchanged: it is meant to run against an installed package.
+  - Environment instructions are updated in README "Local acceptance" and `docs/HANDOFF.md`.
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -618,7 +645,8 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
       guard refuses. Options for the user: remove the editable install (M10 docs would then say
       `pip install -e` is for development only), or document that independence runs start the
       parent with `-S`, as M9 did.
-  - *Status after M9:* follow-ups 5, 6 and 7 are resolved (M9a; verified in M9b).
+  - *Status after M9:* follow-ups 5, 6 and 7 are resolved (M9a; verified in M9b). Follow-up 11
+    is resolved (M9c): the editable install was removed at the user's request.
 
 ## Decisions
 
@@ -1069,7 +1097,8 @@ separate "approve references" commit.
 
 | Removed | Expected outcome |
 |---|---|
-| `FeCrNi.tdb` | O05, O08, E05 skipped "database input missing" |
+| `FeCrNi.tdb` | O05, O08 skipped "database input missing" (E05 does not read the TDB; corrected after M9b, user-approved 2026-11-11) |
+| `pycalphad-reference.npz` | E05 skipped "local input missing" (its frozen surrogate input) |
 | `exb5.json` | O01, O02 skipped |
 | TC licence or config | O06 skipped, with the probe reason |
 | `open-surrogate.npz` | C24 **fails** with a clear, documented message (quick-required); **E04 still runs and passes** in example acceptance (it builds its own surrogate and compares with C24's frozen output; follow-up 5) |
@@ -1136,7 +1165,8 @@ The authority-switch work is complete only when all of these hold, with results 
 - [ ] Exact quick and full are bit-identical (30/40 runs, 5 contracts) using package-owned
       definitions; E01-E10 pass; the full package `tests/` suite is green, with ported/deferred
       counts reported per file.
-- [ ] LEGACY's one-time bitwise proof is recorded; normal acceptance uses the hashed `LEGACY.npz`.
+- [x] LEGACY's one-time bitwise proof is recorded; normal acceptance uses the hashed `LEGACY.npz`.
+      (Met in M1: 33 `binary_*` keys bit-identical; see log.)
 - [ ] Every adopted input and expected artifact keeps its original hash (validated before and
       after every batch).
 - [x] **Regeneration verification (M5b; met 2026-11-10, 12/12 `verified`, see log):** `open-surrogate.npz`, `pycalphad-reference.npz` and the
@@ -1148,10 +1178,11 @@ The authority-switch work is complete only when all of these hold, with results 
         with reasons as open items, and the check is rerun once the resource is available.
       - The four caches without package generators are reported as known gaps and tracked in
         FUTURE_PORTS.md. They are outside this criterion, and they are not verified.
-- [ ] A missing required acceptance input (e.g. `open-surrogate.npz` for C24) fails normal
-      acceptance (shown in the M9 missing-resource matrix); it is not skipped.
-- [ ] The independence proof (M9) passes with empty and nonempty approved sets, and the
-      missing-resource matrix behaves as documented.
+- [x] A missing required acceptance input (e.g. `open-surrogate.npz` for C24) fails normal
+      acceptance (shown in the M9 missing-resource matrix); it is not skipped. (Met 2026-11-11, M9b.)
+- [x] The independence proof (M9) passes with empty and nonempty approved sets, and the
+      missing-resource matrix behaves as documented. (Met 2026-11-11, M9b/M9c; E05 row corrected
+      with the user's approval.)
 - [x] The approval path (M7) passes its unit, interruption and isolated-clone tests (met
       2026-11-10, M7b; see log).
 - [ ] `tooling_sha256` is removed; supersession is recorded in package docs only (LEDGERS,

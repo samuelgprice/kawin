@@ -96,6 +96,29 @@ source checkouts with no editable/site hooks. Shared kawin is unchanged.
 The local environment pointer is ignored `.verification/public-environment.json`;
 this is a configured local verification command, not a portable bootstrap.
 
+`mb-public-050` holds stock kawin 0.5.0 and the tested dependencies only. Never install
+this package into it (no `pip install -e`): acceptance builds a fresh wheel from the
+checkout it runs in and installs it into a private target, and an editable install would
+put one particular checkout's `src` on every normally started process's `sys.path`. To
+run the package tests directly, activate `mb-public-050`, install this checkout into a
+private folder and put that folder on `PYTHONPATH` (plus `MB_EXAMPLE_TDB` for the database
+tests):
+
+    python -m pip install <package> --no-deps --no-build-isolation --no-index --target <scratch>\mb-target
+    set "PYTHONPATH=<scratch>\mb-target"
+    python -m pytest tests --basetemp <scratch>\pytest
+
+Reinstall after editing the package. `PYTHONPATH=<package>/src` alone is not enough: the
+FeCrNi example records the installed distribution's version, so its five tests need the
+installed metadata.
+
+Normal `quick`, `full` and example acceptance need no research checkout and no Git.
+`historical capture|repeat --research PATH` and `approve` are the explicit exceptions.
+The independence proof runs them from a `git archive` export with the opt-in guard
+`MB_FORBID_RESEARCH=1` (research imports and reads under `MB_FORBID_ROOTS` or any
+`mb-ref-*` path fail) and `MB_FORBID_GIT=1` (any Git launch fails); see
+`tools/batch_safety.guard_independence` and docs/AUTHORITY_SWITCH_PLAN.md (M9).
+
 Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 578.02 s.
 
 Quick includes C01-C24/C30-C32, the older binary fixture/bulk probes and freshly

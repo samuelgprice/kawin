@@ -9,6 +9,8 @@ The public-kawin milestone is implemented and accepted by the frozen quick/full
 suite. Runtime metadata requires stock kawin==0.5.0, not the research fork.
 
 The separate offline environment is `mb-public-050` beside the extraction worktree.
+It holds stock kawin and the tested dependencies only; the package itself is never installed
+there (its editable worktree install was removed on 2026-11-11, see README "Local acceptance").
 All 73 stock files match the cached 0.5.0 wheel byte for byte. Its LAPACK check
 passed. The package wheel installs privately beside that host. The original shared
 kawin environment was not reinstalled or upgraded. Every Python operation uses
