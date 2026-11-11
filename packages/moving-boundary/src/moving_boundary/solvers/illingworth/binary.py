@@ -71,6 +71,65 @@ def _validate_binary_diffusivity(values, phase, context="binary Illingworth diff
         raise ValueError(f"{context} for phase {phase} must be positive.")
     return values
 
+
+_DEFAULT_BULK_PICARD_RTOL = 1.0e-10
+_ZERO_INVENTORY_SCALE_FACTOR = 64.0 * np.finfo(float).eps
+
+
+def _require_positive_finite(value, name):
+    """Returns ``float(value)`` after checking it is positive and finite, else raises ``ValueError``."""
+    value = float(value)
+    if not np.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{name} must be a positive finite value.")
+    return value
+
+
+def _binary_residual_scale(inventory, domain_length, composition_floor):
+    """
+    Returns the normalization of the binary interface residual for one step (ledger R08).
+
+    ``scale = max(|inventory|, domain_length * composition_floor)``, where
+    ``inventory`` is the transformed solute inventory of the accepted old state
+    and ``composition_floor`` is a composition (``minComposition`` or the
+    explicit ``interface_residual_composition_scale``). The residual check
+    ``|r| <= residual_tolerance * scale`` therefore bounds the relative
+    inventory change per step while ``|inventory| >= R * floor``, and the change
+    of the mean composition per step by ``residual_tolerance * floor`` below
+    that.
+
+    Only when ``inventory`` and ``composition_floor`` are both exactly zero (a
+    test on the inputs, possible only with ``minComposition = 0``) is the
+    scale ``64 eps * domain_length``: an absolute, round-off-level bound,
+    because a relative bound is undefined at zero inventory. A positive floor
+    whose product with the length underflows to zero is not that case.
+
+    Raises ``ValueError`` naming the quantity for a non-finite inventory, a
+    non-finite or non-positive length, a non-finite or negative floor, and a
+    scale that overflows or underflows to a non-positive value. Nothing is
+    replaced by a substitute value.
+    """
+    inventory = float(inventory)
+    domain_length = float(domain_length)
+    composition_floor = float(composition_floor)
+    if not np.isfinite(inventory):
+        raise ValueError(f"Illingworth residual normalization: the old inventory {inventory!r} is not finite.")
+    if not np.isfinite(domain_length) or domain_length <= 0.0:
+        raise ValueError(f"Illingworth residual normalization: the domain length {domain_length!r} must be positive and finite.")
+    if not np.isfinite(composition_floor) or composition_floor < 0.0:
+        raise ValueError(
+            f"Illingworth residual normalization: the composition floor {composition_floor!r} must be non-negative and finite."
+        )
+    if inventory == 0.0 and composition_floor == 0.0:
+        scale = domain_length * _ZERO_INVENTORY_SCALE_FACTOR
+    else:
+        scale = max(abs(inventory), domain_length * composition_floor)
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError(
+            f"Illingworth residual normalization: the scale {scale!r} (inventory {inventory!r}, domain length "
+            f"{domain_length!r}, composition floor {composition_floor!r}) must be positive and finite."
+        )
+    return float(scale)
+
 class _ScalarHistory:
     def __init__(self, record: bool | int = False):
         if isinstance(record, bool):
@@ -249,7 +308,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     - ``'composition_dependent_implicit'`` re-evaluates the face values from a
       Picard iterate inside each phase solve, seeded from the old profile with
       the interface Dirichlet value imposed, until the update norm falls below
-      ``bulk_picard_atol + rtol * max|profile|``.
+      ``bulk_picard_atol + rtol * max|profile|``. ``rtol`` is
+      ``bulk_picard_rtol``, or ``1e-10`` when it is ``None``; it no longer
+      follows ``tolerance`` (ledger R08).
 
     In every mode the interface balance uses the diffusivity on the
     interface-adjacent face returned by the most recent phase solve, so the
@@ -267,11 +328,44 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     composition: forming ``c_interface - p[-2]`` from absolute compositions
     leaves round-off of order ``eps * |c|``, which the flux amplifies by
     ``D dt / dz`` into noise in the interface position. With small interface
-    cells and long semi-log steps that noise exceeded ``tolerance`` and the
-    fixed point stalled (issue R06 in the moving-boundary package's
+    cells and long semi-log steps that noise exceeded the position tolerance
+    and the fixed point stalled (issue R06 in the moving-boundary package's
     ``docs/LEDGERS.md``). Stored profiles remain absolute compositions, so
     each step's old deviation is rounded once, to the unit of
-    ``c_interface``. ``tolerance`` is still an absolute length (ledger R08).
+    ``c_interface``.
+
+    The fixed-point iteration on the interface position accepts a trial
+    position ``s*`` (never the pass-zero iterate) only when both checks hold
+    (ledger R08):
+
+    - ``|s* - s_previous| <= tolerance * R``. ``tolerance`` is dimensionless
+      (relative to the domain length ``R``), default ``1e-12``. Before R08 it
+      was an absolute length with default ``1e-8``; an old absolute value
+      ``t`` corresponds to ``t / R``.
+    - ``|r| <= residual_tolerance * scale`` (default ``1e-13``). ``r`` is the
+      conservative interface residual ``lhs * (s* - s) - rhs`` of the planar
+      balance, formed with the same operations as the interface update from
+      the deviations and interface-face diffusivities of the bulk solves at
+      ``s*``; it equals the step's change of the transformed inventory up to
+      round-off. ``scale = max(|I_old|, R * c_floor)`` is fixed once per step
+      from the accepted old inventory ``I_old``. ``c_floor`` is
+      ``interface_residual_composition_scale`` when given, otherwise
+      ``constraints.minComposition`` read at the start of the step. (The
+      ternary models use the same argument name, but there the default is a
+      composition scale of 1, so their default residual scale is ``R``; see
+      ledger R13.)
+
+    The residual check bounds the change of the transformed inventory per step
+    by ``residual_tolerance * max(|I_old|, R * c_floor)`` up to round-off, so
+    by ``N * residual_tolerance`` relative over ``N`` steps while
+    ``|I_old| >= R * c_floor``. The floor can bind for valid data: interface
+    compositions are not clamped, and a profile near a zero interface
+    composition can integrate to less than ``R * minComposition``. The bound is
+    then absolute, at most ``residual_tolerance * c_floor`` of mean
+    composition per step. If the old inventory and the floor are both exactly
+    zero (only possible with ``minComposition = 0``) the scale is
+    ``64 eps * R``, an absolute round-off-level bound. Any other non-finite or
+    non-positive scale raises ``ValueError``.
     The transformed profile histories ``pData`` and ``qData`` are recorded by
     default, but may be disabled with ``record_pq_data=False`` to reduce
     memory use in long runs. Recording arrays can also be preallocated once the
@@ -333,7 +427,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         geometry: str = "planar",
         phase_a_nodes: int | None = None,
         phase_b_nodes: int | None = None,
-        tolerance: float = 1e-8,
+        tolerance: float = 1e-12,
         max_iterations: int = 100,
         bulk_diffusivity_mode: str = _BULK_DIFFUSIVITY_PHASE_UNIFORM,
         bulk_picard_rtol: float | None = None,
@@ -349,7 +443,17 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         transformed_u_grid=None,
         transformed_v_grid=None,
         interface_composition_basis: str = "x",
+        residual_tolerance: float = 1e-13,
+        interface_residual_composition_scale: float | None = None,
     ):
+        # Validated before the host constructor builds any state (ledger R08).
+        self.tolerance = _require_positive_finite(tolerance, "tolerance")
+        self.residualTolerance = _require_positive_finite(residual_tolerance, "residual_tolerance")
+        self.interfaceResidualCompositionScale = (
+            None
+            if interface_residual_composition_scale is None
+            else _require_positive_finite(interface_residual_composition_scale, "interface_residual_composition_scale")
+        )
         self.initialInterfacePosition = float(interfacePosition)
         self.interfaceCompositionBasis = validate_composition_basis(interface_composition_basis, "interface_composition_basis")
         self.interfaceCompositionsInput = tuple(float(v) for v in interface_compositions)
@@ -361,7 +465,6 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self.geometry = str(geometry)
         self.phaseANodes = None if phase_a_nodes is None else int(phase_a_nodes)
         self.phaseBNodes = None if phase_b_nodes is None else int(phase_b_nodes)
-        self.tolerance = float(tolerance)
         self.maxIterations = int(max_iterations)
         self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(bulk_diffusivity_mode)
         self.bulkPicardRtol = None if bulk_picard_rtol is None else float(bulk_picard_rtol)
@@ -392,6 +495,8 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._semiLogNextIndex = 0
         self._lastImplicitIterations = 0
         self._lastImplicitError = np.nan
+        self._lastImplicitResidual = np.nan
+        self._lastImplicitResidualScale = np.nan
         self._lastStepRetries = 0
         self._lastLeftPicardIterations = 0
         self._lastRightPicardIterations = 0
@@ -493,6 +598,9 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             raise ValueError("semiLogT0 must be a positive finite value.")
         if not np.isfinite(self.tolerance) or self.tolerance <= 0:
             raise ValueError("tolerance must be a positive finite value.")
+        _require_positive_finite(self.residualTolerance, "residual_tolerance")
+        if self.interfaceResidualCompositionScale is not None:
+            _require_positive_finite(self.interfaceResidualCompositionScale, "interface_residual_composition_scale")
         if self.maxIterations < 2:
             raise ValueError("max_iterations must be at least 2.")
         self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(self.bulkDiffusivityMode)
@@ -580,6 +688,8 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._semiLogNextIndex = 0
         self._lastImplicitIterations = 0
         self._lastImplicitError = np.nan
+        self._lastImplicitResidual = np.nan
+        self._lastImplicitResidualScale = np.nan
         self._lastStepRetries = 0
         self._lastLeftPicardIterations = 0
         self._lastRightPicardIterations = 0
@@ -1019,12 +1129,31 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         flux through those faces. On pass zero the velocity sign comes from the
         previous step, and afterwards from the current estimate.
         """
-        c_left_int, c_right_int = self.interfaceCompositions
         if pass_number == 0:
             velocity_sign_probe = s - old_s
         else:
             velocity_sign_probe = future_s - s
 
+        lhs, rhs = self._interface_balance_terms(
+            left_deviation, right_deviation, future_s, dt, D_left_int, D_right_int, velocity_sign_probe
+        )
+        if abs(lhs) <= 1e-300:
+            raise ZeroDivisionError("Illingworth interface update encountered a zero denominator.")
+        return float(s + rhs / lhs)
+
+    def _interface_balance_terms(self, left_deviation, right_deviation, future_s, dt, D_left_int, D_right_int, velocity_sign_probe):
+        """
+        Returns ``(lhs, rhs)`` of the planar conservative interface balance ``lhs * (s_next - s) = rhs``.
+
+        ``rhs`` is ``dt`` times the net diffusive flux into the interface cells,
+        formed from the interface-adjacent deviations and interface-face
+        diffusivities at the trial position ``future_s``; ``lhs`` is the
+        tie-line jump corrected by the upwind interface-cell deviation of the
+        branch selected by ``velocity_sign_probe >= 0``. Both the interface
+        update and the R08 residual use this one function, so they share the
+        same operations in the same order.
+        """
+        c_left_int, c_right_int = self.interfaceCompositions
         diff_l = -left_deviation / (1.0 - self._u_grid[-2])
         diff_l = diff_l * D_left_int / future_s
         diff_r = right_deviation / self._v_grid[1]
@@ -1035,9 +1164,43 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             lhs = (c_left_int - c_right_int) - right_deviation * (1.0 - self._v_grid[1] / 2.0)
         else:
             lhs = (c_left_int - c_right_int) + left_deviation * (0.5 + self._u_grid[-2] / 2.0)
-        if abs(lhs) <= 1e-300:
-            raise ZeroDivisionError("Illingworth interface update encountered a zero denominator.")
-        return float(s + rhs / lhs)
+        return lhs, rhs
+
+    def _interface_residual(self, left_deviation, right_deviation, s, future_s, dt, D_left_int, D_right_int):
+        """
+        Returns the conservative interface residual ``lhs * (future_s - s) - rhs`` at a trial position (ledger R08).
+
+        The deviations and interface-face diffusivities must come from the bulk
+        solves at ``future_s``, and the motion branch is that of the candidate's
+        own displacement ``future_s - s`` (not the pass-zero probe). Forming it
+        from the displacement and the deviation fluxes, never as
+        ``future_s - s_next``, keeps R06's cancellation-resistant arithmetic.
+        The residual equals the step's change of the transformed inventory up
+        to round-off.
+        """
+        displacement = future_s - s
+        lhs, rhs = self._interface_balance_terms(
+            left_deviation, right_deviation, future_s, dt, D_left_int, D_right_int, displacement
+        )
+        return float(lhs * displacement - rhs)
+
+    def _interface_residual_scale(self, p, q, s):
+        """
+        Returns the residual normalization ``max(|I_old|, R * c_floor)`` for one step (ledger R08).
+
+        ``I_old`` is the transformed inventory of the accepted old state, with
+        the same trapezoid quadrature as the conservation check. ``c_floor`` is
+        ``interface_residual_composition_scale`` when given, otherwise
+        ``constraints.minComposition`` read now, so it is resolved once per
+        step. See ``_binary_residual_scale`` for the zero-inventory safeguard
+        and the ``ValueError`` cases.
+        """
+        inventory = float(self.getTotalInventoryFromState(p, q, s))
+        if self.interfaceResidualCompositionScale is not None:
+            floor = float(self.interfaceResidualCompositionScale)
+        else:
+            floor = float(self.constraints.minComposition)
+        return _binary_residual_scale(inventory, self._R, floor)
 
     def _new_concentration_left_planar(self, p, s, future_s, dt, D_left, return_deviation=False):
         """
@@ -1204,8 +1367,14 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         return (profile, w) if return_deviation else profile
 
     def _bulk_picard_relative_tolerance(self):
-        """Returns the effective relative tolerance for implicit bulk Picard solves."""
-        return float(self.tolerance if self.bulkPicardRtol is None else self.bulkPicardRtol)
+        """
+        Returns the effective relative tolerance for implicit bulk Picard solves.
+
+        ``bulk_picard_rtol`` when given, otherwise the fixed default ``1e-10``.
+        Since R08 it does not follow the (now dimensionless) interface
+        ``tolerance``.
+        """
+        return float(_DEFAULT_BULK_PICARD_RTOL if self.bulkPicardRtol is None else self.bulkPicardRtol)
 
     def _bulk_picard_update_has_converged(self, update_norm, profile):
         """
@@ -1299,8 +1468,15 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
 
         Each pass updates the interface from the latest profiles and
         interface-face diffusivities, then re-solves both phases at that trial
-        position. Convergence requires at least two passes and
-        ``|delta s| <= tolerance``. Per-step diffusivities are evaluated once at
+        position. Convergence requires at least two passes (the pass-zero
+        iterate is never accepted), ``|delta s| <= tolerance * R`` and
+        ``|r| <= residual_tolerance * scale`` (ledger R08), where ``r`` is the
+        conservative interface residual at the trial position (see
+        ``_interface_residual``) and ``scale`` is fixed once per step from the
+        old state (see ``_interface_residual_scale``). On acceptance
+        ``_lastImplicitError`` holds ``|delta s|`` (a length),
+        ``_lastImplicitResidual`` the residual and
+        ``_lastImplicitResidualScale`` the scale. Per-step diffusivities are evaluated once at
         the old state (see ``_step_diffusivities``); in implicit mode they only
         provide the pass-zero interface-face values. Pass zero takes the
         interface-adjacent deviations from the old profiles; later passes use
@@ -1316,6 +1492,10 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         right_deviation = float(q_future[1] - c_right_int)
         future_s = float(s)
         error = np.inf
+        residual = np.nan
+        residual_scale = self._interface_residual_scale(p, q, s)
+        position_bound = self.tolerance * self._R
+        residual_bound = self.residualTolerance * residual_scale
         D_left, D_right = self._step_diffusivities(p, q, s, self.currentTime)
         D_left_int = self._left_interface_D(D_left)
         D_right_int = self._right_interface_D(D_right)
@@ -1333,16 +1513,20 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             D_left_int = left_result.interface_D
             D_right_int = right_result.interface_D
             error = abs(previous_future_s - future_s)
-            if error <= self.tolerance and count >= 1:
+            residual = self._interface_residual(left_deviation, right_deviation, s, future_s, dt, D_left_int, D_right_int)
+            if count >= 1 and error <= position_bound and abs(residual) <= residual_bound:
                 self._lastImplicitIterations = count + 1
                 self._lastImplicitError = float(error)
+                self._lastImplicitResidual = float(residual)
+                self._lastImplicitResidualScale = float(residual_scale)
                 self._lastLeftPicardIterations = int(left_result.inner_iterations)
                 self._lastRightPicardIterations = int(right_result.inner_iterations)
                 return p_future, q_future, self._clipInterfacePosition(future_s, strict=True), D_left_int, D_right_int
 
         raise RuntimeError(
             "Illingworth implicit step failed to converge within "
-            f"{self.maxIterations} iterations; final interface error was {error:.3e}."
+            f"{self.maxIterations} iterations; final interface error was {error:.3e} "
+            f"(bound {position_bound:.3e}) and final residual {residual:.3e} (bound {residual_bound:.3e})."
         )
 
     def _reconstruct_physical_profile(self, p, q, s):
