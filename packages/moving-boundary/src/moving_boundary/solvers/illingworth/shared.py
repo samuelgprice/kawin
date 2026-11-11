@@ -150,10 +150,13 @@ def _pending_step_mismatches(pending, accepted_time, committed_time, state, name
     floating point, which resolves the step only to about half an ulp of the
     result, and the subtraction adds at most another ulp. The allowance is
     therefore ``4 ulp`` of the largest of the start, committed and accepted
-    times and ``dt``. It grows only with that resolution: about 1.2e-7 at
-    t = 1e9, 1.8e-15 at t = 4, and a few ulp of ``dt`` from t = 0. A step that
+    times and ``dt``. It grows only with that resolution: about 4.77e-7 at
+    t = 1e9, 3.55e-15 at t = 4, and 4 ulp of ``dt`` from t = 0. A step that
     cannot be resolved at all at the time origin also cannot be detected. The
     accepted start time must match the candidate's start to the same allowance.
+    A non-finite start, accepted or committed time or ``dt`` is reported as
+    ``"non-finite time"`` before the allowance is formed, because ``ulp(inf)``
+    is infinite and would accept any timestamp; the time checks are then skipped.
 
     State: each entry ``i`` is compared with ``rtol=2e-13`` and
     ``atol = 64 eps * pending.scales[i]``, the round-off of
@@ -163,14 +166,17 @@ def _pending_step_mismatches(pending, accepted_time, committed_time, state, name
     start = float(pending.start_time)
     committed = float(committed_time)
     accepted = float(accepted_time)
-    time_atol = _OUTER_TIME_ULPS * max(
-        math.ulp(abs(start)), math.ulp(abs(committed)), math.ulp(abs(accepted)), math.ulp(abs(pending.dt))
-    )
     mismatches = []
-    if not abs(accepted - start) <= time_atol:
-        mismatches.append("accepted start time")
-    if not abs((committed - start) - float(pending.dt)) <= time_atol:
-        mismatches.append("timestep")
+    if not all(math.isfinite(value) for value in (start, committed, accepted, float(pending.dt))):
+        mismatches.append("non-finite time")
+    else:
+        time_atol = _OUTER_TIME_ULPS * max(
+            math.ulp(abs(start)), math.ulp(abs(committed)), math.ulp(abs(accepted)), math.ulp(abs(pending.dt))
+        )
+        if not abs(accepted - start) <= time_atol:
+            mismatches.append("accepted start time")
+        if not abs((committed - start) - float(pending.dt)) <= time_atol:
+            mismatches.append("timestep")
     for name, actual, expected, scale in zip(names, state, pending.state, pending.scales):
         actual = np.asarray(actual, dtype=np.float64)
         expected = np.asarray(expected, dtype=np.float64)

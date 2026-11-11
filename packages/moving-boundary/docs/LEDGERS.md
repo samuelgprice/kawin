@@ -719,7 +719,8 @@ Both reproduced against `ce1c990` in both families.
   tolerance on the absolute timestamp (2e-13 * 1e9 = 2e-4) hid the half step. The
   check now compares the elapsed step, `(time - start) - dt`, with 4 ulp of the
   largest time involved. That is the resolution of the wrapper's `start + dt`:
-  about 1.2e-7 at t = 1e9, and a few ulp of dt from t = 0.
+  about 4.77e-7 at t = 1e9, 3.55e-15 at t = 4, and 4 ulp of dt from t = 0.
+  (Corrected; the first version of this record gave 1 ulp at t = 1e9, 1.2e-7.)
 - *Rejection lifecycle.* A rejected update cleared the candidate, so resubmitting
   it committed through the "no candidate" exemption. `_awaitingFreshCandidate`
   is now set:
@@ -743,6 +744,15 @@ Both reproduced against `ce1c990` in both families.
   1 deselected (fresh target); exact quick 30/30 + 5 contracts bit-identical,
   33 repeat pairs, 454 s; exact full 40/40 + 5 bit-identical, 34 repeat pairs,
   590 s, O06 run against live TC.
+- *Non-finite times (second follow-up, 2026-11-11).* `ulp(inf)` is infinite, so
+  `postProcess(inf, valid candidate state)` was accepted in both families and
+  recorded an infinite time. NaN was rejected, but only because NaN comparisons
+  are false. A non-finite start, accepted or committed time or candidate dt is now
+  reported as "non-finite time" before the allowance is formed. Rejection leaves
+  the latch set and recovery works through a new candidate. The finite allowance
+  is unchanged. Tests: 15 more (both families with inf, -inf and NaN; each time
+  field; the finite four-ulp allowance at t = 1e9). This is input rejection only,
+  so the exact acceptance gates were not rerun.
 
 ### R08: binary convergence tolerance depends on length units
 

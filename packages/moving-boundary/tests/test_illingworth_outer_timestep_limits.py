@@ -502,3 +502,54 @@ def test_interrupted_commit_cannot_be_resubmitted_unchecked(family):
     model.postProcess(start + step, _euler_update(x, dXdt, step))
     assert model.currentTime == start + step
     assert model._pendingCandidate is None
+
+
+@pytest.mark.parametrize("bad_time", [np.inf, -np.inf, np.nan])
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_non_finite_committed_time_is_rejected(family, bad_time):
+    """A non-finite timestamp would otherwise make the ulp allowance infinite (inf) or the comparison undefined (NaN)."""
+    model, x, dXdt, dt = _proposed_step(family)
+    before = _accepted_snapshot(model)
+    update = _euler_update(x, dXdt, dt)
+
+    with pytest.raises(RuntimeError, match="non-finite time"):
+        model.postProcess(bad_time, update)
+    _assert_not_advanced(model, before)
+    # The rejection latch stays active, even for the correct update.
+    with pytest.raises(RuntimeError, match="no new candidate has been solved"):
+        model.postProcess(dt, update)
+    _assert_not_advanced(model, before)
+
+    x = model.getCurrentX()
+    dXdt = model.getdXdt(0.0, x)
+    dt = model.getDt(dXdt)
+    model.postProcess(dt, _euler_update(x, dXdt, dt))
+    assert model.currentTime == dt
+    assert model.interfaceData.N == 1
+
+
+@pytest.mark.parametrize("field", ["start_time", "accepted_time", "committed_time", "dt"])
+@pytest.mark.parametrize("bad", [np.inf, np.nan])
+def test_pending_step_mismatches_flags_each_non_finite_time(field, bad):
+    from moving_boundary.solvers.illingworth.shared import _PendingImplicitStep, _pending_step_mismatches
+
+    times = {"start_time": 1.0, "accepted_time": 1.0, "committed_time": 1.5, "dt": 0.5}
+    times[field] = bad
+    pending = _PendingImplicitStep(start_time=times["start_time"], dt=times["dt"], state=(np.zeros(2),), scales=(1.0,))
+    mismatches = _pending_step_mismatches(pending, times["accepted_time"], times["committed_time"], (np.zeros(2),), ("profile",))
+    assert mismatches == ["non-finite time"]
+
+
+def test_pending_step_mismatches_keeps_finite_four_ulp_allowance():
+    from moving_boundary.solvers.illingworth.shared import _PendingImplicitStep, _pending_step_mismatches
+
+    start, dt = 1.0e9, 1.0e-4
+    pending = _PendingImplicitStep(start_time=start, dt=dt, state=(np.zeros(1),), scales=(1.0,))
+    allowance = 4.0 * np.spacing(start + dt)
+    assert allowance == pytest.approx(4.77e-7, rel=1.0e-3)
+    for committed, expected in (
+        (start + dt, []),
+        (np.nextafter(start + dt, np.inf), []),
+        (start + dt + 3.0 * allowance, ["timestep"]),
+    ):
+        assert _pending_step_mismatches(pending, start, committed, (np.zeros(1),), ("profile",)) == expected
