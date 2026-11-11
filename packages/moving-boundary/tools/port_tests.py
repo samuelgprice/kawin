@@ -15,13 +15,25 @@ each recorded in ``docs/test-port-provenance.json``:
   ``moving_boundary.solvers.illingworth.shared`` that has them, else stock kawin 0.5.0. A name
   with no counterpart is an error;
 - *helper imports*: ``kawin.tests.<helper>`` becomes ``ported_helpers.<helper>`` (``tests/conftest.py``
-  puts ``tests/`` on ``sys.path`` so this works under ``--import-mode=importlib`` too);
+  puts ``tests/`` on ``sys.path`` so this works under ``--import-mode=importlib`` too); a helper
+  that is itself a research test module (``HELPER_SUBSETS``) is reduced to the named definitions
+  and what they need (``extract_subset``) under a non-test file name;
+- *relocated example helpers*: imports from the research similarity example scripts
+  (``EXAMPLE_MODULES``) bind ``moving_boundary.analytic``, where those helpers now live; every
+  name must exist there. Any other research example import is an error;
+- *patches across the module split*: ``<patcher>.setattr(<research module alias>, NAME, value)``
+  becomes ``setattr_owners(<patcher>, <alias>, NAME, value)`` (``tests/ported_helpers/relocation.py``)
+  when the package module re-imports NAME from another package module (research kept both in one
+  module), or when NAME is not a literal; the patch then reaches the same code as in research;
 - *strings*: a string constant naming a research module (e.g. a ``skipif`` that imports
   ``kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D``) is renamed to the package module;
 - *deferred tests*: tests needing unported functionality (``DEFERRED``, each listed in
   FUTURE_PORTS.md § Deferred tests) are removed with their decorators, and so are the
   module-level imports only they used;
 - *docstring*: a provenance paragraph (source, commit, sha256, exclusions) is prepended.
+
+Research test files deferred whole (``DEFERRED_FILES``) are recorded under ``deferred_files`` with
+their counts and reason; nothing is written for them.
 
 ``--check`` regenerates in memory and requires the committed files and provenance record to be
 identical (newlines normalized); nothing is written. Any research module path left in the output
@@ -62,6 +74,17 @@ DEFERRED = {
             "so it can be ported as an opt-in check outside the gate",
     },
 }
+# Research example modules whose helpers were relocated into the package (plan §6, FUTURE_PORTS.md
+# "Deferred tests": the similarity helpers exist in moving_boundary.analytic). Each name must exist.
+EXAMPLE_MODULES = {
+    "examples.ternaryExamples.ternaryTwoPhaseSimilarity": "moving_boundary.analytic",
+    "examples.ternaryExamples.ternaryThreePhaseSimilarity": "moving_boundary.analytic",
+}
+# Research test files deferred whole (FUTURE_PORTS.md § Deferred tests): recorded, never written.
+DEFERRED_FILES = {
+    3: {"test_illingworth_ternary_convergence.py": "needs IllingworthTernaryConvergence (FUTURE_PORTS entry 4)",
+        "test_three_phase_examples.py": "tests the research script IllingworthTernaryThreePhaseStable (FUTURE_PORTS entry 6)"},
+}
 # Helpers that are themselves research test modules: only these names (and the top-level code they
 # need) are extracted, into ported_helpers/<target>.py, so no research test is copied or collected.
 HELPER_SUBSETS = {
@@ -86,6 +109,16 @@ def _bindings():
 
 
 BINDINGS = _bindings()
+
+
+def _relocation():
+    spec = importlib.util.spec_from_file_location("port_relocation", TESTS / HELPERS / "relocation.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+RELOCATION = _relocation()
 
 
 def resolve(module, name):
@@ -240,6 +273,39 @@ def port_text(source, name, *, deferred=None, header):
     def inside_removed(node):
         return any(a <= node.lineno <= b for a, b in removed)
 
+    def segment(node):
+        return source[offset(node.lineno, node.col_offset):offset(node.end_lineno, node.end_col_offset)]
+
+    # ``import <research module> as alias``: patches on these aliases may need setattr_owners.
+    module_aliases = {alias.asname: rename_module(alias.name) for node in ast.walk(tree) if isinstance(node, ast.Import)
+                      for alias in node.names if alias.asname and rename_module(alias.name)}
+    needs_relocation_import = False
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "setattr"
+                and len(node.args) >= 3 and isinstance(node.args[0], ast.Name) and node.args[0].id in module_aliases
+                and not inside_removed(node)):
+            package = module_aliases[node.args[0].id]
+            key = node.args[1]
+            owners = "resolved at run time (attribute name is not a literal)"
+            needed = True
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                chain = RELOCATION.owner_chain(importlib.import_module(package), key.value)
+                owners = [f"{module.__name__}.{attribute}" for module, attribute in chain]
+                needed = len(chain) > 1
+            if needed:
+                parts = [segment(node.func.value)] + [segment(arg) for arg in node.args]
+                parts += [f"{keyword.arg}={segment(keyword.value)}" for keyword in node.keywords]
+                edits.append((offset(node.lineno, node.col_offset), offset(node.end_lineno, node.end_col_offset),
+                              "setattr_owners(" + ", ".join(parts) + ")"))
+                transforms.append(dict(kind="monkeypatch through the package re-import chain", line=node.lineno,
+                                       call=segment(node), owners=owners))
+                needs_relocation_import = True
+    if needs_relocation_import:
+        last = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))][-1]
+        position = offset(last.end_lineno, last.end_col_offset)
+        edits.append((position, position, "\nfrom ported_helpers.relocation import setattr_owners"))
+        transforms.append(dict(kind="import", research="(none)", package="ported_helpers.relocation.setattr_owners"))
+
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)) and not inside_removed(node):
             top = node in tree.body
@@ -259,6 +325,10 @@ def port_text(source, name, *, deferred=None, header):
                         helpers.add(module.split(".", 2)[2])
                     elif module.startswith(("kawin.diffusion", "kawin.thermo")) or module in BINDINGS.MODULES:
                         target = resolve(module, alias.name)
+                    elif module in EXAMPLE_MODULES:
+                        target = EXAMPLE_MODULES[module]
+                        if not hasattr(importlib.import_module(target), alias.name):
+                            raise PortError(f"{name}:{node.lineno}: {module}.{alias.name} has no counterpart in {target}")
                     elif module.startswith("examples"):
                         raise PortError(f"{name}:{node.lineno}: research example import {module} in a ported test")
                     if target != module:
@@ -379,6 +449,21 @@ def port_batch(research, batch):
     return outputs
 
 
+def deferred_files(research, batch):
+    """Record entries for this batch's research test files deferred whole (no output is written)."""
+    research = Path(research)
+    commit = research_commit(research)
+    entries = {}
+    for name, reason in DEFERRED_FILES.get(batch, {}).items():
+        relative = f"kawin/tests/{name}"
+        source = (research / relative).read_bytes().decode("utf-8").replace("\r\n", "\n")
+        total = sum(1 for node in ast.parse(source).body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"))
+        entries[relative] = dict(batch=batch, source=relative, research_commit=commit, source_sha256=_sha(source),
+                                 counts=dict(total=total, deferred=total, ported=0), reason=reason)
+    return entries
+
+
 def main(argv=None):
     """Write (or ``--check``) one batch of ported tests and update the provenance record."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -387,12 +472,15 @@ def main(argv=None):
     parser.add_argument("--check", action="store_true", help="compare with the committed files; write nothing")
     args = parser.parse_args(argv)
     outputs = port_batch(args.research, args.batch)
+    whole = deferred_files(args.research, args.batch)
     record = json.loads(RECORD.read_text(encoding="utf-8")) if RECORD.exists() else dict(
         description="Ported research tests (plan section 6, item 16): source, research commit, sha256 of the source and "
                     "of the output (newlines normalized), per-file counts and every transform. Written by tools/port_tests.py.",
         files={})
+    record.setdefault("deferred_files", {})
     if args.check:
-        problems = []
+        problems = [f"deferred file record differs: {name}" for name, entry in whole.items()
+                    if record["deferred_files"].get(name) != entry]
         for target, (text, entry) in outputs.items():
             path = PROJECT / target
             if not path.exists() or path.read_text(encoding="utf-8").replace("\r\n", "\n") != text:
@@ -411,7 +499,11 @@ def main(argv=None):
         record["files"][target] = entry
         counts = entry["counts"]
         print(target, f"ported {counts['ported']} / deferred {counts['deferred']} / total {counts['total']}" if counts else "(helper)")
+    for name, entry in whole.items():
+        record["deferred_files"][name] = entry
+        print(name, f"ported 0 / deferred {entry['counts']['deferred']} / total {entry['counts']['total']} (deferred whole)")
     record["files"] = dict(sorted(record["files"].items()))
+    record["deferred_files"] = dict(sorted(record["deferred_files"].items()))
     RECORD.write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8", newline="\n")
     return 0
 

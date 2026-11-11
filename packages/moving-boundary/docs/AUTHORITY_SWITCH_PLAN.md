@@ -19,7 +19,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M5b | Regeneration verification of adopted inputs | done 2026-11-10 (12/12 verified; see log) |
 | M6 | Normal/historical split, package-role repeatability | done 2026-11-10 (see log) |
 | M7 | Approval path | done 2026-11-10: M7a `approval_criteria` adopted (user-approved); M7b approval path (see log) |
-| M8 | Test port (item 16), 4 batches | in progress: batches 1-2 done 2026-11-10 (see log) |
+| M8 | Test port (item 16), 4 batches | in progress: batches 1-3 done 2026-11-10 (see log) |
 | M9 | Independence proof + missing-resource matrix | not started |
 | M10 | Docs + final recorded gates | not started |
 
@@ -357,6 +357,38 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
     - `--check` identical for batches 1 and 2;
     - `test_port_tests.py` 8;
     - full `tests/` 703 passed, 5 skipped, 1 deselected.
+- **M8 batch 3 (2026-11-10).**
+  - Per file, ported / deferred / total:
+    - `test_illingworth_ternary_three_phase_similarity.py` 8/0/8;
+    - `test_illingworth_interstitials_ternary.py` 8/0/8;
+    - `test_illingworth_ternary_physical_scale.py` 6/0/6;
+    - `test_similarity_comparison_basis.py` 2/0/2;
+    - `test_illingworth_ternary_similarity.py` 2/0/2;
+    - deferred whole, recorded under `deferred_files`: `test_illingworth_ternary_convergence.py`
+      0/5/5 and `test_three_phase_examples.py` 0/3/3.
+    Total 26 of 34, as planned.
+  - *Relocated example helpers:* the tests import the similarity helpers from the research
+    example scripts `ternaryTwoPhaseSimilarity`/`ternaryThreePhaseSimilarity`. They now bind
+    `moving_boundary.analytic`, where §6 and FUTURE_PORTS record the helpers as ported; all 10
+    names exist there. The example paths remain only in docstring prose. No test checks the
+    example scripts themselves, so none was flagged.
+  - *Patches across the module split (new transform):*
+    - `test_ternary_initial_eta_componentwise_scaling...` in `interstitials_ternary` failed first.
+      It patches `_COMPONENTWISE_ROUNDOFF_FACTOR` on the research ternary module, where both
+      that constant and `estimate_initial_eta_from_instantaneous_balance` lived. The package
+      moved both into `illingworth/shared.py`, and `ternary.py` re-imports them, so patching
+      `ternary` no longer reached the function. This is a relocation effect, not a numerical
+      difference.
+    - New hand-written `tests/ported_helpers/relocation.py`: `setattr_owners` patches the name
+      on the module and on every package module along its `from … import` chain, with the same
+      value.
+    - The tool uses it only where the chain is longer than one, or the name is not a literal,
+      and records each use. Batch 4 has 10 module-attribute patches that this covers.
+  - Results:
+    - 36 ported items pass (75 s; also under importlib mode);
+    - `--check` identical for batches 1-3;
+    - `test_port_tests.py` 9;
+    - full `tests/` 740 passed, 5 skipped, 1 deselected, in 204 s (up from 140 s).
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -801,9 +833,10 @@ separate "approve references" commit.
   - [x] 2: binary_variable_diffusivity (14, plus `test_diffusion` helpers already reproduced in
         `test_binary_deviation_form.py`), interstitials (13), transformed_grids (16) (done
         2026-11-10: 43 of 43, see log)
-  - [ ] 3: similarity group (34 across 7 files: three_phase_similarity 8, interstitials_ternary 8,
+  - [x] 3: similarity group (34 across 7 files: three_phase_similarity 8, interstitials_ternary 8,
         physical_scale 6, convergence 5, three_phase_examples 3, similarity_comparison_basis 2,
         ternary_similarity 2). Tests that only check research example scripts are flagged, not forced.
+        (done 2026-11-10: 26 of 34, the 8 deferred whole as planned; see log)
   - [ ] 4: ternary (155)
 - **Before batch 1 (M0):** check the other research `test_surrogate*.py` files and
   `test_fecrni_surrogate_artifact_recipe.py` for solver-relevant coverage and report them, without

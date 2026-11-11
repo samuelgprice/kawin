@@ -125,6 +125,32 @@ def test_subset_helpers_copy_only_what_the_selected_names_need():
         tool.extract_subset("from data import *\n\ndef f():\n    return TDB\n", ["f"], "kawin/tests/test_helper.py")
 
 
+def test_patches_follow_the_package_reimport_chain(monkeypatch):
+    """A research module global now re-imported from another package module is patched on both."""
+    import moving_boundary.solvers.illingworth.shared as shared
+    import moving_boundary.solvers.illingworth.ternary as ternary
+    from ported_helpers.relocation import owner_chain, setattr_owners
+    assert owner_chain(ternary, "_COMPONENTWISE_ROUNDOFF_FACTOR") == [
+        (ternary, "_COMPONENTWISE_ROUNDOFF_FACTOR"), (shared, "_COMPONENTWISE_ROUNDOFF_FACTOR")]
+    assert owner_chain(ternary, "MovingBoundaryIllingworthTernaryFD1DModel") == [(ternary, "MovingBoundaryIllingworthTernaryFD1DModel")]
+    marker = object()
+    with monkeypatch.context() as patch:
+        setattr_owners(patch, ternary, "_COMPONENTWISE_ROUNDOFF_FACTOR", marker)
+        assert ternary._COMPONENTWISE_ROUNDOFF_FACTOR is marker and shared._COMPONENTWISE_ROUNDOFF_FACTOR is marker
+    assert shared._COMPONENTWISE_ROUNDOFF_FACTOR == 64.0 and ternary._COMPONENTWISE_ROUNDOFF_FACTOR == 64.0
+    tool = _tool()
+    source = ("import kawin.diffusion.MovingBoundaryIllingworthTernaryFDM as fdm\n\n\ndef test_a(monkeypatch, name):\n"
+              "    monkeypatch.setattr(fdm, \"_COMPONENTWISE_ROUNDOFF_FACTOR\", 1e-300)\n"
+              "    monkeypatch.setattr(fdm, \"MovingBoundaryIllingworthTernaryFD1DModel\", None)\n"
+              "    monkeypatch.setattr(fdm, name, None, raising=False)\n")
+    text, transforms, _, _ = tool.port_text(source, "kawin/tests/test_x.py", header=HEADER)
+    assert "from ported_helpers.relocation import setattr_owners" in text
+    assert 'setattr_owners(monkeypatch, fdm, "_COMPONENTWISE_ROUNDOFF_FACTOR", 1e-300)' in text
+    assert 'monkeypatch.setattr(fdm, "MovingBoundaryIllingworthTernaryFD1DModel", None)' in text  # defined there: unchanged
+    assert "setattr_owners(monkeypatch, fdm, name, None, raising=False)" in text  # not a literal: resolved at run time
+    assert sum(item["kind"] == "monkeypatch through the package re-import chain" for item in transforms) == 2
+
+
 def test_ported_files_match_their_record():
     """Every ported file is byte-for-byte (newlines normalized) what the recorded port produced."""
     record = json.loads((PROJECT / "docs/test-port-provenance.json").read_text(encoding="utf-8"))

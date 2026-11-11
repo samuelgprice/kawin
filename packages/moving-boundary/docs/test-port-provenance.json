@@ -222,6 +222,94 @@
     }
    ]
   },
+  "tests/test_illingworth_interstitials_ternary.py": {
+   "batch": 3,
+   "source": "kawin/tests/test_illingworth_interstitials_ternary.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "2b4936f581e1b9972c317f0ecafe1269baccf84a6d64376b6ad46253b93be314",
+   "output_sha256": "b313357dc2863e9d3f4f564ef79fff59a147a1cc8689ff4376497fbf3813714e",
+   "counts": {
+    "total": 8,
+    "deferred": 0,
+    "ported": 8
+   },
+   "transforms": [
+    {
+     "kind": "monkeypatch through the package re-import chain",
+     "line": 275,
+     "call": "monkeypatch.setattr(ternary_fdm, \"_COMPONENTWISE_ROUNDOFF_FACTOR\", 1e-300)",
+     "owners": [
+      "moving_boundary.solvers.illingworth.ternary._COMPONENTWISE_ROUNDOFF_FACTOR",
+      "moving_boundary.solvers.illingworth.shared._COMPONENTWISE_ROUNDOFF_FACTOR"
+     ]
+    },
+    {
+     "kind": "import",
+     "research": "(none)",
+     "package": "ported_helpers.relocation.setattr_owners"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.FixedMatrixTernaryDiffusivity",
+     "package": "moving_boundary.analytic.FixedMatrixTernaryDiffusivity"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.compare_model_to_similarity",
+     "package": "moving_boundary.analytic.compare_model_to_similarity"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.solve_similarity_roots",
+     "package": "moving_boundary.analytic.solve_similarity_roots"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFDM",
+     "package": "moving_boundary.solvers.illingworth.ternary"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.CallableTernaryInterfaceEquilibrium",
+     "package": "moving_boundary.CallableTernaryInterfaceEquilibrium"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.estimate_initial_eta_from_instantaneous_balance",
+     "package": "moving_boundary.estimate_initial_eta_from_instantaneous_balance"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.StepProfile1D",
+     "package": "moving_boundary.mesh.StepProfile1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.landau_grid",
+     "package": "moving_boundary.mesh.TransformedGrids.landau_grid"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.two_phase_landau_grids",
+     "package": "moving_boundary.mesh.TransformedGrids.two_phase_landau_grids"
+    }
+   ]
+  },
   "tests/test_illingworth_interstitials_three_phase.py": {
    "batch": 1,
    "source": "kawin/tests/test_illingworth_interstitials_three_phase.py",
@@ -330,6 +418,134 @@
     }
    ]
   },
+  "tests/test_illingworth_ternary_physical_scale.py": {
+   "batch": 3,
+   "source": "kawin/tests/test_illingworth_ternary_physical_scale.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "1efea00ee3d7aaa2ba7d1d9431a3f57a93d0c2e092bed7fd078895823afc0822",
+   "output_sha256": "47d7afe13b3bf71a0d390649422020474d3dea10459f9fd3f7450f8be84c92cb",
+   "counts": {
+    "total": 6,
+    "deferred": 0,
+    "ported": 6
+   },
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.FixedMatrixTernaryDiffusivity",
+     "package": "moving_boundary.analytic.FixedMatrixTernaryDiffusivity"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.solve_similarity_roots",
+     "package": "moving_boundary.analytic.solve_similarity_roots"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.CallableTernaryInterfaceEquilibrium",
+     "package": "moving_boundary.CallableTernaryInterfaceEquilibrium"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.estimate_initial_eta_from_instantaneous_balance",
+     "package": "moving_boundary.estimate_initial_eta_from_instantaneous_balance"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.StepProfile1D",
+     "package": "moving_boundary.mesh.StepProfile1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.two_phase_landau_grids",
+     "package": "moving_boundary.mesh.TransformedGrids.two_phase_landau_grids"
+    }
+   ]
+  },
+  "tests/test_illingworth_ternary_similarity.py": {
+   "batch": 3,
+   "source": "kawin/tests/test_illingworth_ternary_similarity.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "bee5b94811064c78d71671573d3a011a99bc0e73cc5a39df92a5160b1530756a",
+   "output_sha256": "80d3bdbcedf65c98ad0f68ef9f535d5ff8b184f0ad4b5edd360e4fb7d979e1b8",
+   "counts": {
+    "total": 2,
+    "deferred": 0,
+    "ported": 2
+   },
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.FixedMatrixTernaryDiffusivity",
+     "package": "moving_boundary.analytic.FixedMatrixTernaryDiffusivity"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.compare_model_to_similarity",
+     "package": "moving_boundary.analytic.compare_model_to_similarity"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.semi_infinite_validity_time",
+     "package": "moving_boundary.analytic.semi_infinite_validity_time"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.solve_similarity_roots",
+     "package": "moving_boundary.analytic.solve_similarity_roots"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.CallableTernaryInterfaceEquilibrium",
+     "package": "moving_boundary.CallableTernaryInterfaceEquilibrium"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.StepProfile1D",
+     "package": "moving_boundary.mesh.StepProfile1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.two_phase_landau_grids",
+     "package": "moving_boundary.mesh.TransformedGrids.two_phase_landau_grids"
+    }
+   ]
+  },
   "tests/test_illingworth_ternary_three_phase.py": {
    "batch": 1,
    "source": "kawin/tests/test_illingworth_ternary_three_phase.py",
@@ -426,6 +642,104 @@
      "kind": "string",
      "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D",
      "package": "moving_boundary.solvers.illingworth.numerics.ternary"
+    }
+   ]
+  },
+  "tests/test_illingworth_ternary_three_phase_similarity.py": {
+   "batch": 3,
+   "source": "kawin/tests/test_illingworth_ternary_three_phase_similarity.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "1dc0db22a6a97aac314ab3f9efacf366469e1e5f597bf5213f31816f22412b5c",
+   "output_sha256": "094f8e0ae34a4e633c57e10cd822e128844ae1621545346f1d1a6b6a82b679fe",
+   "counts": {
+    "total": 8,
+    "deferred": 0,
+    "ported": 8
+   },
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryThreePhaseSimilarity.SimilarityInitialProfile",
+     "package": "moving_boundary.analytic.SimilarityInitialProfile"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryThreePhaseSimilarity.compare_three_phase_model_to_similarity",
+     "package": "moving_boundary.analytic.compare_three_phase_model_to_similarity"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryThreePhaseSimilarity.solve_three_phase_similarity_roots",
+     "package": "moving_boundary.analytic.solve_three_phase_similarity_roots"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryThreePhaseSimilarity.tie_line_crossing_etas",
+     "package": "moving_boundary.analytic.tie_line_crossing_etas"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.FixedMatrixTernaryDiffusivity",
+     "package": "moving_boundary.analytic.FixedMatrixTernaryDiffusivity"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.semi_infinite_validity_time",
+     "package": "moving_boundary.analytic.semi_infinite_validity_time"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.CallableTernaryInterfaceEquilibrium",
+     "package": "moving_boundary.CallableTernaryInterfaceEquilibrium"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.landau_grid",
+     "package": "moving_boundary.mesh.TransformedGrids.landau_grid"
+    }
+   ]
+  },
+  "tests/test_similarity_comparison_basis.py": {
+   "batch": 3,
+   "source": "kawin/tests/test_similarity_comparison_basis.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "1cbeb810469bc5b0cfa92a109c8ca2ec656e92fa28a1815f476244c99f4fd941",
+   "output_sha256": "23fb3448dfad92bbf1c016f7ff89e711a6af7e850b5ed3e6e5c1dfd63376f71a",
+   "counts": {
+    "total": 2,
+    "deferred": 0,
+    "ported": 2
+   },
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.compare_model_to_similarity",
+     "package": "moving_boundary.analytic.compare_model_to_similarity"
+    },
+    {
+     "kind": "import",
+     "research": "examples.ternaryExamples.ternaryTwoPhaseSimilarity.solve_similarity_roots",
+     "package": "moving_boundary.analytic.solve_similarity_roots"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.CallableTernaryInterfaceEquilibrium",
+     "package": "moving_boundary.CallableTernaryInterfaceEquilibrium"
     }
    ]
   },
@@ -585,6 +899,32 @@
      "package": "ported_helpers.ternary_helpers._LinearInterfaceEquilibrium"
     }
    ]
+  }
+ },
+ "deferred_files": {
+  "kawin/tests/test_illingworth_ternary_convergence.py": {
+   "batch": 3,
+   "source": "kawin/tests/test_illingworth_ternary_convergence.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "55ffe6203fd79fef1a41c0ca787018780911dba9a3449cdbb276b79a5160733f",
+   "counts": {
+    "total": 5,
+    "deferred": 5,
+    "ported": 0
+   },
+   "reason": "needs IllingworthTernaryConvergence (FUTURE_PORTS entry 4)"
+  },
+  "kawin/tests/test_three_phase_examples.py": {
+   "batch": 3,
+   "source": "kawin/tests/test_three_phase_examples.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "05c4b5c529ea1ef876e5dfb0e6c829cd272b9190032b4df02ac8f2591ef7481b",
+   "counts": {
+    "total": 3,
+    "deferred": 3,
+    "ported": 0
+   },
+   "reason": "tests the research script IllingworthTernaryThreePhaseStable (FUTURE_PORTS entry 6)"
   }
  }
 }
