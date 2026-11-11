@@ -101,14 +101,19 @@ this package into it (no `pip install -e`): acceptance builds a fresh wheel from
 checkout it runs in and installs it into a private target, and an editable install would
 put one particular checkout's `src` on every normally started process's `sys.path`. To
 run the package tests directly, activate `mb-public-050`, install this checkout into a
-private folder and put that folder on `PYTHONPATH` (plus `MB_EXAMPLE_TDB` for the database
-tests):
+**new, empty** private folder and put that folder on `PYTHONPATH` (plus `MB_EXAMPLE_TDB`
+for the database tests). Use a fresh folder name for every revision you test, e.g. one
+named after the commit or a timestamp:
 
-    python -m pip install <package> --no-deps --no-build-isolation --no-index --target <scratch>\mb-target
-    set "PYTHONPATH=<scratch>\mb-target"
-    python -m pytest tests --basetemp <scratch>\pytest
+    mkdir <scratch>\mb-target-<rev> && python -m pip install <package> --no-deps --no-build-isolation --no-index --target <scratch>\mb-target-<rev>
+    set "PYTHONPATH=<scratch>\mb-target-<rev>"
+    python -m pytest tests --basetemp <scratch>\pytest-<rev>
 
-Reinstall after editing the package. `PYTHONPATH=<package>/src` alone is not enough: the
+Never reinstall into an existing target folder. `pip install --target` into a folder that
+already holds the package can exit successfully, with only warnings, while leaving the old
+module in place, and it never removes modules deleted since. The tests would then silently
+run stale code. `mkdir` fails if the folder exists, which stops the command. Delete old
+targets when you're done with them. `PYTHONPATH=<package>/src` alone is not enough: the
 FeCrNi example records the installed distribution's version, so its five tests need the
 installed metadata.
 

@@ -558,6 +558,10 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
       (`pip install <package> --no-deps --no-build-isolation --no-index --target <scratch>`) on
       `PYTHONPATH`. From the export, guarded, that gives 1036 passed, 5 skipped, 4 deselected,
       0 violations.
+    - Correction (user review after M10): installing into an existing target folder can
+      silently keep the old module. The user reproduced this: pip exits successfully with
+      warnings, and modules deleted since are never removed. The README now requires a new,
+      empty target folder per revision (`mkdir` first, so a reused name fails).
     - The example is unchanged: it is meant to run against an installed package.
   - Environment instructions are updated in README "Local acceptance" and `docs/HANDOFF.md`.
 - **M10 (2026-11-11): docs and final recorded gates.**

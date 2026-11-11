@@ -81,8 +81,12 @@ last research oracle; it is never moved again.
   --cases ... --reason "LEDGERS Rxx"`. It runs the whole test suite, a repeat pair for every
   case, the registered `approval_criteria`, and a public-tolerance check of every unlisted case.
   It then promotes immutable, hash-recorded artifacts under
-  `.verification/acceptance/reference-approved/` and commits only the manifest entry and the
-  report under `docs/approvals/`. `approve --rollback ID` points those cases back.
+  `.verification/acceptance/reference-approved/` (local, never committed) and writes the
+  manifest entry (`tools/acceptance_manifest.json`) and the report (`docs/approvals/<id>.json`).
+  `approve` does not commit anything. Committing those two files is a separate manual step,
+  done separately from the solver change; the report must be force-added (`git add -f`). The
+  approval takes effect locally as soon as it is written. `approve --rollback ID` points those
+  cases back, and its manifest change is committed the same way.
   `reference/` is never rewritten. No real approval exists yet.
 - **Item 7.** Contract cases C25-C29 compare with per-model molar-volume scales
   (`contract_model_scales`, user-approved), as run cases do.
