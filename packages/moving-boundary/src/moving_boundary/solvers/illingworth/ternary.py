@@ -330,6 +330,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._solveMinDtFrac = 1e-8
         self._solveMaxDtFrac = 1.0
         self._pendingCandidate = None
+        self._awaitingFreshCandidate = False
         self._reset_implicit_diagnostics()
         # Cumulative round-off floor projections over committed steps (signed and
         # absolute inventory change, projected nodes; staged in
@@ -745,6 +746,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._solveMinDtFrac = 1e-8
         self._solveMaxDtFrac = 1.0
         self._pendingCandidate = None
+        self._awaitingFreshCandidate = False
         self._reset_implicit_diagnostics()
         # Cumulative round-off floor projections over committed steps (signed and
         # absolute inventory change, projected nodes; staged in
@@ -2506,8 +2508,15 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         converged step below the outer minimum raises ``ValueError`` unless it
         is the exact final remainder; the converged state is staged in
         ``_pendingCandidate`` for ``postProcess`` to verify.
+
+        A proposal counts as rejected from its start until it succeeds
+        (``_awaitingFreshCandidate``), so if this raises (retry exhaustion,
+        subminimum step, terminal thin-phase check), ``postProcess`` refuses
+        every commit and drops anything staged until a later call succeeds.
         """
         self._pendingCandidate = None
+        self._pendingStepProjection = None
+        self._awaitingFreshCandidate = True
         p = np.asarray(xCurr[0], dtype=np.float64).reshape((-1, 2))
         q = np.asarray(xCurr[1], dtype=np.float64).reshape((-1, 2))
         s = self._clipInterfacePosition(float(xCurr[2]), strict=True)
@@ -2519,12 +2528,14 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         q[0] = c_right
         dt = self._compute_dt(t)
         if self._nearFinalNoop:
+            self._awaitingFreshCandidate = False
             return [np.zeros_like(p), np.zeros_like(q), 0.0, 0.0]
 
         trial_dt = float(dt)
         dXdt, trial_dt, last_error = self._try_step_retries(p, q, s, eta, trial_dt, self.maxStepRetries, start_time=t)
         if dXdt is not None:
             self._check_pending_timestep_against_outer_minimum(t, trial_dt)
+            self._awaitingFreshCandidate = False
             return dXdt
 
         thin_phase = self._single_terminal_thin_phase(s)
@@ -2554,6 +2565,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                         "time": float(t),
                         "dt": float(self._currdt),
                     }
+                    self._awaitingFreshCandidate = False
                     return dXdt
                 if extra_error is not None:
                     last_error = extra_error
@@ -2608,9 +2620,24 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         from the candidate solved in ``getdXdt`` (for example after an outer
         timestep clamp), the implicit equations were not solved for that state,
         so this raises ``RuntimeError`` before any accepted state, history or
-        projection total changes. Without a staged candidate (``postProcess``
-        called directly) nothing is checked.
+        projection total changes. See ``_pending_step_mismatches`` for the
+        tolerances.
+
+        Rejection lifecycle: a mismatch, or an exception while checking,
+        discards the candidate, the staged projection totals and the terminal
+        thin-phase stop, and sets ``_awaitingFreshCandidate``. While it is set
+        (also after a failed ``getdXdt`` or an interrupted commit), every
+        commit is refused the same way, including a resubmission and the
+        originally correct update, until ``getdXdt`` solves a new candidate. A
+        model that has never proposed a step has no candidate and is not
+        awaiting one, so a direct ``postProcess`` commits unchecked, as before.
         """
+        if self._awaitingFreshCandidate:
+            self._reject_pending_proposal()
+            raise RuntimeError(
+                "Cannot commit a ternary state: the last proposed step was rejected or failed and no new "
+                "candidate has been solved since; call getdXdt again. Accepted state was not advanced."
+            )
         pending = self._pendingCandidate
         if pending is None:
             return
@@ -2623,33 +2650,41 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 ("left profile", "right profile", "interface", "eta"),
             )
         except Exception:
-            self._pendingCandidate = None
+            self._reject_pending_proposal()
             raise
         if mismatches:
-            self._pendingCandidate = None
-            self._pendingStepProjection = None
-            self._terminalThinPhaseStop = False
-            self._terminalThinPhaseInfo = None
+            self._reject_pending_proposal()
             raise RuntimeError(
                 "Outer solver update does not match the pending converged ternary candidate "
                 f"({', '.join(mismatches)}); accepted state was not advanced."
             )
+
+    def _reject_pending_proposal(self):
+        """Discards everything staged for the proposal and refuses commits until a new candidate is solved."""
+        self._pendingCandidate = None
+        self._pendingStepProjection = None
+        self._terminalThinPhaseStop = False
+        self._terminalThinPhaseInfo = None
+        self._awaitingFreshCandidate = True
 
     def postProcess(self, time, x):
         """
         Commits the wrapper's update after checking it against the pending candidate.
 
         See ``_verify_pending_candidate``; a near-final no-op step only advances
-        time and stops the solve.
+        time and stops the solve. Once checked, the candidate is consumed and
+        ``_awaitingFreshCandidate`` stays set until the commit completes, so an
+        update whose commit raised part-way cannot be resubmitted unchecked.
         """
+        self._verify_pending_candidate(time, x)
         if self._nearFinalNoop:
             self.currentTime = time
             self._nearFinalNoop = False
             self._pendingStepProjection = None
             self._pendingCandidate = None
             return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr, self._eta_curr], True
-        self._verify_pending_candidate(time, x)
         self._pendingCandidate = None
+        self._awaitingFreshCandidate = True
         GenericModel.postProcess(self, time, x)
         p = np.asarray(x[0], dtype=np.float64).reshape((-1, 2)).copy()
         q = np.asarray(x[1], dtype=np.float64).reshape((-1, 2)).copy()
@@ -2678,6 +2713,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._eta_curr = float(eta)
         self._commit_pending_step_projection()
         self.updateCoupledModels()
+        self._awaitingFreshCandidate = False
         if self._terminalThinPhaseStop:
             self.finalTime = time
             self._terminalThinPhaseStop = False

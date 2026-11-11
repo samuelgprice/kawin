@@ -290,3 +290,215 @@ def test_pending_candidate_rejects_outer_mismatch_without_commit(family):
     assert model._pendingCandidate is None
     for got, want in zip(model.getCurrentX(), before):
         np.testing.assert_array_equal(np.asarray(got, dtype=np.float64), want)
+
+
+# --- Commit-guard follow-ups: large time origins and the rejection lifecycle ----------------
+
+_LARGE_TIME = 1.0e9
+
+
+def _proposed_step(family, start_time=0.0, time_step=1.0e-4):
+    """Returns ``(model, x, dXdt, dt)`` for one proposed (uncommitted) step starting at ``start_time``."""
+    build = _FAMILIES[family][0]
+    model = build(time_step)
+    model.setup()
+    model.setTimeInfo(start_time, 1.0)
+    model.currentTime = start_time
+    x = model.getCurrentX()
+    dXdt = model.getdXdt(start_time, x)
+    return model, x, dXdt, model.getDt(dXdt)
+
+
+def _euler_update(x, dXdt, dt):
+    return [np.asarray(x[i], dtype=np.float64) + np.asarray(dXdt[i], dtype=np.float64) * dt for i in range(len(x))]
+
+
+def _accepted_snapshot(model):
+    """Accepted time, state, history lengths and (ternary) cumulative projection totals."""
+    snapshot = {
+        "time": model.currentTime,
+        "state": [np.asarray(part, dtype=np.float64).copy() for part in model.getCurrentX()],
+        "interface_N": model.interfaceData.N,
+        "data_N": model.data.N,
+    }
+    if hasattr(model, "_cumulativeProjectedNodes"):
+        snapshot["projection"] = (
+            model._cumulativeProjectionInventoryChange.copy(),
+            model._cumulativeProjectionAbsoluteChange.copy(),
+            model._cumulativeProjectedNodes,
+        )
+    return snapshot
+
+
+def _assert_not_advanced(model, snapshot):
+    after = _accepted_snapshot(model)
+    assert after["time"] == snapshot["time"]
+    assert after["interface_N"] == snapshot["interface_N"]
+    assert after["data_N"] == snapshot["data_N"]
+    for got, want in zip(after["state"], snapshot["state"]):
+        np.testing.assert_array_equal(got, want)
+    if "projection" in snapshot:
+        np.testing.assert_array_equal(after["projection"][0], snapshot["projection"][0])
+        np.testing.assert_array_equal(after["projection"][1], snapshot["projection"][1])
+        assert after["projection"][2] == snapshot["projection"][2]
+        assert model._pendingStepProjection is None
+    assert model._pendingCandidate is None
+
+
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_valid_update_at_large_start_time_is_committed(family):
+    model, x, dXdt, dt = _proposed_step(family, start_time=_LARGE_TIME)
+    model.postProcess(_LARGE_TIME + dt, _euler_update(x, dXdt, dt))
+    assert model.currentTime == _LARGE_TIME + dt
+    assert model.interfaceData.N == 1
+
+
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_solve_from_large_start_time_passes_verification(family):
+    build = _FAMILIES[family][0]
+    model = build(1.0e-4)
+    model.setup()
+    model.currentTime = _LARGE_TIME
+    model.solve(1.0e-3, minDtFrac=1.0e-14)
+    assert model.currentTime == pytest.approx(_LARGE_TIME + 1.0e-3, rel=0.0, abs=4.0 * np.spacing(_LARGE_TIME))
+    assert model.interfaceData.N >= 10
+
+
+@pytest.mark.parametrize("fraction", [0.5, 0.99, 1.01])
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_wrong_timestamp_at_large_start_time_is_rejected(family, fraction):
+    """The full candidate state with a wrong elapsed time fails, however large the time origin."""
+    model, x, dXdt, dt = _proposed_step(family, start_time=_LARGE_TIME)
+    before = _accepted_snapshot(model)
+    with pytest.raises(RuntimeError, match=r"does not match the pending converged .*timestep"):
+        model.postProcess(_LARGE_TIME + fraction * dt, _euler_update(x, dXdt, dt))
+    _assert_not_advanced(model, before)
+
+
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_rejected_update_cannot_be_resubmitted_until_a_new_candidate_is_solved(family):
+    model, x, dXdt, dt = _proposed_step(family)
+    before = _accepted_snapshot(model)
+    half = _euler_update(x, dXdt, 0.5 * dt)
+
+    with pytest.raises(RuntimeError, match="does not match the pending converged"):
+        model.postProcess(0.5 * dt, half)
+    _assert_not_advanced(model, before)
+    for attempt_time, attempt in ((0.5 * dt, half), (0.5 * dt, half), (dt, _euler_update(x, dXdt, dt))):
+        # Repeated rejection, including the originally correct update: its candidate was discarded.
+        with pytest.raises(RuntimeError, match="no new candidate has been solved"):
+            model.postProcess(attempt_time, attempt)
+        _assert_not_advanced(model, before)
+
+    # Recovery: a freshly solved candidate commits normally.
+    x = model.getCurrentX()
+    dXdt = model.getdXdt(0.0, x)
+    dt = model.getDt(dXdt)
+    model.postProcess(dt, _euler_update(x, dXdt, dt))
+    assert model.currentTime == dt
+    assert model.interfaceData.N == 1
+    assert model._pendingCandidate is None
+
+
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_malformed_update_rejects_the_proposal(family):
+    """An exception while checking the update also rejects the proposal."""
+    model, x, dXdt, dt = _proposed_step(family)
+    before = _accepted_snapshot(model)
+    with pytest.raises(IndexError):
+        model.postProcess(dt, _euler_update(x, dXdt, dt)[:2])
+    _assert_not_advanced(model, before)
+    with pytest.raises(RuntimeError, match="no new candidate has been solved"):
+        model.postProcess(dt, _euler_update(x, dXdt, dt))
+    _assert_not_advanced(model, before)
+
+
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_failed_or_subminimum_proposal_blocks_direct_commit(family):
+    build, _sim_time, time_step, _max_frac, _drift_bound = _FAMILIES[family]
+    model = build(time_step)
+    model.setup()
+    model.setTimeInfo(0.0, 1.0)
+    x = model.getCurrentX()
+    before = _accepted_snapshot(model)
+    original_step = model._take_implicit_step_planar
+
+    def always_fail(*args):
+        raise RuntimeError("forced failure")
+
+    model._take_implicit_step_planar = always_fail
+    with pytest.raises((RuntimeError, ValueError)):
+        model.getdXdt(0.0, x)
+    with pytest.raises(RuntimeError, match="no new candidate has been solved"):
+        model.postProcess(time_step, model.getCurrentX())
+    _assert_not_advanced(model, before)
+
+    # A converged retry below the outer minimum is rejected the same way.
+    model._take_implicit_step_planar = original_step
+    model._solveMinDtFrac = 0.5
+    model.setTimeInfo(0.0, 4.0 * time_step)
+    calls = []
+
+    def fail_twice(*args):
+        calls.append(args[-1])
+        if len(calls) <= 2:
+            raise RuntimeError("forced retry")
+        return original_step(*args)
+
+    model._take_implicit_step_planar = fail_twice
+    with pytest.raises(ValueError, match="smaller than the outer solver minimum"):
+        model.getdXdt(0.0, model.getCurrentX())
+    with pytest.raises(RuntimeError, match="no new candidate has been solved"):
+        model.postProcess(time_step / 4, model.getCurrentX())
+    _assert_not_advanced(model, before)
+
+    # Recovery through a newly solved candidate.
+    model._take_implicit_step_planar = original_step
+    model._solveMinDtFrac = 1.0e-14
+    model.setTimeInfo(0.0, 1.0)
+    x = model.getCurrentX()
+    dXdt = model.getdXdt(0.0, x)
+    dt = model.getDt(dXdt)
+    model.postProcess(dt, _euler_update(x, dXdt, dt))
+    assert model.currentTime == dt
+
+
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_direct_post_process_without_any_proposal_is_still_accepted(family):
+    """Compatibility: a model that never proposed a step may commit directly (nothing to verify)."""
+    build = _FAMILIES[family][0]
+    model = build(1.0e-4)
+    model.setup()
+    model.postProcess(1.0e-4, model.getCurrentX())
+    assert model.currentTime == 1.0e-4
+    model.postProcess(2.0e-4, model.getCurrentX())
+    assert model.currentTime == 2.0e-4
+
+
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_interrupted_commit_cannot_be_resubmitted_unchecked(family):
+    """A commit that raises after verification consumed the candidate leaves commits refused.
+
+    Rolling back what the interrupted commit already changed is LEDGERS R10; this only
+    checks that the same update cannot then pass through the no-candidate exemption.
+    """
+    model, x, dXdt, dt = _proposed_step(family)
+    update = _euler_update(x, dXdt, dt)
+
+    def coupled_failure():
+        raise RuntimeError("forced coupled-model failure")
+
+    model.updateCoupledModels = coupled_failure
+    with pytest.raises(RuntimeError, match="forced coupled-model failure"):
+        model.postProcess(dt, update)
+    del model.updateCoupledModels
+    with pytest.raises(RuntimeError, match="no new candidate has been solved"):
+        model.postProcess(dt, update)
+
+    x = model.getCurrentX()
+    dXdt = model.getdXdt(model.currentTime, x)
+    step = model.getDt(dXdt)
+    start = model.currentTime
+    model.postProcess(start + step, _euler_update(x, dXdt, step))
+    assert model.currentTime == start + step
+    assert model._pendingCandidate is None

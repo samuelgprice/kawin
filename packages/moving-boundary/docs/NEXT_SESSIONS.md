@@ -95,7 +95,9 @@ to `three_phase.py`/`shared.py` on 2026-11-10. Open solver findings:
 (2026-11-08): outer timestep clamping, binary tolerance scaling, sparse histories,
 failure recovery, incomplete restart loading and numerical-control validation.
 R07/R08 are the highest-priority numerical investigations. R07 (outer timestep clamping) is
-fixed in the package (2026-11-11); the other five are open.
+fixed in the package (2026-11-11), including a follow-up to its commit guard (elapsed-step
+timestamp check; commits refused after a rejected proposal until a new candidate is solved).
+The other five are open; R08's tolerance semantics are awaiting the user's decision.
 
 ## Installed solving and research-owned generation
 

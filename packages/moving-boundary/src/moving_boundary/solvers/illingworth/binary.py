@@ -401,6 +401,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._solveMinDtFrac = 1e-8
         self._solveMaxDtFrac = 1.0
         self._pendingCandidate = None
+        self._awaitingFreshCandidate = False
         self._initialInventory = None
 
         self._z = None
@@ -588,6 +589,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._solveMinDtFrac = 1e-8
         self._solveMaxDtFrac = 1.0
         self._pendingCandidate = None
+        self._awaitingFreshCandidate = False
         self._initialInventory = None
         self._z = None
         self._R = None
@@ -1388,8 +1390,13 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         converged step below the outer minimum raises ``ValueError`` unless it
         is the exact final remainder. The converged state is staged in
         ``_pendingCandidate`` for ``postProcess`` to verify.
+
+        A proposal counts as rejected from its start until it succeeds
+        (``_awaitingFreshCandidate``), so if this raises, ``postProcess``
+        refuses every commit until a later call succeeds.
         """
         self._pendingCandidate = None
+        self._awaitingFreshCandidate = True
         p = np.asarray(xCurr[0], dtype=np.float64).reshape(-1)
         q = np.asarray(xCurr[1], dtype=np.float64).reshape(-1)
         s = self._clipInterfacePosition(float(xCurr[2]), strict=True)
@@ -1397,10 +1404,12 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         q[0] = self.interfaceCompositions[1]
         dt = self._compute_dt(t)
         if self._nearFinalNoop:
+            self._awaitingFreshCandidate = False
             return [np.zeros_like(p), np.zeros_like(q), 0.0]
         p_new, q_new, s_new, dt = self._try_step_retries(p, q, s, dt)
         _check_trial_dt_against_outer_minimum(dt, getattr(self, "finalTime", np.inf) - float(t), self._outerMinTimeStep)
         self._stage_pending_candidate(t, dt, (p, q, s), (p_new, q_new, s_new))
+        self._awaitingFreshCandidate = False
         return [(p_new - p) / dt, (q_new - q) / dt, (s_new - s) / dt]
 
     def _committed_state(self, x):
@@ -1439,9 +1448,22 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         from the candidate solved in ``getdXdt`` (for example after an outer
         timestep clamp), the implicit equations were not solved for that state,
         so this raises ``RuntimeError`` before any accepted state or history
-        changes. Without a staged candidate (``postProcess`` called directly)
-        nothing is checked.
+        changes. See ``_pending_step_mismatches`` for the tolerances.
+
+        Rejection lifecycle: a mismatch, or an exception while checking,
+        discards the candidate and sets ``_awaitingFreshCandidate``. While it
+        is set (also after a failed ``getdXdt`` or an interrupted commit),
+        every commit is refused, including a resubmission and the originally
+        correct update, until ``getdXdt`` solves a new candidate. A model that
+        has never proposed a step has no candidate and is not awaiting one, so
+        a direct ``postProcess`` commits unchecked, as before.
         """
+        if self._awaitingFreshCandidate:
+            self._pendingCandidate = None
+            raise RuntimeError(
+                "Cannot commit a binary state: the last proposed step was rejected or failed and no new "
+                "candidate has been solved since; call getdXdt again. Accepted state was not advanced."
+            )
         pending = self._pendingCandidate
         if pending is None:
             return
@@ -1450,14 +1472,19 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
                 pending, self.currentTime, time, self._committed_state(x), ("left profile", "right profile", "interface")
             )
         except Exception:
-            self._pendingCandidate = None
+            self._reject_pending_proposal()
             raise
         if mismatches:
-            self._pendingCandidate = None
+            self._reject_pending_proposal()
             raise RuntimeError(
                 "Outer solver update does not match the pending converged binary candidate "
                 f"({', '.join(mismatches)}); accepted state was not advanced."
             )
+
+    def _reject_pending_proposal(self):
+        """Discards the staged candidate and refuses commits until a new one is solved."""
+        self._pendingCandidate = None
+        self._awaitingFreshCandidate = True
 
     def getDt(self, dXdt):
         if np.isfinite(self._currdt) and self._currdt > 0:
@@ -1491,15 +1518,18 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         Commits the wrapper's update after checking it against the pending candidate.
 
         See ``_verify_pending_candidate``; a near-final no-op step only advances
-        time and stops the solve.
+        time and stops the solve. Once checked, the candidate is consumed and
+        ``_awaitingFreshCandidate`` stays set until the commit completes, so an
+        update whose commit raised part-way cannot be resubmitted unchecked.
         """
+        self._verify_pending_candidate(time, x)
         if self._nearFinalNoop:
             self.currentTime = time
             self._nearFinalNoop = False
             self._pendingCandidate = None
             return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr], True
-        self._verify_pending_candidate(time, x)
         self._pendingCandidate = None
+        self._awaitingFreshCandidate = True
         GenericModel.postProcess(self, time, x)
         p = np.asarray(x[0], dtype=np.float64).reshape(-1).copy()
         q = np.asarray(x[1], dtype=np.float64).reshape(-1).copy()
@@ -1521,6 +1551,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._q_curr = q
         self._s_curr = float(s)
         self.updateCoupledModels()
+        self._awaitingFreshCandidate = False
         return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr], False
 
     def postSolve(self):

@@ -64,6 +64,9 @@ def _loge_arange(start, stop, log_step):
 # Three-phase implements the same contract in its own methods.
 _OUTER_UPDATE_RTOL = 2e-13
 _OUTER_UPDATE_ULPS = 64.0
+# Timestamps: allowance, in units in the last place of the largest time involved,
+# for the elapsed step recovered from the wrapper's ``start + dt``.
+_OUTER_TIME_ULPS = 4.0
 
 
 @dataclass(frozen=True)
@@ -141,19 +144,32 @@ def _pending_step_mismatches(pending, accepted_time, committed_time, state, name
     """
     Lists where the outer Euler update differs from the converged candidate.
 
-    Time is compared with a relative tolerance and a round-off allowance scaled
-    by the times involved (no unit floor). Each state entry ``i`` is compared
-    with ``rtol=2e-13`` and ``atol = 64 eps * pending.scales[i]``; a different
-    committed dt (an outer clamp or correction) fails the comparison.
+    Time: the check is on the elapsed step, ``(committed_time - start) - dt``,
+    not on the absolute timestamp, so a relative tolerance on a large time
+    origin cannot hide a wrong step. The wrapper forms ``start + dt`` in
+    floating point, which resolves the step only to about half an ulp of the
+    result, and the subtraction adds at most another ulp. The allowance is
+    therefore ``4 ulp`` of the largest of the start, committed and accepted
+    times and ``dt``. It grows only with that resolution: about 1.2e-7 at
+    t = 1e9, 1.8e-15 at t = 4, and a few ulp of ``dt`` from t = 0. A step that
+    cannot be resolved at all at the time origin also cannot be detected. The
+    accepted start time must match the candidate's start to the same allowance.
+
+    State: each entry ``i`` is compared with ``rtol=2e-13`` and
+    ``atol = 64 eps * pending.scales[i]``, the round-off of
+    ``old + ((new - old) / dt) * dt``.
     """
     eps = np.finfo(float).eps
-    expected_time = pending.start_time + pending.dt
-    time_scale = max(abs(float(committed_time)), abs(expected_time), abs(pending.start_time), abs(pending.dt))
-    time_atol = _OUTER_UPDATE_ULPS * eps * time_scale
+    start = float(pending.start_time)
+    committed = float(committed_time)
+    accepted = float(accepted_time)
+    time_atol = _OUTER_TIME_ULPS * max(
+        math.ulp(abs(start)), math.ulp(abs(committed)), math.ulp(abs(accepted)), math.ulp(abs(pending.dt))
+    )
     mismatches = []
-    if not np.isclose(float(accepted_time), pending.start_time, rtol=_OUTER_UPDATE_RTOL, atol=time_atol):
+    if not abs(accepted - start) <= time_atol:
         mismatches.append("accepted start time")
-    if not np.isclose(float(committed_time), expected_time, rtol=_OUTER_UPDATE_RTOL, atol=time_atol):
+    if not abs((committed - start) - float(pending.dt)) <= time_atol:
         mismatches.append("timestep")
     for name, actual, expected, scale in zip(names, state, pending.state, pending.scales):
         actual = np.asarray(actual, dtype=np.float64)

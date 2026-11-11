@@ -712,6 +712,38 @@ run explicitly configured to take the same smaller steps.
   33 repeat pairs, gate pytest 145, 454 s; exact full 40/40 + 5 bit-identical,
   34 repeat pairs, 552 s, O06 run against live TC.
 
+**Follow-up (2026-11-11): two commit-guard gaps in the resolution above.**
+Both reproduced against `ce1c990` in both families.
+- *Large time origins.* With `currentTime=1e9` and a 1e-4 step, `postProcess` at
+  `start + 5e-5` with the full candidate state was accepted, because the relative
+  tolerance on the absolute timestamp (2e-13 * 1e9 = 2e-4) hid the half step. The
+  check now compares the elapsed step, `(time - start) - dt`, with 4 ulp of the
+  largest time involved. That is the resolution of the wrapper's `start + dt`:
+  about 1.2e-7 at t = 1e9, and a few ulp of dt from t = 0.
+- *Rejection lifecycle.* A rejected update cleared the candidate, so resubmitting
+  it committed through the "no candidate" exemption. `_awaitingFreshCandidate`
+  is now set:
+  - from the start of `getdXdt` until it succeeds;
+  - on a mismatch, or an exception while checking;
+  - while a commit is in progress.
+
+  While it is set, every commit is refused, and everything staged (ternary: also
+  the projection totals and the terminal thin-phase stop) is discarded, until
+  `getdXdt` solves a new candidate. A model that never proposed a step still
+  commits directly, as before.
+- Not changed: an interrupted commit can still have advanced time or state before
+  it raised (R10). Only its resubmission is refused.
+- Tests: 20 more in `test_illingworth_outer_timestep_limits.py`. They cover valid and
+  wrong timestamps at t = 1e9 (including a complete solve), repeated rejection,
+  the originally correct update after a rejection, malformed updates, failed and
+  subminimum proposals, interrupted commits, recovery through a new candidate,
+  and direct-call compatibility. The 14 rejection tests failed against `ce1c990`;
+  the 6 valid-update tests passed there too.
+- Gates (unchanged, no approval needed): full `tests/` 1071 passed, 5 skipped,
+  1 deselected (fresh target); exact quick 30/30 + 5 contracts bit-identical,
+  33 repeat pairs, 454 s; exact full 40/40 + 5 bit-identical, 34 repeat pairs,
+  590 s, O06 run against live TC.
+
 ### R08: binary convergence tolerance depends on length units
 
 **Status:** open; high priority before release. **Scope:** binary fixed-point
