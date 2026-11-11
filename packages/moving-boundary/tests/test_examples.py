@@ -422,6 +422,55 @@ def test_settings_record_catches_a_post_construction_change():
     assert settings.differences(baseline, settings.effective_settings(changed, example.FAST.duration, arguments), {"dtMode": "why", "timeStep": "why"}) == []
 
 
+def _settings_tool():
+    spec = importlib.util.spec_from_file_location("example_settings", Path(__file__).parents[1] / "tools/example_settings.py")
+    settings = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(settings)
+    return settings
+
+
+def test_bookkeeping_attributes_added_after_capture_are_ignored():
+    """A reference captured before the R07/R08 bookkeeping fields existed still matches, whatever their values."""
+    settings = _settings_tool()
+    example = load("binary_planar_growth")
+    arguments = dict(minDtFrac=1e-14)
+    model = example.build_model(example.FAST)
+    package = settings.effective_settings(model, example.FAST.duration, arguments)
+    assert set(settings.BOOKKEEPING) <= set(package["attributes"])
+    older = dict(package, attributes={k: v for k, v in package["attributes"].items() if k not in settings.BOOKKEEPING})
+    assert settings.differences(older, package) == []
+    model._outerMaxTimeStep, model._solveMaxDtFrac, model._awaitingFreshCandidate = 3.0, 0.5, True
+    model._lastImplicitResidual, model._lastImplicitResidualScale = 1.0, 2.0
+    assert settings.differences(package, settings.effective_settings(model, example.FAST.duration, arguments)) == []
+
+
+@pytest.mark.parametrize(("attribute", "value"), [
+    ("tolerance", 1.0e-8), ("residualTolerance", 1.0e-10), ("interfaceResidualCompositionScale", 1.0e-6),
+    ("timeStep", 1.0e-5), ("dtMode", "semi_log"), ("semiLog_dt", 0.1), ("semiLogT0", 1.0e-6),
+    ("maxIterations", 7), ("bulkPicardRtol", 1.0e-8), ("_unlistedPrivateSetting", 1.0),
+])
+def test_genuine_settings_are_still_compared(attribute, value):
+    """Tolerance, residual and timestep settings, and any private attribute not named as bookkeeping, still fail."""
+    settings = _settings_tool()
+    example = load("binary_planar_growth")
+    arguments = dict(minDtFrac=1e-14)
+    baseline = settings.effective_settings(example.build_model(example.FAST), example.FAST.duration, arguments)
+    changed = example.build_model(example.FAST)
+    setattr(changed, attribute, value)
+    assert settings.differences(baseline, settings.effective_settings(changed, example.FAST.duration, arguments)) == [
+        "attributes." + attribute]
+
+
+def test_changed_solve_arguments_are_still_compared():
+    """The outer timestep fractions are compared through the recorded solve arguments, not their copies."""
+    settings = _settings_tool()
+    example = load("binary_planar_growth")
+    model = example.build_model(example.FAST)
+    baseline = settings.effective_settings(model, example.FAST.duration, dict(minDtFrac=1e-14))
+    assert settings.differences(baseline, settings.effective_settings(model, example.FAST.duration, dict(minDtFrac=1e-14, maxDtFrac=0.1))) == ["solve"]
+    assert settings.differences(baseline, settings.effective_settings(model, 2 * example.FAST.duration, dict(minDtFrac=1e-14))) == ["duration"]
+
+
 # ---- notebook use ------------------------------------------------------------
 
 @pytest.mark.parametrize("name", ["binary_planar_growth", "binary_tlp_bonding", "ternary_interstitial_similarity", "surrogate_lifecycle", "three_phase_similarity"])

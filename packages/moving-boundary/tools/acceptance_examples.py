@@ -2,7 +2,8 @@
 
 Each case runs an example's quick-check settings and requires:
 
-- recorded effective settings equal to the accepted case's, except approved named differences;
+- recorded effective settings equal to the accepted case's, except approved named differences
+  and the named run-bookkeeping attributes in ``example_settings.BOOKKEEPING``;
 - parity arrays with the fixture's exact key set and identical bytes (matching behaviour);
 - the same stop status.
 

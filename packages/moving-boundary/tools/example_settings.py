@@ -12,6 +12,26 @@ import numpy as np
 # Instance attributes holding objects handled separately, or run bookkeeping that isn't a setting.
 SKIPPED_TYPES = (type(None),)
 
+# Solver attributes that are run bookkeeping or diagnostics, not settings, so ``differences``
+# ignores them on both sides. Most adopted settings files were captured before they existed (R07,
+# R08). Keep this list narrow and named: genuine settings, private or not (``tolerance``,
+# ``residualTolerance``, ``interfaceResidualCompositionScale``, ``timeStep``, ``dtMode``,
+# ``semiLog_dt``, ...), stay compared.
+BOOKKEEPING = {
+    # R07 commit guard: the staged candidate and the "rejected, awaiting a new one" latch.
+    "_pendingCandidate": "R07 commit-guard state, empty before solve",
+    "_awaitingFreshCandidate": "R07 commit-guard latch, False before solve",
+    # R07 outer timestep limits: copies of solve(minDtFrac, maxDtFrac), which the record keeps
+    # under "solve", and the limits solve() derives from them; before solve() only placeholders.
+    "_solveMinDtFrac": "copy of the solve() argument recorded under 'solve'",
+    "_solveMaxDtFrac": "copy of the solve() argument recorded under 'solve'",
+    "_outerMinTimeStep": "derived in solve() from minDtFrac and the solve duration",
+    "_outerMaxTimeStep": "derived in solve() from maxDtFrac and the solve duration",
+    # Last accepted step's diagnostics (NaN before solve).
+    "_lastImplicitResidual": "diagnostic of the last accepted step",
+    "_lastImplicitResidualScale": "R08 diagnostic of the last accepted step",
+}
+
 
 def digest(value):
     """Hash an array's shape, dtype and bytes, so settings can be compared exactly."""
@@ -78,7 +98,12 @@ def effective_settings(model, duration, solve_arguments):
 
 
 def differences(reference, package, allowed=()):
-    """List settings that differ, excluding named attributes approved with a reason."""
+    """List settings that differ, excluding named attributes approved with a reason.
+
+    ``BOOKKEEPING`` attributes are never compared, on either side, so a field added to the solver
+    after a reference was captured cannot fail the comparison. Everything else, including the
+    solve arguments and every other attribute, must match exactly.
+    """
     found = []
     for key in sorted(set(reference) | set(package)):
         if key == "attributes":
@@ -87,6 +112,8 @@ def differences(reference, package, allowed=()):
             found.append(key)
     left, right = reference["attributes"], package["attributes"]
     for key in sorted(set(left) | set(right)):
+        if key in BOOKKEEPING:
+            continue
         if key not in allowed and left.get(key) != right.get(key):
             found.append("attributes." + key)
     return found
