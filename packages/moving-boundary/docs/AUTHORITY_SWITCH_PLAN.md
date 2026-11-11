@@ -19,7 +19,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M5b | Regeneration verification of adopted inputs | done 2026-11-10 (12/12 verified; see log) |
 | M6 | Normal/historical split, package-role repeatability | done 2026-11-10 (see log) |
 | M7 | Approval path | done 2026-11-10: M7a `approval_criteria` adopted (user-approved); M7b approval path (see log) |
-| M8 | Test port (item 16), 4 batches | not started |
+| M8 | Test port (item 16), 4 batches | in progress: batch 1 done 2026-11-10 (see log) |
 | M9 | Independence proof + missing-resource matrix | not started |
 | M10 | Docs + final recorded gates | not started |
 
@@ -302,6 +302,36 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
   - Quick approve was not re-measured. Estimate: 420 s measured with the allowlist, plus about
     110-200 s for the whole suite, under its 900 s budget.
   - Real paths unchanged (193 files); artifacts equal the M5 baseline.
+- **M8 batch 1 (2026-11-10).**
+  - *Port tool:* `tools/port_tests.py` (historical: reads research tests by path, never imports
+    them). It rewrites imports name by name with `_bindings.Context.symbol`'s resolution, renames
+    research module paths inside strings, copies `kawin.tests.*` helpers verbatim into
+    `tests/ported_helpers/`, removes deferred tests and the imports only they used, and prepends a
+    provenance docstring. Every transform and the LF-normalized source and output sha256 are
+    recorded in `docs/test-port-provenance.json`. `--check` regenerates and compares; any research
+    module path left in the output is an error.
+  - *Helpers:* reusing `tools/definitions/*` was rejected for the test helpers. Those files carry
+    load-time transforms (e.g. the injected terminal thin-phase policy) and only selected names,
+    so the research tests would no longer check what they check. The helper is therefore a
+    verbatim copy with provenance, the plan's fallback. `tests/conftest.py` puts `tests/` on
+    `sys.path`, so `ported_helpers` imports also work under `--import-mode=importlib` (approve's
+    gate).
+  - Per file, ported / deferred / total:
+    - `test_illingworth_setup_and_diagnostics.py` 6/0/6;
+    - `test_illingworth_ternary_three_phase.py` 62/0/62;
+    - `test_illingworth_interstitials_three_phase.py` 2/0/2;
+    - `test_surrogate_artifacts.py` 11/1/12;
+    - helper `illingworth_baseline_cases.py`.
+  - *Deferred:* `test_cuniti_tc_python_bundle_smoke`, an opt-in licence smoke test
+    (`KAWIN_RUN_TC_PYTHON_SMOKE=1`, TCHEA5/MOBHEA4). Ported as is, it would skip in every normal
+    run and so block approve's no-skip whole-suite gate. Its adapter is already ported. Listed in
+    FUTURE_PORTS.md § Deferred tests; where it should run is a gate decision for the user.
+  - Results:
+    - 141 ported test items (81 functions) pass from `src/` (11 s) and under
+      `--import-mode=importlib`;
+    - `--check` reports the 5 files identical to a fresh port;
+    - `tests/test_port_tests.py` (7);
+    - full `tests/` 573 passed, 5 skipped, 1 deselected.
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -740,8 +770,9 @@ separate "approve references" commit.
   (loaded by path); otherwise copy verbatim with provenance. The R06 AST-copy generator was not
   found and will be rewritten.
 - **Batches:**
-  - [ ] 1: setup_and_diagnostics (6), three_phase (62), interstitials_three_phase (2),
-        **surrogate_artifacts (12; added, covers the C24 builder)**
+  - [x] 1: setup_and_diagnostics (6), three_phase (62), interstitials_three_phase (2),
+        **surrogate_artifacts (12; added, covers the C24 builder)** (done 2026-11-10: 81 of 82;
+        the TC licence smoke test deferred, see log)
   - [ ] 2: binary_variable_diffusivity (14, plus `test_diffusion` helpers already reproduced in
         `test_binary_deviation_form.py`), interstitials (13), transformed_grids (16)
   - [ ] 3: similarity group (34 across 7 files: three_phase_similarity 8, interstitials_ternary 8,

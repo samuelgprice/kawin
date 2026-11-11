@@ -1,0 +1,320 @@
+{
+ "description": "Ported research tests (plan section 6, item 16): source, research commit, sha256 of the source and of the output (newlines normalized), per-file counts and every transform. Written by tools/port_tests.py.",
+ "files": {
+  "tests/ported_helpers/illingworth_baseline_cases.py": {
+   "batch": 1,
+   "source": "kawin/tests/illingworth_baseline_cases.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "a56b6defca519ec34dc143fa8a96d5b13c1d792eaa323c06e37354a18b20c98f",
+   "output_sha256": "f39625aeabb948bb73def9a8d3e44a1ca85a56eb4bcced5273ab1d2850816206",
+   "counts": null,
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MixedBoundary1D",
+     "package": "moving_boundary.mesh.MixedBoundary1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.StepProfile1D",
+     "package": "moving_boundary.mesh.StepProfile1D"
+    }
+   ]
+  },
+  "tests/test_illingworth_interstitials_three_phase.py": {
+   "batch": 1,
+   "source": "kawin/tests/test_illingworth_interstitials_three_phase.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "0fc868af7b8c55bf2dc475c61b2dbef76063c59e0f5dc4b11e0cb20c4998c835",
+   "output_sha256": "85b80fbc1769b07bcb8f01bd80e5b95b30d96cdaba95e9a3446e40f357c7eeb4",
+   "counts": {
+    "total": 2,
+    "deferred": 0,
+    "ported": 2
+   },
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D.integrate_planar_transformed_molar_inventories",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary.integrate_planar_transformed_molar_inventories"
+    }
+   ]
+  },
+  "tests/test_illingworth_setup_and_diagnostics.py": {
+   "batch": 1,
+   "source": "kawin/tests/test_illingworth_setup_and_diagnostics.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "b54d02a1ed58a3e0c40f6277cbb17b24cba8b9cc892fa8d0f345f9b179a70e70",
+   "output_sha256": "dc388a98e97f0ac6620d665f250132fe5b4884e50f300c537b12d13f68a310ca",
+   "counts": {
+    "total": 6,
+    "deferred": 0,
+    "ported": 6
+   },
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._binary_model",
+     "package": "ported_helpers.illingworth_baseline_cases._binary_model"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._CoupledTernaryThermodynamics",
+     "package": "ported_helpers.illingworth_baseline_cases._CoupledTernaryThermodynamics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._ternary_model",
+     "package": "ported_helpers.illingworth_baseline_cases._ternary_model"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._three_phase_model",
+     "package": "ported_helpers.illingworth_baseline_cases._three_phase_model"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.TemperatureParameters",
+     "package": "moving_boundary.solvers.illingworth.shared.TemperatureParameters"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.StepProfile1D",
+     "package": "moving_boundary.mesh.StepProfile1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._BinaryThermodynamics",
+     "package": "ported_helpers.illingworth_baseline_cases._BinaryThermodynamics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MixedBoundary1D",
+     "package": "moving_boundary.mesh.MixedBoundary1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.PeriodicBoundary1D",
+     "package": "moving_boundary.mesh.PeriodicBoundary1D"
+    }
+   ]
+  },
+  "tests/test_illingworth_ternary_three_phase.py": {
+   "batch": 1,
+   "source": "kawin/tests/test_illingworth_ternary_three_phase.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "1c9ab98da800c0c7bada0e4295647c79608ad86479b3af793617adcf72cfd032",
+   "output_sha256": "54add32998c519c111d4a14be44f32169f0c4ddf3fb2befd9b5e1e4516759625",
+   "counts": {
+    "total": 62,
+    "deferred": 0,
+    "ported": 62
+   },
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.estimate_initial_eta_from_instantaneous_balance",
+     "package": "moving_boundary.estimate_initial_eta_from_instantaneous_balance"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM._BULK_DIFFUSIVITY_IMPLICIT",
+     "package": "moving_boundary.solvers.illingworth.three_phase._BULK_DIFFUSIVITY_IMPLICIT"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM._BULK_DIFFUSIVITY_LAGGED",
+     "package": "moving_boundary.solvers.illingworth.three_phase._BULK_DIFFUSIVITY_LAGGED"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM._BULK_DIFFUSIVITY_PHASE_UNIFORM",
+     "package": "moving_boundary.solvers.illingworth.three_phase._BULK_DIFFUSIVITY_PHASE_UNIFORM"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM._ThreePhaseCandidate",
+     "package": "moving_boundary.solvers.illingworth.three_phase._ThreePhaseCandidate"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.StepProfile1D",
+     "package": "moving_boundary.mesh.StepProfile1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D.integrate_planar_transformed_molar_inventories",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary.integrate_planar_transformed_molar_inventories"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D.integrate_planar_transformed_profile_sequence",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary.integrate_planar_transformed_profile_sequence"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D.reconstruct_planar_transformed_profile_sequence",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary.reconstruct_planar_transformed_profile_sequence"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._three_phase_model",
+     "package": "ported_helpers.illingworth_baseline_cases._three_phase_model"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._three_phase_model",
+     "package": "ported_helpers.illingworth_baseline_cases._three_phase_model"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._three_phase_model",
+     "package": "ported_helpers.illingworth_baseline_cases._three_phase_model"
+    },
+    {
+     "kind": "string",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary"
+    }
+   ]
+  },
+  "tests/test_surrogate_artifacts.py": {
+   "batch": 1,
+   "source": "kawin/tests/test_surrogate_artifacts.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "b64430a6cb255ca97050f248523578a5ab5b04c077ba9025c88974a2bd0595a0",
+   "output_sha256": "f3ea585c03a5d895ff463a2e6e4a1a96fc0cecfa70d301d470a3944bce16a2e4",
+   "counts": {
+    "total": 12,
+    "deferred": 1,
+    "ported": 11
+   },
+   "transforms": [
+    {
+     "kind": "dropped import (only used by deferred tests)",
+     "name": "os"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.SurrogateArtifacts",
+     "package": "moving_boundary.surrogate_artifacts"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.SurrogateArtifactBundle",
+     "package": "moving_boundary.SurrogateArtifactBundle"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.SurrogateArtifactCompatibilityError",
+     "package": "moving_boundary.SurrogateArtifactCompatibilityError"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.SurrogateArtifactIntegrityError",
+     "package": "moving_boundary.SurrogateArtifactIntegrityError"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.TernaryMovingBoundaryThermodynamicsSurrogate",
+     "package": "moving_boundary.TernaryMovingBoundaryThermodynamicsSurrogate"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.canonicalize_build_spec",
+     "package": "moving_boundary.canonicalize_build_spec"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.prepare_surrogate_artifact",
+     "package": "moving_boundary.prepare_surrogate_artifact"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.surrogate_build_fingerprint",
+     "package": "moving_boundary.surrogate_build_fingerprint"
+    },
+    {
+     "kind": "deferred test",
+     "name": "test_cuniti_tc_python_bundle_smoke",
+     "reason": "opt-in licence smoke test (KAWIN_RUN_TC_PYTHON_SMOKE=1, TC-Python with TCHEA5/MOBHEA4): in every normal run it skips, and approve's whole-suite gate allows no skips; the adapter it uses is already ported (moving_boundary.providers.thermocalc), so it can be ported as an opt-in check outside the gate"
+    }
+   ]
+  }
+ }
+}

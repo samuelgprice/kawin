@@ -1,0 +1,328 @@
+"""Port research Illingworth tests into the package test suite (plan §6, item 16; historical tool).
+
+    python tools/port_tests.py --research <frozen research checkout> --batch N [--check]
+
+Reads research ``kawin/tests/<file>.py`` by path (research code is never imported) and writes
+``tests/<file>.py``, plus every ``kawin.tests.<helper>`` module those files import, transitively,
+as ``tests/ported_helpers/<helper>.py``. The text stays verbatim except for these transforms,
+each recorded in ``docs/test-port-provenance.json``:
+
+- *imports*: a research import is resolved name by name exactly as
+  ``tools/definitions/_bindings.Context.symbol`` resolves it in the package role: solver classes
+  from ``moving_boundary.solvers``; research-only modules (``_bindings.MODULES``) to their package
+  modules, never back to research; ``kawin.diffusion``/``kawin.diffusion.mesh`` names to the
+  first of ``moving_boundary``, ``moving_boundary.mesh`` and
+  ``moving_boundary.solvers.illingworth.shared`` that has them, else stock kawin 0.5.0. A name
+  with no counterpart is an error;
+- *helper imports*: ``kawin.tests.<helper>`` becomes ``ported_helpers.<helper>`` (``tests/conftest.py``
+  puts ``tests/`` on ``sys.path`` so this works under ``--import-mode=importlib`` too);
+- *strings*: a string constant naming a research module (e.g. a ``skipif`` that imports
+  ``kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D``) is renamed to the package module;
+- *deferred tests*: tests needing unported functionality (``DEFERRED``, each listed in
+  FUTURE_PORTS.md § Deferred tests) are removed with their decorators, and so are the
+  module-level imports only they used;
+- *docstring*: a provenance paragraph (source, commit, sha256, exclusions) is prepended.
+
+``--check`` regenerates in memory and requires the committed files and provenance record to be
+identical (newlines normalized); nothing is written. Any research module path left in the output
+is an error. Validation that the ported tests pass is the package test suite itself.
+"""
+from pathlib import Path
+import argparse
+import ast
+import hashlib
+import importlib
+import importlib.util
+import json
+import re
+import subprocess
+import sys
+
+PROJECT = Path(__file__).resolve().parents[1]
+TESTS = PROJECT / "tests"
+HELPERS = "ported_helpers"
+RECORD = PROJECT / "docs/test-port-provenance.json"
+
+BATCHES = {
+    1: ["test_illingworth_setup_and_diagnostics.py", "test_illingworth_ternary_three_phase.py",
+        "test_illingworth_interstitials_three_phase.py", "test_surrogate_artifacts.py"],
+    2: ["test_illingworth_binary_variable_diffusivity.py", "test_illingworth_interstitials.py",
+        "test_illingworth_transformed_grids.py"],
+    3: ["test_illingworth_ternary_three_phase_similarity.py", "test_illingworth_interstitials_ternary.py",
+        "test_illingworth_physical_scale.py", "test_illingworth_similarity_comparison_basis.py",
+        "test_illingworth_ternary_similarity.py"],
+    4: ["test_illingworth_ternary.py"],
+}
+# Tests needing unported functionality: removed here, listed in FUTURE_PORTS.md § Deferred tests.
+DEFERRED = {
+    "test_surrogate_artifacts.py": {
+        "test_cuniti_tc_python_bundle_smoke": "opt-in licence smoke test (KAWIN_RUN_TC_PYTHON_SMOKE=1, "
+            "TC-Python with TCHEA5/MOBHEA4): in every normal run it skips, and approve's whole-suite gate "
+            "allows no skips; the adapter it uses is already ported (moving_boundary.providers.thermocalc), "
+            "so it can be ported as an opt-in check outside the gate",
+    },
+}
+RESEARCH_PREFIXES = ("kawin.diffusion.MovingBoundary", "kawin.diffusion.mesh.MovingBoundary",
+                     "kawin.diffusion.mesh.TransformedGrids", "kawin.diffusion._illingworth",
+                     "kawin.diffusion.SurrogateArtifacts", "kawin.tests", "examples.")
+
+
+class PortError(RuntimeError):
+    """A research test cannot be ported mechanically; nothing is written."""
+
+
+def _bindings():
+    spec = importlib.util.spec_from_file_location("port_bindings", PROJECT / "tools/definitions/_bindings.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+BINDINGS = _bindings()
+
+
+def resolve(module, name):
+    """The package (or stock kawin) module a research ``from module import name`` binds, as ``_bindings``."""
+    if name in BINDINGS.MODELS and module.startswith("kawin.diffusion"):
+        return "moving_boundary.solvers"
+    choices = []
+    if module == "kawin.thermo" and name == "MulticomponentThermodynamics":
+        choices.append("moving_boundary.compatibility.thermo")
+    if module in BINDINGS.MODULES:
+        choices.append(BINDINGS.MODULES[module])
+    if module in {"kawin.diffusion", "kawin.diffusion.mesh"}:
+        choices.extend(["moving_boundary", "moving_boundary.mesh", "moving_boundary.solvers.illingworth.shared"])
+    for choice in choices:
+        if hasattr(importlib.import_module(choice), name):
+            return choice
+    if module in BINDINGS.MODULES:
+        raise PortError(f"{module}.{name} has no package counterpart in {BINDINGS.MODULES[module]}")
+    if hasattr(importlib.import_module(module), name):
+        return module
+    raise PortError(f"{module}.{name} exists neither in the package nor in stock kawin")
+
+
+def rename_module(text):
+    """A research module path (or a dotted name below one) renamed to its package module, else ``None``."""
+    for research, package in sorted(BINDINGS.MODULES.items(), key=lambda item: -len(item[0])):
+        if text == research or text.startswith(research + "."):
+            return package + text[len(research):]
+    if text == "kawin.tests" or text.startswith("kawin.tests."):
+        return HELPERS + text[len("kawin.tests"):]
+    return None
+
+
+def _offsets(source):
+    """Map (line, utf-8 column) from ``ast`` to character offsets in ``source``."""
+    starts, total = [], 0
+    lines = source.splitlines(keepends=True)
+    for line in lines:
+        starts.append(total)
+        total += len(line)
+    def offset(line, column):
+        text = lines[line - 1]
+        return starts[line - 1] + len(text.encode("utf-8")[:column].decode("utf-8"))
+    return offset
+
+
+def _span(node):
+    first = min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])])
+    return first, node.end_lineno
+
+
+def _names_used(tree, skip):
+    """Names read anywhere in ``tree`` outside import statements and the line spans in ``skip``."""
+    used = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not any(a <= node.lineno <= b for a, b in skip):
+            used.add(node.id)
+    return used
+
+
+def port_text(source, name, *, deferred=None, header):
+    """Port one research module's text; returns ``(text, transforms, helpers, counts)``.
+
+    ``deferred`` maps top-level test names to reasons. ``header`` is the provenance paragraph.
+    """
+    deferred = dict(deferred or {})
+    tree = ast.parse(source)
+    offset = _offsets(source)
+    lines = source.splitlines(keepends=True)
+    tests = [node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")]
+    missing = sorted(set(deferred) - set(tests))
+    if missing:
+        raise PortError(f"{name}: deferred tests not found: {missing}")
+    removed = [_span(node) for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in deferred]
+    used_before = _names_used(tree, [])
+    used_after = _names_used(tree, removed)
+    edits, transforms, helpers = [], [], set()
+
+    def inside_removed(node):
+        return any(a <= node.lineno <= b for a, b in removed)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and not inside_removed(node):
+            top = node in tree.body
+            indent = lines[node.lineno - 1][: node.col_offset]
+            groups, changed = {}, False
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                for alias in node.names:
+                    bound = alias.asname or alias.name
+                    if top and bound in used_before and bound not in used_after:
+                        transforms.append(dict(kind="dropped import (only used by deferred tests)", name=f"{module}.{alias.name}"))
+                        changed = True
+                        continue
+                    target = module
+                    if module.startswith("kawin.tests"):
+                        target = rename_module(module)
+                        helpers.add(module.split(".", 2)[2])
+                    elif module.startswith(("kawin.diffusion", "kawin.thermo")) or module in BINDINGS.MODULES:
+                        target = resolve(module, alias.name)
+                    elif module.startswith("examples"):
+                        raise PortError(f"{name}:{node.lineno}: research example import {module} in a ported test")
+                    if target != module:
+                        changed = True
+                        transforms.append(dict(kind="import", research=f"{module}.{alias.name}", package=f"{target}.{alias.name}"))
+                    groups.setdefault(target, []).append(alias.name + (f" as {alias.asname}" if alias.asname else ""))
+                text = "\n".join(f"{indent if i else ''}from {target} import {', '.join(names)}" for i, (target, names) in enumerate(groups.items()))
+            else:
+                parts = []
+                for alias in node.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    if top and bound in used_before and bound not in used_after:
+                        transforms.append(dict(kind="dropped import (only used by deferred tests)", name=alias.name))
+                        changed = True
+                        continue
+                    renamed = rename_module(alias.name)
+                    if alias.name.startswith("examples"):
+                        raise PortError(f"{name}:{node.lineno}: research example import {alias.name}")
+                    if renamed:
+                        if not alias.asname:
+                            raise PortError(f"{name}:{node.lineno}: 'import {alias.name}' without an alias cannot be renamed")
+                        changed = True
+                        transforms.append(dict(kind="import", research=alias.name, package=renamed))
+                    parts.append((renamed or alias.name) + (f" as {alias.asname}" if alias.asname else ""))
+                text = f"import {', '.join(parts)}" if parts else ""
+            if changed:
+                start, end = offset(node.lineno, node.col_offset), offset(node.end_lineno, node.end_col_offset)
+                if not text:   # the whole statement goes: remove its line(s)
+                    start, end = offset(node.lineno, 0), offset(node.end_lineno, len(lines[node.end_lineno - 1].encode("utf-8")))
+                edits.append((start, end, text))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and not inside_removed(node):
+            renamed = rename_module(node.value)
+            if renamed and node.value.startswith(RESEARCH_PREFIXES):
+                start, end = offset(node.lineno, node.col_offset), offset(node.end_lineno, node.end_col_offset)
+                segment = source[start:end]
+                edits.append((start, end, segment.replace(node.value, renamed, 1)))
+                transforms.append(dict(kind="string", research=node.value, package=renamed))
+    for first, last in removed:
+        start = offset(first, 0)
+        end = offset(last, 0) + len(lines[last - 1])
+        while end < len(source) and source[end] == "\n":   # its trailing blank lines; the preceding ones stay
+            end += 1
+        edits.append((start, end, ""))
+    for test, reason in deferred.items():
+        transforms.append(dict(kind="deferred test", name=test, reason=reason))
+    doc = tree.body[0] if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(getattr(tree.body[0], "value", None), ast.Constant) and isinstance(tree.body[0].value.value, str) else None
+    if doc is not None:
+        start, end = offset(doc.lineno, doc.col_offset), offset(doc.end_lineno, doc.end_col_offset)
+        segment = source[start:end]
+        if segment.startswith('"""') and segment.endswith('"""'):
+            edits.append((start, end, '"""' + header + "\n\n" + segment[3:]))
+        else:
+            edits.append((start, start, '"""' + header + '\n"""\n'))
+    else:
+        edits.append((0, 0, '"""' + header + '\n"""\n'))
+    edits.sort(key=lambda edit: (edit[0], edit[1]))
+    for (a1, b1, _), (a2, b2, _) in zip(edits, edits[1:]):
+        if a2 < b1:
+            raise PortError(f"{name}: overlapping edits at {a1}-{b1} and {a2}-{b2}")
+    text = source
+    for start, end, replacement in reversed(edits):
+        text = text[:start] + replacement + text[end:]
+    if removed:
+        text = text.rstrip("\n") + "\n"   # a removed final test leaves no trailing blank lines
+    ast.parse(text)
+    leftovers = sorted({match for match in re.findall(r"[A-Za-z_.]*(?:kawin\.diffusion\.(?:mesh\.)?(?:MovingBoundary|TransformedGrids|_illingworth|SurrogateArtifacts)\w*|kawin\.tests\.\w+|examples\.\w+(?:\.\w+)*)", text)})
+    if leftovers:
+        raise PortError(f"{name}: research module paths left after porting: {leftovers}")
+    counts = dict(total=len(tests), deferred=len(deferred), ported=len(tests) - len(deferred))
+    return text, transforms, sorted(helpers), counts
+
+
+def _sha(text):
+    return hashlib.sha256(text.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+
+
+def research_commit(research):
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=research, check=True, capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL).stdout.strip()
+
+
+def port_batch(research, batch):
+    """Every output (``{relative path: (text, record)}``) for one batch, including its helpers."""
+    research = Path(research)
+    commit = research_commit(research)
+    outputs, queue, seen = {}, [(name, False) for name in BATCHES[batch]], set()
+    while queue:
+        name, helper = queue.pop(0)
+        if (name, helper) in seen:
+            continue
+        seen.add((name, helper))
+        relative = f"kawin/tests/{name}" if not helper else f"kawin/tests/{name}.py"
+        source = (research / relative).read_bytes().decode("utf-8").replace("\r\n", "\n")
+        deferred = DEFERRED.get(name, {})
+        excluded = "; ".join(f"{test} (deferred: see FUTURE_PORTS.md § Deferred tests)" for test in deferred) or "none"
+        header = (f"Ported from research ``{relative}`` at ``{commit[:7]}`` (LF-normalized sha256\n"
+                  f"``{_sha(source)}``) by\n"
+                  f"``tools/port_tests.py`` (batch {batch}); do not edit by hand. Imports resolve to the package as\n"
+                  f"``tools/definitions/_bindings.py`` does; the full transform list is in\n"
+                  f"``docs/test-port-provenance.json``. Excluded tests: {excluded}.")
+        text, transforms, helpers, counts = port_text(source, relative, deferred=deferred, header=header)
+        target = f"tests/{HELPERS}/{name}.py" if helper else f"tests/{name}"
+        outputs[target] = (text, dict(batch=batch, source=relative, research_commit=commit, source_sha256=_sha(source),
+                                      output_sha256=_sha(text), counts=None if helper else counts, transforms=transforms))
+        queue.extend((module, True) for module in helpers)
+    return outputs
+
+
+def main(argv=None):
+    """Write (or ``--check``) one batch of ported tests and update the provenance record."""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--research", type=Path, required=True, help="frozen research checkout (read by path only)")
+    parser.add_argument("--batch", type=int, choices=sorted(BATCHES), required=True)
+    parser.add_argument("--check", action="store_true", help="compare with the committed files; write nothing")
+    args = parser.parse_args(argv)
+    outputs = port_batch(args.research, args.batch)
+    record = json.loads(RECORD.read_text(encoding="utf-8")) if RECORD.exists() else dict(
+        description="Ported research tests (plan section 6, item 16): source, research commit, sha256 of the source and "
+                    "of the output (newlines normalized), per-file counts and every transform. Written by tools/port_tests.py.",
+        files={})
+    if args.check:
+        problems = []
+        for target, (text, entry) in outputs.items():
+            path = PROJECT / target
+            if not path.exists() or path.read_text(encoding="utf-8").replace("\r\n", "\n") != text:
+                problems.append("differs or missing: " + target)
+            if record["files"].get(target) != entry:
+                problems.append("provenance record differs: " + target)
+        print("\n".join(problems) or f"batch {args.batch}: {len(outputs)} files identical to a fresh port")
+        return 1 if problems else 0
+    (TESTS / HELPERS).mkdir(exist_ok=True)
+    init = TESTS / HELPERS / "__init__.py"
+    if not init.exists():
+        init.write_text('"""Research test helpers ported by tools/port_tests.py (see docs/test-port-provenance.json)."""\n',
+                        encoding="utf-8", newline="\n")
+    for target, (text, entry) in outputs.items():
+        (PROJECT / target).write_text(text, encoding="utf-8", newline="\n")
+        record["files"][target] = entry
+        counts = entry["counts"]
+        print(target, f"ported {counts['ported']} / deferred {counts['deferred']} / total {counts['total']}" if counts else "(helper)")
+    record["files"] = dict(sorted(record["files"].items()))
+    RECORD.write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8", newline="\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -241,6 +241,7 @@ place, not counted as ported, and get ported in the same change as their feature
 | `test_illingworth_ternary.py::test_surrogate_construction_report_includes_thermocalc_metadata` | 1 | `evaluate_surrogate_construction_diagnostics` | 1 |
 | `test_illingworth_ternary_convergence.py` (whole file) | 5 | `IllingworthTernaryConvergence` | 4 |
 | `test_three_phase_examples.py` (whole file) | 3 | the research script `IllingworthTernaryThreePhaseStable` | 6 (decision per script) |
+| `test_surrogate_artifacts.py::test_cuniti_tc_python_bundle_smoke` | 1 | an opt-in place outside approve's whole-suite gate: it is a licence smoke test (`KAWIN_RUN_TC_PYTHON_SMOKE=1`, TC-Python with TCHEA5/MOBHEA4) that skips in every normal run, and that gate allows no skips. Its adapter is already ported (`moving_boundary.providers.thermocalc`). Deferred in M8 batch 1; 11 of 12 ported | — (gate decision) |
 
 Feature test files outside item 16 that are also deferred: `test_surrogate_diagnostics.py` (36),
 `test_no_debugger_dependencies.py` (4, the diagnostics part), `test_surrogate_comparison.py` (10),
