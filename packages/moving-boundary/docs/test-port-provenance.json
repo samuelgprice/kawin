@@ -418,6 +418,240 @@
     }
    ]
   },
+  "tests/test_illingworth_ternary.py": {
+   "batch": 4,
+   "source": "kawin/tests/test_illingworth_ternary.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "abd346b716ce0c79a118606b9b4bee9dabb0d33863c0bcc2aead886224127025",
+   "output_sha256": "3d1217918137376851e8f9b979140b1c60961b219377ca946b0b0234e4a13501",
+   "counts": {
+    "total": 155,
+    "deferred": 4,
+    "ported": 151
+   },
+   "transforms": [
+    {
+     "kind": "monkeypatch through the package re-import chain",
+     "line": 1215,
+     "call": "monkeypatch.setattr(ternary_fdm, \"_validate_ternary_diffusivity_matrix\", count_scalar)",
+     "owners": [
+      "moving_boundary.solvers.illingworth.ternary._validate_ternary_diffusivity_matrix",
+      "moving_boundary.solvers.illingworth.shared._validate_ternary_diffusivity_matrix"
+     ]
+    },
+    {
+     "kind": "monkeypatch through the package re-import chain",
+     "line": 1269,
+     "call": "monkeypatch.setattr(ternary_fdm, \"_validate_ternary_diffusivity_matrix\", validation_spy)",
+     "owners": [
+      "moving_boundary.solvers.illingworth.ternary._validate_ternary_diffusivity_matrix",
+      "moving_boundary.solvers.illingworth.shared._validate_ternary_diffusivity_matrix"
+     ]
+    },
+    {
+     "kind": "monkeypatch through the package re-import chain",
+     "line": 1515,
+     "call": "monkeypatch.setattr(ternary_fdm, helper_name, None)",
+     "owners": "resolved at run time against the names kawin.diffusion.MovingBoundaryIllingworthTernaryFDM defines (_RESEARCH_DEFINES_MovingBoundaryIllingworthTernaryFDM)"
+    },
+    {
+     "kind": "monkeypatch through the package re-import chain",
+     "line": 1608,
+     "call": "monkeypatch.setattr(ternary_fdm, \"_validate_ternary_diffusivity_matrix\", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError(\"unexpected scalar validation\")))",
+     "owners": [
+      "moving_boundary.solvers.illingworth.ternary._validate_ternary_diffusivity_matrix",
+      "moving_boundary.solvers.illingworth.shared._validate_ternary_diffusivity_matrix"
+     ]
+    },
+    {
+     "kind": "monkeypatch through the package re-import chain",
+     "line": 2690,
+     "call": "monkeypatch.setattr(ternary_fdm, \"_select_interface_motion_branch\", select_branch)",
+     "owners": [
+      "moving_boundary.solvers.illingworth.ternary._select_interface_motion_branch",
+      "moving_boundary.solvers.illingworth.shared._select_interface_motion_branch"
+     ]
+    },
+    {
+     "kind": "research definitions constant",
+     "name": "_RESEARCH_DEFINES_MovingBoundaryIllingworthTernaryFDM",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFDM"
+    },
+    {
+     "kind": "import",
+     "research": "(none)",
+     "package": "ported_helpers.relocation.setattr_owners"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundarySurrogates",
+     "package": "moving_boundary.surrogates"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFDM",
+     "package": "moving_boundary.solvers.illingworth.ternary"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFDM",
+     "package": "moving_boundary.solvers.illingworth.three_phase"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthTernaryThreePhaseFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.TernaryMovingBoundaryThermodynamicsSurrogate",
+     "package": "moving_boundary.TernaryMovingBoundaryThermodynamicsSurrogate"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.estimate_initial_eta_from_instantaneous_balance",
+     "package": "moving_boundary.estimate_initial_eta_from_instantaneous_balance"
+    },
+    {
+     "kind": "dropped import (only used by deferred tests)",
+     "name": "kawin.diffusion.evaluate_surrogate_construction_diagnostics"
+    },
+    {
+     "kind": "dropped import (only used by deferred tests)",
+     "name": "kawin.diffusion.plot_surrogate_construction_diagnostics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MixedBoundary1D",
+     "package": "moving_boundary.mesh.MixedBoundary1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.PeriodicBoundary1D",
+     "package": "moving_boundary.mesh.PeriodicBoundary1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.StepProfile1D",
+     "package": "moving_boundary.mesh.StepProfile1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFDM._get_stefan_interdiffusivity",
+     "package": "moving_boundary.solvers.illingworth.ternary._get_stefan_interdiffusivity"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFDM._select_interface_motion_branch",
+     "package": "moving_boundary.solvers.illingworth.ternary._select_interface_motion_branch"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFDM._validate_ternary_diffusivity_matrix",
+     "package": "moving_boundary.solvers.illingworth.ternary._validate_ternary_diffusivity_matrix"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D._BLOCK_PIVOT_RCOND_LIMIT",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary._BLOCK_PIVOT_RCOND_LIMIT"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D._BLOCK_PIVOT_STATUS_NONFINITE",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary._BLOCK_PIVOT_STATUS_NONFINITE"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D._BLOCK_PIVOT_STATUS_SINGULAR",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary._BLOCK_PIVOT_STATUS_SINGULAR"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D._BLOCK_PIVOT_STATUS_VALID",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary._BLOCK_PIVOT_STATUS_VALID"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D._check_block_pivot",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary._check_block_pivot"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D._estimate_2x2_rcond",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary._estimate_2x2_rcond"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D.integrate_planar_transformed_profile_components",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary.integrate_planar_transformed_profile_components"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D.solve_illingworth_block_tridiagonal",
+     "package": "moving_boundary.solvers.illingworth.numerics.ternary.solve_illingworth_block_tridiagonal"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._CoupledTernaryThermodynamics",
+     "package": "ported_helpers.illingworth_baseline_cases._CoupledTernaryThermodynamics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._ternary_model",
+     "package": "ported_helpers.illingworth_baseline_cases._ternary_model"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._CoupledTernaryThermodynamics",
+     "package": "ported_helpers.illingworth_baseline_cases._CoupledTernaryThermodynamics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.illingworth_baseline_cases._ternary_model",
+     "package": "ported_helpers.illingworth_baseline_cases._ternary_model"
+    },
+    {
+     "kind": "deferred test",
+     "name": "test_surrogate_construction_provenance_records_line_and_bulk_samples",
+     "reason": "needs evaluate_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)"
+    },
+    {
+     "kind": "deferred test",
+     "name": "test_surrogate_construction_dashboard_has_phase_tabs",
+     "reason": "needs evaluate_/plot_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)"
+    },
+    {
+     "kind": "deferred test",
+     "name": "test_surrogate_construction_report_includes_thermocalc_metadata",
+     "reason": "needs evaluate_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)"
+    },
+    {
+     "kind": "deferred test",
+     "name": "test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case",
+     "reason": "builds its binary reference with build_fig3_present_work_model/build_fig6_illingworth_case_params from the research example examples/Illingworth2005/compare_illingworth2005_planar.py, which is not ported (FUTURE_PORTS entry 6, decision per script)"
+    }
+   ]
+  },
   "tests/test_illingworth_ternary_physical_scale.py": {
    "batch": 3,
    "source": "kawin/tests/test_illingworth_ternary_physical_scale.py",

@@ -19,7 +19,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M5b | Regeneration verification of adopted inputs | done 2026-11-10 (12/12 verified; see log) |
 | M6 | Normal/historical split, package-role repeatability | done 2026-11-10 (see log) |
 | M7 | Approval path | done 2026-11-10: M7a `approval_criteria` adopted (user-approved); M7b approval path (see log) |
-| M8 | Test port (item 16), 4 batches | in progress: batches 1-3 done 2026-11-10 (see log) |
+| M8 | Test port (item 16), 4 batches | done 2026-11-10: 301 of 314 research tests ported, 13 deferred (see log) |
 | M9 | Independence proof + missing-resource matrix | not started |
 | M10 | Docs + final recorded gates | not started |
 
@@ -389,6 +389,40 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
     - `--check` identical for batches 1-3;
     - `test_port_tests.py` 9;
     - full `tests/` 740 passed, 5 skipped, 1 deselected, in 204 s (up from 140 s).
+- **M8 batch 4 (2026-11-10) and M8 totals.**
+  - `test_illingworth_ternary.py` 151/4/155. Deferred:
+    - the 3 surrogate-construction diagnostics tests (planned), whose imports
+      `evaluate_/plot_surrogate_construction_diagnostics` were dropped;
+    - **one more, not in the plan:** `test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case`.
+      It builds its binary reference with `build_fig3_present_work_model` and
+      `build_fig6_illingworth_case_params` from the research example
+      `examples/Illingworth2005/compare_illingworth2005_planar.py`, which is not ported
+      (FUTURE_PORTS entry 6). Added to FUTURE_PORTS § Deferred tests; flagged for the user.
+  - *Patch rule corrected before committing:* the batch 3 rule followed every package re-import.
+    For a name the research module only *imported*, research changed that module's binding
+    alone, so following the chain would patch more code than research did.
+    - The examples here were `solve_illingworth_block_tridiagonal` (research TernaryFDM imports
+      it from the mesh module) and `MulticomponentThermodynamics` (research Surrogates imports it
+      from `kawin.thermo`).
+    - Now the chain is followed only for names the research module *defines* (read by path at
+      port time). A patch whose name is known only at run time (`helper_name`) passes a per-file
+      frozenset of the research module's definitions to `setattr_owners`.
+    - Result in batch 4: 5 patches follow the chain (`_validate_ternary_diffusivity_matrix` ×3,
+      `_select_interface_motion_branch`, and `helper_name` checked at run time); the other 5
+      stay plain. Batch 3's single use is unchanged (identical regeneration).
+  - Results:
+    - 263 ported items pass (27 s);
+    - `--check` identical for batches 1-3;
+    - `test_port_tests.py` 10;
+    - full `tests/` 1004 passed, 5 skipped, 1 deselected (227 s).
+  - *Approve's gate:* the whole suite on freshly built installed targets, contracts configured,
+    passes 1009, 0 skipped, in 298 s. Estimated quick approve about 640 s of 900.
+  - **M8 totals:** 301 of 314 research tests ported, in 13 files plus 3 generated helpers and
+    `relocation.py`. 13 deferred, all listed in FUTURE_PORTS.md § Deferred tests:
+    - the TC licence smoke test;
+    - 8 deferred whole (convergence 5, three_phase_examples 3);
+    - the 3 diagnostics tests;
+    - the quasi-binary brass test.
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -837,7 +871,7 @@ separate "approve references" commit.
         physical_scale 6, convergence 5, three_phase_examples 3, similarity_comparison_basis 2,
         ternary_similarity 2). Tests that only check research example scripts are flagged, not forced.
         (done 2026-11-10: 26 of 34, the 8 deferred whole as planned; see log)
-  - [ ] 4: ternary (155)
+  - [x] 4: ternary (155) (done 2026-11-10: 151 of 155; one deferral beyond the planned 3, see log)
 - **Before batch 1 (M0):** check the other research `test_surrogate*.py` files and
   `test_fecrni_surrogate_artifact_recipe.py` for solver-relevant coverage and report them, without
   porting them by default.

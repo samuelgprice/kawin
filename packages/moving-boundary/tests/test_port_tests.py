@@ -142,13 +142,26 @@ def test_patches_follow_the_package_reimport_chain(monkeypatch):
     source = ("import kawin.diffusion.MovingBoundaryIllingworthTernaryFDM as fdm\n\n\ndef test_a(monkeypatch, name):\n"
               "    monkeypatch.setattr(fdm, \"_COMPONENTWISE_ROUNDOFF_FACTOR\", 1e-300)\n"
               "    monkeypatch.setattr(fdm, \"MovingBoundaryIllingworthTernaryFD1DModel\", None)\n"
+              "    monkeypatch.setattr(fdm, \"_validate_ternary_diffusivity_matrix\", None)\n"
               "    monkeypatch.setattr(fdm, name, None, raising=False)\n")
-    text, transforms, _, _ = tool.port_text(source, "kawin/tests/test_x.py", header=HEADER)
+    # Research defines the first two names itself; it only imported _validate_ternary_diffusivity_matrix here.
+    defines = {"_COMPONENTWISE_ROUNDOFF_FACTOR", "MovingBoundaryIllingworthTernaryFD1DModel"}
+    text, transforms, _, _ = tool.port_text(source, "kawin/tests/test_x.py", header=HEADER,
+                                            research_defines=lambda module: defines)
     assert "from ported_helpers.relocation import setattr_owners" in text
     assert 'setattr_owners(monkeypatch, fdm, "_COMPONENTWISE_ROUNDOFF_FACTOR", 1e-300)' in text
-    assert 'monkeypatch.setattr(fdm, "MovingBoundaryIllingworthTernaryFD1DModel", None)' in text  # defined there: unchanged
-    assert "setattr_owners(monkeypatch, fdm, name, None, raising=False)" in text  # not a literal: resolved at run time
+    assert 'monkeypatch.setattr(fdm, "MovingBoundaryIllingworthTernaryFD1DModel", None)' in text  # nothing moved
+    assert 'monkeypatch.setattr(fdm, "_validate_ternary_diffusivity_matrix", None)' in text  # research only imported it
+    assert ("setattr_owners(monkeypatch, fdm, name, None, raising=False, "
+            "research_defines=_RESEARCH_DEFINES_MovingBoundaryIllingworthTernaryFDM)") in text
+    assert ("_RESEARCH_DEFINES_MovingBoundaryIllingworthTernaryFDM = frozenset({'MovingBoundaryIllingworthTernaryFD1DModel', "
+            "'_COMPONENTWISE_ROUNDOFF_FACTOR'})") in text
     assert sum(item["kind"] == "monkeypatch through the package re-import chain" for item in transforms) == 2
+    with pytest.raises(tool.PortError, match="needs research_defines"):
+        tool.port_text(source, "kawin/tests/test_x.py", header=HEADER)
+    with monkeypatch.context() as patch:  # a name research did not define is patched on the module only
+        setattr_owners(patch, ternary, "_COMPONENTWISE_ROUNDOFF_FACTOR", marker, research_defines=frozenset())
+        assert ternary._COMPONENTWISE_ROUNDOFF_FACTOR is marker and shared._COMPONENTWISE_ROUNDOFF_FACTOR == 64.0
 
 
 def test_ported_files_match_their_record():

@@ -73,6 +73,18 @@ DEFERRED = {
             "allows no skips; the adapter it uses is already ported (moving_boundary.providers.thermocalc), "
             "so it can be ported as an opt-in check outside the gate",
     },
+    "test_illingworth_ternary.py": {
+        "test_surrogate_construction_provenance_records_line_and_bulk_samples":
+            "needs evaluate_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)",
+        "test_surrogate_construction_dashboard_has_phase_tabs":
+            "needs evaluate_/plot_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)",
+        "test_surrogate_construction_report_includes_thermocalc_metadata":
+            "needs evaluate_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)",
+        "test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case":
+            "builds its binary reference with build_fig3_present_work_model/build_fig6_illingworth_case_params from "
+            "the research example examples/Illingworth2005/compare_illingworth2005_planar.py, which is not ported "
+            "(FUTURE_PORTS entry 6, decision per script)",
+    },
 }
 # Research example modules whose helpers were relocated into the package (plan §6, FUTURE_PORTS.md
 # "Deferred tests": the similarity helpers exist in moving_boundary.analytic). Each name must exist.
@@ -252,10 +264,24 @@ def _names_used(tree, skip):
     return used
 
 
-def port_text(source, name, *, deferred=None, header):
+def top_level_definitions(source):
+    """Names a module defines itself at top level (functions, classes, assignments; not imports)."""
+    names = set()
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+                names.update(inner.id for inner in ast.walk(target) if isinstance(inner, ast.Name))
+    return names
+
+
+def port_text(source, name, *, deferred=None, header, research_defines=None):
     """Port one research module's text; returns ``(text, transforms, helpers, counts)``.
 
     ``deferred`` maps top-level test names to reasons. ``header`` is the provenance paragraph.
+    ``research_defines(module)`` returns the top-level names a research module defines (read by
+    path); it decides whether a patch on that module's alias follows the package re-import chain.
     """
     deferred = dict(deferred or {})
     tree = ast.parse(source)
@@ -277,33 +303,46 @@ def port_text(source, name, *, deferred=None, header):
         return source[offset(node.lineno, node.col_offset):offset(node.end_lineno, node.end_col_offset)]
 
     # ``import <research module> as alias``: patches on these aliases may need setattr_owners.
-    module_aliases = {alias.asname: rename_module(alias.name) for node in ast.walk(tree) if isinstance(node, ast.Import)
-                      for alias in node.names if alias.asname and rename_module(alias.name)}
-    needs_relocation_import = False
+    module_aliases = {alias.asname: (alias.name, rename_module(alias.name)) for node in ast.walk(tree)
+                      if isinstance(node, ast.Import) for alias in node.names if alias.asname and rename_module(alias.name)}
+    needs_relocation_import, runtime_modules = False, {}
     for node in ast.walk(tree):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "setattr"
                 and len(node.args) >= 3 and isinstance(node.args[0], ast.Name) and node.args[0].id in module_aliases
                 and not inside_removed(node)):
-            package = module_aliases[node.args[0].id]
+            research_module, package = module_aliases[node.args[0].id]
+            if research_defines is None:
+                raise PortError(f"{name}:{node.lineno}: a patch on a research module alias needs research_defines")
             key = node.args[1]
-            owners = "resolved at run time (attribute name is not a literal)"
-            needed = True
+            extra = []
             if isinstance(key, ast.Constant) and isinstance(key.value, str):
                 chain = RELOCATION.owner_chain(importlib.import_module(package), key.value)
+                defined = key.value in research_defines(research_module)
+                if not (defined and len(chain) > 1):
+                    continue   # research patched its own binding only, or nothing moved: unchanged
                 owners = [f"{module.__name__}.{attribute}" for module, attribute in chain]
-                needed = len(chain) > 1
-            if needed:
-                parts = [segment(node.func.value)] + [segment(arg) for arg in node.args]
-                parts += [f"{keyword.arg}={segment(keyword.value)}" for keyword in node.keywords]
-                edits.append((offset(node.lineno, node.col_offset), offset(node.end_lineno, node.end_col_offset),
-                              "setattr_owners(" + ", ".join(parts) + ")"))
-                transforms.append(dict(kind="monkeypatch through the package re-import chain", line=node.lineno,
-                                       call=segment(node), owners=owners))
-                needs_relocation_import = True
+            else:
+                constant = "_RESEARCH_DEFINES_" + re.sub(r"\W", "_", research_module.rsplit(".", 1)[-1])
+                runtime_modules[constant] = research_module
+                extra = [f"research_defines={constant}"]
+                owners = f"resolved at run time against the names {research_module} defines ({constant})"
+            parts = [segment(node.func.value)] + [segment(arg) for arg in node.args]
+            parts += [f"{keyword.arg}={segment(keyword.value)}" for keyword in node.keywords] + extra
+            edits.append((offset(node.lineno, node.col_offset), offset(node.end_lineno, node.end_col_offset),
+                          "setattr_owners(" + ", ".join(parts) + ")"))
+            transforms.append(dict(kind="monkeypatch through the package re-import chain", line=node.lineno,
+                                   call=segment(node), owners=owners))
+            needs_relocation_import = True
     if needs_relocation_import:
         last = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))][-1]
         position = offset(last.end_lineno, last.end_col_offset)
-        edits.append((position, position, "\nfrom ported_helpers.relocation import setattr_owners"))
+        inserted = "\nfrom ported_helpers.relocation import setattr_owners"
+        for constant, research_module in sorted(runtime_modules.items()):
+            names = ", ".join(repr(item) for item in sorted(research_defines(research_module)))
+            inserted += (f"\n\n# Top-level names research {research_module.replace('.', '/')}.py defines (tools/port_tests.py), for patches\n"
+                         f"# whose attribute name is known only at run time.\n{constant} = frozenset({{{names}}})")
+            transforms.append(dict(kind="research definitions constant", name=constant, research=research_module))
+        edits.append((position, position, inserted))
         transforms.append(dict(kind="import", research="(none)", package="ported_helpers.relocation.setattr_owners"))
 
     for node in ast.walk(tree):
@@ -415,6 +454,15 @@ def port_batch(research, batch):
     research = Path(research)
     commit = research_commit(research)
     outputs, queue, seen = {}, [(name, False) for name in BATCHES[batch]], set()
+    definitions = {}
+
+    def research_defines(module):
+        """Top-level names the research module defines (read by path; never imported)."""
+        if module not in definitions:
+            path = research / (module.replace(".", "/") + ".py")
+            definitions[module] = top_level_definitions(path.read_bytes().decode("utf-8"))
+        return definitions[module]
+
     while queue:
         name, helper = queue.pop(0)
         if (name, helper) in seen:
@@ -434,7 +482,8 @@ def port_batch(research, batch):
                   f"``tools/port_tests.py``{'' if helper else f' (batch {batch})'}; do not edit by hand. Imports resolve to the package as\n"
                   f"``tools/definitions/_bindings.py`` does; the full transform list is in\n"
                   f"``docs/test-port-provenance.json``. Excluded tests: {excluded}.{scope}")
-        text, transforms, helpers, counts = port_text(source, relative, deferred=deferred, header=header)
+        text, transforms, helpers, counts = port_text(source, relative, deferred=deferred, header=header,
+                                                      research_defines=research_defines)
         if selected:
             target = f"tests/{HELPERS}/{HELPER_SUBSETS[name][0]}.py"
         else:

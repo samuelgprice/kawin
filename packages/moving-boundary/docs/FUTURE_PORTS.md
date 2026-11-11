@@ -239,6 +239,7 @@ place, not counted as ported, and get ported in the same change as their feature
 | `test_illingworth_ternary.py::test_surrogate_construction_provenance_records_line_and_bulk_samples` | 1 | `evaluate_surrogate_construction_diagnostics` | 1 |
 | `test_illingworth_ternary.py::test_surrogate_construction_dashboard_has_phase_tabs` | 1 | `evaluate_…` + `plot_surrogate_construction_diagnostics` (plotly) | 1 |
 | `test_illingworth_ternary.py::test_surrogate_construction_report_includes_thermocalc_metadata` | 1 | `evaluate_surrogate_construction_diagnostics` | 1 |
+| `test_illingworth_ternary.py::test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case` | 1 | `build_fig3_present_work_model` and `build_fig6_illingworth_case_params` from the research example `examples/Illingworth2005/compare_illingworth2005_planar.py` (not ported). Found in M8 batch 4; not in the original count | 6 (decision per script) |
 | `test_illingworth_ternary_convergence.py` (whole file) | 5 | `IllingworthTernaryConvergence` | 4 |
 | `test_three_phase_examples.py` (whole file) | 3 | the research script `IllingworthTernaryThreePhaseStable` | 6 (decision per script) |
 | `test_surrogate_artifacts.py::test_cuniti_tc_python_bundle_smoke` | 1 | an opt-in place outside approve's whole-suite gate: it is a licence smoke test (`KAWIN_RUN_TC_PYTHON_SMOKE=1`, TC-Python with TCHEA5/MOBHEA4) that skips in every normal run, and that gate allows no skips. Its adapter is already ported (`moving_boundary.providers.thermocalc`). Deferred in M8 batch 1; 11 of 12 ported | — (gate decision) |
@@ -254,7 +255,8 @@ figure-9 study scripts through their source, so it goes with entry 6; classified
 
 Effect on the item 16 counts:
 
-- `test_illingworth_ternary.py`: 152 of 155 tests are ported and 3 are deferred.
+- `test_illingworth_ternary.py`: 151 of 155 tests are ported and 4 are deferred (the 3
+  diagnostics tests, plus the quasi-binary brass test found in M8 batch 4).
   `test_illingworth_ternary_convergence.py` (5) and `test_three_phase_examples.py` (3) are deferred
   whole.
 - The other similarity-group files *are* portable: `FixedMatrixTernaryDiffusivity`,
