@@ -18,8 +18,17 @@ identically to the recorded research AST so the materializer's equivalence proof
 - ``kwargs_default``: in a call to ``call``, turn ``**X`` into ``**{"arg": new, **X}``, a default
   that an entry of ``X`` still overrides.
 
-An edit whose function is emitted must match exactly once, and its ``old`` text must match the
-research text, otherwise ``MigrationError`` is raised; nothing is skipped silently.
+One operation names a module-level assignment instead of a function:
+
+- ``module_dict_value``: in the statement ``assignment = {...}`` at module level (a single plain
+  name target and a dict literal; never a nested or function-local one), replace the value of
+  string key ``key`` (``old``) with ``new``. Other dictionaries and constants are never touched.
+
+An edit whose function or assignment is emitted must match exactly once, and its ``old`` text must
+match the research text, otherwise ``MigrationError`` is raised; nothing is skipped silently. Two
+module-level assignments to the same name in the research source are ambiguous and also raise
+(``check_source``). The materializer also fails when a listed ``module_dict_value`` edit for a
+materialized source is never applied (``unapplied``).
 """
 import ast
 
@@ -59,6 +68,11 @@ EDITS = {
     "examples/Interstitials/fe_c_exb1a.py": [  # O07 (SI lengths, lagged)
         dict(function="run_kawin", op="keyword", call="MovingBoundaryIllingworthFD1DModel",
              arg="tolerance", old="1.0e-14", new="1.0e-14 / R"),
+    ],
+    # C04, C31, F04 (R = 1). User decision 2026-11-11: run at the new default 1e-12 (superseding
+    # "keep 1e-8"), so the binary_planar_growth examples, which use the defaults, reproduce them.
+    "examples/Illingworth2005/replicate_illingworth2005_fig4_5_6_planar.py": [
+        dict(assignment="VALIDATION_PARAMS", op="module_dict_value", key="tolerance", old="1.0e-8", new="1.0e-12"),
     ],
 }
 
@@ -105,11 +119,42 @@ def _targets(function, edit):
     return found
 
 
+def _module_assignments(tree, name):
+    """Module-level ``name = ...`` statements in ``tree``: a module's body, or ``tree`` itself when it is one.
+
+    Only single plain-name targets count; nested, function-local, tuple or annotated assignments never do.
+    """
+    statements = tree.body if isinstance(tree, ast.Module) else [tree]
+    return [node for node in statements if isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name]
+
+
+def _locate_module_dict_value(tree, edit, where):
+    """``(dict, value)`` for a ``module_dict_value`` edit, ``None`` when the assignment is absent."""
+    assignments = _module_assignments(tree, edit["assignment"])
+    if not assignments:
+        return None
+    if len(assignments) > 1:
+        raise MigrationError(f"{where}: api_migration {edit}: {len(assignments)} module-level assignments to "
+                             f"{edit['assignment']} are ambiguous, expected exactly 1")
+    value = assignments[0].value
+    if not isinstance(value, ast.Dict):
+        raise MigrationError(f"{where}: api_migration {edit}: {edit['assignment']} is not assigned a dict literal")
+    found = [(value, item) for key, item in zip(value.keys, value.values)
+             if isinstance(key, ast.Constant) and key.value == edit["key"] and _same(item, edit["old"])]
+    if len(found) != 1:
+        raise MigrationError(f"{where}: api_migration {edit} matched {len(found)} places, expected exactly 1")
+    return found[0]
+
+
 def locate(tree, edit, where):
     """The single ``(container, node)`` an edit applies to in ``tree``, or ``None`` when its function is absent.
 
     Raises ``MigrationError`` when the function is present but the edit matches zero or several places.
+    ``module_dict_value`` edits look only at module-level assignments (see the module docstring).
     """
+    if edit["op"] == "module_dict_value":
+        return _locate_module_dict_value(tree, edit, where)
     functions = _functions(tree, edit["function"])
     if not functions:
         return None
@@ -126,7 +171,7 @@ def text_edit(edit, target, start, end, source_text):
     """
     container, node = target
     op = edit["op"]
-    if op in ("keyword", "dict_value"):
+    if op in ("keyword", "dict_value", "module_dict_value"):
         old = source_text[start(node.value if op == "keyword" else node):end(node.value if op == "keyword" else node)]
         if ast.dump(ast.parse(old, mode="eval").body) != ast.dump(ast.parse(edit["old"], mode="eval").body):
             raise MigrationError(f"api_migration {edit}: source text {old!r} differs from the recorded old value")
@@ -141,11 +186,41 @@ def text_edit(edit, target, start, end, source_text):
 
 def record(edit, line):
     """The provenance record of one applied edit."""
-    data = dict(kind="api_migration", reason=REASON, line=line, function=edit["function"], op=edit["op"])
+    data = dict(kind="api_migration", reason=REASON, line=line)
+    if "function" in edit:
+        data["function"] = edit["function"]
+    else:
+        data["assignment"] = edit["assignment"]
+    data["op"] = edit["op"]
     for name in ("call", "arg", "after", "key", "old", "new"):
         if name in edit:
             data[name] = edit[name]
     return data
+
+
+def check_source(tree, path):
+    """Locate every ``module_dict_value`` edit for ``path`` in the full research module ``tree``.
+
+    A generator emits only selected statements (the last binding of a name), so an ambiguous
+    research module could otherwise look unambiguous; this raises ``MigrationError`` instead.
+    """
+    for edit in edits_for(path):
+        if edit["op"] == "module_dict_value":
+            locate(tree, edit, path)
+
+
+def unapplied(path, transforms):
+    """The listed ``module_dict_value`` edits for ``path`` that no record in ``transforms`` shows as applied.
+
+    Function-scoped edits are excluded: a generator emits only selected functions (the materializer
+    and the test port select different ones from the same research file), so an unselected
+    function's edit legitimately applies elsewhere or nowhere.
+    """
+    def signature(data):
+        return sorted((key, value) for key, value in data.items() if key != "line")
+    applied = [signature(item) for item in transforms if item.get("kind") == "api_migration"]
+    return [edit for edit in edits_for(path)
+            if edit["op"] == "module_dict_value" and signature(record(edit, None)) not in applied]
 
 
 def apply_to_ast(tree, path):
@@ -159,7 +234,7 @@ def apply_to_ast(tree, path):
         op = edit["op"]
         if op == "keyword":
             node.value = new
-        elif op == "dict_value":
+        elif op in ("dict_value", "module_dict_value"):
             container.values[container.values.index(node)] = new
         elif op == "insert_keyword":
             index = container.keywords.index(node)

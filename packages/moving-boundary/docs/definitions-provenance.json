@@ -1359,7 +1359,7 @@
   },
   "illingworth2005_planar": {
    "file": "tools/definitions/illingworth2005_planar.py",
-   "sha256": "713299c7c21d85d560682079e00ef4656279781f3d3a8908766129a66b6648ef",
+   "sha256": "e02354e3bc8f6d42d42eb3773dc5b624281a4e8a9a2bfc7aee8feb2971688ad4",
    "source": "examples/Illingworth2005/replicate_illingworth2005_fig4_5_6_planar.py",
    "source_sha256": "9f534c5b20f9ecfba1bbe2c5749151d01b8e6da9c2a1e012090613b7fe5bd1d7",
    "names": [
@@ -1409,8 +1409,19 @@
       "CartesianFD1D = _input_symbol('kawin.diffusion.mesh', 'CartesianFD1D')",
       "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')"
      ]
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 116,
+     "assignment": "VALIDATION_PARAMS",
+     "op": "module_dict_value",
+     "key": "tolerance",
+     "old": "1.0e-8",
+     "new": "1.0e-12"
     }
-   ]
+   ],
+   "migrated_ast_sha256": "da48ac5ee9f34497e3eb8e23ad7c9ec1c31140ebd832860514206ad128c4adb1"
   },
   "interstitials_binary": {
    "file": "tools/definitions/interstitials_binary.py",

@@ -132,3 +132,54 @@ def test_api_migration_edits_keep_the_ast_proof(research, monkeypatch):
     monkeypatch.setattr(tool.API, "EDITS", {"examples/mig.py": [dict(edits[0], old="1.0e-9")]})
     with pytest.raises(tool.API.MigrationError, match="matched 0 places"):
         tool.materialize(research, calls, "test-commit", {})
+
+
+MODULE_DICT = '''VALIDATION_PARAMS = {"c_a": 0.4, "tolerance": 1.0e-8}
+OTHER_PARAMS = {"tolerance": 1.0e-8}
+TOLERANCE = 1.0e-8
+
+
+def build():
+    local = {"tolerance": 1.0e-8}
+    return dict(VALIDATION_PARAMS), dict(OTHER_PARAMS), TOLERANCE, local
+'''
+MODULE_EDIT = dict(assignment="VALIDATION_PARAMS", op="module_dict_value", key="tolerance", old="1.0e-8", new="1.0e-12")
+
+
+def _module_dict_run(tool, research, monkeypatch, text, edits):
+    (research / "examples/mod.py").write_text(text, encoding="utf-8")
+    monkeypatch.setattr(tool.API, "EDITS", {"examples/mod.py": edits})
+    entries = {"mod": ("examples/mod.py", ["build"], {}, [], [], "raise", ["X03"])}
+    calls, _ = tool.record_bindinputs(research, entries)
+    return tool.materialize(research, calls, "test-commit", {})
+
+
+def test_module_dict_value_edits_only_the_named_module_level_dict(research, monkeypatch):
+    """Only ``VALIDATION_PARAMS["tolerance"]`` changes; other dicts, constants and local dicts stay; the AST proof holds."""
+    tool = _tool()
+    files, provenance = _module_dict_run(tool, research, monkeypatch, MODULE_DICT, [MODULE_EDIT])
+    text = files["mod"].decode("utf-8")
+    assert 'VALIDATION_PARAMS = {"c_a": 0.4, "tolerance": 1.0e-12}' in text
+    assert 'OTHER_PARAMS = {"tolerance": 1.0e-8}' in text and "TOLERANCE = 1.0e-8" in text
+    assert 'local = {"tolerance": 1.0e-8}' in text
+    assert provenance["mod"]["ast_equal"] and provenance["mod"]["migrated_ast_sha256"] != provenance["mod"]["ast_sha256"]
+    (record,) = [item for item in provenance["mod"]["transforms"] if item["kind"] == "api_migration"]
+    assert record == dict(kind="api_migration", reason=tool.API.REASON, line=1, assignment="VALIDATION_PARAMS",
+                          op="module_dict_value", key="tolerance", old="1.0e-8", new="1.0e-12")
+    namespace = {}
+    exec(compile(text, "mod", "exec"), namespace)
+    assert namespace["build"]() == ({"c_a": 0.4, "tolerance": 1.0e-12}, {"tolerance": 1.0e-8}, 1.0e-8, {"tolerance": 1.0e-8})
+
+
+@pytest.mark.parametrize(("text", "edit", "match"), [
+    (MODULE_DICT, dict(MODULE_EDIT, old="1.0e-9"), "matched 0 places"),             # stale old value
+    (MODULE_DICT, dict(MODULE_EDIT, key="missing"), "matched 0 places"),            # missing key
+    (MODULE_DICT, dict(MODULE_EDIT, assignment="ABSENT"), "never applied"),          # missing assignment
+    (MODULE_DICT + 'VALIDATION_PARAMS = {"tolerance": 1.0e-8}\n', MODULE_EDIT, "ambiguous"),
+    (MODULE_DICT.replace('{"c_a": 0.4, "tolerance": 1.0e-8}', 'dict(tolerance=1.0e-8)'), MODULE_EDIT, "not assigned a dict literal"),
+])
+def test_module_dict_value_mismatches_fail_clearly(research, monkeypatch, text, edit, match):
+    """A stale, missing, ambiguous or non-dict target raises ``MigrationError``; nothing is skipped."""
+    tool = _tool()
+    with pytest.raises(tool.API.MigrationError, match=match):
+        _module_dict_run(tool, research, monkeypatch, text, [edit])

@@ -402,6 +402,7 @@ def materialize(root, calls, research_commit, source_hashes):
         path = Path(root) / call["path"]
         source = Source(path.read_text(encoding="utf-8"))
         tree = ast.parse(source.text, filename=str(path))
+        API.check_source(tree, call["path"])
         body, selected, requested = select(tree, call["names"], set(call["overrides"]))
         segments, transforms = [], []
         for node in body:
@@ -447,6 +448,12 @@ def materialize(root, calls, research_commit, source_hashes):
             transforms=transforms)
         if migrated:
             provenance[call["stem"]]["migrated_ast_sha256"] = hashlib.sha256(expected.encode("utf-8")).hexdigest()
+    # Every listed module-level api_migration edit for a materialized source must have been applied somewhere.
+    for source_path in sorted({call["path"] for call in calls.values()}):
+        applied = [item for entry in provenance.values() if entry["source"] == source_path for item in entry["transforms"]]
+        missing = API.unapplied(source_path, applied)
+        if missing:
+            raise API.MigrationError(f"{source_path}: api_migration edits never applied: {missing}")
     return files, provenance
 
 
