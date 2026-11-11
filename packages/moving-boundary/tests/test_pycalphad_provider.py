@@ -75,22 +75,48 @@ def test_endpoint_helpers_preserve_requested_phase_and_input_element_order():
     assert [item.phase_record.phase_name for item in filtered]==['FCC_A1','BCC_A2']
 
 
+_GENERATION_GUARD_SCRIPT = r"""
+import importlib.machinery, importlib.util, re, site, sys
+from pathlib import Path
+sys.path.extend(site.getsitepackages())
+spec=importlib.util.spec_from_file_location('generation_tool',sys.argv[1])
+module=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+operation,path=sys.argv[2],Path(sys.argv[3])
+guard=module.guard_package_generation
+try:
+    with guard():
+        if operation=='import':
+            __import__('examples')
+        elif operation=='path_read':
+            path.read_text()
+        else:
+            importlib.machinery.SourceFileLoader('forbidden_adapter',str(path)).get_data(str(path))
+except AssertionError as exc:
+    assert re.search('Research',str(exc)),exc
+else:
+    raise SystemExit('the generation guard did not raise')
+assert path.read_text()=='answer=42'
+with guard() as audit:
+    pass
+assert audit==dict(guarded=True,examples_imported=False,examples_read=False),audit
+"""
+
+
 @pytest.mark.parametrize('operation',['import','path_read','loader_read'])
 def test_generation_guard_blocks_research_imports_and_source_reads(tmp_path, operation):
-    """The guard catches imports and direct reads, then becomes inert for research assembly."""
+    """The guard catches imports and direct reads, then becomes inert for research assembly.
+
+    Runs in its own process without the M9 independence variables: this negative test imports
+    ``examples`` on purpose, which an active ``MB_FORBID_RESEARCH`` guard would refuse first, and
+    the generation guard's audit hook cannot be removed from the process afterwards.
+    """
+    import os
     path=tmp_path/'examples/ternaryExamples/pycalphad_default_phase_adapter.py'
     path.parent.mkdir(parents=True)
     path.write_text('answer=42')
-    guard=optional_tool().guard_package_generation
-    with pytest.raises(AssertionError,match='Research'):
-        with guard():
-            if operation=='import':
-                __import__('examples')
-            elif operation=='path_read':
-                path.read_text()
-            else:
-                importlib.machinery.SourceFileLoader('forbidden_adapter',str(path)).get_data(str(path))
-    assert path.read_text()=='answer=42'
-    with guard() as audit:
-        pass
-    assert audit==dict(guarded=True,examples_imported=False,examples_read=False)
+    env={key:value for key,value in os.environ.items() if not key.startswith(('PYTHON','MB_FORBID','MB_GUARD'))}
+    result=subprocess.run([sys.executable,'-I','-S','-c',_GENERATION_GUARD_SCRIPT,
+                           str(Path(__file__).parents[1]/'tools/acceptance_optional.py'),operation,str(path)],
+                          cwd=tmp_path,env=env,capture_output=True,text=True,stdin=subprocess.DEVNULL,timeout=120)
+    assert result.returncode==0,result.stdout+result.stderr

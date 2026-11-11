@@ -51,12 +51,15 @@ def forbidden_module(name):
             or name.startswith(FORBIDDEN_NAME_PREFIXES))
 
 
-def git_invocation(program, args):
+def git_invocation(program, args, *, shell=False):
     """Whether a process launch (audit-event arguments) runs Git, directly or through a shell.
 
-    ``program`` is the explicit executable (may be ``None``); ``args`` is the argument list or a
-    command string. A string is searched for a ``git`` command token; a list is checked by its
-    program name and, when that program is a shell, by every later token.
+    ``program`` is the explicit executable (may be ``None``); ``args`` is an argument list or a
+    command line. On Windows ``subprocess`` audits the joined command line, so a string is split
+    into its program token (quoted or bare) and the rest: Git is detected when the program is Git,
+    or when it is a shell (``cmd``, PowerShell, ``bash``, ``sh``) and the rest holds a ``git``
+    command token. Other programs' arguments are not searched (a Python ``-c`` script mentioning
+    "git" is not a Git launch). ``shell=True`` (``os.system``) searches the whole string.
     """
     def name(value):
         try:
@@ -66,7 +69,14 @@ def git_invocation(program, args):
     if program is not None and name(program) in _GIT_PROGRAMS:
         return True
     if isinstance(args, (str, bytes)):
-        return bool(_GIT_IN_COMMAND.search(os.fsdecode(args)))
+        command = os.fsdecode(args)
+        if shell or (program is not None and name(program) in _SHELLS):
+            return bool(_GIT_IN_COMMAND.search(command))
+        match = re.match(r'\s*(?:"([^"]*)"|(\S+))(.*)', command, re.DOTALL)
+        if match is None:
+            return False
+        first, rest = match.group(1) if match.group(1) is not None else match.group(2), match.group(3)
+        return name(first) in _GIT_PROGRAMS or (name(first) in _SHELLS and bool(_GIT_IN_COMMAND.search(rest)))
     try:
         tokens = [os.fsdecode(token) for token in args or ()]
     except TypeError:
@@ -177,7 +187,9 @@ def guard_independence(environ=None):
             if event == "subprocess.Popen":
                 launch = (args[0], args[1])
             elif event == "os.system":
-                launch = (None, args[0])
+                if git_invocation(None, args[0], shell=True):
+                    violation(f"Git invocation blocked (MB_FORBID_GIT=1): {args[0]!r}")
+                return
             elif event in {"os.exec", "os.posix_spawn"}:
                 launch = (args[0], args[1])
             elif event == "os.spawn":

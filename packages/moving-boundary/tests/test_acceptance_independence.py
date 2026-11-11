@@ -44,6 +44,8 @@ try:
         subprocess.run(["git", "--version"], capture_output=True, timeout=30)
     elif action == "git-shell":
         subprocess.run("git --version", shell=True, capture_output=True, timeout=30)
+    elif action == "system":
+        os.system("cd . && git --version")
     elif action == "git-path":
         subprocess.run([value, "--version"], capture_output=True, timeout=30)
     elif action == "python":
@@ -73,11 +75,14 @@ def _guarded(tmp_path, action, *, research=True, git=False, roots=()):
 
 @pytest.fixture
 def research_tree(tmp_path):
+    """A research root (forbidden only in the child process) and an allowed file.
+
+    No ``mb-ref-*`` path is created: the test process itself may run under the guard (M9), and
+    an ``open`` is audited before the file system is touched, so a nonexistent path suffices.
+    """
     root = tmp_path / "research"
     (root / "kawin").mkdir(parents=True)
     (root / "kawin/secret.py").write_text("x = 1\n", encoding="utf-8")
-    (tmp_path / "mb-ref-0000000").mkdir()
-    (tmp_path / "mb-ref-0000000/file.txt").write_text("x", encoding="utf-8")
     (tmp_path / "allowed.txt").write_text("x", encoding="utf-8")
     return root
 
@@ -121,7 +126,7 @@ def test_guard_follows_links_into_research_roots(tmp_path, research_tree):
     assert out.startswith("RAISED IndependenceViolation research path open"), out
 
 
-@pytest.mark.parametrize("action", ["git", "git-shell", "git-path:C:/Program Files/Git/cmd/git.exe"])
+@pytest.mark.parametrize("action", ["git", "git-shell", "system", "git-path:C:/Program Files/Git/cmd/git.exe"])
 def test_guard_blocks_git(tmp_path, action):
     out, log = _guarded(tmp_path, action, research=False, git=True)
     assert out.startswith("RAISED IndependenceViolation Git invocation blocked"), out
@@ -140,9 +145,20 @@ def test_guard_allows_other_processes_and_is_off_by_default(tmp_path, research_t
     ("C:/Git/bin/git.exe", ["anything"], True), (None, "git rev-parse HEAD", True),
     (None, 'C:\Windows\system32\cmd.exe /c "git status"', True), (None, ["cmd", "/d", "/c", "git", "status"], True),
     (None, ["python", "-m", "pytest", "-m", "not git"], False), (None, ["pip", "wheel", "."], False),
-    (None, "python -c pass", False), (None, ["digit.exe"], False), (None, [], False)])
+    (None, "python -c pass", False), (None, ["digit.exe"], False), (None, [], False),
+    # Windows subprocess audits the joined command line: only the program token decides.
+    (None, r'''"C:\env\python.exe" -I -c "x = 'git'" C:\tools\batch_safety.py git''', False),
+    (None, r'"C:\Program Files\Git\cmd\git.exe" status', True), (None, "  git.exe log", True),
+    (r"C:\Windows\system32\cmd.exe", "/c git status", True)])
 def test_git_invocation_detection(program, args, expected):
     assert _tool().git_invocation(program, args) is expected
+
+
+def test_git_invocation_detection_in_shell_commands():
+    """``os.system`` runs a shell: a chained Git command is found anywhere in the string."""
+    tool = _tool()
+    assert tool.git_invocation(None, "cd . && git --version", shell=True)
+    assert not tool.git_invocation(None, "cd . && python -c pass", shell=True)
 
 
 def test_forbidden_module_names():
