@@ -14,7 +14,9 @@ use: non-private cases against ``settings_sha256`` in ``example_manifest.json``,
 A case's private surrogate input is checked against ``private-inputs.json`` the same way.
 
 ``run`` needs no research checkout: the fixtures it compares with are hash-validated by
-``acceptance.validate_expected`` before and after.
+``acceptance.validate_expected`` before and after (``validate_references``). The reference
+cases' own inputs are not required: a missing ``open-surrogate.npz`` fails C24 in quick/full
+acceptance, but E04 builds its own surrogate and still runs here.
 ``capture-settings --research PATH`` is historical (reference role, frozen research checkout,
 validated by ``acceptance.validate_research_checkout``): it re-records
 every mapped case into a fresh ``settings-capture-*`` scratch folder, never into
@@ -80,6 +82,16 @@ def capture_settings(tool, manifest, research):
                                         "identical" if old.read_bytes() == (folder / name).read_bytes() else "DIFFERS")
         print(entry["reference"], "recorded in", folder.name, "-", verdicts[entry["reference"]], flush=True)
     return folder, verdicts
+
+
+def validate_references(tool, references):
+    """Hash-validate the reference artifacts the examples compare with (Git-free, no research).
+
+    Missing original inputs of those reference cases (e.g. C24's ``open-surrogate.npz``) are not
+    required, since no reference case is rerun here (plan follow-up 5); a present adopted input
+    must still match its hash, and each example's own inputs are checked per case in ``main``.
+    """
+    return tool.validate_expected(references, required_inputs_for=())
 
 
 def private_inputs(tool):
@@ -197,7 +209,12 @@ raise SystemExit(pytest.main(sys.argv[3:]))
 
 
 def main(argv=None):
-    """Re-execute in the public environment, then capture settings or run the example cases."""
+    """Re-execute in the public environment, then capture settings or run the example cases.
+
+    Installs the opt-in independence guards first (``batch_safety.guard_independence``).
+    """
+    import runpy
+    runpy.run_path(str(Path(__file__).resolve().parent / "batch_safety.py"))["guard_independence"]()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("capture-settings", "run"))
     parser.add_argument("--tier", choices=("quick", "full"), default="full")
@@ -227,7 +244,7 @@ def main(argv=None):
         return 0 if all(verdict == "identical" for verdict in verdicts.values()) else 1
     # The fixtures each example is compared with are hash-validated before and after (no research).
     references = sorted({entry["reference"] for entry in manifest["cases"].values()})
-    tool.validate_expected(references)
+    validate_references(tool, references)
     spec = importlib.util.spec_from_file_location("example_settings", PROJECT / "tools/example_settings.py")
     settings = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(settings)
@@ -264,7 +281,7 @@ def main(argv=None):
         tests = run_tests(tool, state, "no", timeout=420)
         if args.slow:
             tests = {"fast": tests, "slow": run_tests(tool, state, "only", timeout=300)}
-    tool.validate_expected(references)
+    validate_references(tool, references)
     elapsed = time.monotonic() - started
     summary = dict(tier=args.tier, cases=len(manifest["cases"]), failures=failures, skipped=skipped, tests=tests,
                    pending_fixture=sorted(manifest["pending_fixture"]), elapsed_seconds=elapsed)

@@ -424,8 +424,10 @@ def test_run_pytest_full_suite_selects_the_tests_directory(tmp_path, monkeypatch
     assert tool.run_pytest(state, tolerance="public", require=[], full_suite=True)["tests"] == 3
     assert str(tmp_path / "tests") in seen["args"] and not any("test_bridge.py::" in a for a in seen["args"])
     assert seen["env"]["MB_EXAMPLE_TDB"].endswith("FeCrNi.tdb") and seen["env"]["MB_ACCEPTANCE_STATE"]
+    assert seen["args"][seen["args"].index("-m") + 1] == "not slow"  # approve uses Git: git tests included
     tool.run_pytest(state, tolerance="public", require=[])  # normal gates keep their allowlist
     assert str(tmp_path / "tests") not in seen["args"] and "MB_EXAMPLE_TDB" not in seen["env"]
+    assert seen["args"][seen["args"].index("-m") + 1] == "not slow and not git"  # portable: no Git (follow-up 7)
     (output / "pytest.xml").write_text('<testsuites><testsuite tests="3" failures="0" errors="0" skipped="1"/></testsuites>')
     monkeypatch.setattr(tool, "run", lambda args, **kwargs: "")
     with pytest.raises(AssertionError, match="skipped"):

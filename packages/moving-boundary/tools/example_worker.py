@@ -19,7 +19,9 @@ import tempfile
 import time
 
 HERE = Path(__file__).resolve().parent
-runpy.run_path(str(HERE / "batch_safety.py"))["forbid_input"]()
+_SAFETY = runpy.run_path(str(HERE / "batch_safety.py"))
+_SAFETY["forbid_input"]()
+_SAFETY["guard_independence"]()   # opt-in research/Git guards (MB_FORBID_RESEARCH, MB_FORBID_GIT)
 
 
 def module(name, path):

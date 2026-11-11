@@ -3,13 +3,22 @@
 import importlib.util
 from pathlib import Path
 import subprocess
+import tempfile
 
 import pytest
 
 
+@pytest.mark.git
 @pytest.mark.parametrize("change", ["package_commit", "tracked_solver", "untracked_solver"])
-def test_frozen_content_guard(tmp_path, monkeypatch, change):
-    """Allow package commits but reject tracked changes and source shadowing."""
+def test_frozen_content_guard(tmp_path, monkeypatch, request, change):
+    """Allow package commits but reject tracked changes and source shadowing.
+
+    Historical tooling that runs Git itself, so it is marked ``git`` and kept out of the
+    portable normal gate (plan §7, follow-up 7); ``approve`` and plain suite runs include it.
+    The disposable repository lives under a short system temp root, not ``tmp_path``: its Git
+    object paths would exceed Windows' 260-character MAX_PATH below a deep ``--basetemp``
+    (follow-up 6).
+    """
     spec = importlib.util.spec_from_file_location(
         "bridge_verify", Path(__file__).parents[1] / "tools/verify.py")
     verify = importlib.util.module_from_spec(spec)
@@ -17,7 +26,9 @@ def test_frozen_content_guard(tmp_path, monkeypatch, change):
     logs = tmp_path / "logs"
     logs.mkdir()
     monkeypatch.setattr(verify, "OUTPUT", logs)
-    repo = tmp_path / "disposable"
+    short = tempfile.TemporaryDirectory(prefix="mbgit-", ignore_cleanup_errors=True)
+    request.addfinalizer(short.cleanup)
+    repo = Path(short.name) / "r"
     repo.mkdir()
 
     def git(*args):

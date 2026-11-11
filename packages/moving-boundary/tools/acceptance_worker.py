@@ -11,7 +11,9 @@ import time
 import traceback
 
 HERE = Path(__file__).resolve().parent
-runpy.run_path(str(HERE / "batch_safety.py"))["forbid_input"]()
+_SAFETY = runpy.run_path(str(HERE / "batch_safety.py"))
+_SAFETY["forbid_input"]()
+_SAFETY["guard_independence"]()   # opt-in research/Git guards (MB_FORBID_RESEARCH, MB_FORBID_GIT)
 # Cases whose package role builds from tools/definitions (materialized, hash-checked) instead of
 # the historical acceptance_inputs AST loader; the reference role always keeps the loader.
 PACKAGE_DEFINITIONS = ({f"C{n:02d}" for n in range(1, 33)} | {"LEGACY", "prepare", "F04", "F11", "F12"}

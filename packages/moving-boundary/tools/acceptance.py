@@ -124,7 +124,7 @@ def run_tc_worker(args, *, env, timeout):
     return stdout
 
 
-def validate_expected(cases):
+def validate_expected(cases, *, required_inputs_for=None):
     """Normal-run validation without any research checkout or Git (plan §2).
 
     Checks, failing on the first problem:
@@ -132,8 +132,10 @@ def validate_expected(cases):
     - each case's ``reference/<case>.{json,npz}`` against ``expected_artifacts`` (a case without an
       entry fails; O06/O08 frozen hashes are also checked in ``compare``);
     - each adopted input in ``adopted_inputs`` that exists must match its sha256; a missing one
-      fails every case that ``requires`` it (``open-surrogate.npz`` is required by C24), and is
-      never regenerated or skipped;
+      fails every case of ``required_inputs_for`` (default: ``cases``) that ``requires`` it
+      (``open-surrogate.npz`` is required by C24), and is never regenerated or skipped. Example
+      acceptance passes ``()``: it compares with the reference artifacts but does not rerun the
+      reference cases, so their original inputs are not needed (follow-up 5);
     - every ``tools/definitions`` file against ``docs/definitions-provenance.json``;
     - ``approved_references`` when present (``acceptance_approval.validate``): every approval
       record and its committed report hash, and the approved files of each of ``cases`` in effect.
@@ -157,7 +159,7 @@ def validate_expected(cases):
         if path.exists():
             assert hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"], "adopted input changed: inputs/" + name
         else:
-            needed = sorted(set(entry["required_by"]) & set(cases))
+            needed = sorted(set(entry["required_by"]) & set(cases if required_inputs_for is None else required_inputs_for))
             assert not needed, f"required input missing: inputs/{name} (needed by {', '.join(needed)}; never regenerated)"
     provenance = json.loads((PROJECT / "docs/definitions-provenance.json").read_text(encoding="utf-8"))
     for stem, entry in provenance["definitions"].items():
@@ -701,11 +703,13 @@ def contract_case(case, state=None, *, tolerance="exact", require=()):
 def run_pytest(state, *, tolerance, require, timeout=180, full_suite=False):
     """Run package contracts and kernel/tooling tests against the installed targets.
 
-    Normal quick/full runs use the fixed list below. ``full_suite=True`` (``approve``) runs the
-    whole ``tests/`` directory instead, with the contracts configured and ``MB_EXAMPLE_TDB`` set,
-    so every package test, including ones added later, gates an approval. Either way the run must
-    have tests and no failures, errors or skips (``slow`` tests stay deselected by the project's
-    pytest options).
+    Normal quick/full runs use the fixed list below and are portable: tests marked ``git`` (they
+    run Git themselves, e.g. the historical ``test_frozen_content_guard``) are deselected, so a
+    normal gate never invokes Git (plan §7, follow-up 7). ``full_suite=True`` (``approve``, which
+    uses Git anyway) runs the whole ``tests/`` directory instead, ``git`` tests included, with the
+    contracts configured and ``MB_EXAMPLE_TDB`` set, so every package test, including ones added
+    later, gates an approval. Either way the run must have tests and no failures, errors or skips
+    (``slow`` tests stay deselected).
     """
     state.update(tolerance=tolerance, require=list(require))
     configured = OUTPUT / "state.json"
@@ -734,6 +738,7 @@ raise SystemExit(pytest.main(sys.argv[3:]))
         str(PROJECT / "tests/test_bridge.py") + "::test_missing_fork_error"]
     args = [sys.executable, "-I", "-S", "-c", code, state["target"], state["host"], *selection,
             "--import-mode=importlib", "--basetemp", str(OUTPUT / "pytest"), "-q",
+            "-m", "not slow" if full_suite else "not slow and not git",
             "--junitxml", str(OUTPUT / "pytest.xml")]
     output = run(args, env=env, timeout=timeout)
     (OUTPUT / "pytest.log").write_text(output, encoding="utf-8")
@@ -1069,7 +1074,13 @@ def rollback_approval(approval_id, *, reason):
 
 
 def main(argv=None):
-    """Run quick/full acceptance (no research), an explicit historical capture/repeat, or an approval."""
+    """Run quick/full acceptance (no research), an explicit historical capture/repeat, or an approval.
+
+    The opt-in independence guards (``batch_safety.guard_independence``: ``MB_FORBID_RESEARCH``,
+    ``MB_FORBID_GIT``) are installed first; workers and test runs inherit them.
+    """
+    import runpy
+    runpy.run_path(str(Path(__file__).resolve().parent / "batch_safety.py"))["guard_independence"]()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("action", choices=("quick", "full", "setup", "historical", "approve"))
     parser.add_argument("step", nargs="?", choices=("capture", "repeat"), help="historical actions only")

@@ -23,6 +23,7 @@ test = ["pytest"]
 addopts = "--strict-markers -m 'not slow'"
 markers = [
   "slow: longer refinement studies; deselected by default, run with -m slow",
+  "git: runs Git itself (historical tooling); deselected by the portable normal acceptance gate",
 ]
 
 [tool.setuptools]

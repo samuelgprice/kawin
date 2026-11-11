@@ -70,6 +70,23 @@ def test_missing_required_input_fails_only_its_cases(tmp_path, monkeypatch):
         tool.validate_expected(["C24"])
 
 
+def test_examples_validate_references_without_the_reference_cases_inputs(tmp_path, monkeypatch):
+    """Follow-up 5: E04 compares with C24's output, so a missing C24 input fails C24, not the examples."""
+    tool, output = _tool(tmp_path, monkeypatch)
+    examples = _load("validate_expected_examples", PROJECT / "tools/acceptance_examples.py")
+    (output / "inputs/open-surrogate.npz").unlink()
+    with pytest.raises(AssertionError, match="required input missing: inputs/open-surrogate.npz"):
+        tool.validate_expected(["C24"])  # quick/full: C24 itself fails
+    examples.validate_references(tool, ["C24"])  # example acceptance: the reference artifacts suffice
+    (output / "inputs/open-surrogate.npz").write_bytes(b"changed")
+    with pytest.raises(AssertionError, match="adopted input changed"):  # a present input is still checked
+        examples.validate_references(tool, ["C24"])
+    (output / "inputs/open-surrogate.npz").unlink()
+    (output / "reference/C24.npz").write_bytes(b"changed")
+    with pytest.raises(AssertionError, match="C24: expected artifact changed"):
+        examples.validate_references(tool, ["C24"])
+
+
 def test_changed_definitions_file_fails(tmp_path, monkeypatch):
     tool, _ = _tool(tmp_path, monkeypatch)
     (tmp_path / "tools/definitions/d.py").write_bytes(b"x = 2\n")

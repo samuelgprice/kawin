@@ -20,7 +20,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M6 | Normal/historical split, package-role repeatability | done 2026-11-10 (see log) |
 | M7 | Approval path | done 2026-11-10: M7a `approval_criteria` adopted (user-approved); M7b approval path (see log) |
 | M8 | Test port (item 16), 4 batches | done 2026-11-10: 301 of 314 research tests ported, 13 deferred (see log) |
-| M9 | Independence proof + missing-resource matrix | not started |
+| M9 | Independence proof + missing-resource matrix | in progress: M9a guards and follow-ups 5-7 fixed (see log) |
 | M10 | Docs + final recorded gates | not started |
 
 ### Implementation log
@@ -423,6 +423,35 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
     - 8 deferred whole (convergence 5, three_phase_examples 3);
     - the 3 diagnostics tests;
     - the quasi-binary brass test.
+- **M9a (2026-11-10): guards and fixes needed before the independence runs.**
+  - *Guard* `tools/batch_safety.guard_independence`, opt-in, installed by both workers, the test
+    `conftest` and the `acceptance.py` / `acceptance_examples.py` `main`s; child processes
+    inherit the environment variables:
+    - `MB_FORBID_RESEARCH=1`: a first meta-path finder plus the `import` audit event refuse the
+      §7 research modules; the `open`, `os.listdir` and `os.scandir` events refuse paths under
+      `MB_FORBID_ROOTS` or with an `mb-ref-*` component (checked before and after resolving
+      links); a forbidden root on `sys.path` is refused at every import. M9 forbids the whole
+      extraction worktree, not only its `kawin/` and `examples/`, because `mb-public-050` has an
+      editable `.pth` pointing at the worktree's `src`. Workers run with `-S`, so it is never
+      processed there.
+    - `MB_FORBID_GIT=1`: Git launched through `subprocess`, `os.system`, `os.exec*`, `os.spawn*`,
+      `os.posix_spawn` or `os.startfile` is refused. That includes Git started through a shell.
+    - `MB_GUARD_LOG`: every violation is also logged, so one swallowed by a broad `except` still
+      fails the check of the log.
+    - Violations raise `IndependenceViolation`, a `RuntimeError` rather than `ImportError` or
+      `OSError`, so fallback handlers cannot hide them.
+    - `tests/test_acceptance_independence.py` (28) proves each case in its own process: research
+      imports, reads, listing, a swallowed read, `sys.path`, a junction into a forbidden root,
+      Git direct, by full path and through the shell, and the guard off by default.
+  - *Follow-up 7:* `test_frozen_content_guard` is marked `git` (a new marker). The normal gate's
+    `run_pytest` passes `-m "not slow and not git"`; approve (which uses Git) passes `-m "not slow"`.
+  - *Follow-up 6:* that test's disposable repository now lives under a short system temp root
+    (`tempfile`, prefix `mbgit-`), not `tmp_path`, so `--basetemp` depth no longer matters.
+  - *Follow-up 5:* `validate_expected(cases, required_inputs_for=None)`. Example acceptance calls
+    `validate_references` (`required_inputs_for=()`). It hash-checks the reference artifacts it
+    compares with and any present adopted input, but no longer requires C24's
+    `open-surrogate.npz`. Tested on the synthetic project in `test_validate_expected.py`.
+  - Results: full `tests/` 1033 passed, 5 skipped, 1 deselected (205 s).
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -482,6 +511,24 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
      tests ported in M8 gate approvals automatically. It also repeats **every run case in every
      tier** (O05/O08 as seeded pairs; per-run caps 60 s, F 180 s, O06 300 s, as in a gate run).
      Normal quick/full gates keep their allowlist and repeat set unchanged.
+  9. *Deferral decisions (user review after M8, 2026-11-10).*
+     - `test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case`: deferring
+       it in M8 is accepted, but it is a **priority backlog item**. It checks binary/ternary
+       agreement over a long run: accepted times, interface motion, profiles, conservation.
+       Preferred route: port only the two builders it needs (`build_fig3_present_work_model`,
+       `build_fig6_illingworth_case_params`), or reproduce that configuration as a small package
+       test fixture, without porting the plotting example.
+     - `test_cuniti_tc_python_bundle_smoke`: keep it as an **explicit opt-in check outside the
+       mandatory approval gate**. It exercises a distinct provider workflow, but its database
+       licences (TCHEA5/MOBHEA4) must not become prerequisites for ordinary solver changes.
+     - Recorded in FUTURE_PORTS.md § Deferred tests.
+  10. *Reviewer's check of M8 (user, 2026-11-10).* On an export of `42f32b1`:
+      - the provenance source and output hashes matched;
+      - the 301 ported / 13 deferred count was correct;
+      - no ported assertion changed;
+      - 62 focused tests passed under `--import-mode=importlib`.
+      The full suite was not rerun. The M7b follow-ups were confirmed to address the earlier
+      findings.
 
 ## Decisions
 
@@ -913,6 +960,17 @@ separate "approve references" commit.
   Any Git call outside `approve`, `historical` and the scratch tools fails the run.
 - **Runs:** package `tests/`, normal `quick` and `full` (exact), and
   `acceptance_examples.py run --skip-tests`, then with tests.
+- **Ported tests run on their own, from the export with Git blocked (user review after M8):** normal
+  `quick`/`full` run only their smaller pytest allowlist, so passing them does not show that the
+  M8 port (`tests/test_illingworth_*.py`, `test_transformed_grids.py`,
+  `test_surrogate_artifacts.py`, `test_similarity_comparison_basis.py`, `tests/ported_helpers/`)
+  works without research or Git. Run the whole `tests/` suite, and the ported files as their own
+  reported run, from the `git archive` export with the research guard on and every `git`
+  invocation blocked. Report ported pass/fail counts separately from the normal quick/full
+  results.
+- **The same checks with an active synthetic approval:** with the nonempty approved set below in
+  effect, repeat the Git-blocked export runs (normal quick and the ported tests). Approved cases
+  must read their hash-validated versioned files and every other case `reference/`, without Git.
 - **Nonempty approved set:** a second export carries a synthetic approval (made in the M7 scratch
   clone, e.g. one quick case and one contract). Quick must select and hash-validate the approved
   versioned files without Git, and the other cases must still read `reference/`. This exposes any
@@ -924,7 +982,7 @@ separate "approve references" commit.
 | `FeCrNi.tdb` | O05, O08, E05 skipped "database input missing" |
 | `exb5.json` | O01, O02 skipped |
 | TC licence or config | O06 skipped, with the probe reason |
-| `open-surrogate.npz` | C24 **fails** with a documented message (quick-required) |
+| `open-surrogate.npz` | C24 **fails** with a clear, documented message (quick-required); **E04 still runs and passes** in example acceptance (it builds its own surrogate and compares with C24's frozen output; follow-up 5) |
 | one `reference/*.npz` byte | hash failure |
 | `reference-approved` file | hash failure |
 
