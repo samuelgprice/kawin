@@ -6,7 +6,16 @@ on UNMODIFIED public kawin (a chosen release, currently 0.5.0) only for what it
 really needs: the model/solver loop, mesh and recording, TemperatureParameters, and
 the pycalphad/thermo side. Fork-only host behavior lives in the package's own
 compatibility layer. A single command shows that the runs I actually use still give
-the same results as main.
+the same results as the frozen research oracle (`mb-ref-7af24f4`), except cases with logged
+approved references (`acceptance.py approve`; LEDGERS.md "Authority switch"). That command
+needs no research checkout and no Git.
+
+> **Deferred ports backlog:** [FUTURE_PORTS.md](FUTURE_PORTS.md) lists research functionality to
+> port *after* the authority switch (surrogate diagnostics, comparison and benchmarking,
+> visualization and convergence tools, training-data utilities, material-specific workflows),
+> plus the research tests deferred with them. Sequence: authority switch → R07/R08 →
+> diagnostics/comparison → the rest. **Revisit it after R07/R08.** None of it is needed by
+> current acceptance.
 
 ## Current checkpoint
 
@@ -227,9 +236,10 @@ See [LEDGERS.md R03](LEDGERS.md#research-dependency-issue-r03-tc-debugger-import
 - Broaden fallback/Numba, plotting/result workflows, restart/coupling and scientific
   convergence coverage before claiming those capabilities. Parity is not proof of
   mathematical convergence or support for untested combinations.
-- Preserve one numerical authority. Scientific fixes originate on the designated
-  research branch and are ported deliberately with source SHA, affected functions,
-  rationale and expected changes. A reference refresh is a separate reviewed change.
+- Preserve one numerical authority: since the authority switch (2026-11-11) it is this
+  package. Solver changes (R07, R08, ...) are made here only. A deliberate numerical change
+  is adopted with `acceptance.py approve --cases ... --reason "LEDGERS Rxx"` after its
+  correctness gates; the frozen `reference/` files are never rewritten.
 
 ## Open decisions reserved for the user
 
@@ -245,8 +255,10 @@ research main with the R05 and R06 merges, moved from 06dc7b4 on 2026-11-09 (LED
 R06); the frozen O06/O08 fixtures stay from 06dc7b4. Since the same day the oracle is
 `mb-ref-720d122` (adds the two-phase ternary R06 merge); O06 was recaptured there, O08 stays
 from 06dc7b4. Since 2026-11-10 the oracle is `mb-ref-7af24f4` (adds the three-phase R06 merge;
-O06 and O08 fixtures unchanged). Do not merge research HEAD into
-the extraction or develop scientific repairs independently in both locations.
+O06 and O08 fixtures unchanged). Since the authority switch
+(2026-11-11) the oracle is frozen and is never moved again; it is needed only for the
+explicit historical actions (`historical capture|repeat --research`). Do not merge research
+HEAD into the extraction or develop scientific repairs independently in both locations.
 Preserve floating-point order, x/u and volume conventions, R=8.3145 where used,
 and temperature-array hours. Never regenerate references to hide a difference.
 The shared Conda environment is unchanged. No push, research-branch merge,

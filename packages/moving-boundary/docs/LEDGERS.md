@@ -58,6 +58,54 @@ need the narrow hash exception described in R01 below. O08 adds one newly frozen
 detached-06dc7b4 JSON/NPZ fixture with manifest hashes; original fixtures remain
 unchanged. No worker imposes a NumPy seed.
 
+## Authority switch (2026-11-11)
+
+The package is now the numerical authority (plan: docs/AUTHORITY_SWITCH_PLAN.md, items 7 and
+14-18). Research main stays frozen at `7af24f4`, and the clean detached `mb-ref-7af24f4` is the
+last research oracle; it is never moved again.
+
+- **Ownership.** Case definitions are package-owned in `tools/definitions/` (outside the
+  wheel). They are materialized from the research builders by `tools/materialize_definitions.py`
+  and hash-checked against `docs/definitions-provenance.json` on every run. The adopted local
+  inputs (`open-surrogate.npz`, `pycalphad-reference.npz`, the example settings) keep their
+  original hashes, and package-owned generation paths were shown to recreate them
+  (`docs/regeneration-verification.json`, 12/12 verified). LEGACY's baseline is
+  `reference/LEGACY.npz`, after a one-time bitwise proof against the research
+  `illingworth_substitutional_baseline.npz`. 301 of 314 research tests are ported
+  (`docs/test-port-provenance.json`); the 13 deferred ones are listed in FUTURE_PORTS.md.
+- **Normal and historical actions.** `quick`, `full` and example acceptance read no research
+  file and run no Git. A `git archive` export passed them with research reads and Git blocked,
+  with the approved set both empty and active (plan M9). `historical capture|repeat --research
+  PATH` is the only research use. `tooling_sha256` was removed.
+- **Approved references.** A deliberate numerical change is adopted with `acceptance.py approve
+  --cases ... --reason "LEDGERS Rxx"`. It runs the whole test suite, a repeat pair for every
+  case, the registered `approval_criteria`, and a public-tolerance check of every unlisted case.
+  It then promotes immutable, hash-recorded artifacts under
+  `.verification/acceptance/reference-approved/` and commits only the manifest entry and the
+  report under `docs/approvals/`. `approve --rollback ID` points those cases back.
+  `reference/` is never rewritten. No real approval exists yet.
+- **Item 7.** Contract cases C25-C29 compare with per-model molar-volume scales
+  (`contract_model_scales`, user-approved), as run cases do.
+- **Item 14 supersession.** Supersession is recorded only in the package docs (this entry,
+  NEXT_SESSIONS.md's definition of done, the branch ledger). Research main is not edited.
+
+Migration log (branch `refactor/package-extraction`, not pushed):
+
+| Batch | Commits |
+|---|---|
+| M0 classification, materializer, artifact hashes | `7f7755f` |
+| M1 definitions C01-C23, C30-C32, LEGACY | `e3b9bfd`, `8f74746` |
+| M2 contracts and per-model scales (item 7) | `045f0b9`, `3b4926c` |
+| M3 C24 and prepare | `deebac9` |
+| M4 F04/F11/F12, O01-O08 | `3321479` |
+| M5 example worker, hashed settings | `1cee752`, `9c37a44` |
+| M5b regeneration verification | `2a239a8` |
+| M6 normal/historical split | `3c2c4a6`, `a4d38a6` |
+| M7 approval path | `3ca6911`, `e86ff94`, `429b3fe`, `e857424` |
+| M8 test port | `52601f2`, `833e620`, `b3606de`, `42f32b1` |
+| M9 independence proof | `0f71c19`, `4d64aa0`, `d879153` |
+| M10 docs and final recorded gates | this entry; results in acceptance.json and the plan log |
+
 ## Research reproducibility issue R01 (open)
 
 O05 restricted generation and O08 default-phase sampling are hash-sensitive.
