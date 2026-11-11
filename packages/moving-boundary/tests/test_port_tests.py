@@ -176,3 +176,35 @@ def test_ported_files_match_their_record():
             deferred = [item for item in entry["transforms"] if item["kind"] == "deferred test"]
             assert counts["ported"] + counts["deferred"] == counts["total"] and len(deferred) == counts["deferred"], target
             assert not any(f"def {item['name']}(" in text for item in deferred), target
+
+
+MIGRATION_SOURCE = '''def build(R, options):
+    params = {"tolerance": 1.0e-8}
+    return dict(tolerance=1e-10, record=True, **options)
+'''
+MIGRATION_EDITS = [
+    dict(function="build", op="dict_value", key="tolerance", old="1.0e-8", new="2.0e-9"),
+    dict(function="build", op="keyword", call="dict", arg="tolerance", old="1e-10", new="1e-10 / R"),
+    dict(function="build", op="insert_keyword", call="dict", after="tolerance", arg="bulk_picard_rtol", new="1e-10"),
+    dict(function="build", op="kwargs_default", call="dict", arg="extra", new="1"),
+]
+
+
+def test_api_migration_edits_are_applied_and_recorded(monkeypatch):
+    """Recorded ``api_migration`` edits rewrite the listed call sites only, and a stale ``old`` value is an error."""
+    tool = _tool()
+    monkeypatch.setattr(tool.API, "EDITS", {"kawin/tests/test_x.py": MIGRATION_EDITS})
+    text, transforms, _, _ = tool.port_text(MIGRATION_SOURCE, "kawin/tests/test_x.py", header=HEADER)
+    assert 'params = {"tolerance": 2.0e-9}' in text
+    assert 'dict(tolerance=1e-10 / R, bulk_picard_rtol=1e-10, record=True, **{"extra": 1, **options})' in text
+    migrations = [item for item in transforms if item["kind"] == "api_migration"]
+    assert [item["op"] for item in migrations] == [edit["op"] for edit in MIGRATION_EDITS]
+    assert all(item["reason"] == tool.API.REASON for item in migrations)
+    namespace = {}
+    exec(compile(text, "test_x", "exec"), namespace)
+    assert namespace["build"](5.0, {"extra": 2}) == dict(tolerance=1e-10 / 5.0, bulk_picard_rtol=1e-10, record=True, extra=2)
+
+    stale = [dict(MIGRATION_EDITS[1], old="1e-9")]
+    monkeypatch.setattr(tool.API, "EDITS", {"kawin/tests/test_x.py": stale})
+    with pytest.raises(tool.API.MigrationError, match="matched 0 places"):
+        tool.port_text(MIGRATION_SOURCE, "kawin/tests/test_x.py", header=HEADER)

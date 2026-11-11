@@ -128,7 +128,7 @@ FAST = Config(duration=3.0)          # the early window and the peak only
 # max|s - s_exact| / (s_exact(t_valid) - s0) for early_from <= t <= liquid_validity_time;
 # DEMO gives 1.1e-3. peak_over_bound: maximum half-width / (s0 c0 / c_liquid), an exact
 # limit; DEMO gives 0.9941. inventory_rel: |final - initial| / initial phosphorus inventory;
-# DEMO gives about 2e-9, set by the 1e-8 um interface tolerance.
+# DEMO gives about 2e-12 with the default interface tolerances (about 2e-9 before LEDGERS R08).
 DEMO_LIMITS = {"early_interface_rel": 3.0e-3, "peak_over_bound": 1.0, "inventory_rel": 2.0e-8}
 
 # %% [markdown]
@@ -222,8 +222,8 @@ def build_model(config=DEMO, p=PARAMS):
         time_step=1.0, dt_mode="semi_log", semiLog_dt=config.semi_log_dt, semiLogT0=config.semi_log_t0,
         phase_a_nodes=config.liquid_nodes, phase_b_nodes=config.solid_nodes,
         transformed_u_grid=u_grid, transformed_v_grid=v_grid,
-        # The interface tolerance is in um; it sets the inventory drift (about 2e-9 relative here).
-        tolerance=1.0e-8, max_iterations=200, record=True, record_pq_data=True,
+        # Default interface tolerances (dimensionless position 1e-12, residual 1e-13); see the notes above.
+        max_iterations=200, record=True, record_pq_data=True,
     )
 
 

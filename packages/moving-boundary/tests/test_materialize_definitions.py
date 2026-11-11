@@ -97,3 +97,38 @@ def test_ast_mismatch_aborts(research):
     call["ast"].body.append(ast.Pass())
     with pytest.raises(AssertionError, match="AST mismatch"):
         tool.materialize(research, calls, "test-commit", {})
+
+
+MIGRATION = '''def build(R, options):
+    params = {"tolerance": 1.0e-8}
+    return dict(tolerance=1e-10, record=True, **options)
+'''
+
+
+def test_api_migration_edits_keep_the_ast_proof(research, monkeypatch):
+    """``api_migration`` edits are emitted as text and applied to the recorded AST, so equivalence still holds."""
+    tool = _tool()
+    (research / "examples/mig.py").write_text(MIGRATION, encoding="utf-8")
+    edits = [
+        dict(function="build", op="dict_value", key="tolerance", old="1.0e-8", new="2.0e-9"),
+        dict(function="build", op="keyword", call="dict", arg="tolerance", old="1e-10", new="1e-10 / R"),
+        dict(function="build", op="insert_keyword", call="dict", after="tolerance", arg="bulk_picard_rtol", new="1e-10"),
+        dict(function="build", op="kwargs_default", call="dict", arg="extra", new="1"),
+    ]
+    monkeypatch.setattr(tool.API, "EDITS", {"examples/mig.py": edits})
+    entries = {"mig": ("examples/mig.py", ["build"], {}, [], [], "raise", ["X02"])}
+    calls, _ = tool.record_bindinputs(research, entries)
+    files, provenance = tool.materialize(research, calls, "test-commit", {})
+    text = files["mig"].decode("utf-8")
+    assert 'dict(tolerance=1e-10 / R, bulk_picard_rtol=1e-10, record=True, **{"extra": 1, **options})' in text
+    assert "api_migration" in text and provenance["mig"]["ast_equal"]
+    assert provenance["mig"]["migrated_ast_sha256"] != provenance["mig"]["ast_sha256"]
+    assert [item["op"] for item in provenance["mig"]["transforms"] if item["kind"] == "api_migration"] == [
+        edit["op"] for edit in edits]
+    namespace = {}
+    exec(compile(text, "mig", "exec"), namespace)
+    assert namespace["build"](5.0, {}) == dict(tolerance=1e-10 / 5.0, bulk_picard_rtol=1e-10, record=True, extra=1)
+
+    monkeypatch.setattr(tool.API, "EDITS", {"examples/mig.py": [dict(edits[0], old="1.0e-9")]})
+    with pytest.raises(tool.API.MigrationError, match="matched 0 places"):
+        tool.materialize(research, calls, "test-commit", {})

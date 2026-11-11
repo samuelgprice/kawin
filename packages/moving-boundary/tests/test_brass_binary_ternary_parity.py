@@ -8,7 +8,9 @@ and ``_build_brass_binary_model`` reproduce exactly the inputs those builders pr
 
 - The research test passed ``"tolerance": 1.0e-15`` in its config, but ``build_fig6_illingworth_case_params``
   ignores that key and always returns ``FIG6_BASE_PARAMS["tolerance"] = 1.0e-10``. The binary model
-  therefore ran with ``tolerance=1.0e-10`` (micrometres), and so does this port.
+  therefore ran with ``tolerance=1.0e-10`` (micrometres). Since LEDGERS R08 the binary ``tolerance`` is
+  relative to the domain length, so this port passes the same position bound as ``1.0e-10 / R_um``
+  (about 1.77e-13); the general default (1e-12) is too loose for this parity.
 - ``max_iterations=10000`` comes from ``FIG6_OLAYE_BRASS_CONFIG["fig6_max_iterations"]``.
 - ``grid_type="constant"`` gives no explicit transformed grids.
 
@@ -135,7 +137,7 @@ def _build_brass_binary_model(params):
         phase_b_nodes=params["n_beta"],
         transformed_u_grid=None,
         transformed_v_grid=None,
-        tolerance=params["tolerance"],
+        tolerance=params["tolerance"] / params["R_um"],  # research absolute um tolerance, as relative (R08)
         record=True,
         record_pq_data=params["record_pq_data"],
         preallocate_recordings=params["preallocate_recordings"],

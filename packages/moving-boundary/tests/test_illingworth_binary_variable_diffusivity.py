@@ -123,7 +123,7 @@ def test_variable_d_conserves_transformed_inventory(mode):
     model = _model(
         mode,
         therm_class=StrongVariableBinaryThermodynamics,
-        tolerance=1e-13,
+        tolerance=2e-14,
         model_kwargs={"bulk_picard_rtol": 1e-14},
     )
     model.solve(1.0, iterator=explicitEulerIterator, minDtFrac=1e-14)
@@ -147,7 +147,7 @@ def test_implicit_step_satisfies_discrete_equations_at_converged_profile():
     model = _model(
         "composition_dependent_implicit",
         therm_class=StrongVariableBinaryThermodynamics,
-        tolerance=1e-13,
+        tolerance=2e-14,
         model_kwargs={"bulk_picard_rtol": 1e-13, "bulk_picard_atol": 1e-14},
     )
     model.setup()

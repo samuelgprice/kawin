@@ -130,7 +130,6 @@ def build_model(config=DEMO):
         time_step=config.time_step,
         phase_a_nodes=config.nodes,
         phase_b_nodes=config.nodes,
-        tolerance=p["tolerance"],
         max_iterations=100,
         record=1,
         record_pq_data=False,

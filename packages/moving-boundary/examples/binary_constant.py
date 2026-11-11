@@ -36,7 +36,7 @@ def build_model(model_class=MovingBoundaryIllingworthFD1DModel):
         temperature=TemperatureParameters(1000.0),
         interfacePosition=1.0, interface_compositions=(0.6, 0.0),
         time_step=0.1, phase_a_nodes=100, phase_b_nodes=100,
-        tolerance=1.0e-8, record=True, bulk_diffusivity_mode="phase_uniform",
+        record=True, bulk_diffusivity_mode="phase_uniform",
     )
 
 

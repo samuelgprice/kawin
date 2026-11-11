@@ -50,11 +50,15 @@ class VariableBinaryThermodynamics(ConstantBinaryThermodynamics):
 
 
 def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, **kwargs):
-    """The research default binary case (s0 = 1, R = 5, 100/100 nodes), with overrides."""
+    """The research default binary case (s0 = 1, R = 5, 100/100 nodes), with overrides.
+
+    LEDGERS R08: the research absolute tolerance 1e-8 is passed as the relative 1e-8 / R = 2e-9,
+    and the Picard rtol it used to imply (1e-8) is passed explicitly.
+    """
     params = {
         "s0": 1.0, "R": 5.0, "n_alpha": 100, "d_alpha": 1.0e-7, "initial_alpha": 0.8,
         "interface_alpha": 0.6, "n_beta": 100, "d_beta": 1.0e-5, "initial_beta": 0.4,
-        "interface_beta": 0.0, "time_step": 0.1, "tolerance": 1.0e-8, "record": True,
+        "interface_beta": 0.0, "time_step": 0.1, "tolerance": 2.0e-9, "record": True,
         "transformed_u_grid": None, "transformed_v_grid": None, "model_kwargs": {},
     }
     params.update(kwargs)
@@ -71,7 +75,7 @@ def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, *
         interface_compositions=(params["interface_alpha"], params["interface_beta"]),
         time_step=params["time_step"], geometry="planar",
         phase_a_nodes=params["n_alpha"], phase_b_nodes=params["n_beta"],
-        tolerance=params["tolerance"], record=params["record"],
+        tolerance=params["tolerance"], bulk_picard_rtol=1.0e-8, record=params["record"],
         transformed_u_grid=params["transformed_u_grid"], transformed_v_grid=params["transformed_v_grid"],
         **params["model_kwargs"],
     )
@@ -171,7 +175,7 @@ def _ni_p_model(tolerance):
         interface_compositions=(p["c_liquid"], p["c_solid"]),
         time_step=1.0, dt_mode="semi_log", semiLog_dt=0.005, semiLogT0=1.0e-6,
         phase_a_nodes=81, phase_b_nodes=321, transformed_u_grid=u_grid, transformed_v_grid=v_grid,
-        tolerance=tolerance, max_iterations=200, record=True, record_pq_data=False,
+        tolerance=tolerance / p["R"], max_iterations=200, record=True, record_pq_data=False,  # um -> relative (R08)
     )
 
 

@@ -61,7 +61,7 @@ def _binary_model(time_step, **kwargs):
     mesh = CartesianFD1D(["CR"], [0.0, 5.0], 501)
     mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(1.0, 0.8, 0.4), "CR")]))
     options = dict(
-        time_step=time_step, phase_a_nodes=100, phase_b_nodes=100, tolerance=1.0e-10,
+        time_step=time_step, phase_a_nodes=100, phase_b_nodes=100, tolerance=2.0e-11,  # 1e-10 / R (R08)
         max_step_retries=15, record=True, bulk_diffusivity_mode="phase_uniform",
     )
     options.update(kwargs)

@@ -68,7 +68,7 @@ def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, *
         "initial_beta": 0.4,
         "interface_beta": 0.0,
         "time_step": 0.1,
-        "tolerance": 1.0e-8,
+        "tolerance": 2.0e-9,
         "geometry": "planar",
         "record": True,
         "transformed_u_grid": None,
@@ -100,5 +100,5 @@ def _build_illingworth_default_model(therm_class=ConstantBinaryThermodynamics, *
         record=params["record"],
         transformed_u_grid=params["transformed_u_grid"],
         transformed_v_grid=params["transformed_v_grid"],
-        **params["model_kwargs"],
+        **{"bulk_picard_rtol": 1.0e-8, **params["model_kwargs"]},
     )

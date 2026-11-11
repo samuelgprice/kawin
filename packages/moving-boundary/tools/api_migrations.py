@@ -1,0 +1,171 @@
+"""Recorded API-migration edits that the generators apply to research text (historical tooling).
+
+``tools/materialize_definitions.py`` and ``tools/port_tests.py`` emit research source verbatim apart
+from recorded transforms. When a package API changes meaning, the call sites they emit must be
+migrated so the generated cases keep their intent. Hand edits would break the byte-for-byte
+``--check`` against the frozen oracle, so the migration is a recorded transform of kind
+``api_migration``: a small text edit at a named call site, listed in provenance, and applied
+identically to the recorded research AST so the materializer's equivalence proof still holds
+(emitted AST == recorded AST with the same edits applied).
+
+``EDITS`` maps a research path to its edits. Each edit names the enclosing ``function`` (any
+``def`` of that name in the emitted segment) and one operation:
+
+- ``keyword``: in a call to ``call``, replace the value of keyword ``arg`` (source text ``old``)
+  with ``new``;
+- ``insert_keyword``: in a call to ``call``, insert ``arg=new`` directly after keyword ``after``;
+- ``dict_value``: in a dict literal, replace the value of string key ``key`` (``old``) with ``new``;
+- ``kwargs_default``: in a call to ``call``, turn ``**X`` into ``**{"arg": new, **X}``, a default
+  that an entry of ``X`` still overrides.
+
+An edit whose function is emitted must match exactly once, and its ``old`` text must match the
+research text, otherwise ``MigrationError`` is raised; nothing is skipped silently.
+"""
+import ast
+
+REASON = "LEDGERS R08 binary tolerance API"
+
+
+class MigrationError(ValueError):
+    """A recorded migration edit did not match the research source exactly once."""
+
+
+# LEDGERS R08: the binary ``tolerance`` became dimensionless (relative to the domain length R) and
+# ``bulk_picard_rtol=None`` no longer follows it. Absolute tolerances become ``old / R``; where the
+# implicit mode ran, the Picard tolerance it used to imply is passed explicitly.
+EDITS = {
+    "kawin/tests/illingworth_baseline_cases.py": [  # C01, LEGACY, C25 (R = 5)
+        dict(function="_binary_model", op="keyword", call="MovingBoundaryIllingworthFD1DModel",
+             arg="tolerance", old="1.0e-8", new="2.0e-9"),
+        dict(function="_binary_model", op="insert_keyword", call="MovingBoundaryIllingworthFD1DModel",
+             after="tolerance", arg="bulk_picard_rtol", new="1.0e-8"),
+    ],
+    "kawin/tests/test_diffusion.py": [  # C02, C03, C30, C29, variable-D tests (R = 5)
+        dict(function="_build_illingworth_default_model", op="dict_value", key="tolerance", old="1.0e-8", new="2.0e-9"),
+        dict(function="_build_illingworth_default_model", op="kwargs_default", call="MovingBoundaryIllingworthFD1DModel",
+             arg="bulk_picard_rtol", new="1.0e-8"),
+    ],
+    "kawin/tests/test_illingworth_binary_variable_diffusivity.py": [  # tight tests (R = 5)
+        dict(function="test_variable_d_conserves_transformed_inventory", op="keyword", call="_model",
+             arg="tolerance", old="1e-13", new="2e-14"),
+        dict(function="test_implicit_step_satisfies_discrete_equations_at_converged_profile", op="keyword",
+             call="_model", arg="tolerance", old="1e-13", new="2e-14"),
+    ],
+    "kawin/tests/test_illingworth_interstitials.py": [  # C13, C14, C15, interstitial tests (R = 5 and 40)
+        dict(function="_binary_model", op="keyword", call="dict", arg="tolerance", old="1e-10", new="1e-10 / R"),
+        dict(function="_binary_model", op="insert_keyword", call="dict", after="tolerance",
+             arg="bulk_picard_rtol", new="1e-10"),
+    ],
+    "examples/Interstitials/fe_c_exb1a.py": [  # O07 (SI lengths, lagged)
+        dict(function="run_kawin", op="keyword", call="MovingBoundaryIllingworthFD1DModel",
+             arg="tolerance", old="1.0e-14", new="1.0e-14 / R"),
+    ],
+}
+
+
+def edits_for(path):
+    """The recorded edits for one research path (an empty list when it has none)."""
+    return list(EDITS.get(str(path).replace("\\", "/"), ()))
+
+
+def _functions(tree, name):
+    return [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name]
+
+
+def _calls(function, name):
+    return [node for node in ast.walk(function)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name]
+
+
+def _same(node, text):
+    return ast.dump(node) == ast.dump(ast.parse(text, mode="eval").body)
+
+
+def _targets(function, edit):
+    """``(container, node)`` pairs the edit applies to inside one function (verified ``old`` text)."""
+    op = edit["op"]
+    found = []
+    if op in ("keyword", "insert_keyword"):
+        arg = edit["arg"] if op == "keyword" else edit["after"]
+        for call in _calls(function, edit["call"]):
+            for keyword in call.keywords:
+                if keyword.arg == arg and (op == "insert_keyword" or _same(keyword.value, edit["old"])):
+                    found.append((call, keyword))
+    elif op == "dict_value":
+        for node in ast.walk(function):
+            if isinstance(node, ast.Dict):
+                for key, value in zip(node.keys, node.values):
+                    if isinstance(key, ast.Constant) and key.value == edit["key"] and _same(value, edit["old"]):
+                        found.append((node, value))
+    elif op == "kwargs_default":
+        for call in _calls(function, edit["call"]):
+            found.extend((call, keyword) for keyword in call.keywords if keyword.arg is None)
+    else:
+        raise MigrationError(f"unknown api_migration op {op!r}")
+    return found
+
+
+def locate(tree, edit, where):
+    """The single ``(container, node)`` an edit applies to in ``tree``, or ``None`` when its function is absent.
+
+    Raises ``MigrationError`` when the function is present but the edit matches zero or several places.
+    """
+    functions = _functions(tree, edit["function"])
+    if not functions:
+        return None
+    found = [target for function in functions for target in _targets(function, edit)]
+    if len(found) != 1:
+        raise MigrationError(f"{where}: api_migration {edit} matched {len(found)} places, expected exactly 1")
+    return found[0]
+
+
+def text_edit(edit, target, start, end, source_text):
+    """``(start, end, replacement)`` in character offsets for one located edit.
+
+    ``start(node)`` and ``end(node)`` map an AST node to character offsets in ``source_text``.
+    """
+    container, node = target
+    op = edit["op"]
+    if op in ("keyword", "dict_value"):
+        old = source_text[start(node.value if op == "keyword" else node):end(node.value if op == "keyword" else node)]
+        if ast.dump(ast.parse(old, mode="eval").body) != ast.dump(ast.parse(edit["old"], mode="eval").body):
+            raise MigrationError(f"api_migration {edit}: source text {old!r} differs from the recorded old value")
+        value = node.value if op == "keyword" else node
+        return start(value), end(value), edit["new"]
+    if op == "insert_keyword":
+        position = end(node.value)
+        return position, position, f", {edit['arg']}={edit['new']}"
+    value = node.value  # kwargs_default
+    return start(value), end(value), f'{{"{edit["arg"]}": {edit["new"]}, **{source_text[start(value):end(value)]}}}'
+
+
+def record(edit, line):
+    """The provenance record of one applied edit."""
+    data = dict(kind="api_migration", reason=REASON, line=line, function=edit["function"], op=edit["op"])
+    for name in ("call", "arg", "after", "key", "old", "new"):
+        if name in edit:
+            data[name] = edit[name]
+    return data
+
+
+def apply_to_ast(tree, path):
+    """Apply ``path``'s recorded edits to an AST in place (for the equivalence proof); returns ``tree``."""
+    for edit in edits_for(path):
+        target = locate(tree, edit, path)
+        if target is None:
+            continue
+        container, node = target
+        new = ast.parse(edit["new"], mode="eval").body
+        op = edit["op"]
+        if op == "keyword":
+            node.value = new
+        elif op == "dict_value":
+            container.values[container.values.index(node)] = new
+        elif op == "insert_keyword":
+            index = container.keywords.index(node)
+            container.keywords.insert(index + 1, ast.keyword(arg=edit["arg"], value=new))
+        else:  # kwargs_default: parse the same template the text edit writes, then keep the original X
+            merged = ast.parse(f'{{"{edit["arg"]}": {edit["new"]}, **_}}', mode="eval").body
+            merged.values[1] = node.value
+            node.value = merged
+    return tree

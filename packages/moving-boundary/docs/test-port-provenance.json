@@ -6,7 +6,7 @@
    "source": "kawin/tests/test_diffusion.py",
    "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
    "source_sha256": "0f23bd76ea83b3dc0ccb0aca1e589cf2f284d640c05eec87ef6469b6e27b91db",
-   "output_sha256": "8181d28f715b863d5b388c004966be3d551959e7b480bd39487280b3f88216b7",
+   "output_sha256": "cab95c07afd1feaffe7337ccc4967060a58bd59cd4f5de77407ff451f2d26852",
    "counts": null,
    "transforms": [
     {
@@ -33,6 +33,26 @@
      "kind": "import",
      "research": "kawin.diffusion.mesh.StepProfile1D",
      "package": "moving_boundary.mesh.StepProfile1D"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 64,
+     "function": "_build_illingworth_default_model",
+     "op": "dict_value",
+     "key": "tolerance",
+     "old": "1.0e-8",
+     "new": "2.0e-9"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 96,
+     "function": "_build_illingworth_default_model",
+     "op": "kwargs_default",
+     "call": "MovingBoundaryIllingworthFD1DModel",
+     "arg": "bulk_picard_rtol",
+     "new": "1.0e-8"
     }
    ],
    "selected_names": [
@@ -46,7 +66,7 @@
    "source": "kawin/tests/illingworth_baseline_cases.py",
    "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
    "source_sha256": "a56b6defca519ec34dc143fa8a96d5b13c1d792eaa323c06e37354a18b20c98f",
-   "output_sha256": "c0328956da2946c70f3511ad1d43c1c62f6938a2b990f1d2dbd24e018424731d",
+   "output_sha256": "1a7478b4e3289649441f6026784da8ce75759639347cc601b0e156adfdd220fd",
    "counts": null,
    "transforms": [
     {
@@ -83,6 +103,28 @@
      "kind": "import",
      "research": "kawin.diffusion.mesh.StepProfile1D",
      "package": "moving_boundary.mesh.StepProfile1D"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 153,
+     "function": "_binary_model",
+     "op": "keyword",
+     "call": "MovingBoundaryIllingworthFD1DModel",
+     "arg": "tolerance",
+     "old": "1.0e-8",
+     "new": "2.0e-9"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 153,
+     "function": "_binary_model",
+     "op": "insert_keyword",
+     "call": "MovingBoundaryIllingworthFD1DModel",
+     "arg": "bulk_picard_rtol",
+     "after": "tolerance",
+     "new": "1.0e-8"
     }
    ]
   },
@@ -104,7 +146,7 @@
    "source": "kawin/tests/test_illingworth_binary_variable_diffusivity.py",
    "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
    "source_sha256": "49a654bc2f31301f36136829f054839ea61336761094738a38bc88937122c632",
-   "output_sha256": "a39cc0b814d5e6c82df05873f34daab71712712e8770721663ffce6f24b22703",
+   "output_sha256": "d4385e36f65f3503825925e53c62eb504855f7faccae98394d955ff7db97098a",
    "counts": {
     "total": 14,
     "deferred": 0,
@@ -130,6 +172,28 @@
      "kind": "import",
      "research": "kawin.diffusion.TemperatureParameters",
      "package": "moving_boundary.solvers.illingworth.shared.TemperatureParameters"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 124,
+     "function": "test_variable_d_conserves_transformed_inventory",
+     "op": "keyword",
+     "call": "_model",
+     "arg": "tolerance",
+     "old": "1e-13",
+     "new": "2e-14"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 148,
+     "function": "test_implicit_step_satisfies_discrete_equations_at_converged_profile",
+     "op": "keyword",
+     "call": "_model",
+     "arg": "tolerance",
+     "old": "1e-13",
+     "new": "2e-14"
     }
    ]
   },
@@ -138,7 +202,7 @@
    "source": "kawin/tests/test_illingworth_interstitials.py",
    "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
    "source_sha256": "823c85d78c9bf5f0967c6170d647a724b4ca0def847c1353076810213acb6dec",
-   "output_sha256": "6218524b95d09175afbed395291cd8a3d4beaf1073ac2e9bb424ffe3fdb0c5ff",
+   "output_sha256": "3a56627d5900e049aff0b8e0e28d8ea39da840d000d16d41005183d17503bc85",
    "counts": {
     "total": 13,
     "deferred": 0,
@@ -219,6 +283,28 @@
      "kind": "import",
      "research": "kawin.diffusion._illingworth_interstitials.has_interstitials",
      "package": "moving_boundary.solvers.illingworth._interstitials.has_interstitials"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 216,
+     "function": "_binary_model",
+     "op": "keyword",
+     "call": "dict",
+     "arg": "tolerance",
+     "old": "1e-10",
+     "new": "1e-10 / R"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 216,
+     "function": "_binary_model",
+     "op": "insert_keyword",
+     "call": "dict",
+     "arg": "bulk_picard_rtol",
+     "after": "tolerance",
+     "new": "1e-10"
     }
    ]
   },

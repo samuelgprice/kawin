@@ -208,7 +208,7 @@ class _VariableBinaryThermodynamics(_ConstantBinaryThermodynamics):
 def _binary_model(elements, therm, profile, interface_compositions, *, basis="x", R=5.0, s0=1.0, n_mesh=501, **kwargs):
     mesh = CartesianFD1D([elements[1]], [0.0, R], n_mesh)
     mesh.setResponseProfile(ProfileBuilder([(profile, elements[1])]))
-    params = dict(time_step=0.05, phase_a_nodes=60, phase_b_nodes=120, tolerance=1e-10, record=True)
+    params = dict(time_step=0.05, phase_a_nodes=60, phase_b_nodes=120, tolerance=1e-10 / R, bulk_picard_rtol=1e-10, record=True)
     params.update(kwargs)
     return MovingBoundaryIllingworthFD1DModel(
         mesh,

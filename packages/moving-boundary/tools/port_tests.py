@@ -30,6 +30,9 @@ each recorded in ``docs/test-port-provenance.json``:
 - *deferred tests*: tests needing unported functionality (``DEFERRED``, each listed in
   FUTURE_PORTS.md § Deferred tests) are removed with their decorators, and so are the
   module-level imports only they used;
+- *API migrations*: call sites listed for the source in ``tools/api_migrations.py`` are migrated
+  to a changed package API by small recorded text edits (kind ``api_migration``, e.g. LEDGERS R08's
+  dimensionless binary tolerance);
 - *docstring*: a provenance paragraph (source, commit, sha256, exclusions) is prepended.
 
 Research test files deferred whole (``DEFERRED_FILES``) are recorded under ``deferred_files`` with
@@ -131,6 +134,16 @@ def _relocation():
 
 
 RELOCATION = _relocation()
+
+
+def _api_migrations():
+    spec = importlib.util.spec_from_file_location("port_api_migrations", PROJECT / "tools/api_migrations.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+API = _api_migrations()
 
 
 def resolve(module, name):
@@ -405,6 +418,14 @@ def port_text(source, name, *, deferred=None, header, research_defines=None):
                 segment = source[start:end]
                 edits.append((start, end, segment.replace(node.value, renamed, 1)))
                 transforms.append(dict(kind="string", research=node.value, package=renamed))
+    for edit in API.edits_for(name):
+        target = API.locate(tree, edit, name)
+        if target is None or inside_removed(target[1]):
+            continue
+        start, end, replacement = API.text_edit(edit, target, lambda n: offset(n.lineno, n.col_offset),
+                                                lambda n: offset(n.end_lineno, n.end_col_offset), source)
+        edits.append((start, end, replacement))
+        transforms.append(API.record(edit, target[1].lineno))
     for first, last in removed:
         start = offset(first, 0)
         end = offset(last, 0) + len(lines[last - 1])

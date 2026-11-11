@@ -152,7 +152,7 @@ def _binary_model(mode, variable):
         time_step=0.1,
         phase_a_nodes=100,
         phase_b_nodes=100,
-        tolerance=1.0e-8,
+        tolerance=2.0e-9, bulk_picard_rtol=1.0e-8,
         record=True,
         bulk_diffusivity_mode=mode,
     )

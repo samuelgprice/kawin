@@ -2,7 +2,7 @@
  "schema": 1,
  "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
  "materializer": "tools/materialize_definitions.py",
- "equivalence": "ast.dump of each emitted module without its docstring equals the AST that the unchanged acceptance_inputs.CaseInputs.load compiles at research_commit; no normalization",
+ "equivalence": "ast.dump of each emitted module without its docstring equals the AST that the unchanged acceptance_inputs.CaseInputs.load compiles at research_commit, with the recorded api_migration edits (tools/api_migrations.py) applied to it; no other normalization. ast_sha256 is the recorded AST, migrated_ast_sha256 (when present) the AST after those edits",
  "definitions": {
   "_nested_illingworth_baseline_cases_CoupledTernaryThermodynamics": {
    "file": "tools/definitions/_nested_illingworth_baseline_cases_CoupledTernaryThermodynamics.py",
@@ -370,7 +370,7 @@
   },
   "_nested_test_diffusion_build_illingworth_default_model": {
    "file": "tools/definitions/_nested_test_diffusion_build_illingworth_default_model.py",
-   "sha256": "da3213ff3889c76c5bbc307cbcc76efa5d9c74b70eff920b5916fa80c2722a7d",
+   "sha256": "536f13a5935411cd4dc74f5ca6c540a5cd08252f26a08924d9f802906496a98c",
    "source": "kawin/tests/test_diffusion.py",
    "source_sha256": "d346c28e1795cfb07b7478a827d36669d26703541b532ea929561dd13a148671",
    "names": [
@@ -424,12 +424,33 @@
      "to": [
       "TemperatureParameters = _input_symbol('kawin.diffusion.DiffusionParameters', 'TemperatureParameters')"
      ]
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 3252,
+     "function": "_build_illingworth_default_model",
+     "op": "dict_value",
+     "key": "tolerance",
+     "old": "1.0e-8",
+     "new": "2.0e-9"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 3284,
+     "function": "_build_illingworth_default_model",
+     "op": "kwargs_default",
+     "call": "MovingBoundaryIllingworthFD1DModel",
+     "arg": "bulk_picard_rtol",
+     "new": "1.0e-8"
     }
-   ]
+   ],
+   "migrated_ast_sha256": "8359cb3be1e28d0214b873b590e0ac4a0af32af683dd7ec53ca0f47df9c77e53"
   },
   "baseline_binary": {
    "file": "tools/definitions/baseline_binary.py",
-   "sha256": "3fba8f21b525a57733be5f8f9caf4b2b841018c8da998ec3c43ff824aa636139",
+   "sha256": "a3cdc3e39f7127ffeb57c6347fb38109ca41435f73569e660edc1e47cb38c3a3",
    "source": "kawin/tests/illingworth_baseline_cases.py",
    "source_sha256": "2a31c47b5f54e43337b769f5410577795ec796038bfac18b64b6783da11c7842",
    "names": [
@@ -475,12 +496,35 @@
       "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')",
       "StepProfile1D = _input_symbol('kawin.diffusion.mesh', 'StepProfile1D')"
      ]
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 153,
+     "function": "_binary_model",
+     "op": "keyword",
+     "call": "MovingBoundaryIllingworthFD1DModel",
+     "arg": "tolerance",
+     "old": "1.0e-8",
+     "new": "2.0e-9"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 153,
+     "function": "_binary_model",
+     "op": "insert_keyword",
+     "call": "MovingBoundaryIllingworthFD1DModel",
+     "arg": "bulk_picard_rtol",
+     "after": "tolerance",
+     "new": "1.0e-8"
     }
-   ]
+   ],
+   "migrated_ast_sha256": "9c382037be2c3184fa7d7a682cafbd2b6863d6fe26d6145041607d92215f98fe"
   },
   "baseline_legacy": {
    "file": "tools/definitions/baseline_legacy.py",
-   "sha256": "ab23e26df72677980478ccc06bd34906400242c75eece78d95ece9dbf5133564",
+   "sha256": "046e653cb892f9e1f7d7598dec089ee4f97c13ad5393f154b03e8fa3d1ac3672",
    "source": "kawin/tests/illingworth_baseline_cases.py",
    "source_sha256": "2a31c47b5f54e43337b769f5410577795ec796038bfac18b64b6783da11c7842",
    "names": [
@@ -522,8 +566,31 @@
       "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')",
       "StepProfile1D = _input_symbol('kawin.diffusion.mesh', 'StepProfile1D')"
      ]
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 153,
+     "function": "_binary_model",
+     "op": "keyword",
+     "call": "MovingBoundaryIllingworthFD1DModel",
+     "arg": "tolerance",
+     "old": "1.0e-8",
+     "new": "2.0e-9"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 153,
+     "function": "_binary_model",
+     "op": "insert_keyword",
+     "call": "MovingBoundaryIllingworthFD1DModel",
+     "arg": "bulk_picard_rtol",
+     "after": "tolerance",
+     "new": "1.0e-8"
     }
-   ]
+   ],
+   "migrated_ast_sha256": "e6b11680e6bc6ebab695de4dc4ae40615c21cd48c05cbeda03a3f5c83fe6fc33"
   },
   "baseline_ternary_three_phase": {
    "file": "tools/definitions/baseline_ternary_three_phase.py",
@@ -1016,7 +1083,7 @@
   },
   "fe_c_exb1a": {
    "file": "tools/definitions/fe_c_exb1a.py",
-   "sha256": "aafb7843a14de1aeeb5803bdea8a484bc643cd7aedbc387244d4e68db74a8856",
+   "sha256": "9088564a8f55c3352f333b44180970028caf831b07e11c938ef5a89b8f492fd7",
    "source": "examples/Interstitials/fe_c_exb1a.py",
    "source_sha256": "39f83ca18ee5ae0dbc0ca8857cfb378713859841fe862922c0ab5ee095e09140",
    "names": [
@@ -1086,8 +1153,20 @@
      "line": 208,
      "from": "4001",
      "to": "401"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 230,
+     "function": "run_kawin",
+     "op": "keyword",
+     "call": "MovingBoundaryIllingworthFD1DModel",
+     "arg": "tolerance",
+     "old": "1.0e-14",
+     "new": "1.0e-14 / R"
     }
-   ]
+   ],
+   "migrated_ast_sha256": "5d682ce0a322409a2145e34c0fa303d4a351d5f84142b11383f0a483af386428"
   },
   "fe_mn_c_ferrite_case": {
    "file": "tools/definitions/fe_mn_c_ferrite_case.py",
@@ -1335,7 +1414,7 @@
   },
   "interstitials_binary": {
    "file": "tools/definitions/interstitials_binary.py",
-   "sha256": "e0467ad73b00f305e7165b91074ab30299e2f55b3a9c3f71b0bed468fe7918a5",
+   "sha256": "76c4b88d98b3f9d7adaac1996e5923390fff03fda20a526f334e0a28b5ccc905",
    "source": "kawin/tests/test_illingworth_interstitials.py",
    "source_sha256": "1411518d3206977b1159081383174460e3a8ad4a40e8546e98c2b2f5a65df116",
    "names": [
@@ -1380,8 +1459,31 @@
       "ProfileBuilder = _input_symbol('kawin.diffusion.mesh', 'ProfileBuilder')",
       "StepProfile1D = _input_symbol('kawin.diffusion.mesh', 'StepProfile1D')"
      ]
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 216,
+     "function": "_binary_model",
+     "op": "keyword",
+     "call": "dict",
+     "arg": "tolerance",
+     "old": "1e-10",
+     "new": "1e-10 / R"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R08 binary tolerance API",
+     "line": 216,
+     "function": "_binary_model",
+     "op": "insert_keyword",
+     "call": "dict",
+     "arg": "bulk_picard_rtol",
+     "after": "tolerance",
+     "new": "1e-10"
     }
-   ]
+   ],
+   "migrated_ast_sha256": "60d33097d0681d1747565c84c15151758cafd7a694ca7ad78a02aaf754e9dba9"
   },
   "interstitials_ternary": {
    "file": "tools/definitions/interstitials_ternary.py",
