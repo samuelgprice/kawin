@@ -86,6 +86,45 @@ def test_unportable_sources_raise(source, deferred, message):
         tool.port_text(source, "kawin/tests/test_x.py", deferred=deferred, header=HEADER)
 
 
+HELPER_SOURCE = '''import os
+import numpy as np
+from kawin.diffusion.mesh import CartesianFD1D, ProfileBuilder
+
+SCALE = 2.0
+
+
+class Base:
+    def value(self):
+        return np.float64(SCALE)
+
+
+class Wanted(Base):
+    pass
+
+
+def test_not_copied():
+    assert os
+
+
+def unrelated():
+    return ProfileBuilder
+'''
+
+
+def test_subset_helpers_copy_only_what_the_selected_names_need():
+    tool = _tool()
+    text = tool.extract_subset(HELPER_SOURCE, ["Wanted"], "kawin/tests/test_helper.py")
+    assert "class Wanted(Base)" in text and "class Base" in text and "SCALE = 2.0" in text
+    assert "import numpy as np" in text and "test_not_copied" not in text and "unrelated" not in text
+    assert "import os" not in text and "CartesianFD1D" not in text
+    assert "# --- kawin/tests/test_helper.py:13-14" in text and "# --- kawin/tests/test_helper.py:8-10" in text
+    compile(text, "subset", "exec")
+    with pytest.raises(tool.PortError, match="not defined at top level"):
+        tool.extract_subset(HELPER_SOURCE, ["Missing"], "kawin/tests/test_helper.py")
+    with pytest.raises(tool.PortError, match="star import"):
+        tool.extract_subset("from data import *\n\ndef f():\n    return TDB\n", ["f"], "kawin/tests/test_helper.py")
+
+
 def test_ported_files_match_their_record():
     """Every ported file is byte-for-byte (newlines normalized) what the recorded port produced."""
     record = json.loads((PROJECT / "docs/test-port-provenance.json").read_text(encoding="utf-8"))

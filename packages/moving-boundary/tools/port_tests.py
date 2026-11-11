@@ -47,9 +47,9 @@ BATCHES = {
     1: ["test_illingworth_setup_and_diagnostics.py", "test_illingworth_ternary_three_phase.py",
         "test_illingworth_interstitials_three_phase.py", "test_surrogate_artifacts.py"],
     2: ["test_illingworth_binary_variable_diffusivity.py", "test_illingworth_interstitials.py",
-        "test_illingworth_transformed_grids.py"],
+        "test_transformed_grids.py"],
     3: ["test_illingworth_ternary_three_phase_similarity.py", "test_illingworth_interstitials_ternary.py",
-        "test_illingworth_physical_scale.py", "test_illingworth_similarity_comparison_basis.py",
+        "test_illingworth_ternary_physical_scale.py", "test_similarity_comparison_basis.py",
         "test_illingworth_ternary_similarity.py"],
     4: ["test_illingworth_ternary.py"],
 }
@@ -61,6 +61,13 @@ DEFERRED = {
             "allows no skips; the adapter it uses is already ported (moving_boundary.providers.thermocalc), "
             "so it can be ported as an opt-in check outside the gate",
     },
+}
+# Helpers that are themselves research test modules: only these names (and the top-level code they
+# need) are extracted, into ported_helpers/<target>.py, so no research test is copied or collected.
+HELPER_SUBSETS = {
+    "test_diffusion": ("diffusion_helpers", ["ConstantBinaryThermodynamics", "VariableBinaryThermodynamics",
+                                             "_build_illingworth_default_model"]),
+    "test_illingworth_ternary": ("ternary_helpers", ["_IdentityTernaryThermodynamics", "_LinearInterfaceEquilibrium"]),
 }
 RESEARCH_PREFIXES = ("kawin.diffusion.MovingBoundary", "kawin.diffusion.mesh.MovingBoundary",
                      "kawin.diffusion.mesh.TransformedGrids", "kawin.diffusion._illingworth",
@@ -107,9 +114,82 @@ def rename_module(text):
     for research, package in sorted(BINDINGS.MODULES.items(), key=lambda item: -len(item[0])):
         if text == research or text.startswith(research + "."):
             return package + text[len(research):]
+    for helper, (target, _) in HELPER_SUBSETS.items():
+        research = "kawin.tests." + helper
+        if text == research or text.startswith(research + "."):
+            return f"{HELPERS}.{target}" + text[len(research):]
     if text == "kawin.tests" or text.startswith("kawin.tests."):
         return HELPERS + text[len("kawin.tests"):]
     return None
+
+
+def extract_subset(source, names, relative):
+    """The verbatim top-level segments of ``source`` that define ``names``, with everything they need.
+
+    Follows references to other top-level definitions and imports transitively; keeps only the
+    import aliases used; each segment is marked with its research line range. A module with a
+    star import, or a requested name that is not defined at top level, raises ``PortError``.
+    """
+    tree = ast.parse(source)
+    lines = source.splitlines(keepends=True)
+    if any(isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names) for node in tree.body):
+        star = True
+    else:
+        star = False
+    defined = {}
+    for index, node in enumerate(tree.body):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined[node.name] = index
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                for name in ast.walk(target):
+                    if isinstance(name, ast.Name):
+                        defined[name.id] = index
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name != "*":
+                    defined[alias.asname or alias.name.split(".")[0]] = index
+    missing = [name for name in names if name not in defined]
+    if missing:
+        raise PortError(f"{relative}: names not defined at top level: {missing}")
+    wanted, queue = set(), list(names)
+    while queue:
+        name = queue.pop()
+        if name in wanted:
+            continue
+        wanted.add(name)
+        node = tree.body[defined[name]]
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Name) and inner.id in defined and inner.id not in wanted:
+                queue.append(inner.id)
+    builtins = set(dir(__builtins__)) if not isinstance(__builtins__, dict) else set(__builtins__)
+    if star:
+        free = {inner.id for name in wanted for inner in ast.walk(tree.body[defined[name]])
+                if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load)}
+        unknown = sorted(free - set(defined) - builtins)
+        locals_ = {inner.id for name in wanted for inner in ast.walk(tree.body[defined[name]])
+                   if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Store)}
+        locals_ |= {arg.arg for name in wanted for inner in ast.walk(tree.body[defined[name]])
+                    if isinstance(inner, (ast.FunctionDef, ast.Lambda)) for arg in ast.walk(inner.args) if isinstance(arg, ast.arg)}
+        unknown = [name for name in unknown if name not in locals_]
+        if unknown:
+            raise PortError(f"{relative}: names may come from a star import: {unknown}")
+    segments = []
+    for index in sorted({defined[name] for name in wanted}):
+        node = tree.body[index]
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            keep = [alias for alias in node.names if (alias.asname or alias.name.split(".")[0]) in wanted]
+            if isinstance(node, ast.ImportFrom):
+                text = f"from {node.module} import " + ", ".join(a.name + (f" as {a.asname}" if a.asname else "") for a in keep)
+            else:
+                text = "import " + ", ".join(a.name + (f" as {a.asname}" if a.asname else "") for a in keep)
+            segments.append(f"# --- {relative}:{node.lineno}-{node.end_lineno} (aliases used)\n{text}\n")
+        else:
+            first, last = _span(node)
+            segments.append(f"# --- {relative}:{first}-{last}\n" + "".join(lines[first - 1:last]))
+    return "\n\n".join(segment.rstrip("\n") + "\n" for segment in segments)
 
 
 def _offsets(source):
@@ -271,18 +351,30 @@ def port_batch(research, batch):
             continue
         seen.add((name, helper))
         relative = f"kawin/tests/{name}" if not helper else f"kawin/tests/{name}.py"
-        source = (research / relative).read_bytes().decode("utf-8").replace("\r\n", "\n")
+        full = (research / relative).read_bytes().decode("utf-8").replace("\r\n", "\n")
+        source, selected = full, None
+        if helper and name in HELPER_SUBSETS:
+            selected = HELPER_SUBSETS[name][1]
+            source = extract_subset(full, selected, relative)
         deferred = DEFERRED.get(name, {})
         excluded = "; ".join(f"{test} (deferred: see FUTURE_PORTS.md § Deferred tests)" for test in deferred) or "none"
+        scope = f" Selected names (with what they need): {', '.join(selected)}." if selected else ""
         header = (f"Ported from research ``{relative}`` at ``{commit[:7]}`` (LF-normalized sha256\n"
-                  f"``{_sha(source)}``) by\n"
-                  f"``tools/port_tests.py`` (batch {batch}); do not edit by hand. Imports resolve to the package as\n"
+                  f"``{_sha(full)}``) by\n"
+                  f"``tools/port_tests.py``{'' if helper else f' (batch {batch})'}; do not edit by hand. Imports resolve to the package as\n"
                   f"``tools/definitions/_bindings.py`` does; the full transform list is in\n"
-                  f"``docs/test-port-provenance.json``. Excluded tests: {excluded}.")
+                  f"``docs/test-port-provenance.json``. Excluded tests: {excluded}.{scope}")
         text, transforms, helpers, counts = port_text(source, relative, deferred=deferred, header=header)
-        target = f"tests/{HELPERS}/{name}.py" if helper else f"tests/{name}"
-        outputs[target] = (text, dict(batch=batch, source=relative, research_commit=commit, source_sha256=_sha(source),
-                                      output_sha256=_sha(text), counts=None if helper else counts, transforms=transforms))
+        if selected:
+            target = f"tests/{HELPERS}/{HELPER_SUBSETS[name][0]}.py"
+        else:
+            target = f"tests/{HELPERS}/{name}.py" if helper else f"tests/{name}"
+        # Helpers are shared across batches, so they record no batch.
+        entry = dict(batch=None if helper else batch, source=relative, research_commit=commit, source_sha256=_sha(full),
+                     output_sha256=_sha(text), counts=None if helper else counts, transforms=transforms)
+        if selected:
+            entry["selected_names"] = selected
+        outputs[target] = (text, entry)
         queue.extend((module, True) for module in helpers)
     return outputs
 

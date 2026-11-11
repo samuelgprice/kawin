@@ -1,6 +1,6 @@
 """Ported from research ``kawin/tests/illingworth_baseline_cases.py`` at ``7af24f4`` (LF-normalized sha256
 ``a56b6defca519ec34dc143fa8a96d5b13c1d792eaa323c06e37354a18b20c98f``) by
-``tools/port_tests.py`` (batch 1); do not edit by hand. Imports resolve to the package as
+``tools/port_tests.py``; do not edit by hand. Imports resolve to the package as
 ``tools/definitions/_bindings.py`` does; the full transform list is in
 ``docs/test-port-provenance.json``. Excluded tests: none.
 

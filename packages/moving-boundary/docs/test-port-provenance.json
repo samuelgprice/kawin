@@ -1,12 +1,52 @@
 {
  "description": "Ported research tests (plan section 6, item 16): source, research commit, sha256 of the source and of the output (newlines normalized), per-file counts and every transform. Written by tools/port_tests.py.",
  "files": {
+  "tests/ported_helpers/diffusion_helpers.py": {
+   "batch": null,
+   "source": "kawin/tests/test_diffusion.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "0f23bd76ea83b3dc0ccb0aca1e589cf2f284d640c05eec87ef6469b6e27b91db",
+   "output_sha256": "8181d28f715b863d5b388c004966be3d551959e7b480bd39487280b3f88216b7",
+   "counts": null,
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.TemperatureParameters",
+     "package": "moving_boundary.solvers.illingworth.shared.TemperatureParameters"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.StepProfile1D",
+     "package": "moving_boundary.mesh.StepProfile1D"
+    }
+   ],
+   "selected_names": [
+    "ConstantBinaryThermodynamics",
+    "VariableBinaryThermodynamics",
+    "_build_illingworth_default_model"
+   ]
+  },
   "tests/ported_helpers/illingworth_baseline_cases.py": {
-   "batch": 1,
+   "batch": null,
    "source": "kawin/tests/illingworth_baseline_cases.py",
    "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
    "source_sha256": "a56b6defca519ec34dc143fa8a96d5b13c1d792eaa323c06e37354a18b20c98f",
-   "output_sha256": "f39625aeabb948bb73def9a8d3e44a1ca85a56eb4bcced5273ab1d2850816206",
+   "output_sha256": "c0328956da2946c70f3511ad1d43c1c62f6938a2b990f1d2dbd24e018424731d",
    "counts": null,
    "transforms": [
     {
@@ -43,6 +83,142 @@
      "kind": "import",
      "research": "kawin.diffusion.mesh.StepProfile1D",
      "package": "moving_boundary.mesh.StepProfile1D"
+    }
+   ]
+  },
+  "tests/ported_helpers/ternary_helpers.py": {
+   "batch": null,
+   "source": "kawin/tests/test_illingworth_ternary.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "abd346b716ce0c79a118606b9b4bee9dabb0d33863c0bcc2aead886224127025",
+   "output_sha256": "3867146955a9c6c6c55967325f0bdaa15e1102ab6bdfe654b906f6dd19d031cd",
+   "counts": null,
+   "transforms": [],
+   "selected_names": [
+    "_IdentityTernaryThermodynamics",
+    "_LinearInterfaceEquilibrium"
+   ]
+  },
+  "tests/test_illingworth_binary_variable_diffusivity.py": {
+   "batch": 2,
+   "source": "kawin/tests/test_illingworth_binary_variable_diffusivity.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "49a654bc2f31301f36136829f054839ea61336761094738a38bc88937122c632",
+   "output_sha256": "a39cc0b814d5e6c82df05873f34daab71712712e8770721663ffce6f24b22703",
+   "counts": {
+    "total": 14,
+    "deferred": 0,
+    "ported": 14
+   },
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "kawin.tests.test_diffusion.ConstantBinaryThermodynamics",
+     "package": "ported_helpers.diffusion_helpers.ConstantBinaryThermodynamics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.test_diffusion.VariableBinaryThermodynamics",
+     "package": "ported_helpers.diffusion_helpers.VariableBinaryThermodynamics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.test_diffusion._build_illingworth_default_model",
+     "package": "ported_helpers.diffusion_helpers._build_illingworth_default_model"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.TemperatureParameters",
+     "package": "moving_boundary.solvers.illingworth.shared.TemperatureParameters"
+    }
+   ]
+  },
+  "tests/test_illingworth_interstitials.py": {
+   "batch": 2,
+   "source": "kawin/tests/test_illingworth_interstitials.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "823c85d78c9bf5f0967c6170d647a724b4ca0def847c1353076810213acb6dec",
+   "output_sha256": "6218524b95d09175afbed395291cd8a3d4beaf1073ac2e9bb424ffe3fdb0c5ff",
+   "counts": {
+    "total": 13,
+    "deferred": 0,
+    "ported": 13
+   },
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthFD1DModel",
+     "package": "moving_boundary.solvers.MovingBoundaryIllingworthFD1DModel"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion._illingworth_interstitials.UFractionDiffusivityProvider",
+     "package": "moving_boundary.solvers.illingworth._interstitials.UFractionDiffusivityProvider"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion._illingworth_interstitials.UFractionInterfaceEquilibrium",
+     "package": "moving_boundary.solvers.illingworth._interstitials.UFractionInterfaceEquilibrium"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion._illingworth_interstitials.composition_bound_violation",
+     "package": "moving_boundary.solvers.illingworth._interstitials.composition_bound_violation"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion._illingworth_interstitials.full_mole_fractions",
+     "package": "moving_boundary.solvers.illingworth._interstitials.full_mole_fractions"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion._illingworth_interstitials.independent_interstitial_mask",
+     "package": "moving_boundary.solvers.illingworth._interstitials.independent_interstitial_mask"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion._illingworth_interstitials.resolve_diffusivity_provider",
+     "package": "moving_boundary.solvers.illingworth._interstitials.resolve_diffusivity_provider"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion._illingworth_interstitials.resolve_interface_equilibrium",
+     "package": "moving_boundary.solvers.illingworth._interstitials.resolve_interface_equilibrium"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion._illingworth_interstitials.u_to_x_independent",
+     "package": "moving_boundary.solvers.illingworth._interstitials.u_to_x_independent"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion._illingworth_interstitials.validate_interstitial_element_order",
+     "package": "moving_boundary.solvers.illingworth._interstitials.validate_interstitial_element_order"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion._illingworth_interstitials.x_to_u_independent",
+     "package": "moving_boundary.solvers.illingworth._interstitials.x_to_u_independent"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.StepProfile1D",
+     "package": "moving_boundary.mesh.StepProfile1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion._illingworth_interstitials.has_interstitials",
+     "package": "moving_boundary.solvers.illingworth._interstitials.has_interstitials"
     }
    ]
   },
@@ -313,6 +489,100 @@
      "kind": "deferred test",
      "name": "test_cuniti_tc_python_bundle_smoke",
      "reason": "opt-in licence smoke test (KAWIN_RUN_TC_PYTHON_SMOKE=1, TC-Python with TCHEA5/MOBHEA4): in every normal run it skips, and approve's whole-suite gate allows no skips; the adapter it uses is already ported (moving_boundary.providers.thermocalc), so it can be ported as an opt-in check outside the gate"
+    }
+   ]
+  },
+  "tests/test_transformed_grids.py": {
+   "batch": 2,
+   "source": "kawin/tests/test_transformed_grids.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "15950f319e5588789905f9dbf1513bec8d13b28bca0a6a2d30a02ee3bb0cefee",
+   "output_sha256": "ddd0cd3ea52a4e21ca42ad2d80793e4c1ae4e066baa30f58256ad9cd6ab41e1e",
+   "counts": {
+    "total": 16,
+    "deferred": 0,
+    "ported": 16
+   },
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.CartesianFD1D",
+     "package": "moving_boundary.mesh.CartesianFD1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.ProfileBuilder",
+     "package": "moving_boundary.mesh.ProfileBuilder"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.StepProfile1D",
+     "package": "moving_boundary.mesh.StepProfile1D"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.describe_landau_grid",
+     "package": "moving_boundary.mesh.TransformedGrids.describe_landau_grid"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.landau_grid",
+     "package": "moving_boundary.mesh.TransformedGrids.landau_grid"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.linear_spacing_grid",
+     "package": "moving_boundary.mesh.TransformedGrids.linear_spacing_grid"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.power_law_grid",
+     "package": "moving_boundary.mesh.TransformedGrids.power_law_grid"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.summarize_landau_grid",
+     "package": "moving_boundary.mesh.TransformedGrids.summarize_landau_grid"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.tanh_grid",
+     "package": "moving_boundary.mesh.TransformedGrids.tanh_grid"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.three_phase_landau_grids",
+     "package": "moving_boundary.mesh.TransformedGrids.three_phase_landau_grids"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.two_phase_landau_grids",
+     "package": "moving_boundary.mesh.TransformedGrids.two_phase_landau_grids"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.uniform_grid",
+     "package": "moving_boundary.mesh.TransformedGrids.uniform_grid"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.mesh.TransformedGrids.validate_landau_grid",
+     "package": "moving_boundary.mesh.TransformedGrids.validate_landau_grid"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MovingBoundaryIllingworthTernaryFDM.estimate_initial_eta_from_instantaneous_balance",
+     "package": "moving_boundary.solvers.illingworth.ternary.estimate_initial_eta_from_instantaneous_balance"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.test_illingworth_ternary._IdentityTernaryThermodynamics",
+     "package": "ported_helpers.ternary_helpers._IdentityTernaryThermodynamics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.tests.test_illingworth_ternary._LinearInterfaceEquilibrium",
+     "package": "ported_helpers.ternary_helpers._LinearInterfaceEquilibrium"
     }
    ]
   }

@@ -19,7 +19,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M5b | Regeneration verification of adopted inputs | done 2026-11-10 (12/12 verified; see log) |
 | M6 | Normal/historical split, package-role repeatability | done 2026-11-10 (see log) |
 | M7 | Approval path | done 2026-11-10: M7a `approval_criteria` adopted (user-approved); M7b approval path (see log) |
-| M8 | Test port (item 16), 4 batches | in progress: batch 1 done 2026-11-10 (see log) |
+| M8 | Test port (item 16), 4 batches | in progress: batches 1-2 done 2026-11-10 (see log) |
 | M9 | Independence proof + missing-resource matrix | not started |
 | M10 | Docs + final recorded gates | not started |
 
@@ -332,6 +332,31 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
     - `--check` reports the 5 files identical to a fresh port;
     - `tests/test_port_tests.py` (7);
     - full `tests/` 573 passed, 5 skipped, 1 deselected.
+- **M8 batch 2 (2026-11-10).**
+  - Per file, ported / deferred / total:
+    - `test_illingworth_binary_variable_diffusivity.py` 14/0/14;
+    - `test_illingworth_interstitials.py` 13/0/13;
+    - `test_transformed_grids.py` 16/0/16 (the plan's "transformed_grids").
+  - *Subset helpers:* two helpers are themselves research test modules, so the tool gained a
+    subset mode (`HELPER_SUBSETS`). It extracts only the named definitions, plus the top-level
+    code and import aliases they need, as verbatim segments with research line markers, into a
+    non-test file name:
+    - `test_diffusion.py` (4338 lines, 131 tests) → `ported_helpers/diffusion_helpers.py`
+      (`ConstantBinaryThermodynamics`, `VariableBinaryThermodynamics`,
+      `_build_illingworth_default_model`);
+    - `test_illingworth_ternary.py` → `ported_helpers/ternary_helpers.py`
+      (`_IdentityTernaryThermodynamics`, `_LinearInterfaceEquilibrium`).
+    The extract keeps research's double import of `TemperatureParameters` in order, so the stock
+    binding still wins, as in research. A star-imported name or an undefined name is an error.
+  - *Tool fixes:* batch 2's research file names corrected (`test_transformed_grids.py`;
+    batch 3's `test_illingworth_ternary_physical_scale.py`, `test_similarity_comparison_basis.py`).
+    Helpers are shared across batches, so their header and record carry no batch; this
+    regenerated batch 1's helper header and record line only.
+  - Results:
+    - 129 ported items pass (6 s; also under importlib mode);
+    - `--check` identical for batches 1 and 2;
+    - `test_port_tests.py` 8;
+    - full `tests/` 703 passed, 5 skipped, 1 deselected.
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -773,8 +798,9 @@ separate "approve references" commit.
   - [x] 1: setup_and_diagnostics (6), three_phase (62), interstitials_three_phase (2),
         **surrogate_artifacts (12; added, covers the C24 builder)** (done 2026-11-10: 81 of 82;
         the TC licence smoke test deferred, see log)
-  - [ ] 2: binary_variable_diffusivity (14, plus `test_diffusion` helpers already reproduced in
-        `test_binary_deviation_form.py`), interstitials (13), transformed_grids (16)
+  - [x] 2: binary_variable_diffusivity (14, plus `test_diffusion` helpers already reproduced in
+        `test_binary_deviation_form.py`), interstitials (13), transformed_grids (16) (done
+        2026-11-10: 43 of 43, see log)
   - [ ] 3: similarity group (34 across 7 files: three_phase_similarity 8, interstitials_ternary 8,
         physical_scale 6, convergence 5, three_phase_examples 3, similarity_comparison_basis 2,
         ternary_similarity 2). Tests that only check research example scripts are flagged, not forced.
