@@ -818,6 +818,13 @@ Decisions are the user's (R08_HANDOFF §2-§4, all recommended options approved)
   is R13), R07's outer-timestep contract, `_nearFinalNoop`, the retry accounting.
 - *Acceptance.* Binary arrays change by design; the deviation report is pending the
   user's review, and any `approve` is a separate, explicitly authorized step.
+  Analytic errors (exact acceptance, 2026-11-11; reference -> R08, unchanged limits):
+  interface C04 0.001701657985 -> 0.001701657998 (relative change 7.6e-9, 10th
+  significant digit; limit 0.0035), C31 0.0004145331289 -> 0.0004145330726 (1.4e-7,
+  7th digit; limit 0.00083), F04 0.007035469669 -> 0.007035470999 (1.9e-7, 7th digit;
+  limit 0.015); profile C04 0.03803348829 -> 0.03803348827 (5e-10; limit 0.077), C31
+  0.01521744308 -> 0.01521744306 (1.3e-9; limit 0.031), F04 0.002771259736 ->
+  0.002771260642 (3.3e-7, 7th digit; limit 0.0056).
 
 ### R09: sparse recording mixes live state with recorded snapshots
 
