@@ -2,7 +2,7 @@
 
 ## Current capability inventory
 
-Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 578.02 s.
+Quick: 30 run comparisons, 5 contracts and 145 pytest tests passed in 381.09 s. Full: 40 run comparisons, 5 contracts and 145 pytest tests passed in 491.61 s (public tolerance, `--record`, 2026-11-11, after the authority switch; every run bit-identical).
 These are regression claims for the approved frozen inputs, not a full release or
 physical convergence audit. See ACCEPTANCE_CANDIDATES.md for exact input variants.
 

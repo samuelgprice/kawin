@@ -119,7 +119,7 @@ The independence proof runs them from a `git archive` export with the opt-in gua
 `mb-ref-*` path fail) and `MB_FORBID_GIT=1` (any Git launch fails); see
 `tools/batch_safety.guard_independence` and docs/AUTHORITY_SWITCH_PLAN.md (M9).
 
-Quick: 30 run comparisons and 88 pytest tests passed in 427.34 s. Full: 40 run comparisons and 88 pytest tests passed in 578.02 s.
+Quick: 30 run comparisons, 5 contracts and 145 pytest tests passed in 381.09 s. Full: 40 run comparisons, 5 contracts and 145 pytest tests passed in 491.61 s (public tolerance, `--record`, 2026-11-11, after the authority switch; every run bit-identical).
 
 Quick includes C01-C24/C30-C32, the older binary fixture/bulk probes and freshly
 sampled O05 (4.94-second sampling pilot) and O08 (two valid default-phase tie lines

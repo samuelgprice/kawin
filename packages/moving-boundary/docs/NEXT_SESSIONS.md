@@ -19,7 +19,13 @@ needs no research checkout and no Git.
 
 ## Current checkpoint
 
-Illingworth solvers, shared/interstitial helpers and numerics moved under `solvers/illingworth/`, leaving room for sibling solver families.
+Authority switch complete (2026-11-11): the package is the numerical authority; normal acceptance
+needs no research checkout and no Git (LEDGERS.md "Authority switch"). Final recorded gates: exact
+quick 30/30 and full 40/40 runs plus 5 contracts bit-identical; Quick: 30 run comparisons, 5 contracts and 145 pytest tests passed in 381.09 s. Full: 40 run comparisons, 5 contracts and 145 pytest tests passed in 491.61 s (public tolerance, `--record`, 2026-11-11, after the authority switch; every run bit-identical).
+Examples 10/10 with 56 tests; full `tests/` 1039 passed, 5 skipped (contract comparisons outside an
+acceptance run), 1 deselected (`slow`).
+
+Earlier checkpoint: Illingworth solvers, shared/interstitial helpers and numerics moved under `solvers/illingworth/`, leaving room for sibling solver families.
 Commit: `refactor: group Illingworth modules under solvers/illingworth`; permitted docstring changes: `solvers/__init__.py`, `solvers/illingworth/__init__.py` and the approved `solvers/illingworth/numerics/__init__.py`.
 Fresh installed-wheel full `--record`: 40 runs and 5 contracts bit-identical, 88 tests, 34 repeat pairs, 578.02 s; solver origins `moving_boundary.solvers.illingworth.*`.
 

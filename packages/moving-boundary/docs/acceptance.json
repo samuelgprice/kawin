@@ -78,9 +78,9 @@
     "separate_environment": true,
     "shared_environment_unchanged": true,
     "quick": {
-      "elapsed_seconds": 471.89000000001397,
+      "elapsed_seconds": 381.09400000000096,
       "pytest": {
-        "tests": 89,
+        "tests": 145,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -88,9 +88,9 @@
       "skipped": {}
     },
     "full": {
-      "elapsed_seconds": 607.625,
+      "elapsed_seconds": 491.6100000000006,
       "pytest": {
-        "tests": 89,
+        "tests": 145,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -141,9 +141,9 @@
   },
   "review_followup": {
     "quick": {
-      "elapsed_seconds": 471.89000000001397,
+      "elapsed_seconds": 381.09400000000096,
       "pytest": {
-        "tests": 89,
+        "tests": 145,
         "failures": 0,
         "errors": 0,
         "skipped": 0
@@ -157,9 +157,9 @@
       }
     },
     "full": {
-      "elapsed_seconds": 607.625,
+      "elapsed_seconds": 491.6100000000006,
       "pytest": {
-        "tests": 89,
+        "tests": 145,
         "failures": 0,
         "errors": 0,
         "skipped": 0
