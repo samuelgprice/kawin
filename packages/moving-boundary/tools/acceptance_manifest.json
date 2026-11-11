@@ -1573,5 +1573,128 @@
         "relative_drift": 2.423108998691983e-10
       }
     }
+  },
+  "approved_references": {
+    "description": "Approved reference artifacts (plan section 5). in_effect maps a case to the approval whose artifacts it is compared with; cases not listed read reference/<case>. Artifacts live locally under .verification/acceptance/<directory> and are sha256-checked on every run; each approval's report (docs/approvals/<id>.json) is committed and sha256-checked. Written only by tools/acceptance.py approve; history keeps every approval and rollback.",
+    "in_effect": {
+      "C02": "20261111T222849Z-5aedde7-1",
+      "C03": "20261111T222849Z-5aedde7-1",
+      "C04": "20261111T222849Z-5aedde7-1",
+      "C13": "20261111T222849Z-5aedde7-1",
+      "C14": "20261111T222849Z-5aedde7-1",
+      "C15": "20261111T222849Z-5aedde7-1",
+      "C29": "20261111T222849Z-5aedde7-1",
+      "C30": "20261111T222849Z-5aedde7-1",
+      "C31": "20261111T222849Z-5aedde7-1",
+      "F04": "20261111T222849Z-5aedde7-1",
+      "O07": "20261111T222849Z-5aedde7-1"
+    },
+    "approvals": {
+      "20261111T222849Z-5aedde7-1": {
+        "created_utc": "2026-11-11T22:28:49Z",
+        "package_commit": "5aedde7598a5589591e0c65d3f80ccbacbc4e1e6",
+        "reason": "LEDGERS R08: dimensionless binary tolerance and conservative residual acceptance; C04/C31/F04 at the default tolerance 1e-12 (user decision 2026-11-11)",
+        "tier": "full",
+        "cases": [
+          "C02",
+          "C03",
+          "C04",
+          "C13",
+          "C14",
+          "C15",
+          "C30",
+          "C31",
+          "F04",
+          "O07",
+          "C29"
+        ],
+        "directory": "reference-approved/20261111T222849Z-5aedde7-1",
+        "artifacts": {
+          "C02": {
+            "json": "3485ca9ddef5304b616d7f9c6dac05325d8c738a85e41d88dec6093718399366",
+            "npz": "b2bf0d1b8cddcf7bcc4694733f4075fcacd0ca6b45077073b051af6a0e4c6cfe"
+          },
+          "C03": {
+            "json": "273041d591f648587f591aee2e2c57e7def170aa2939498078e19fabdbcd5adc",
+            "npz": "bc21052bae5752c0a1be9939387d70dbe976b9b7fea5f6bc37ed4fd1ec3c01a5"
+          },
+          "C04": {
+            "json": "83b382ad9e4cd356ef5af6e721abd2d7e743187e0a6db755477b375979082aaf",
+            "npz": "ce104fcb2e09e776adbd90452c8becf96a38cb0ee774ba1a5ae06b9f5a523291",
+            "settings": "73103cc88720a30983fb1d10c6a56d55e1ee3621b1dc01ca1295907c796ca7c3"
+          },
+          "C13": {
+            "json": "b2c082b2384eb976ccdf92c66e7444f8f22aa5bc12a55071bae7691e0ff69ebf",
+            "npz": "cb2d0cc56debcfc2c2a42609e88d29ff259c69292ef5cb5620d47aecc89e48fe"
+          },
+          "C14": {
+            "json": "dc14455c09c68966216abbbff34ce494db80aa781e854501922fc502b598c02d",
+            "npz": "e86d91c5a0a149f556357bd6e27d72492f853819bd44d59bfee3240af0843e77"
+          },
+          "C15": {
+            "json": "42086aa7a9837242ea1d595a3368e652b00406509f62821f2dbd62af51a07a69",
+            "npz": "a3332f29fecafa4f2d94a877c53d718223ae5357ade27e48ed76ea6924ca6152"
+          },
+          "C30": {
+            "json": "0e53c19595aac9da61972078d38831cea7e741358a8854b30d94434cc08c17f9",
+            "npz": "7e3f618a51c6cb6cad70adc4683d8022a60ec453a757be1e7bf63b78dfd20b8f"
+          },
+          "C31": {
+            "json": "5d684c0c8b65eab7bcfff1aa5028c80a9651584b971d04a3f2ceb8b717628a42",
+            "npz": "f29c99786499a3712c41de0b1866bfba9c59656c0f5568393fb072ebe3804eb6"
+          },
+          "F04": {
+            "json": "e411d6d0dc4fe7e9d5d5a778e90f1c7617e777d9738ab5ca3f09930f9f57a02e",
+            "npz": "7516ce5f51759c6876fe448e10d04d81fa3aaa31c43a1cec66f1975803c29f84",
+            "settings": "6d7d8034928301ba12b48f9f7befb0464f41d56f7fe45ec33accce6d2f6c9a7b"
+          },
+          "O07": {
+            "json": "84a7b4b485b69f0c8cea8355f88a95d03fc420356766e9b444f679052d2c955a",
+            "npz": "af57a36fbbd92c187b4d4c88e8e01f55bf4cebad8685b2de6462476d7fbb2bb7"
+          },
+          "C29": {
+            "json": "a75664ef4d83f322bc69ec5f46f4bf79b475f7ddfaa2703b4aa827330d646d9d",
+            "npz": "2a65073c403641133896b15a9ae296fc7c7b3b9c1a5418d61a4cc08b6b3fded9"
+          }
+        },
+        "previous": {
+          "C02": "reference",
+          "C03": "reference",
+          "C04": "reference",
+          "C13": "reference",
+          "C14": "reference",
+          "C15": "reference",
+          "C30": "reference",
+          "C31": "reference",
+          "F04": "reference",
+          "O07": "reference",
+          "C29": "reference"
+        },
+        "report": {
+          "path": "docs/approvals/20261111T222849Z-5aedde7-1.json",
+          "sha256": "68913f6b7ae005aa08722a9d2b33db6e3cba1532db562e0ae16567f2960ee4b0"
+        }
+      }
+    },
+    "history": [
+      {
+        "event": "approve",
+        "approval_id": "20261111T222849Z-5aedde7-1",
+        "utc": "2026-11-11T22:28:49Z",
+        "cases": [
+          "C02",
+          "C03",
+          "C04",
+          "C13",
+          "C14",
+          "C15",
+          "C30",
+          "C31",
+          "F04",
+          "O07",
+          "C29"
+        ]
+      }
+    ]
   }
 }
