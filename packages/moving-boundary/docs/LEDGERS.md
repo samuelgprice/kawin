@@ -928,6 +928,31 @@ across families. Add active-mode checks for zero, negative, NaN and infinity, an
 ensure invalid inputs fail before setup/state mutation or schedule allocation.
 The active semi-log failure variants still need dedicated reproduction tests.
 
+### R13: ternary and three-phase residual scales are R-scaled by default (recorded during R08)
+
+**Status:** open; recorded 2026-11-11 from the R08 survey; not changed within R08.
+**Scope:** `ternary.py:_interface_residual_scale` and `three_phase.py:_residual_scale`, plus
+their constructor and docstring descriptions of `interface_residual_composition_scale`.
+
+- *Misleading description.* Both docstrings call the default normalization a "relative
+  solute loss per step". With the default composition scale of 1, the scale is
+  `max(|I_k|, R * 1)` (three-phase: the normalized length `L`). That equals `R` whenever the
+  mean composition of component `k` is below 1, which covers every mole or u-fraction. The
+  default tolerance therefore bounds a defect in the *mean composition* per step, not a
+  relative solute-inventory error. For a component with mean composition `c`, the bound on
+  the relative inventory error per step is about `residual_tolerance / c`.
+- *Dilution weakness.* The R08 binary survey (scratch, 2026-11-11) measured the same
+  normalization on the binary. At residual tolerance 1e-10, the final relative inventory
+  drift was 4.8e-10 for the unscaled R08 problem, 7.1e-6 with every composition scaled by
+  1e-4, and 1.8e-2 at 1e-8 (with a 14% interface error). An inventory-based scale gave the
+  same dimensionless result at every composition scale. A smaller per-component
+  `interface_residual_composition_scale` already turns the ternary scale into an
+  inventory-based one; only the default is affected.
+- **Investigate:** correct the docstrings first; that is documentation only. Changing the
+  default (for example to the inventory-based scale with a `minComposition` floor proposed for
+  the binary in R08) would change ternary and three-phase references. It needs its own
+  measurements, tests and approval, and is a user decision.
+
 ## Example acceptance (pending tier approval)
 
 See [ACCEPTANCE_CANDIDATES.md](ACCEPTANCE_CANDIDATES.md#proposed-example-cases-pending-approval)
