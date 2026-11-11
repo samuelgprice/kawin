@@ -659,7 +659,7 @@ refresh reference fixtures or widen tolerances to conceal changed behavior.
 
 ### R07: outer maximum timestep can invalidate an implicit step
 
-**Status:** open; high priority before release. **Scope:** binary and two-phase
+**Status:** fixed 2026-11-11 (see Resolution below). **Scope:** binary and two-phase
 ternary. Three-phase already limits the trial timestep before solving and verifies
 its pending candidate during acceptance.
 
@@ -681,6 +681,36 @@ that the committed timestep/state matches its converged candidate, following the
 three-phase approach. Add regression coverage for fixed and semi-log schedules,
 retry-reduced steps, and exact final remainders. A clamped run should agree with a
 run explicitly configured to take the same smaller steps.
+
+**Resolution (2026-11-11, package only; three-phase unchanged).**
+- `_compute_dt` also takes the outer maximum `maxDtFrac * (finalTime - initialTime)`
+  (the host wrapper's expression), so each implicit step is solved at the dt the
+  wrapper commits. At the default `maxDtFrac=1` this equals the remaining time,
+  which the schedule already applied.
+- Outer minimum: the package wrapper never stretched a short step; it raised
+  `ValueError`, but only after `getdXdt` had staged the step. `getdXdt` now rejects
+  a converged step below `minDtFrac * simTime` itself ("reduce minDtFrac"), with the
+  wrapper's own exact-final-remainder exemption, and clears the staged candidate
+  (ternary: also the staged projection totals).
+- `getdXdt` stages the converged candidate; `postProcess` raises `RuntimeError`
+  and commits nothing if the wrapper's time or state does not reproduce it.
+  Unlike three-phase, `postProcess` with no staged candidate is not an error,
+  because an existing ternary test commits directly.
+- Helpers are in `shared.py`. The trial-only diagnostics of a rejected step
+  (`_currdt`, `_lastStepRetries`, interface D, ternary `_lastAcceptedDt`) are R10's.
+- After the fix, the binary reproduction gives 1.1246627054903873 and drift
+  9.110e-12 for both runs. The two-phase ternary analogue (`time_step=1e-2,
+  maxDtFrac=0.1` against `time_step=1e-3`, test builder) gives 0.4505991417849936
+  and drift 2.80e-11 for both; before the fix the clamped run gave
+  0.45059520500044936 and drift 2.6e-7.
+- Tests: `tests/test_illingworth_outer_timestep_limits.py` (fixed and semi-log
+  schedules, retry-reduced steps, subminimum rejection, exact final remainder,
+  and commit refusal, for both families). All 12 failed before the fix, except the
+  two final-remainder guards.
+- Gates (unchanged, no approval needed): full `tests/` 1051 passed, 5 skipped,
+  1 deselected (fresh target); exact quick 30/30 + 5 contracts bit-identical,
+  33 repeat pairs, gate pytest 145, 454 s; exact full 40/40 + 5 bit-identical,
+  34 repeat pairs, 552 s, O06 run against live TC.
 
 ### R08: binary convergence tolerance depends on length units
 

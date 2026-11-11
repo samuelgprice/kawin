@@ -18,7 +18,13 @@ from moving_boundary.solvers.illingworth._interstitials import (
 from moving_boundary.solvers.illingworth.shared import (
     _BULK_DIFFUSIVITY_IMPLICIT,
     _BULK_DIFFUSIVITY_PHASE_UNIFORM,
+    _PendingImplicitStep,
+    _check_trial_dt_against_outer_minimum,
     _coerce_bulk_diffusivity_mode,
+    _magnitude,
+    _outer_timestep_limits,
+    _pending_step_mismatches,
+    _validate_outer_dt_fractions,
 )
 from moving_boundary.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D
 from moving_boundary.solvers.illingworth.numerics.binary import (
@@ -390,6 +396,11 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._lastLeftPicardIterations = 0
         self._lastRightPicardIterations = 0
         self._nearFinalNoop = False
+        self._outerMinTimeStep = 0.0
+        self._outerMaxTimeStep = np.inf
+        self._solveMinDtFrac = 1e-8
+        self._solveMaxDtFrac = 1.0
+        self._pendingCandidate = None
         self._initialInventory = None
 
         self._z = None
@@ -572,6 +583,11 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         self._lastLeftPicardIterations = 0
         self._lastRightPicardIterations = 0
         self._nearFinalNoop = False
+        self._outerMinTimeStep = 0.0
+        self._outerMaxTimeStep = np.inf
+        self._solveMinDtFrac = 1e-8
+        self._solveMaxDtFrac = 1.0
+        self._pendingCandidate = None
         self._initialInventory = None
         self._z = None
         self._R = None
@@ -655,10 +671,18 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         advances one complete step at a time; only the target output/step times
         are nonuniform. ``semiLogT0`` is the first relative target time and
         ``semiLog_dt`` is the spacing in natural-log time.
+
+        Also stores the outer wrapper's minimum and maximum timestep for this
+        solve (from the ``minDtFrac``/``maxDtFrac`` passed to ``solve``) and
+        drops any uncommitted step candidate.
         """
         super().setTimeInfo(currTime, simTime)
         self._currdt = np.inf
         self._nearFinalNoop = False
+        self._outerMinTimeStep, self._outerMaxTimeStep = _outer_timestep_limits(
+            self._solveMinDtFrac, self._solveMaxDtFrac, self.initialTime, self.finalTime
+        )
+        self._pendingCandidate = None
         if self.dtMode != "semi_log" or simTime <= 0:
             self._semiLogTimes = None
             self._semiLogNextIndex = 0
@@ -904,12 +928,19 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
 
         Multi-stage iterators are rejected because the implicit Illingworth step
         is not a continuously valid right-hand side for RK intermediate states.
-        When ``max_step_retries > 1``, pass a ``minDtFrac`` small enough that a
-        reduced retry step is not raised to the solver's minimum step, since
-        the returned increment is only valid for the accepted ``dt``.
+
+        Each step is solved at ``min(schedule, remaining time, maxDtFrac *
+        simTime)``, so the wrapper never shortens a solved step. A retry-reduced
+        step below ``minDtFrac * simTime`` raises ``ValueError`` (pass a smaller
+        ``minDtFrac`` when ``max_step_retries > 1``); only the exact final
+        remainder may be shorter. ``postProcess`` refuses to commit an outer
+        update that does not reproduce the converged candidate.
         """
         if iterator is not explicitEulerIterator:
             raise ValueError("MovingBoundaryIllingworthFD1DModel supports only explicitEulerIterator.")
+        _validate_outer_dt_fractions(minDtFrac, maxDtFrac, "MovingBoundaryIllingworthFD1DModel")
+        self._solveMinDtFrac = float(minDtFrac)
+        self._solveMaxDtFrac = float(maxDtFrac)
         return super().solve(simTime, iterator=iterator, verbose=verbose, vIt=vIt, minDtFrac=minDtFrac, maxDtFrac=maxDtFrac)
 
     def getCurrentX(self):
@@ -927,15 +958,22 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         return [p, q, s]
 
     def _compute_dt(self, t):
+        """
+        Returns the trial dt: the schedule, limited by the remaining time and the outer maximum.
+
+        Including the outer maximum here means the implicit step is solved at
+        the dt the wrapper will commit (LEDGERS R07). The near-final no-op
+        threshold still uses the unclamped schedule step.
+        """
         remaining = getattr(self, "finalTime", np.inf) - float(t)
         step_scale = self.timeStep
         if self.dtMode == "semi_log":
             scheduled_dt = self._computeSemiLogDt(t)
             if np.isfinite(scheduled_dt) and scheduled_dt > 0:
                 step_scale = scheduled_dt
-            dt = min(scheduled_dt, remaining)
+            dt = min(scheduled_dt, remaining, self._outerMaxTimeStep)
         else:
-            dt = min(self.timeStep, remaining)
+            dt = min(self.timeStep, remaining, self._outerMaxTimeStep)
         self._nearFinalNoop = bool(np.isfinite(remaining) and 0 < remaining <= max(step_scale, 1e-15) * 1e-10)
         if self._nearFinalNoop:
             self._currdt = max(step_scale, 1e-15)
@@ -1346,8 +1384,12 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         Returns the implicit-step increment divided by the accepted ``dt``.
 
         The complete implicit step (with optional ``dt`` retries) is taken here,
-        so ``getDt`` must be used to advance time by the accepted step.
+        so ``getDt`` must be used to advance time by the accepted step. A
+        converged step below the outer minimum raises ``ValueError`` unless it
+        is the exact final remainder. The converged state is staged in
+        ``_pendingCandidate`` for ``postProcess`` to verify.
         """
+        self._pendingCandidate = None
         p = np.asarray(xCurr[0], dtype=np.float64).reshape(-1)
         q = np.asarray(xCurr[1], dtype=np.float64).reshape(-1)
         s = self._clipInterfacePosition(float(xCurr[2]), strict=True)
@@ -1357,7 +1399,65 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         if self._nearFinalNoop:
             return [np.zeros_like(p), np.zeros_like(q), 0.0]
         p_new, q_new, s_new, dt = self._try_step_retries(p, q, s, dt)
+        _check_trial_dt_against_outer_minimum(dt, getattr(self, "finalTime", np.inf) - float(t), self._outerMinTimeStep)
+        self._stage_pending_candidate(t, dt, (p, q, s), (p_new, q_new, s_new))
         return [(p_new - p) / dt, (q_new - q) / dt, (s_new - s) / dt]
+
+    def _committed_state(self, x):
+        """Returns ``(p, q, s)`` as ``postProcess`` commits them, without validating ``s``."""
+        p = np.asarray(x[0], dtype=np.float64).reshape(-1).copy()
+        q = np.asarray(x[1], dtype=np.float64).reshape(-1).copy()
+        p[-1] = self.interfaceCompositions[0]
+        q[0] = self.interfaceCompositions[1]
+        return p, q, float(x[2])
+
+    def _stage_pending_candidate(self, t, dt, old, new):
+        """
+        Stages the converged step for verification in ``postProcess``.
+
+        Round-off allowances scale with the compositions (at least 1) and, for
+        the interface, with the domain length, so the check is independent of
+        the length unit.
+        """
+        p_old, q_old, s_old = old
+        self._pendingCandidate = _PendingImplicitStep(
+            start_time=float(t),
+            dt=float(dt),
+            state=self._committed_state(new),
+            scales=(
+                _magnitude(p_old, new[0]),
+                _magnitude(q_old, new[1]),
+                _magnitude(s_old, new[2], floor=self._R),
+            ),
+        )
+
+    def _verify_pending_candidate(self, time, x):
+        """
+        Refuses an outer update that does not reproduce the converged candidate.
+
+        The wrapper commits ``old + dXdt * dt``; if its ``time`` or state differ
+        from the candidate solved in ``getdXdt`` (for example after an outer
+        timestep clamp), the implicit equations were not solved for that state,
+        so this raises ``RuntimeError`` before any accepted state or history
+        changes. Without a staged candidate (``postProcess`` called directly)
+        nothing is checked.
+        """
+        pending = self._pendingCandidate
+        if pending is None:
+            return
+        try:
+            mismatches = _pending_step_mismatches(
+                pending, self.currentTime, time, self._committed_state(x), ("left profile", "right profile", "interface")
+            )
+        except Exception:
+            self._pendingCandidate = None
+            raise
+        if mismatches:
+            self._pendingCandidate = None
+            raise RuntimeError(
+                "Outer solver update does not match the pending converged binary candidate "
+                f"({', '.join(mismatches)}); accepted state was not advanced."
+            )
 
     def getDt(self, dXdt):
         if np.isfinite(self._currdt) and self._currdt > 0:
@@ -1387,10 +1487,19 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         return self.qData.y(time)
 
     def postProcess(self, time, x):
+        """
+        Commits the wrapper's update after checking it against the pending candidate.
+
+        See ``_verify_pending_candidate``; a near-final no-op step only advances
+        time and stops the solve.
+        """
         if self._nearFinalNoop:
             self.currentTime = time
             self._nearFinalNoop = False
+            self._pendingCandidate = None
             return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr], True
+        self._verify_pending_candidate(time, x)
+        self._pendingCandidate = None
         GenericModel.postProcess(self, time, x)
         p = np.asarray(x[0], dtype=np.float64).reshape(-1).copy()
         q = np.asarray(x[1], dtype=np.float64).reshape(-1).copy()

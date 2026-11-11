@@ -94,7 +94,8 @@ to `three_phase.py`/`shared.py` on 2026-11-10. Open solver findings:
 [release review follow-ups R07-R12](LEDGERS.md#release-review-follow-ups-r07-r12-open)
 (2026-11-08): outer timestep clamping, binary tolerance scaling, sparse histories,
 failure recovery, incomplete restart loading and numerical-control validation.
-R07/R08 are the highest-priority numerical investigations; none of these six is fixed.
+R07/R08 are the highest-priority numerical investigations. R07 (outer timestep clamping) is
+fixed in the package (2026-11-11); the other five are open.
 
 ## Installed solving and research-owned generation
 

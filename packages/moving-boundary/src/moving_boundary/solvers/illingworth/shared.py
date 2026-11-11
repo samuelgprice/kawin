@@ -1,4 +1,5 @@
 # Complete shared helper section from samuelgprice/kawin fae6149ccc6ebfda2100c4ed5a9b99b962e77620 (R06 three-phase correction on top of main 720d122), MovingBoundaryIllingworthTernaryFDM.py
+import math
 import warnings
 from dataclasses import dataclass
 
@@ -55,6 +56,118 @@ def _loge_arange(start, stop, log_step):
     """Returns exponentially spaced target times with fixed natural-log spacing."""
     logs = np.arange(np.log(start), np.log(stop), log_step)
     return np.exp(logs)
+
+
+# Outer-timestep contract (LEDGERS R07) for the binary and two-phase ternary
+# models. Each ``getdXdt`` solves a complete implicit step for one dt and returns
+# ``(new - old) / dt``; the explicit-Euler wrapper must commit exactly that dt.
+# Three-phase implements the same contract in its own methods.
+_OUTER_UPDATE_RTOL = 2e-13
+_OUTER_UPDATE_ULPS = 64.0
+
+
+@dataclass(frozen=True)
+class _PendingImplicitStep:
+    """
+    A converged implicit step that ``postProcess`` has not committed yet.
+
+    ``state`` holds the candidate in ``getCurrentX`` order, after the same
+    interface-node overrides that ``postProcess`` applies. ``scales`` gives,
+    per entry, the magnitude used for the absolute round-off allowance of the
+    outer Euler update ``old + ((new - old) / dt) * dt``.
+    """
+
+    start_time: float
+    dt: float
+    state: tuple
+    scales: tuple
+
+
+def _validate_outer_dt_fractions(min_dt_frac, max_dt_frac, model_name):
+    """Rejects outer timestep fractions that no implicit step can satisfy."""
+    if not np.isfinite(min_dt_frac) or not np.isfinite(max_dt_frac) or min_dt_frac < 0.0 or max_dt_frac <= 0.0:
+        raise ValueError("minDtFrac must be nonnegative and maxDtFrac must be positive and finite.")
+    if min_dt_frac > max_dt_frac:
+        raise ValueError(f"minDtFrac cannot exceed maxDtFrac for {model_name}.")
+
+
+def _outer_timestep_limits(min_dt_frac, max_dt_frac, initial_time, final_time):
+    """
+    Returns the outer wrapper's ``(minimum, maximum)`` timestep for one ``solve``.
+
+    Uses the host expression ``fraction * (finalTime - initialTime)``, so the
+    model's pre-solve clamp equals the wrapper's to the last bit. At the default
+    ``maxDtFrac=1`` the maximum equals the remaining time of the first step,
+    which the schedule already applies, so default runs are unchanged.
+    """
+    span = float(final_time) - float(initial_time)
+    return float(min_dt_frac) * span, float(max_dt_frac) * span
+
+
+def _is_outer_final_remainder(trial_dt, remaining, outer_minimum):
+    """
+    Returns whether ``trial_dt`` is the exact final remainder below the outer minimum.
+
+    Mirrors the exemption in ``compatibility.solver.DESolver._getdXdt``, so the
+    model and the wrapper accept the same subminimum steps.
+    """
+    remaining = float(remaining)
+    return bool(
+        remaining < outer_minimum
+        and math.isclose(
+            float(trial_dt),
+            remaining,
+            rel_tol=2e-13,
+            abs_tol=64.0 * math.ulp(1.0) * max(1.0, abs(remaining)),
+        )
+    )
+
+
+def _check_trial_dt_against_outer_minimum(trial_dt, remaining, outer_minimum):
+    """
+    Rejects a converged step below the outer minimum unless it is the final remainder.
+
+    The wrapper would refuse such a step anyway; rejecting it here happens
+    before the step is staged for commit and names the remedy.
+    """
+    if trial_dt < outer_minimum and not _is_outer_final_remainder(trial_dt, remaining, outer_minimum):
+        raise ValueError(
+            f"Converged nonlinear timestep {trial_dt} is smaller than the outer solver minimum "
+            f"{outer_minimum}; reduce minDtFrac."
+        )
+
+
+def _pending_step_mismatches(pending, accepted_time, committed_time, state, names):
+    """
+    Lists where the outer Euler update differs from the converged candidate.
+
+    Time is compared with a relative tolerance and a round-off allowance scaled
+    by the times involved (no unit floor). Each state entry ``i`` is compared
+    with ``rtol=2e-13`` and ``atol = 64 eps * pending.scales[i]``; a different
+    committed dt (an outer clamp or correction) fails the comparison.
+    """
+    eps = np.finfo(float).eps
+    expected_time = pending.start_time + pending.dt
+    time_scale = max(abs(float(committed_time)), abs(expected_time), abs(pending.start_time), abs(pending.dt))
+    time_atol = _OUTER_UPDATE_ULPS * eps * time_scale
+    mismatches = []
+    if not np.isclose(float(accepted_time), pending.start_time, rtol=_OUTER_UPDATE_RTOL, atol=time_atol):
+        mismatches.append("accepted start time")
+    if not np.isclose(float(committed_time), expected_time, rtol=_OUTER_UPDATE_RTOL, atol=time_atol):
+        mismatches.append("timestep")
+    for name, actual, expected, scale in zip(names, state, pending.state, pending.scales):
+        actual = np.asarray(actual, dtype=np.float64)
+        expected = np.asarray(expected, dtype=np.float64)
+        if actual.shape != expected.shape or not np.allclose(
+            actual, expected, rtol=_OUTER_UPDATE_RTOL, atol=_OUTER_UPDATE_ULPS * eps * float(scale)
+        ):
+            mismatches.append(name)
+    return mismatches
+
+
+def _magnitude(*values, floor=1.0):
+    """Returns ``max(floor, max |v|)`` over the given arrays or scalars."""
+    return max([float(floor)] + [float(np.max(np.abs(np.asarray(v, dtype=np.float64)))) for v in values])
 
 
 def _matvec_2x2(matrix, vector):

@@ -69,6 +69,12 @@ from moving_boundary.solvers.illingworth.shared import (
     estimate_initial_eta_from_instantaneous_balance,
     _ScalarHistory,
     _ArrayHistory,
+    _PendingImplicitStep,
+    _check_trial_dt_against_outer_minimum,
+    _magnitude,
+    _outer_timestep_limits,
+    _pending_step_mismatches,
+    _validate_outer_dt_fractions,
 )
 
 class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
@@ -319,6 +325,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._semiLogTimes = None
         self._semiLogNextIndex = 0
         self._nearFinalNoop = False
+        self._outerMinTimeStep = 0.0
+        self._outerMaxTimeStep = np.inf
+        self._solveMinDtFrac = 1e-8
+        self._solveMaxDtFrac = 1.0
+        self._pendingCandidate = None
         self._reset_implicit_diagnostics()
         # Cumulative round-off floor projections over committed steps (signed and
         # absolute inventory change, projected nodes; staged in
@@ -729,6 +740,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._semiLogTimes = None
         self._semiLogNextIndex = 0
         self._nearFinalNoop = False
+        self._outerMinTimeStep = 0.0
+        self._outerMaxTimeStep = np.inf
+        self._solveMinDtFrac = 1e-8
+        self._solveMaxDtFrac = 1.0
+        self._pendingCandidate = None
         self._reset_implicit_diagnostics()
         # Cumulative round-off floor projections over committed steps (signed and
         # absolute inventory change, projected nodes; staged in
@@ -1118,10 +1134,20 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         )
 
     def setTimeInfo(self, currTime, simTime):
-        """Stores solve-time bounds and prepares optional semi-log target times."""
+        """
+        Stores solve-time bounds and prepares optional semi-log target times.
+
+        Also stores the outer wrapper's minimum and maximum timestep for this
+        solve (from the ``minDtFrac``/``maxDtFrac`` passed to ``solve``) and
+        drops any uncommitted step candidate.
+        """
         super().setTimeInfo(currTime, simTime)
         self._currdt = np.inf
         self._nearFinalNoop = False
+        self._outerMinTimeStep, self._outerMaxTimeStep = _outer_timestep_limits(
+            self._solveMinDtFrac, self._solveMaxDtFrac, self.initialTime, self.finalTime
+        )
+        self._pendingCandidate = None
         self._terminalThinPhaseStop = False
         self._terminalThinPhaseInfo = None
         if self.dtMode != "semi_log" or simTime <= 0:
@@ -1157,15 +1183,22 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         return max(1e-15, float(self._semiLogTimes[self._semiLogNextIndex] - float(t)))
 
     def _compute_dt(self, t):
+        """
+        Returns the trial dt: the schedule, limited by the remaining time and the outer maximum.
+
+        Including the outer maximum here means the implicit step is solved at
+        the dt the wrapper will commit (LEDGERS R07). The near-final no-op
+        threshold still uses the unclamped schedule step.
+        """
         remaining = getattr(self, "finalTime", np.inf) - float(t)
         step_scale = self.timeStep
         if self.dtMode == "semi_log":
             scheduled_dt = self._computeSemiLogDt(t)
             if np.isfinite(scheduled_dt) and scheduled_dt > 0:
                 step_scale = scheduled_dt
-            dt = min(scheduled_dt, remaining)
+            dt = min(scheduled_dt, remaining, self._outerMaxTimeStep)
         else:
-            dt = min(self.timeStep, remaining)
+            dt = min(self.timeStep, remaining, self._outerMaxTimeStep)
         self._nearFinalNoop = bool(np.isfinite(remaining) and 0 < remaining <= max(step_scale, 1e-15) * 1e-10)
         if self._nearFinalNoop:
             self._currdt = max(step_scale, 1e-15)
@@ -1182,9 +1215,18 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         Multi-stage iterators are rejected because each right-hand side evaluation
         performs a complete implicit moving-interface step for a specific time
         increment.
+
+        Each step is solved at ``min(schedule, remaining time, maxDtFrac *
+        simTime)``, so the wrapper never shortens a solved step. A retry-reduced
+        step below ``minDtFrac * simTime`` raises ``ValueError``; only the exact
+        final remainder may be shorter. ``postProcess`` refuses to commit an
+        outer update that does not reproduce the converged candidate.
         """
         if iterator is not explicitEulerIterator:
             raise ValueError("MovingBoundaryIllingworthTernaryFD1DModel supports only explicitEulerIterator.")
+        _validate_outer_dt_fractions(minDtFrac, maxDtFrac, "MovingBoundaryIllingworthTernaryFD1DModel")
+        self._solveMinDtFrac = float(minDtFrac)
+        self._solveMaxDtFrac = float(maxDtFrac)
         return super().solve(simTime, iterator=iterator, verbose=verbose, vIt=vIt, minDtFrac=minDtFrac, maxDtFrac=maxDtFrac)
 
     def getCurrentX(self):
@@ -2356,9 +2398,29 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._cumulativeProjectedNodes += int(nodes)
         self._pendingStepProjection = None
 
-    def _accept_step_result(self, p, q, s, eta, result, trial_dt, retry):
-        """Stores diagnostics and returns derivatives for an accepted implicit trial."""
+    def _accept_step_result(self, p, q, s, eta, result, trial_dt, retry, start_time=None):
+        """
+        Stores diagnostics and returns derivatives for an accepted implicit trial.
+
+        Also stages the converged state in ``_pendingCandidate`` (start time
+        ``start_time``, default ``currentTime``) for ``postProcess`` to verify.
+        """
         p_new, q_new, s_new, eta_new, c_left_new, c_right_new, D_left, D_right = result
+        p_committed = np.asarray(p_new, dtype=np.float64).reshape((-1, 2)).copy()
+        q_committed = np.asarray(q_new, dtype=np.float64).reshape((-1, 2)).copy()
+        p_committed[-1] = c_left_new
+        q_committed[0] = c_right_new
+        self._pendingCandidate = _PendingImplicitStep(
+            start_time=float(self.currentTime if start_time is None else start_time),
+            dt=float(trial_dt),
+            state=(p_committed, q_committed, float(s_new), float(eta_new)),
+            scales=(
+                _magnitude(p, p_new),
+                _magnitude(q, q_new),
+                _magnitude(s, s_new, floor=self._R),
+                _magnitude(eta, eta_new),
+            ),
+        )
         self._currdt = float(trial_dt)
         self._lastAcceptedDt = float(trial_dt)
         self._lastStepRetries = int(retry)
@@ -2379,8 +2441,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             (eta_new - eta) / trial_dt,
         ]
 
-    def _try_step_retries(self, p, q, s, eta, trial_dt, retry_count, retry_offset=0):
-        """Attempts implicit solves while shrinking ``trial_dt`` after each failed trial."""
+    def _try_step_retries(self, p, q, s, eta, trial_dt, retry_count, retry_offset=0, start_time=None):
+        """
+        Attempts implicit solves while shrinking ``trial_dt`` after each failed trial.
+
+        ``start_time`` is passed to ``_accept_step_result`` for the staged candidate.
+        """
         last_error = None
         for retry in range(int(retry_count)):
             try:
@@ -2394,7 +2460,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                 )
                 if retry!=0:
                     self._print_diagnostic(f"step accepted after {retry} retries")
-                return self._accept_step_result(p, q, s, eta, result, trial_dt, retry_offset + retry), trial_dt, None
+                return self._accept_step_result(p, q, s, eta, result, trial_dt, retry_offset + retry, start_time=start_time), trial_dt, None
             except (RuntimeError, ValueError, ZeroDivisionError) as exc:
                 last_error = exc
                 trial_dt *= self.retryFactor
@@ -2436,8 +2502,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         Retry exhaustion raises RuntimeError chained from the last failure,
         without importing research utilities or pausing for a debugger.
-        The explicit terminal-thin-phase prompt policy is unchanged.
+        The explicit terminal-thin-phase prompt policy is unchanged. A
+        converged step below the outer minimum raises ``ValueError`` unless it
+        is the exact final remainder; the converged state is staged in
+        ``_pendingCandidate`` for ``postProcess`` to verify.
         """
+        self._pendingCandidate = None
         p = np.asarray(xCurr[0], dtype=np.float64).reshape((-1, 2))
         q = np.asarray(xCurr[1], dtype=np.float64).reshape((-1, 2))
         s = self._clipInterfacePosition(float(xCurr[2]), strict=True)
@@ -2452,8 +2522,9 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             return [np.zeros_like(p), np.zeros_like(q), 0.0, 0.0]
 
         trial_dt = float(dt)
-        dXdt, trial_dt, last_error = self._try_step_retries(p, q, s, eta, trial_dt, self.maxStepRetries)
+        dXdt, trial_dt, last_error = self._try_step_retries(p, q, s, eta, trial_dt, self.maxStepRetries, start_time=t)
         if dXdt is not None:
+            self._check_pending_timestep_against_outer_minimum(t, trial_dt)
             return dXdt
 
         thin_phase = self._single_terminal_thin_phase(s)
@@ -2468,8 +2539,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
                     trial_dt,
                     self.terminalThinPhaseExtraRetries,
                     retry_offset=self.maxStepRetries,
+                    start_time=t,
                 )
                 if dXdt is not None:
+                    self._check_pending_timestep_against_outer_minimum(t, trial_dt)
                     if self._single_terminal_thin_phase(s + dXdt[2] * trial_dt) is None:
                         raise ValueError(f"Expecting next interface to also satisfy _single_terminal_thin_phase() but got: {s + dXdt[2] * trial_dt}")
                     self._terminalThinPhaseStop = True
@@ -2491,6 +2564,22 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._print_diagnostic(last_error)
         raise RuntimeError("Ternary Illingworth step failed after timestep retries.") from last_error
 
+    def _check_pending_timestep_against_outer_minimum(self, t, trial_dt):
+        """
+        Rejects a converged subminimum step before the wrapper, dropping everything staged for it.
+
+        Clears the pending candidate and staged projection totals so the
+        rejected step cannot be committed or counted.
+        """
+        try:
+            _check_trial_dt_against_outer_minimum(
+                trial_dt, getattr(self, "finalTime", np.inf) - float(t), self._outerMinTimeStep
+            )
+        except ValueError:
+            self._pendingCandidate = None
+            self._pendingStepProjection = None
+            raise
+
     def _print_diagnostic(self, message):
         """Prints a solver diagnostic only when ``printDiagnostics`` is enabled."""
         if self.printDiagnostics:
@@ -2501,12 +2590,66 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             return self._currdt
         return self.timeStep
 
+    def _committed_state(self, x):
+        """Returns ``(p, q, s, eta)`` as ``postProcess`` commits them, without validating them."""
+        p = np.asarray(x[0], dtype=np.float64).reshape((-1, 2)).copy()
+        q = np.asarray(x[1], dtype=np.float64).reshape((-1, 2)).copy()
+        eta = float(x[3])
+        c_left, c_right = self._interface_compositions(eta)
+        p[-1] = c_left
+        q[0] = c_right
+        return p, q, float(x[2]), eta
+
+    def _verify_pending_candidate(self, time, x):
+        """
+        Refuses an outer update that does not reproduce the converged candidate.
+
+        The wrapper commits ``old + dXdt * dt``; if its ``time`` or state differ
+        from the candidate solved in ``getdXdt`` (for example after an outer
+        timestep clamp), the implicit equations were not solved for that state,
+        so this raises ``RuntimeError`` before any accepted state, history or
+        projection total changes. Without a staged candidate (``postProcess``
+        called directly) nothing is checked.
+        """
+        pending = self._pendingCandidate
+        if pending is None:
+            return
+        try:
+            mismatches = _pending_step_mismatches(
+                pending,
+                self.currentTime,
+                time,
+                self._committed_state(x),
+                ("left profile", "right profile", "interface", "eta"),
+            )
+        except Exception:
+            self._pendingCandidate = None
+            raise
+        if mismatches:
+            self._pendingCandidate = None
+            self._pendingStepProjection = None
+            self._terminalThinPhaseStop = False
+            self._terminalThinPhaseInfo = None
+            raise RuntimeError(
+                "Outer solver update does not match the pending converged ternary candidate "
+                f"({', '.join(mismatches)}); accepted state was not advanced."
+            )
+
     def postProcess(self, time, x):
+        """
+        Commits the wrapper's update after checking it against the pending candidate.
+
+        See ``_verify_pending_candidate``; a near-final no-op step only advances
+        time and stops the solve.
+        """
         if self._nearFinalNoop:
             self.currentTime = time
             self._nearFinalNoop = False
             self._pendingStepProjection = None
+            self._pendingCandidate = None
             return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr, self._eta_curr], True
+        self._verify_pending_candidate(time, x)
+        self._pendingCandidate = None
         GenericModel.postProcess(self, time, x)
         p = np.asarray(x[0], dtype=np.float64).reshape((-1, 2)).copy()
         q = np.asarray(x[1], dtype=np.float64).reshape((-1, 2)).copy()
