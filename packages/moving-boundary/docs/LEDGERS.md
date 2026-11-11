@@ -806,7 +806,10 @@ Decisions are the user's (R08_HANDOFF §2-§4, all recommended options approved)
   `_lastImplicitError` stays `|delta s|`.
 - *Call sites.* Test and acceptance builders keep their intent as `old / R` (brass
   1e-10 um -> 1e-10/565, required for its parity test); the three binary examples use
-  the new defaults. Generated definitions and ported tests are migrated by a recorded
+  the new defaults. Exception by user decision (2026-11-11, superseding "keep 1e-8"):
+  C04, C31 and F04 (R = 1) run at the new default 1e-12 (`VALIDATION_PARAMS["tolerance"]`,
+  a module-level `api_migration`), so examples E01/E02, which use the defaults,
+  reproduce C04/F04 bit for bit with equal settings. Generated definitions and ported tests are migrated by a recorded
   `api_migration` transform (`tools/api_migrations.py`) that both generators apply
   and record; `--check` reproduces every file from oracle `7af24f4` plus those edits,
   and the materializer's AST proof applies the same edits to the recorded AST.
@@ -818,13 +821,16 @@ Decisions are the user's (R08_HANDOFF §2-§4, all recommended options approved)
   is R13), R07's outer-timestep contract, `_nearFinalNoop`, the retry accounting.
 - *Acceptance.* Binary arrays change by design; the deviation report is pending the
   user's review, and any `approve` is a separate, explicitly authorized step.
-  Analytic errors (exact acceptance, 2026-11-11; reference -> R08, unchanged limits):
-  interface C04 0.001701657985 -> 0.001701657998 (relative change 7.6e-9, 10th
-  significant digit; limit 0.0035), C31 0.0004145331289 -> 0.0004145330726 (1.4e-7,
-  7th digit; limit 0.00083), F04 0.007035469669 -> 0.007035470999 (1.9e-7, 7th digit;
-  limit 0.015); profile C04 0.03803348829 -> 0.03803348827 (5e-10; limit 0.077), C31
-  0.01521744308 -> 0.01521744306 (1.3e-9; limit 0.031), F04 0.002771259736 ->
-  0.002771260642 (3.3e-7, 7th digit; limit 0.0056).
+  Analytic errors (exact acceptance, 2026-11-11; reference -> R08 candidate at
+  tolerance 1e-12, unchanged limits): interface C04 0.001701657985 -> 0.001701657998
+  (relative change 7.6e-9, 10th significant digit; limit 0.0035), C31 0.0004145331289
+  -> 0.0004145330724 (1.4e-7, 7th digit; limit 0.00083), F04 0.007035469669 ->
+  0.007035471002 (1.9e-7, 7th digit; limit 0.015); profile C04 0.03803348829 ->
+  0.03803348827 (6e-10; limit 0.077), C31 0.01521744308 -> 0.01521744306 (1.5e-9; limit
+  0.031), F04 0.002771259736 -> 0.002771260644 (3.3e-7, 7th digit; limit 0.0056).
+  Inventory drift: C04 4.5e-12 -> 3.7e-16 (limit 4.6e-11), C31 2.4e-11 -> 1.2e-14
+  (2.5e-10), F04 5.1e-10 -> 1.3e-13 (5.2e-9). With 1e-8 kept these differed from the
+  1e-12 values by at most 3e-12 (F04 interface error).
 
 ### R09: sparse recording mixes live state with recorded snapshots
 
