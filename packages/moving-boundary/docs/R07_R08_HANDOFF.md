@@ -1,5 +1,8 @@
 # Handoff: start R07/R08 in the package (written 2026-11-11)
 
+> **Status: historical.** R07 and R08 are both done (LEDGERS R07, R08); R08's binary references are
+> approved as `20261111T222849Z-5aedde7-1`. Its R08 parts were superseded by `R08_HANDOFF.md`.
+
 This handoff is for a fresh session. Each item is labelled **[verified]** (checked against the code
 or the records when this was written), **[suggestion]**, or **[open]** (a decision for the user).
 Verify claims against the code again before relying on them.

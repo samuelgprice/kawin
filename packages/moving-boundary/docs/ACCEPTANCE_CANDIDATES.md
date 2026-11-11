@@ -192,10 +192,13 @@ is complete; no repeated confirmation is required for its implementation.
 
 **Not part of the approved quick or full gates.** These run only through
 `tools/acceptance_examples.py`; `acceptance.py` and `acceptance_manifest.json` are unchanged.
-Each case runs an installed-API example against an existing frozen fixture, which is only
-read. It requires recorded effective settings equal to the accepted case's (taken just before
-solving, with named approved differences), the fixture's exact key set, identical array bytes
-and the same stop status. Example metrics are written separately and never enter parity arrays.
+Each case runs an installed-API example against its case's expected fixture (the frozen
+reference, or the approved artifacts and package-captured settings when the case is approved;
+E01/E02 compare with the R08-approved C04/F04, approval `20261111T222849Z-5aedde7-1`), which is
+only read. It requires recorded effective settings equal to the accepted case's (taken just
+before solving, with named approved differences and the named run-bookkeeping attributes in
+`tools/example_settings.py` `BOOKKEEPING` skipped), the fixture's exact key set, identical
+array bytes and the same stop status. Example metrics are written separately and never enter parity arrays.
 
 | ID | Example, config | Fixture | Proposed tier | Measured worker |
 |---|---|---|---|---|

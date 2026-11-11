@@ -143,6 +143,11 @@ The independence proof runs them from a `git archive` export with the opt-in gua
 `tools/batch_safety.guard_independence` and docs/AUTHORITY_SWITCH_PLAN.md (M9).
 
 Quick: 30 run comparisons, 5 contracts and 145 pytest tests passed in 381.09 s. Full: 40 run comparisons, 5 contracts and 145 pytest tests passed in 491.61 s (public tolerance, `--record`, 2026-11-11, after the authority switch; every run bit-identical).
+Since then R08 changed binary results by design; approval `20261111T222849Z-5aedde7-1` (LEDGERS R08)
+selects new references for C02, C03, C04, C13, C14, C15, C30, C31, F04, O07 and C29. At that commit
+exact full gives 40 runs and 5 contracts bit-identical against the selected references (not `--record`ed).
+Approved artifacts are local under `.verification/acceptance/reference-approved/`; a new checkout needs
+them copied in, like the other local inputs.
 
 Quick includes C01-C24/C30-C32, the older binary fixture/bulk probes and freshly
 sampled O05 (4.94-second sampling pilot) and O08 (two valid default-phase tie lines

@@ -87,7 +87,8 @@ last research oracle; it is never moved again.
   done separately from the solver change; the report must be force-added (`git add -f`). The
   approval takes effect locally as soon as it is written. `approve --rollback ID` points those
   cases back, and its manifest change is committed the same way.
-  `reference/` is never rewritten. No real approval exists yet.
+  `reference/` is never rewritten. The first real approval is `20261111T222849Z-5aedde7-1`
+  (LEDGERS R08, 11 binary cases, commit `34c02d2`).
 - **Item 7.** Contract cases C25-C29 compare with per-model molar-volume scales
   (`contract_model_scales`, user-approved), as run cases do.
 - **Item 14 supersession.** Supersession is recorded only in the package docs (this entry,
@@ -756,8 +757,8 @@ Both reproduced against `ce1c990` in both families.
 
 ### R08: binary convergence tolerance depends on length units
 
-**Status:** fixed in the package (2026-11-11, resolution below); binary reference
-approval pending. **Scope:** binary fixed-point
+**Status:** fixed in the package (2026-11-11, resolution below); binary references
+approved as `20261111T222849Z-5aedde7-1` (commit `34c02d2`). **Scope:** binary fixed-point
 interface iteration in `binary.py:_take_implicit_step_planar`.
 
 The convergence test is `abs(previous_future_s - future_s) <= tolerance`, without
@@ -780,7 +781,7 @@ fluxes. Document tolerance units and semantics. Test equivalent length-unit
 representations and per-step as well as cumulative inventory errors. R06's
 fine-grid iteration floor has a different cause (round-off in the interface flux; see R06).
 
-**Resolution (package, 2026-11-11; binary references not yet re-approved).**
+**Resolution (package, 2026-11-11; binary references approved 2026-11-11).**
 Decisions are the user's (R08_HANDOFF §2-§4, all recommended options approved).
 - *Stopping rule.* A trial position `s*` is accepted (never on pass zero) only when
   `|s* - s_prev| <= tolerance * R` and `|r| <= residual_tolerance * scale`.
@@ -819,9 +820,26 @@ Decisions are the user's (R08_HANDOFF §2-§4, all recommended options approved)
   nonconvergence. 45 failed before the change; 6 controls passed.
 - *Not changed:* ternary and three-phase numerics (their R-scaled residual default
   is R13), R07's outer-timestep contract, `_nearFinalNoop`, the retry accounting.
-- *Acceptance.* Binary arrays change by design; the deviation report is pending the
-  user's review, and any `approve` is a separate, explicitly authorized step.
-  Analytic errors (exact acceptance, 2026-11-11; reference -> R08 candidate at
+- *Example settings.* The example settings comparison now skips the named run-bookkeeping
+  attributes in `tools/example_settings.py` `BOOKKEEPING` (R07 commit-guard state, copies of
+  the `solve()` arguments and the limits derived from them, last-step diagnostics); adopted
+  settings files and hashes are unchanged and every other attribute is still compared.
+- *Acceptance.* Binary arrays change by design. Exact acceptance before approval: every
+  ternary, three-phase and unchanged binary run bit-identical (C01 and LEGACY reach an
+  exact floating-point fixed point); C02-C04, C13-C15, C30, C31, F04, O07 and contract C29
+  differed. O06 failed twice at Thermo-Calc licence startup (`take_l` Error[28]); the cause
+  was not established, and it then passed repeatedly against live TC.
+- *Approval* `20261111T222849Z-5aedde7-1` (user-authorized; `approve --tier full` in a clean
+  clone of `5aedde7`, fresh targets; commit `34c02d2`): C02, C03, C04, C13, C14, C15, C30,
+  C31, F04, O07 and C29. Gates: 40 run cases (live O06) each repeated bit-identically,
+  `approval_criteria` for every case, whole suite on the installed wheel 1163 passed, 34
+  unlisted cases and contracts within public tolerance, nothing skipped; settings captured
+  for C04/F04 (E01/E02). `reference/` is unchanged. After the approval, from the committed
+  revision: exact full 40/40 runs and 5 contracts bit-identical against the selected
+  references (live O06, 34 repeat pairs, 515 s); examples E01-E10 pass (E01/E02 against the
+  approved C04/F04; E11 still a pending fixture); full `tests/` 1158 passed, 5 skipped,
+  1 deselected.
+  Analytic errors (exact acceptance, 2026-11-11; frozen reference -> approved R08 values at
   tolerance 1e-12, unchanged limits): interface C04 0.001701657985 -> 0.001701657998
   (relative change 7.6e-9, 10th significant digit; limit 0.0035), C31 0.0004145331289
   -> 0.0004145330724 (1.4e-7, 7th digit; limit 0.00083), F04 0.007035469669 ->

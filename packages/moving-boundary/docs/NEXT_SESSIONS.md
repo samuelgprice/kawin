@@ -14,7 +14,7 @@ needs no research checkout and no Git.
 > port *after* the authority switch (surrogate diagnostics, comparison and benchmarking,
 > visualization and convergence tools, training-data utilities, material-specific workflows),
 > plus the research tests deferred with them. Sequence: authority switch → R07/R08 →
-> diagnostics/comparison → the rest. **Revisit it after R07/R08.** None of it is needed by
+> diagnostics/comparison → the rest. **Revisit it after R07/R08** (both done 2026-11-11). None of it is needed by
 > current acceptance.
 
 ## Current checkpoint
@@ -24,6 +24,14 @@ needs no research checkout and no Git (LEDGERS.md "Authority switch"). Final rec
 quick 30/30 and full 40/40 runs plus 5 contracts bit-identical; Quick: 30 run comparisons, 5 contracts and 145 pytest tests passed in 381.09 s. Full: 40 run comparisons, 5 contracts and 145 pytest tests passed in 491.61 s (public tolerance, `--record`, 2026-11-11, after the authority switch; every run bit-identical).
 Examples 10/10 with 56 tests; full `tests/` 1039 passed, 5 skipped (contract comparisons outside an
 acceptance run), 1 deselected (`slow`).
+
+R07 and R08 are fixed since then. R08 changed binary results by design; its references are approved
+as `20261111T222849Z-5aedde7-1` (C02, C03, C04, C13, C14, C15, C30, C31, F04, O07, C29; commit
+`34c02d2`). Gates at that commit (fresh targets, 2026-11-11, not `--record`ed): exact full 40/40 runs
+and 5 contracts bit-identical against the selected references, live O06, 34 repeat pairs, 515 s;
+examples E01-E10 pass with 68 tests (E11 pending); full `tests/` 1158 passed, 5 skipped, 1 deselected.
+The approved artifacts are local (`.verification/acceptance/reference-approved/`): another
+checkout needs them copied in before quick/full can pass.
 
 Earlier checkpoint: Illingworth solvers, shared/interstitial helpers and numerics moved under `solvers/illingworth/`, leaving room for sibling solver families.
 Commit: `refactor: group Illingworth modules under solvers/illingworth`; permitted docstring changes: `solvers/__init__.py`, `solvers/illingworth/__init__.py` and the approved `solvers/illingworth/numerics/__init__.py`.
@@ -52,7 +60,9 @@ the new ignored O06 fixture pair was captured; all 89 older files are unchanged.
 quick-check settings with existing frozen fixtures; it isn't part of `acceptance.py`, whose inputs
 and fixtures are unchanged. After adding `analytic`, an unchanged full gate gave 40 runs and 5
 contracts bit-identical, 34 repeat pairs, 570 s (not recorded). All ten example cases (E01–E10)
-are bit-identical with matching settings; last run 2026-11-08 on 4aac448 (83.5 s).
+are bit-identical with matching settings; last run 2026-11-11 on `34c02d2` (160.7 s), with E01/E02
+compared against the R08-approved C04/F04. The settings comparison skips the named run-bookkeeping
+attributes in `tools/example_settings.py` (`BOOKKEEPING`).
 
 Changes on 2026-11-07/08 (commits 22114b7 to 22c8645):
 
@@ -100,8 +110,8 @@ timestamp check; commits refused after a rejected proposal until a new candidate
 R08 (binary tolerance units) is implemented in the package (2026-11-11): dimensionless
 position tolerance plus a conservative, inventory-normalized residual check, with the
 call sites migrated (generated files through the recorded `api_migration` transform).
-Its binary reference changes await the user's review and a separate `approve`
-(LEDGERS R08). The other four are open.
+Its binary reference changes are approved as `20261111T222849Z-5aedde7-1` (commit `34c02d2`;
+LEDGERS R08). R09-R12 are open, and R13 (ternary/three-phase residual scales) is recorded.
 
 ## Installed solving and research-owned generation
 
