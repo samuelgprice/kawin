@@ -97,7 +97,11 @@ failure recovery, incomplete restart loading and numerical-control validation.
 R07/R08 are the highest-priority numerical investigations. R07 (outer timestep clamping) is
 fixed in the package (2026-11-11), including a follow-up to its commit guard (elapsed-step
 timestamp check; commits refused after a rejected proposal until a new candidate is solved).
-The other five are open; R08's tolerance semantics are awaiting the user's decision.
+R08 (binary tolerance units) is implemented in the package (2026-11-11): dimensionless
+position tolerance plus a conservative, inventory-normalized residual check, with the
+call sites migrated (generated files through the recorded `api_migration` transform).
+Its binary reference changes await the user's review and a separate `approve`
+(LEDGERS R08). The other four are open.
 
 ## Installed solving and research-owned generation
 

@@ -50,6 +50,24 @@ cases pass an explicit policy and input() is prohibited before imports.
 C32 is a configured retry stress case. A small natural physical stop run has
 not been established.
 
+**Binary tolerance API change (prerelease, LEDGERS R08).** The binary
+`MovingBoundaryIllingworthFD1DModel` accepts an interface iterate only when both
+`|delta s| <= tolerance * R` and the conservative interface residual satisfies
+`|r| <= residual_tolerance * max(|I_old|, R * c_floor)`:
+
+- `tolerance` is now dimensionless, relative to the domain length `R`
+  (default `1e-12`). It used to be an absolute length (default `1e-8`, in the
+  mesh's length unit); to keep an old value `t`, pass `t / R`. Results are then
+  independent of the length unit.
+- `residual_tolerance` (new, default `1e-13`) bounds the per-step change of the
+  transformed solute inventory, relative while `|I_old| >= R * c_floor`, and an
+  absolute change of mean composition `residual_tolerance * c_floor` below that.
+- `interface_residual_composition_scale` (new) sets `c_floor`; when omitted it is
+  `constraints.minComposition`. The ternary models use the same name but default
+  to a composition scale of 1 (see LEDGERS R13).
+- `bulk_picard_rtol=None` now means `1e-10` in implicit mode; it no longer
+  follows `tolerance`. Pass it explicitly to keep an older effective value.
+
 Stage 2B adapter relocation is complete for accepted O05 restricted-phase generation and O08 default-phase endpoint/equilibrium sampling. See [docs/NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation) for remaining research script orchestration, the open broader Stage 2 split and research-branch R01.
 
 Stage 2C is complete within O06: real TC generation uses the installed

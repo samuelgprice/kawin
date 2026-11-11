@@ -756,7 +756,8 @@ Both reproduced against `ce1c990` in both families.
 
 ### R08: binary convergence tolerance depends on length units
 
-**Status:** open; high priority before release. **Scope:** binary fixed-point
+**Status:** fixed in the package (2026-11-11, resolution below); binary reference
+approval pending. **Scope:** binary fixed-point
 interface iteration in `binary.py:_take_implicit_step_planar`.
 
 The convergence test is `abs(previous_future_s - future_s) <= tolerance`, without
@@ -778,6 +779,45 @@ criterion with a conservative interface-residual criterion using the same bulk
 fluxes. Document tolerance units and semantics. Test equivalent length-unit
 representations and per-step as well as cumulative inventory errors. R06's
 fine-grid iteration floor has a different cause (round-off in the interface flux; see R06).
+
+**Resolution (package, 2026-11-11; binary references not yet re-approved).**
+Decisions are the user's (R08_HANDOFF §2-§4, all recommended options approved).
+- *Stopping rule.* A trial position `s*` is accepted (never on pass zero) only when
+  `|s* - s_prev| <= tolerance * R` and `|r| <= residual_tolerance * scale`.
+  `tolerance` is dimensionless (default 1e-12; it was an absolute length, default
+  1e-8, so an old value `t` is `t / R`). `residual_tolerance` is new (default 1e-13).
+  `r = lhs * (s* - s) - rhs` is the planar conservative balance formed from the bulk
+  solves at `s*` (deviations and interface-face D), on the motion branch of `s* - s`,
+  through the same `_interface_balance_terms` as the update (which is bit-identical).
+  It equals the step's transformed-inventory change to within a few eps * R * max|c|.
+- *Normalization.* `scale = max(|I_old|, R * c_floor)`, fixed per step from the old
+  state; `c_floor` is the new `interface_residual_composition_scale` or else
+  `constraints.minComposition`. Per step `|dI| <= residual_tolerance * scale` up to
+  round-off: relative while `|I_old| >= R * c_floor`, otherwise an absolute
+  mean-composition bound `residual_tolerance * c_floor`. The floor can bind for valid
+  data (interface compositions are not clamped). Only when `I_old` and `c_floor` are
+  both exactly 0 is the scale `64 eps R` (an absolute round-off bound); every other
+  non-finite or non-positive input or scale raises `ValueError`.
+- *Picard.* `bulk_picard_rtol=None` is now 1e-10 in implicit mode, independent of
+  `tolerance`. C03 and LEGACY implicit keep 1e-8 and C15 keeps 1e-10, explicitly.
+- *Validation and diagnostics.* `tolerance`, `residual_tolerance` and an explicit
+  composition scale must be positive and finite (checked before the host
+  constructor). New `_lastImplicitResidual`, `_lastImplicitResidualScale`;
+  `_lastImplicitError` stays `|delta s|`.
+- *Call sites.* Test and acceptance builders keep their intent as `old / R` (brass
+  1e-10 um -> 1e-10/565, required for its parity test); the three binary examples use
+  the new defaults. Generated definitions and ported tests are migrated by a recorded
+  `api_migration` transform (`tools/api_migrations.py`) that both generators apply
+  and record; `--check` reproduces every file from oracle `7af24f4` plus those edits,
+  and the materializer's AST proof applies the same edits to the recorded AST.
+- *Tests.* `tests/test_illingworth_binary_tolerance.py` (51): length-unit and dilution
+  invariance, residual identity and both checks in all three modes, floor and
+  safeguard cases, Picard default, validation, pass zero, fixed-point
+  nonconvergence. 45 failed before the change; 6 controls passed.
+- *Not changed:* ternary and three-phase numerics (their R-scaled residual default
+  is R13), R07's outer-timestep contract, `_nearFinalNoop`, the retry accounting.
+- *Acceptance.* Binary arrays change by design; the deviation report is pending the
+  user's review, and any `approve` is a separate, explicitly authorized step.
 
 ### R09: sparse recording mixes live state with recorded snapshots
 
