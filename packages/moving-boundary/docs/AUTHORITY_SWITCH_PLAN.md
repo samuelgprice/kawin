@@ -20,7 +20,7 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
 | M6 | Normal/historical split, package-role repeatability | done 2026-11-10 (see log) |
 | M7 | Approval path | done 2026-11-10: M7a `approval_criteria` adopted (user-approved); M7b approval path (see log) |
 | M8 | Test port (item 16), 4 batches | done 2026-11-10: 301 of 314 research tests ported, 13 deferred (see log) |
-| M9 | Independence proof + missing-resource matrix | in progress: M9a guards and follow-ups 5-7 fixed (see log) |
+| M9 | Independence proof + missing-resource matrix | runs done 2026-11-11, all green from Git-blocked exports (empty and active approved sets); one §7 table row (E05) awaits the user's decision (see log) |
 | M10 | Docs + final recorded gates | not started |
 
 ### Implementation log
@@ -452,6 +452,87 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
     compares with and any present adopted input, but no longer requires C24's
     `open-surrogate.npz`. Tested on the synthetic project in `test_validate_expected.py`.
   - Results: full `tests/` 1033 passed, 5 skipped, 1 deselected (205 s).
+- **M9a fix `4d64aa0` (found by the first guarded export run of `0f71c19`).**
+  - On Windows, `subprocess` audits the joined command line. `git_invocation` had matched "git"
+    inside a Python `-c` script. It now decides by the program token, and searches the rest only
+    for a shell; `os.system` strings are searched whole.
+  - The guard tests' fixture no longer creates an `mb-ref-*` file in the (possibly guarded) test
+    process.
+  - `test_pycalphad_provider::test_generation_guard_blocks_research_imports_and_source_reads`
+    imports `examples` on purpose, to test the M4 generation guard, and the M9 guard refused it
+    first. It now runs in its own process without the M9 variables, with the same assertions.
+- **M9b (2026-11-11): independence proof and missing-resource matrix (scratch driver
+  `m9_proof.py`, not committed).**
+  - *Exports and environment:*
+    - Exports are `git archive` of the package at the commit, under
+      `%TEMP%\claude\m9\<name>`, with no checkout above them. `.verification` is copied (226
+      files: inputs, references, example settings, pilot, stock wheel, environment file), not
+      linked.
+    - Every run had `MB_FORBID_RESEARCH=1` and `MB_FORBID_GIT=1`. `MB_FORBID_ROOTS` covered the
+      whole extraction worktree, the research checkout, the research env and both scratch
+      clones, plus any `mb-ref-*` path.
+    - There was one `MB_GUARD_LOG` per run, PYTHON* and CONDA* variables were removed, and
+      conda was activated afresh for `mb-public-050`.
+    - `PATH` had every directory holding `git.exe`/`git.cmd`/`git.bat` removed and a failing
+      `git` shim first. Inside the activated env, `where git` finds only the shim.
+    - After each setup, the installed target's `moving_boundary` was checked equal to the
+      export's `src` (32 files), so the unguarded `pip wheel` built from the export.
+  - *Finding (environment, not changed):* `mb-public-050` has an editable `.pth` pointing at
+    the worktree's `src`. The guard refused the first guarded `quick`, because a normally
+    started acceptance parent has that path on `sys.path`. The parent never imports
+    `moving_boundary`; workers and test runs use `-S`. The M9 runs start tool parents the same
+    way (`python -S` with that env's site-packages on `PYTHONPATH`). Follow-up 11.
+  - *E1, empty approved set (export of `4d64aa0`), every run with 0 guard violations:*
+    - whole `tests/`: 1036 passed, 5 skipped (C25-C29 contract comparisons, which need
+      `MB_ACCEPTANCE_STATE`), 4 deselected (1 `slow`, 3 `git`), in 218 s;
+    - ported files on their own: 570 items passed, 0 skipped, in 98 s. Per file:
+      - binary_variable_diffusivity 31;
+      - interstitials 19, interstitials_ternary 13, interstitials_three_phase 3;
+      - setup_and_diagnostics 16;
+      - ternary 264, ternary_physical_scale 6, ternary_similarity 2;
+      - ternary_three_phase 104, ternary_three_phase_similarity 13;
+      - similarity_comparison_basis 2, surrogate_artifacts 18, transformed_grids 79;
+    - exact quick: 30/30 runs and 5 contracts bit-identical, 33 repeat pairs with 0
+      differences, gate pytest 145 passed with the 3 `git` tests deselected; 433 s of 600;
+    - exact full: 40/40 runs (O06 live TC) and 5 contracts bit-identical, 34 repeat pairs;
+      549 s of 1200;
+    - examples `--skip-tests`: 10/10, 75 s; with tests: 10/10 plus 56 tests, 142 s.
+  - *E2, active synthetic approval:*
+    - Made in the scratch clone `%TEMP%\claude\m9c`: base `4d64aa0`, then the M7b synthetic
+      C01 change (duration 0.5 to 0.45, `394cb71`).
+    - `approve --cases C01 C25` gave `20261111T022430Z-394cb71-1`: C01 differs, C25 is
+      unchanged; the whole-suite gate passed 1044 tests, `git` tests included; 603 s of 900.
+    - The approval was committed in the clone (`c77815e`) and exported. The real worktree's
+      approval files were unchanged (193 files, 0 changed).
+    - Git-blocked exact quick: 30/30 runs and 5 contracts bit-identical, 0 violations, 430 s.
+      The run record shows C01 and C25 compared with `20261111T022430Z-394cb71-1` and every
+      other case with `reference`. The changed C01 can match only the approved arrays.
+    - Ported files: 570 passed, 0 violations.
+  - *Missing-resource matrix (each row a fresh export, guard on, Git blocked, 0 violations):*
+
+    | Removed / changed | Observed |
+    |---|---|
+    | `FeCrNi.tdb` | quick: O05, O08 SKIPPED "database input missing"; 28/28 and 5 contracts bit-identical. **E05 PASSED** in example acceptance (see below) |
+    | `exb5.json` | full: O01, O02 SKIPPED "cached input missing"; 38/38 and 5 contracts bit-identical |
+    | `inputs/O06.json` (TC config) | full: O06 SKIPPED "local O06 input missing" (the probe reason); 39/39 and 5 contracts bit-identical |
+    | `open-surrogate.npz` | quick fails at once: "required input missing: inputs/open-surrogate.npz (needed by C24; never regenerated)". Example acceptance: **E04 PASS**, 10/10 |
+    | one bit of `reference/C04.npz` | quick fails: "C04: expected artifact changed: reference/C04.npz" |
+    | one bit of the approved `C01.npz` (E2) | quick fails: "C01: approved artifact changed: reference-approved/20261111T022430Z-394cb71-1/C01.npz" |
+    | extra: `pycalphad-reference.npz` | example acceptance: E05 SKIPPED "local input missing: pycalphad-reference.npz"; the other 9 pass |
+
+  - **Discrepancy with the §7 table (awaiting the user):** the table expects E05 to skip when
+    `FeCrNi.tdb` is removed. E05 solves from the frozen `inputs/pycalphad-reference.npz` (as
+    `ACCEPTANCE_CANDIDATES.md` states) and never reads the TDB, so it ran and passed. Its input
+    is `pycalphad-reference.npz` (extra row). Proposed correction to the table: `FeCrNi.tdb`
+    row "O05, O08 skipped"; new row `pycalphad-reference.npz`, "E05 skipped (local input
+    missing)". The table is not edited until the user decides.
+  - Artifact hashes vs `hashes-M5-after`: 207 files, 0 changed. The worktree's full `tests/`
+    for `4d64aa0` is included in E1 (same tree).
+  - Gate time: about 76 min of runs (E1 26, approval 10, E2 9, matrix 28) plus the M9a suite
+    and fix runs, against the §9 estimate of 44-46 min. The excess comes from checks added
+    after the estimate: the separate ported runs and the active-approval repeats (user review
+    after M8), a fresh approval under the whole-suite approve gate (M7b scope decision), and
+    the skip rows each needing a real quick or full gate.
 - **Follow-ups recorded 2026-11-10 (user review):**
   1. *`docs/definitions-provenance.json` is git-ignored.* It matches `*.json` in the shared
      `.git/info/exclude` (research checkout, line 13); the other `docs/*.json` are tracked only
@@ -529,6 +610,15 @@ has not started and needs the user's go-ahead.** Written 2026-11-10 at extractio
       - 62 focused tests passed under `--import-mode=importlib`.
       The full suite was not rerun. The M7b follow-ups were confirmed to address the earlier
       findings.
+  11. *Editable worktree install in `mb-public-050` (found in M9b; environment not changed).* Its
+      `__editable__.moving_boundary-0.0.1.dev0.pth` puts the worktree's `src` on `sys.path` for
+      any process started with normal site processing. Acceptance workers and test runs use
+      `-S`, and the acceptance parent never imports `moving_boundary`, so no run used it. But a
+      parent started normally from an export would still have the worktree on its path, which the
+      guard refuses. Options for the user: remove the editable install (M10 docs would then say
+      `pip install -e` is for development only), or document that independence runs start the
+      parent with `-S`, as M9 did.
+  - *Status after M9:* follow-ups 5, 6 and 7 are resolved (M9a; verified in M9b).
 
 ## Decisions
 
