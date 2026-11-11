@@ -949,8 +949,8 @@ their constructor and docstring descriptions of `interface_residual_composition_
   `interface_residual_composition_scale` already turns the ternary scale into an
   inventory-based one; only the default is affected.
 - **Investigate:** correct the docstrings first; that is documentation only. Changing the
-  default (for example to the inventory-based scale with a `minComposition` floor proposed for
-  the binary in R08) would change ternary and three-phase references. It needs its own
+  default (for example to the inventory-based scale with a `minComposition` floor that R08
+  implemented for the binary) would change ternary and three-phase references. It needs its own
   measurements, tests and approval, and is a user decision.
 
 ## Example acceptance (pending tier approval)
