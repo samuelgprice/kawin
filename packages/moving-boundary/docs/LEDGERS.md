@@ -1095,6 +1095,18 @@ coupled-model failures without silently advancing accepted state.
   `mesh.boundaryConditions`, temperature parameters, coupled models, printed diagnostics. Unchanged:
   the near-final no-op step, a direct `postProcess` without a proposal (commits unchecked),
   three-phase `solve(0)` rejection and the binary/two-phase `solve(0)` setup-only no-op.
+- *Follow-up (2026-11-13, from review): three-phase interruptions.* Three-phase
+  `_commit_accepted_state` and `postProcess` caught only `Exception`, so a `KeyboardInterrupt` from
+  a coupled-model update advanced accepted state, time and every history and kept a staged terminal
+  thin-phase stop (reproduced: 3 new three-phase tests failed at `7e81f53`; binary/two-phase already
+  rolled back). Both now handle `BaseException` like binary/two-phase: this model's state and
+  histories are restored, the candidate is consumed, the terminal stop cleared and the interruption
+  re-raised unchanged; external coupled updates are still not undone (D6). Tests (11, all families):
+  interruption rollback with resubmission refused, recovery through a fresh candidate equal to an
+  untouched model, terminal-stop cleanup, and preservation of successful commits with a coupled
+  model. Gates (fresh targets, no approval): focused lifecycle/R07/R09/three-phase suites 519
+  passed; full `tests/` 1459 passed, 5 skipped, 1 deselected; exact full 40/40 runs and 5 contracts
+  bit-identical, live O06, 34 repeat pairs, 630 s; examples E01-E10 pass with 68 tests.
 
 ### R11: inherited deserialization does not restore the solver state
 

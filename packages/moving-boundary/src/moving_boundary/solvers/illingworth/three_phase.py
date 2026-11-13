@@ -2696,10 +2696,11 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         Commits one prepared state and all synchronized histories as one transaction.
 
         Uses the shared atomic history helpers (``_record_histories_atomically``,
-        ``_restore_history_snapshots``); a failure in recording, in the state
+        ``_restore_history_snapshots``); any exception, including an
+        interruption such as ``KeyboardInterrupt``, in recording, in the state
         assignment or in ``updateCoupledModels`` restores this model's
-        histories and accepted state. Coupled models updated before the failing
-        one keep their update (LEDGERS R10, D6).
+        histories and accepted state and is re-raised unchanged. Coupled models
+        updated before the failing one keep their update (LEDGERS R10, D6).
         """
         records = [
             (self.data, accepted.fixed_mesh_profile),
@@ -2738,7 +2739,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             self._lastInterfaceCompositions = accepted.interface_compositions
             self.currentTime = float(time)
             self.updateCoupledModels()
-        except Exception:
+        except BaseException:
             _restore_history_snapshots(snapshots)
             (
                 self._profiles_curr,
@@ -2811,12 +2812,24 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return pending
 
     def postProcess(self, time, x):
+        """
+        Verifies the wrapper's update against the pending candidate, then prepares and commits it.
+
+        Preparation (``_prepare_accepted_state``) touches no model state; the
+        commit (``_commit_accepted_state``) is atomic. The candidate is consumed
+        whether or not the commit succeeds, so after any exception, including
+        an interruption such as ``KeyboardInterrupt`` (re-raised unchanged),
+        accepted state and histories are unchanged, a staged terminal
+        thin-phase stop is cleared, a resubmission is refused and only a newly
+        solved candidate can be committed. Coupled models updated before a
+        failing one keep their update (LEDGERS R10, D6).
+        """
         pending = self._verify_pending_candidate(time, x)
         try:
             accepted = self._prepare_accepted_state(x)
             self._commit_accepted_state(time, accepted)
             self._commit_step_projection(pending)
-        except Exception:
+        except BaseException:
             self._terminalThinPhaseStop = False
             self._terminalThinPhaseInfo = None
             raise

@@ -636,3 +636,99 @@ def test_post_solve_finalizes_all_histories_as_one_unit(family, record, expected
     finalized = {name: _freeze(dict(vars(h))) for name, h in _histories(model).items()}
     model.postSolve()
     assert {name: _freeze(dict(vars(h))) for name, h in _histories(model).items()} == finalized
+
+
+# R10 follow-up: interruptions (``BaseException``) during a commit, every family.
+# The three-phase cases failed before the follow-up (its commit rollback caught
+# only ``Exception``); binary and two-phase ternary already rolled back.
+
+_REFUSAL = {
+    "binary": "no new candidate has been solved",
+    "ternary": "no new candidate has been solved",
+    "three_phase": "without a pending converged nonlinear candidate",
+}
+
+
+class _InterruptingCoupledModel:
+    def updateCoupledModel(self, model):
+        raise KeyboardInterrupt("interrupted during the coupled update")
+
+
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_interrupt_during_coupled_update_rolls_back_and_refuses_resubmission(family):
+    """A ``KeyboardInterrupt`` from a coupled model restores this model, consumes the candidate and propagates.
+
+    The coupled model updated before the interruption keeps its entry (D6).
+    """
+    model = _stepping_model(family, steps=1)
+    recorder = _Recorder()
+    model.couplingModels = [recorder, _InterruptingCoupledModel()]
+    proposal = _propose(model)
+    before = _image(model)
+
+    with pytest.raises(KeyboardInterrupt, match="interrupted during the coupled update"):
+        _commit(model, proposal)
+
+    changed = [name for name in _image_changes(before, _image(model)) if name not in _CONSUMED]
+    assert changed == [], f"an interrupted commit changed {changed}"
+    assert model._pendingCandidate is None
+    assert len(recorder.entries) == 1, "the documented limitation: the external update is not undone"
+    time, x = _update(proposal)
+    with pytest.raises(RuntimeError, match=_REFUSAL[family]):
+        model.postProcess(time, x)
+    assert [name for name in _image_changes(before, _image(model)) if name not in _CONSUMED] == []
+
+
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_recovery_after_an_interrupted_commit_equals_an_untouched_model(family):
+    """After the interruption, freshly solved candidates reproduce a model that was never interrupted."""
+    model = _stepping_model(family, steps=1)
+    model.couplingModels = [_InterruptingCoupledModel()]
+    with pytest.raises(KeyboardInterrupt):
+        _commit(model, _propose(model))
+    model.couplingModels = []
+    untouched = _stepping_model(family, steps=1)
+
+    for _ in range(2):
+        _commit(model, _propose(model))
+        _commit(untouched, _propose(untouched))
+
+    _assert_same_result(model, untouched)
+    assert model._pendingCandidate is None
+
+
+@pytest.mark.parametrize("family", ["ternary", "three_phase"])
+def test_interrupted_commit_clears_the_terminal_thin_phase_stop(family):
+    """A terminal thin-phase stop staged with the interrupted candidate is consumed with it; the run is not ended."""
+    model = _stepping_model(family, steps=1)
+    model.couplingModels = [_InterruptingCoupledModel()]
+    proposal = _propose(model)
+    final_time = model.finalTime
+    model._terminalThinPhaseStop = True
+    model._terminalThinPhaseInfo = {"phase": model.phases[0]}
+
+    with pytest.raises(KeyboardInterrupt):
+        _commit(model, proposal)
+
+    assert model._terminalThinPhaseStop is False
+    assert model._terminalThinPhaseInfo is None
+    assert model.finalTime == final_time
+
+
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
+def test_successful_commits_with_a_coupled_model_are_unchanged(family):
+    """Preservation: each commit updates the coupled model once with the accepted state and returns no stop."""
+    model = _stepping_model(family)
+    recorder = _Recorder()
+    model.couplingModels = [recorder]
+    plain = _stepping_model(family)
+
+    for step in range(3):
+        _, stop = _commit(model, _propose(model))
+        _commit(plain, _propose(plain))
+        assert stop is False
+        assert len(recorder.entries) == step + 1
+        assert recorder.entries[-1] == _freeze((float(model.currentTime), model.getCurrentX()))
+
+    _assert_same_result(model, plain)
+    assert model._pendingCandidate is None
