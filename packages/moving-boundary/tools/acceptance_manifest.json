@@ -1583,7 +1583,8 @@
       "C13": "20261111T222849Z-5aedde7-1",
       "C14": "20261111T222849Z-5aedde7-1",
       "C15": "20261111T222849Z-5aedde7-1",
-      "C29": "20261111T222849Z-5aedde7-1",
+      "C25": "20261113T174227Z-3047510-1",
+      "C29": "20261113T174227Z-3047510-1",
       "C30": "20261111T222849Z-5aedde7-1",
       "C31": "20261111T222849Z-5aedde7-1",
       "F04": "20261111T222849Z-5aedde7-1",
@@ -1674,6 +1675,35 @@
           "path": "docs/approvals/20261111T222849Z-5aedde7-1.json",
           "sha256": "68913f6b7ae005aa08722a9d2b33db6e3cba1532db562e0ae16567f2960ee4b0"
         }
+      },
+      "20261113T174227Z-3047510-1": {
+        "created_utc": "2026-11-13T17:42:27Z",
+        "package_commit": "30475101a815e9af91c49561feb91fb07ba2fe7d",
+        "reason": "LEDGERS R09a: no-time getters return the live accepted state; binary time-zero profiles/compositions (C25 model0, model4; C29 model1) are now the reconstructed initial profile instead of stored data row 0",
+        "tier": "full",
+        "cases": [
+          "C25",
+          "C29"
+        ],
+        "directory": "reference-approved/20261113T174227Z-3047510-1",
+        "artifacts": {
+          "C25": {
+            "json": "a9968e8d6fa0383152b2a858fd61c66d4c17eba70a254fa15cca1fe5263380da",
+            "npz": "70fd8f5f98be5a2e1cb2b03b0dd1aca826d5cc20dc8363a7ecacbd56d4eda91a"
+          },
+          "C29": {
+            "json": "126a88eab01541eb0af2c1e3c67626ae2c557ad6a6c49abf830b22351451fe7b",
+            "npz": "fb5ec4ad977c9b000497c80dfb7bde5e741f45137b4178aa97c207b5226f1891"
+          }
+        },
+        "previous": {
+          "C25": "reference",
+          "C29": "20261111T222849Z-5aedde7-1"
+        },
+        "report": {
+          "path": "docs/approvals/20261113T174227Z-3047510-1.json",
+          "sha256": "8f858c99715a62889c01c930d3afc4a74a40f6810cac0f0b6090eeaca467846b"
+        }
       }
     },
     "history": [
@@ -1692,6 +1722,15 @@
           "C31",
           "F04",
           "O07",
+          "C29"
+        ]
+      },
+      {
+        "event": "approve",
+        "approval_id": "20261113T174227Z-3047510-1",
+        "utc": "2026-11-13T17:42:27Z",
+        "cases": [
+          "C25",
           "C29"
         ]
       }

@@ -1,0 +1,2009 @@
+{
+  "schema": 1,
+  "kind": "approval",
+  "created_utc": "2026-11-13T17:42:27Z",
+  "package_commit": "30475101a815e9af91c49561feb91fb07ba2fe7d",
+  "reason": "LEDGERS R09a: no-time getters return the live accepted state; binary time-zero profiles/compositions (C25 model0, model4; C29 model1) are now the reconstructed initial profile instead of stored data row 0",
+  "tier": "full",
+  "tolerance": "public",
+  "cases": [
+    "C25",
+    "C29"
+  ],
+  "skipped": {},
+  "gates": {
+    "pytest": {
+      "tests": 1337,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "repeatability": {
+      "C01": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C02": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C03": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C04": {
+        "bit_identical": true,
+        "arrays": 13
+      },
+      "C05": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C06": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C07": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C08": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C09": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C10": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C11": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "C12": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "C13": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C14": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C15": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C16": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C17": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C18": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C19": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C20": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C21": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C22": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C23": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C24": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C30": {
+        "bit_identical": true,
+        "arrays": 16
+      },
+      "C31": {
+        "bit_identical": true,
+        "arrays": 13
+      },
+      "C32": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "LEGACY": {
+        "bit_identical": true,
+        "arrays": 45
+      },
+      "O05": {
+        "bit_identical": true,
+        "arrays": 42
+      },
+      "O08": {
+        "bit_identical": true,
+        "arrays": 7
+      },
+      "F04": {
+        "bit_identical": true,
+        "arrays": 13
+      },
+      "F11": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "F12": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "O01": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "O02": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "O03a": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "O03b": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "O04": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "O07": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "O06": {
+        "bit_identical": true,
+        "arrays": 56
+      }
+    },
+    "criteria": {
+      "C01": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.16087958848638e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C02": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 2.323951227191913e-13,
+          "limit": 8.8e-10,
+          "passed": true
+        }
+      ],
+      "C03": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 4.983222070331357e-14,
+          "limit": 4.6e-10,
+          "passed": true
+        }
+      ],
+      "C04": [
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0017016579983828474,
+          "limit": 0.0035,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.03803348826564909,
+          "limit": 0.077,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory",
+          "value": 3.7207515060239214e-16,
+          "limit": 4.6e-11,
+          "passed": true
+        }
+      ],
+      "C05": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.789433494973977e-14,
+          "limit": 1.8e-13,
+          "passed": true
+        }
+      ],
+      "C06": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 7.35235399804747e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C07": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.8333119097572857e-14,
+          "limit": 1.9e-13,
+          "passed": true
+        }
+      ],
+      "C08": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.7896616261916362e-14,
+          "limit": 1.8e-13,
+          "passed": true
+        }
+      ],
+      "C09": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 1.1720350484400818e-09,
+          "limit": 1.2e-08,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C10": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 1.1720350484400818e-09,
+          "limit": 1.2e-08,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C11": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.02563555761567038,
+          "limit": 0.052,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0007851674498030037,
+          "limit": 0.0016,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.021168965190825284,
+          "limit": 0.043,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 2.5026577937560134e-10,
+          "limit": 2.6e-09,
+          "passed": true
+        }
+      ],
+      "C12": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.02730326732117505,
+          "limit": 0.055,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0007900185122861059,
+          "limit": 0.0016,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.02122624261501943,
+          "limit": 0.043,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.8495829921742875e-10,
+          "limit": 1.9e-09,
+          "passed": true
+        }
+      ],
+      "C13": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 3.869372991174674e-14,
+          "limit": 2e-11,
+          "passed": true
+        }
+      ],
+      "C14": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 4.1595759655127746e-14,
+          "limit": 2e-11,
+          "passed": true
+        }
+      ],
+      "C15": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 4.20103353327536e-14,
+          "limit": 2.1e-11,
+          "passed": true
+        }
+      ],
+      "C16": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 6.717256000362792e-09,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C17": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 6.717270946867225e-09,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C18": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 6.717287987326384e-09,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C19": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 6.717270946867225e-09,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C20": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 3.3668842903103264e-11,
+          "limit": 3.4e-10,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C21": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 3.3668842903103264e-11,
+          "limit": 3.4e-10,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C22": [
+        {
+          "criterion": "conservation/closure",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 1.017844131958004e-11,
+          "limit": 1.1e-10,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C23": [
+        {
+          "criterion": "conservation/closure",
+          "value": 1.0477378964424132e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C24": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C30": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.8279576286028575e-14,
+          "limit": 1.1e-10,
+          "passed": true
+        }
+      ],
+      "C31": [
+        {
+          "criterion": "analytic/interface",
+          "value": 0.000414533072367591,
+          "limit": 0.00083,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.015217443059959868,
+          "limit": 0.031,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.1672329162125367e-14,
+          "limit": 2.5e-10,
+          "passed": true
+        }
+      ],
+      "C32": [
+        {
+          "criterion": "conservation/closure",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 1.299134596557501e-10,
+          "limit": 1.3e-09,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "LEGACY": [
+        {
+          "criterion": "conservation/inventory_composition_dependent_implicit",
+          "value": 3.48263876545914e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory_composition_dependent_lagged",
+          "value": 5.804397942431901e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory_phase_uniform",
+          "value": 1.16087958848638e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "O05": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.5358481682540948e-12,
+          "limit": 1.6e-11,
+          "passed": true
+        }
+      ],
+      "F04": [
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0070354710016330285,
+          "limit": 0.015,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.002771260643791157,
+          "limit": 0.0056,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.2520328817770494e-13,
+          "limit": 5.2e-09,
+          "passed": true
+        }
+      ],
+      "F11": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.02563555761567038,
+          "limit": 0.052,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.002188472287251775,
+          "limit": 0.0044,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.013733198006571357,
+          "limit": 0.028,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 2.506153412914764e-10,
+          "limit": 2.6e-09,
+          "passed": true
+        }
+      ],
+      "F12": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.02730326732117505,
+          "limit": 0.055,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0022445461740739914,
+          "limit": 0.0045,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.014037397089284198,
+          "limit": 0.029,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.85229598890565e-10,
+          "limit": 1.9e-09,
+          "passed": true
+        }
+      ],
+      "O01": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O02": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O03a": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O03b": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O04": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O07": [
+        {
+          "criterion": "conservation/inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O06": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ]
+    },
+    "contract_assertion_groups": "passed for C25, C26, C27, C28, C29",
+    "unlisted_cases_passed_public_tolerance": [
+      "C01",
+      "C02",
+      "C03",
+      "C04",
+      "C05",
+      "C06",
+      "C07",
+      "C08",
+      "C09",
+      "C10",
+      "C11",
+      "C12",
+      "C13",
+      "C14",
+      "C15",
+      "C16",
+      "C17",
+      "C18",
+      "C19",
+      "C20",
+      "C21",
+      "C22",
+      "C23",
+      "C24",
+      "C30",
+      "C31",
+      "C32",
+      "LEGACY",
+      "O05",
+      "O08",
+      "F04",
+      "F11",
+      "F12",
+      "O01",
+      "O02",
+      "O03a",
+      "O03b",
+      "O04",
+      "O07",
+      "O06",
+      "C26",
+      "C27",
+      "C28"
+    ]
+  },
+  "listed_cases": {
+    "C25": "differs",
+    "C29": "differs"
+  },
+  "deviations_vs_previous": {
+    "C25": {
+      "reference": "reference",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "contracts/assertion_groups": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/concData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/concData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/data/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/pData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/pData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 0.30099999999999993,
+          "max_relative_deviation": 0.7524999999999998,
+          "max_tolerance_fraction": 7341463414.634144
+        },
+        "model0/qData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/qData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/state/_u_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/state/_v_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/concData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/concData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/data/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/pData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/pData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/qData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/qData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/state/_u_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/state/_v_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/concData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/concData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/data/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/pData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/pData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/qData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/qData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/state/_u_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/state/_v_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/concData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/concData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/data/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/pData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/pData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/qData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/qData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/state/_u_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/state/_v_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/concData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/concData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/data/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/pData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/pData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 0.30099999999999993,
+          "max_relative_deviation": 0.7524999999999998,
+          "max_tolerance_fraction": 7341463414.634144
+        },
+        "model4/qData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/qData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/state/_u_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/state/_v_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "C29": {
+      "reference": "20261111T222849Z-5aedde7-1",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "contracts/assertion_groups": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/concData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/concData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/data/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/pData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/pData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/qData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/qData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/state/_u_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/state/_v_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/concData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/concData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/data/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/pData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/pData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 0.34099999999999997,
+          "max_relative_deviation": 0.8524999999999999,
+          "max_tolerance_fraction": 8317073170.731705
+        },
+        "model1/qData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/qData/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/state/_u_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/state/_v_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/data/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/etaData/values": {
+          "quantity": "eta",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/data/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/etaData/values": {
+          "quantity": "eta",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    }
+  },
+  "settings_captured": [],
+  "approval_id": "20261113T174227Z-3047510-1",
+  "directory": "reference-approved/20261113T174227Z-3047510-1",
+  "artifacts": {
+    "C25": {
+      "json": "a9968e8d6fa0383152b2a858fd61c66d4c17eba70a254fa15cca1fe5263380da",
+      "npz": "70fd8f5f98be5a2e1cb2b03b0dd1aca826d5cc20dc8363a7ecacbd56d4eda91a"
+    },
+    "C29": {
+      "json": "126a88eab01541eb0af2c1e3c67626ae2c557ad6a6c49abf830b22351451fe7b",
+      "npz": "fb5ec4ad977c9b000497c80dfb7bde5e741f45137b4178aa97c207b5226f1891"
+    }
+  },
+  "previous": {
+    "C25": "reference",
+    "C29": "20261111T222849Z-5aedde7-1"
+  }
+}
