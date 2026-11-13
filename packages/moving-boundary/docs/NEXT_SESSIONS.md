@@ -113,8 +113,12 @@ call sites migrated (generated files through the recorded `api_migration` transf
 Its binary reference changes are approved as `20261111T222849Z-5aedde7-1` (commit `34c02d2`;
 LEDGERS R08). R11 (restart loading) is fixed by rejection (2026-11-12, commit `6296bd9`):
 binary and two-phase ternary `fromDict`/`load` raise before changing state, output unchanged;
-quick exact 30/30 runs and 5 contracts bit-identical, full `tests/` 1176 passed. R09, R10 and
-R12 are open, and R13 (ternary/three-phase residual scales) is recorded.
+quick exact 30/30 runs and 5 contracts bit-identical, full `tests/` 1176 passed. R12
+(numerical controls) is fixed (2026-11-12, commit `cdb6c68`): ternary tolerances and active
+semi-log controls are validated before the host constructor and at the start of `solve`, and
+binary/two-phase reject negative, NaN and infinite durations before setup; exact full 40/40 runs
+and 5 contracts bit-identical (live O06), examples E01-E10 pass, full `tests/` 1284 passed.
+R09 and R10 are open, and R13 (ternary/three-phase residual scales) is recorded.
 
 ## Installed solving and research-owned generation
 

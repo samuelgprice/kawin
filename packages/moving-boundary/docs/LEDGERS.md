@@ -938,8 +938,8 @@ Historical output loading should have an explicit contract distinct from restart
 
 ### R12: ternary numerical controls lack consistent validation
 
-**Status:** open; medium priority. **Scope:** both ternary configuration validators;
-compare binary's existing checks and three-phase solve-argument checks.
+**Status:** fixed 2026-11-12 (resolution below). **Scope:** both ternary configuration
+validators; compare binary's existing checks and three-phase solve-argument checks.
 
 A diagnostic two-phase constructor accepted `residual_tolerance=inf`; its
 configuration validator also accepted `tolerance=inf`. Static inspection found no
@@ -952,6 +952,54 @@ parameters. Validate solve duration and min/max timestep fractions consistently
 across families. Add active-mode checks for zero, negative, NaN and infinity, and
 ensure invalid inputs fail before setup/state mutation or schedule allocation.
 The active semi-log failure variants still need dedicated reproduction tests.
+
+**Resolution (2026-11-12, commit `cdb6c68`).** A reproduction on the installed `f0c3201` wheel
+found the two-phase constructor accepting `tolerance` and `residual_tolerance` of 0, -1e-12,
+NaN and inf, and semi-log `semiLog_dt`/`semiLogT0` of 0, negative, NaN and inf (a negative
+spacing left only the final target; `semiLogT0<=0` was silently clamped to 1e-15). Binary and
+two-phase `solve` accepted negative and NaN durations after running setup; an infinite one fails
+after setup (binary) or never terminates in fixed mode (two-phase ternary, by inspection).
+
+| Control | Active when | Rule now | Where checked |
+|---|---|---|---|
+| `time_step` | always | > 0, finite (unchanged) | ternary families: shared controls check |
+| `tolerance` | residual fallback; implicit Picard rtol fallback | > 0, finite, **always** (invariant of the base tolerance) | shared controls check |
+| effective `residualTolerance` | always | > 0, finite | shared controls check |
+| `semiLog_dt`, `semiLogT0` | `dt_mode='semi_log'` | present, > 0, finite; ignored in fixed mode | shared controls check |
+| `simTime` | every `solve` | binary/two-phase: finite, >= 0 (0 = setup-only no-op); three-phase: finite, > 0 (unchanged) | top of `solve`, before setup |
+| `minDtFrac`/`maxDtFrac` | every `solve` | unchanged (already rejected before setup in all families) | top of `solve` |
+
+- *Timing.* `shared._validate_ternary_numerical_controls` only reads attributes. Both ternary
+  constructors call it before the host constructor; the configuration validators call it (it
+  replaces their `time_step`, `dt_mode` and semi-log presence checks, same messages); and
+  two-phase/three-phase `solve` call it after the duration and fraction checks, before
+  `_solveMinDtFrac`/`_solveMaxDtFrac`, `setup`, `setTimeInfo` or any schedule. A control
+  changed on an existing model is therefore refused by `solve` without changing it. General
+  failure recovery during setup remains R10.
+- *Unchanged.* Defaults, valid-input behavior, timestep semantics, final-remainder handling,
+  residual normalization (R13), the Picard zero-tolerance conventions, binary's validation
+  (including its fixed-mode semi-log checks) and the 1e-15 clamp (now reachable only for
+  positive `semiLogT0` below 1e-15).
+- *Tests.* `tests/test_illingworth_numerical_controls.py`. 84 defect tests failed before the
+  fix for the intended reason: 32 constructor cases (both ternary families, each control at 0,
+  negative, NaN, inf) reached the host-constructor sentinel; 40 changed-control cases (stored
+  `residualTolerance`, `tolerance`, `dtMode`+semi-log values; fresh and set-up models) and 12
+  invalid-duration cases (binary/two-phase, fresh and set-up) reached the `setup` sentinel.
+  After the fix each raises a `ValueError` naming the control, with time, bookkeeping,
+  schedule, accepted state and every history bytewise unchanged; after restoring every changed
+  setting (including `dtMode`) a continued solve matches an untouched model bit for bit.
+  `setup`/`setTimeInfo` sentinels keep unfixed infinite durations out of the solver loop.
+  24 preservation tests passed before and after: valid controls reach the host constructor,
+  unused semi-log values accepted in fixed mode, binary/two-phase `solve(0)` takes no step,
+  three-phase still rejects zero, invalid dt fractions still rejected before setup, and a
+  final partial step still ends at the requested time.
+- *Gates* (fresh installed targets, 2026-11-12): focused 224 passed (R12, R11, R07 and binary
+  tolerance files); full `tests/` 1284 passed, 5 skipped (C25-C29 comparisons outside an
+  acceptance run), 1 deselected (`slow`), 243 s; `acceptance.py full --tolerance exact`
+  40/40 runs and 5 contracts bit-identical against the selected references, live O06, 34
+  repeat pairs with no differences, 594 s (not `--record`ed); examples E01-E10 pass with 68
+  tests (E11 a pending fixture), 160 s. No configuration was newly rejected and no reference
+  approval was made.
 
 ### R13: ternary and three-phase residual scales are R-scaled by default (recorded during R08)
 
