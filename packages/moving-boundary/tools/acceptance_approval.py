@@ -7,6 +7,7 @@ effect per case::
       "description": "...",
       "in_effect": {"<case>": "<approval id>", ...},
       "approvals": {"<approval id>": {created_utc, package_commit, reason, tier, cases, directory,
+                                      [layout_correction,]
                                       artifacts: {case: {json, npz[, settings]}}, previous: {case: id | "reference"},
                                       report: {path, sha256}}},
       "history": [{"event": "approve" | "rollback", "approval_id", "utc", ...}, ...]
@@ -27,6 +28,13 @@ Promotion (``promote``) is crash-safe; the old manifest stays valid until the si
    manifest and ``os.replace`` it over the manifest. A
    ``PermissionError`` (OneDrive sync lock) is retried briefly; then the temp file is removed and
    ``ApprovalError`` is raised with the old manifest unchanged.
+
+Settings of a case an example maps to are normally a package-captured file stored and hashed
+with the approval. The one exception is ``CARRIED_FORWARD``: for O04/O05 (``PRIVATE_SETTINGS_CASES``,
+whose settings hashes exist only in the local ``private-inputs.json``) an approval made with a
+``layout_correction`` (``LAYOUT_RULES``) may record ``"settings": "private-carried-forward"``
+instead of a hash. No settings file is copied and no settings hash is written; example acceptance
+keeps using the adopted, privately hashed file. ``validate`` refuses the marker anywhere else.
 
 Approved folders and reports are immutable: nothing here overwrites or deletes them, and nothing
 writes under ``reference/``. ``rollback`` is one more atomic manifest replace that points the
@@ -58,6 +66,9 @@ DESCRIPTION = ("Approved reference artifacts (plan section 5). in_effect maps a 
                ".verification/acceptance/<directory> and are sha256-checked on every run; each approval's report "
                "(docs/approvals/<id>.json) is committed and sha256-checked. Written only by "
                "tools/acceptance.py approve; history keeps every approval and rollback.")
+CARRIED_FORWARD = "private-carried-forward"
+PRIVATE_SETTINGS_CASES = frozenset({"O04", "O05"})   # example settings hashed only in private-inputs.json
+LAYOUT_RULES = frozenset({"r09-data-tail"})          # acceptance_layout.RULES
 REPLACE_ATTEMPTS = 20
 REPLACE_DELAY = 0.25
 _os_replace = os.replace
@@ -81,18 +92,20 @@ def section_of(manifest):
 def expected_reference(case, manifest, output):
     """Where ``case``'s expected artifacts are, and which hashes ``compare`` must check first.
 
-    Returns ``dict(case, source, json, npz, sha256, settings, settings_sha256)``. ``source`` is
-    ``"reference"`` or the approval ID in effect. Not approved: ``output/reference/<case>.*``
-    exactly as before; ``sha256`` is the frozen O06/O08 pair from their manifest sections (and
-    ``None`` for other cases, which ``validate_expected`` checks against ``expected_artifacts``).
-    Approved: the approval's immutable folder, its recorded artifact hashes, and, for a case an
-    example maps to, the package-captured settings file and its hash.
+    Returns ``dict(case, source, json, npz, sha256, settings, settings_sha256,
+    settings_carried_forward)``. ``source`` is ``"reference"`` or the approval ID in effect. Not
+    approved: ``output/reference/<case>.*`` exactly as before; ``sha256`` is the frozen O06/O08
+    pair from their manifest sections (and ``None`` for other cases, which ``validate_expected``
+    checks against ``expected_artifacts``). Approved: the approval's immutable folder, its recorded
+    artifact hashes, and, for a case an example maps to, the package-captured settings file and its
+    hash, or ``settings_carried_forward=True`` (and no settings file) when the approval carried the
+    adopted private settings forward (``CARRIED_FORWARD``).
     """
     approval_id = ((section_of(manifest) or {}).get("in_effect") or {}).get(case)
     if approval_id is None:
         base = Path(output) / "reference"
         selected = dict(case=case, source="reference", json=base / f"{case}.json", npz=base / f"{case}.npz",
-                        sha256=None, settings=None, settings_sha256=None)
+                        sha256=None, settings=None, settings_sha256=None, settings_carried_forward=False)
         if case in FROZEN_SECTIONS:
             frozen = manifest[FROZEN_SECTIONS[case]]["reference_sha256"]
             assert set(frozen) == {case + ".json", case + ".npz"}, case + " requires its frozen fixture hashes"
@@ -101,10 +114,12 @@ def expected_reference(case, manifest, output):
     record = manifest[SECTION]["approvals"][approval_id]
     folder = Path(output) / record["directory"]
     hashes = record["artifacts"][case]
+    carried = hashes.get("settings") == CARRIED_FORWARD
+    stored = "settings" in hashes and not carried
     return dict(case=case, source=approval_id, json=folder / f"{case}.json", npz=folder / f"{case}.npz",
                 sha256={suffix: hashes[suffix] for suffix in SUFFIXES},
-                settings=folder / f"{case}.settings.json" if "settings" in hashes else None,
-                settings_sha256=hashes.get("settings"))
+                settings=folder / f"{case}.settings.json" if stored else None,
+                settings_sha256=hashes["settings"] if stored else None, settings_carried_forward=carried)
 
 
 def validate(manifest, cases, *, project, output):
@@ -115,7 +130,9 @@ def validate(manifest, cases, *, project, output):
     artifact hashes for exactly its cases, ``previous`` naming ``reference`` or a recorded approval,
     and its committed report present with the recorded sha256. ``in_effect`` must name recorded
     approvals that list the case. For each of ``cases`` in effect, the approved files must exist
-    with their recorded hashes. Absent section: nothing to check.
+    with their recorded hashes. A ``layout_correction`` must name a known rule; the
+    ``CARRIED_FORWARD`` settings marker is accepted only for O04/O05 of a layout-correction
+    approval. Absent section: nothing to check.
     """
     section = section_of(manifest)
     if section is None:
@@ -135,12 +152,17 @@ def validate(manifest, cases, *, project, output):
         unknown = sorted(set(listed) - set(expected))
         assert not unknown, where + ": no expected_artifacts entry for " + ", ".join(unknown)
         assert record.get("directory") == f"{APPROVED}/{approval_id}", where + ": directory must be " + f"{APPROVED}/{approval_id}"
+        layout = record.get("layout_correction")
+        assert layout is None or layout in LAYOUT_RULES, where + ": unknown layout_correction " + repr(layout)
         artifacts = record.get("artifacts")
         assert isinstance(artifacts, dict) and set(artifacts) == set(listed), where + ": artifact hashes must cover exactly its cases"
         for case, hashes in artifacts.items():
             assert set(SUFFIXES) <= set(hashes) <= set(SUFFIXES) | {"settings"}, f"{where}: {case} artifact hashes malformed"
-            assert all(isinstance(value, str) and HEX64.fullmatch(value) for value in hashes.values()), \
-                f"{where}: {case} artifact hashes malformed"
+            if hashes.get("settings") == CARRIED_FORWARD:
+                assert case in PRIVATE_SETTINGS_CASES and layout is not None, \
+                    f"{where}: {case} settings marker {CARRIED_FORWARD} is only for O04/O05 of a layout correction"
+            assert all(isinstance(value, str) and HEX64.fullmatch(value) for kind, value in hashes.items()
+                       if not (kind == "settings" and value == CARRIED_FORWARD)), f"{where}: {case} artifact hashes malformed"
         previous = record.get("previous")
         assert isinstance(previous, dict) and set(previous) == set(listed), where + ": previous must cover exactly its cases"
         assert all(value == "reference" or value in approvals for value in previous.values()), where + ": previous names an unknown approval"
@@ -161,6 +183,8 @@ def validate(manifest, cases, *, project, output):
             continue
         record = approvals[approval_id]
         for kind, digest in record["artifacts"][case].items():
+            if kind == "settings" and digest == CARRIED_FORWARD:
+                continue   # no file: the adopted settings stay in example_settings/, privately hashed
             name = f"{case}.settings.json" if kind == "settings" else f"{case}.{kind}"
             path = Path(output) / record["directory"] / name
             assert path.is_file(), f"{case}: approved artifact missing: {record['directory']}/{name}"
@@ -282,14 +306,17 @@ def _reload(path, kind):
         json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def promote(*, project, output, manifest_path, approval_id, record, files, report, fault=None):
+def promote(*, project, output, manifest_path, approval_id, record, files, report, fault=None, carried_forward=()):
     """Promote candidate files as approval ``approval_id`` (steps 1-4 in the module docstring).
 
-    ``record`` carries ``created_utc, package_commit, reason, tier, cases``; ``files`` maps each case
-    to ``{"json": path, "npz": path[, "settings": path]}``; ``report`` is the gate evidence, written
-    to ``docs/approvals/<id>.json`` with the artifact hashes and previous selection added.
-    ``fault(step)`` is a test hook called after each step ("written", "validated", "renamed",
-    "reported", "manifest-temp-written", "replaced"). Returns the new manifest.
+    ``record`` carries ``created_utc, package_commit, reason, tier, cases`` (and, for a layout
+    correction, ``layout_correction``); ``files`` maps each case to ``{"json": path, "npz": path[,
+    "settings": path]}``; ``report`` is the gate evidence, written to ``docs/approvals/<id>.json``
+    with the artifact hashes and previous selection added. ``carried_forward`` lists O04/O05 cases
+    of a layout correction whose adopted private settings stay in place: they get the
+    ``CARRIED_FORWARD`` marker instead of a settings file and hash. ``fault(step)`` is a test hook
+    called after each step ("written", "validated", "renamed", "reported", "manifest-temp-written",
+    "replaced"). Returns the new manifest.
     """
     fault = fault or (lambda step: None)
     project, output, manifest_path = Path(project), Path(output), Path(manifest_path)
@@ -298,6 +325,14 @@ def promote(*, project, output, manifest_path, approval_id, record, files, repor
     cases = list(record["cases"])
     if set(files) != set(cases):
         raise ApprovalError("candidate files must cover exactly the listed cases")
+    carried_forward = sorted(set(carried_forward))
+    if carried_forward:
+        if record.get("layout_correction") not in LAYOUT_RULES:
+            raise ApprovalError("settings can be carried forward only by a layout-correction approval")
+        bad = [case for case in carried_forward
+               if case not in cases or case not in PRIVATE_SETTINGS_CASES or "settings" in files[case]]
+        if bad:
+            raise ApprovalError("settings can be carried forward only for listed O04/O05 without a settings file: " + ", ".join(bad))
     manifest = json.loads(manifest_path.read_bytes().decode("utf-8"))
     if _taken(approval_id, manifest, project, output):
         raise ApprovalError("approval ID already used: " + approval_id)
@@ -306,6 +341,7 @@ def promote(*, project, output, manifest_path, approval_id, record, files, repor
     names = {case: {kind: (f"{case}.settings.json" if kind == "settings" else f"{case}.{kind}") for kind in sources}
              for case, sources in files.items()}
     hashes = {case: {kind: sha256(source) for kind, source in sources.items()} for case, sources in files.items()}
+    copied = copy.deepcopy(hashes)   # what step 2 checks; markers are added after it
     # 1. write into <id>.partial
     partial.mkdir(parents=True)
     for case, sources in files.items():
@@ -316,9 +352,11 @@ def promote(*, project, output, manifest_path, approval_id, record, files, repor
     for case, sources in files.items():
         for kind in sources:
             path = partial / names[case][kind]
-            if sha256(path) != hashes[case][kind]:
+            if sha256(path) != copied[case][kind]:
                 raise ApprovalError(f"{case}: copied {path.name} does not match the candidate")
             _reload(path, "npz" if kind == "npz" else "json")
+    for case in carried_forward:
+        hashes[case]["settings"] = CARRIED_FORWARD
     fault("validated")
     # 3. rename to <id>, then write the committed report
     _retry(_os_rename, partial, final, "rename " + partial.name)

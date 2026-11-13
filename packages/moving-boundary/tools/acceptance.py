@@ -18,6 +18,14 @@ package runs, ``approval_criteria``) and the public-tolerance comparison of ever
 reports the listed cases' deviations, and promotes their candidate artifacts crash-safely
 (``tools/acceptance_approval.py``). ``approve --rollback ID --reason ...`` points those cases back.
 Normal runs read whichever reference is in effect (``expected_reference``) and stay Git-free.
+
+Layout corrections (``tools/acceptance_layout.py``, rule ``r09-data-tail``) are an additional
+strict proof, never a relaxation. ``quick|full --layout-correction RULE`` is a non-promoting check:
+every gate of the normal run still runs (repeatability, contract assertion groups, the package
+tests), normal comparisons are recorded and reported, and each case and contract is classified
+against its selected reference as ``identical``, ``tail-removal`` or ``other``; any ``other``, or a
+case-versus-case settings difference of a corrected mapped case, fails the run. ``approve
+--layout-correction RULE --cases ...`` adopts such a correction (see ``approve``).
 """
 from pathlib import Path
 import argparse
@@ -71,6 +79,26 @@ def criteria_tools():
     """Load the approval correctness criteria (``approval_criteria`` measurements)."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("acceptance_criteria", Path(__file__).resolve().parent / "acceptance_criteria.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@lru_cache(maxsize=1)
+def layout_tools():
+    """Load the strict layout-correction rules (``acceptance_layout``; pure, no I/O)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("acceptance_layout", Path(__file__).resolve().parent / "acceptance_layout.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@lru_cache(maxsize=1)
+def settings_tools():
+    """Load the example-settings comparison (``example_settings.differences`` and ``BOOKKEEPING``)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("example_settings", Path(__file__).resolve().parent / "example_settings.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -682,9 +710,10 @@ def contract_case(case, state=None, *, tolerance="exact", require=()):
     """Entry point for package pytest: a contract's assertion groups, then its array comparison.
 
     ``contract_assertions`` always gates. The comparison with the expected reference gates too,
-    except for a contract listed in ``state["approval_candidates"]``, which only ``approve`` sets:
-    its differences are then recorded (``.deviations.json``) and reported, not failed. Normal runs
-    always clear that list.
+    except for a contract listed in ``state["approval_candidates"]``: its differences are then
+    recorded (``.deviations.json``) and reported, not failed. Only ``approve`` (its listed
+    contracts) and a ``--layout-correction`` run (every contract, each then gated by its strict
+    layout verdict instead) set that list; normal runs always clear it.
     """
     if state is None:
         state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8"))
@@ -890,6 +919,114 @@ def capture_example_settings(cases, state, directory):
     return captured
 
 
+def layout_verdict(case, rule, manifest=None, *, candidate=None):
+    """Strict layout classification of a package output against its previously selected reference.
+
+    The selected reference (``expected_reference``) is hash-checked first (its approved or frozen
+    hashes, else ``expected_artifacts``), both reports must have status ``PASS`` and the same stop
+    status, and the arrays are classified by ``acceptance_layout.classify`` with only O06's
+    documented metadata normalization. ``candidate`` defaults to ``package/<case>``. Also writes
+    the full verdict to ``<candidate>.layout.json`` (ignored local output). Returns the verdict.
+    """
+    import numpy as np
+    manifest = manifest or json.loads(MANIFEST.read_text(encoding="utf-8"))
+    selected = expected_reference(case, manifest)
+    digests = selected["sha256"] or manifest["expected_artifacts"]["cases"][case]
+    for suffix in ("json", "npz"):
+        assert hashlib.sha256(selected[suffix].read_bytes()).hexdigest() == digests[suffix], \
+            f"{case}: selected reference changed: {selected[suffix].name}"
+    candidate = Path(candidate) if candidate is not None else OUTPUT / "package" / case
+    expected = json.loads(selected["json"].read_text(encoding="utf-8"))
+    actual = json.loads(candidate.with_suffix(".json").read_text(encoding="utf-8"))
+    with np.load(selected["npz"], allow_pickle=False) as reference, np.load(candidate.with_suffix(".npz"), allow_pickle=False) as got:
+        result = layout_tools().classify(case, {key: reference[key] for key in reference.files},
+                                         {key: got[key] for key in got.files}, rule=rule, normalize=comparison_array)
+    if not (expected.get("status") == actual.get("status") == "PASS"):
+        result.update(verdict="other", problems=result["problems"] + ["status is not PASS on both sides"])
+    if expected.get("stop_status") != actual.get("stop_status"):
+        result.update(verdict="other", problems=result["problems"] + ["stop status differs"])
+    result["reference"] = selected["source"]
+    candidate.with_suffix(".layout.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return result
+
+
+def example_mapped_cases():
+    """``{case: first example}`` for every case an example maps to (``example_manifest.json``)."""
+    examples = json.loads((PROJECT / "tools/example_manifest.json").read_text(encoding="utf-8"))
+    mapped = {}
+    for example, entry in examples["cases"].items():
+        mapped.setdefault(entry["reference"], example)
+    return mapped
+
+
+def selected_case_settings(case, manifest):
+    """The settings file currently selected for a mapped ``case`` and the digest it must have.
+
+    Approved with captured settings: the approval's file and recorded hash. Otherwise (frozen
+    reference, or an approval that carried private settings forward): the adopted
+    ``example_settings/<case>.settings.json`` with its committed ``settings_sha256`` (C04, F04,
+    C16, C24, ...) or, for O04/O05, its digest in the local ``private-inputs.json``. Returns
+    ``(path, digest, private)``; ``digest`` is ``None`` when no hash is recorded.
+    """
+    selected = expected_reference(case, manifest)
+    if selected["source"] != "reference" and not selected["settings_carried_forward"]:
+        assert selected["settings"] is not None, f"{case}: approval {selected['source']} has no captured settings"
+        return selected["settings"], selected["settings_sha256"], False
+    path = OUTPUT / "example_settings" / f"{case}.settings.json"
+    examples = json.loads((PROJECT / "tools/example_manifest.json").read_text(encoding="utf-8"))
+    if path.name in examples["settings_sha256"]:
+        return path, examples["settings_sha256"][path.name], False
+    entry = (load_private_inputs() or {}).get("example_settings")
+    recorded = entry.get("sha256") if isinstance(entry, dict) else None
+    return path, (recorded or {}).get(path.name) if isinstance(recorded, dict) else None, True
+
+
+def check_case_settings(cases, state, directory, manifest):
+    """Case-versus-case settings proof for a layout correction (non-promoting; never relaxed).
+
+    For each mapped case of ``cases``: hash-validate the currently selected settings first
+    (``selected_case_settings``), capture fresh package settings through the definitions-based
+    ``--settings-only`` path (``capture_example_settings``) and require
+    ``example_settings.differences(selected, captured, allowed=())`` to be empty. Only the named
+    ``BOOKKEEPING`` attributes are skipped; the example-versus-case exceptions of
+    ``example_manifest.allowed_setting_differences`` do not apply. Captures of private cases
+    (O04/O05) are deleted again here, so no private capture outlives the check.
+
+    Returns ``(public, private, problems)``: ``{case: captured path}`` for public cases, the
+    private cases that passed, and the failures (empty when every mapped case matches).
+    """
+    settings = settings_tools()
+    mapped = sorted(set(cases) & set(example_mapped_cases()))
+    problems, public, private = [], {}, []
+    selections = {}
+    for case in mapped:
+        path, digest, is_private = selected_case_settings(case, manifest)
+        if not path.exists():
+            problems.append(f"{case}: selected settings missing: {path.name}")
+        elif digest is None:
+            problems.append(f"{case}: selected settings not hashed: {path.name}")
+        elif hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            problems.append(f"{case}: selected settings changed: {path.name}")
+        else:
+            selections[case] = (path, is_private)
+    if problems:
+        return public, private, problems
+    captured = capture_example_settings(mapped, state, directory)
+    try:
+        for case in mapped:
+            path, is_private = selections[case]
+            found = settings.differences(json.loads(path.read_text(encoding="utf-8")),
+                                         json.loads(Path(captured[case]).read_text(encoding="utf-8")), allowed=())
+            problems.extend(f"{case}: setting differs: {name}" for name in found)
+            if not found:
+                (private.append(case) if is_private else public.__setitem__(case, captured[case]))
+    finally:
+        for case in mapped:
+            if selections[case][1] and case in captured:
+                Path(captured[case]).unlink(missing_ok=True)
+    return public, private, problems
+
+
 def public_deviations(case, record):
     """Committed per-array deviations of a listed case against its previous expected artifact.
 
@@ -914,7 +1051,7 @@ def public_criteria(case, results):
     return [{key: item.get(key) for key in ("criterion", "value", "limit", "passed", "error") if key in item} for item in results]
 
 
-def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "three_phase")):
+def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "three_phase"), layout_correction=None):
     """Approve the listed cases' package outputs as their new expected references (plan §5).
 
     From a clean package tree (``repository_checks``), run the whole ``tier`` gate at public
@@ -933,13 +1070,27 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
     and promote crash-safely (``acceptance_approval.promote``) with a committed report in
     ``docs/approvals/``. O04/O05 cannot be listed: their example settings are hashed only in the
     private record. Returns 0 on success, 1 on a failed gate.
+
+    ``layout_correction`` (``--layout-correction RULE``, e.g. ``r09-data-tail``) adds a strict
+    structural proof on top of every gate above (``layout_verdict``, ``acceptance_layout``): each
+    listed case and contract must be an exact layout correction of its previously selected
+    reference (verdict ``tail-removal``; an unchanged listed case is refused), and each unlisted one
+    must be bit-identical (verdict ``identical``), so the listed set equals the differing set and no
+    numerical change is adopted under public tolerance. Mapped cases' settings are proven equal
+    case versus case (``check_case_settings``) before promotion; public ones store the fresh
+    capture as usual, and only in this mode may O04/O05 be listed, with their adopted private
+    settings carried forward (``acceptance_approval.CARRIED_FORWARD``). The committed report then
+    holds structural layout verdicts instead of numerical deviations.
     """
     import datetime
     tools = approval_tools()
     listed = list(dict.fromkeys(listed))
     assert listed, "approve needs at least one case"
+    assert layout_correction is None or layout_correction in layout_tools().RULES, \
+        "unknown layout correction: " + str(layout_correction)
     refused = sorted(set(listed) & PRIVATE_SETTINGS_CASES)
-    assert not refused, "approving " + ", ".join(refused) + " is not supported: their example settings are private"
+    assert not refused or layout_correction is not None, \
+        "approving " + ", ".join(refused) + " is not supported: their example settings are private"
     head = repository_checks()
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     full = tier == "full"
@@ -959,8 +1110,17 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
     state["approval_candidates"] = sorted(set(listed) & set(contracts))
     started, started_timestamp = time.monotonic(), time.time()
     limit = APPROVE_BUDGET_SECONDS[tier]
-    gates = dict(repeatability={}, criteria={}, unlisted_passed=[], listed={})
+    gates = dict(repeatability={}, criteria={}, unlisted_passed=[], listed={}, layout={})
     failure = None
+
+    def check_layout(case):
+        if layout_correction is None:
+            return
+        verdict = layout_verdict(case, layout_correction, manifest)
+        gates["layout"][case] = layout_tools().structural(verdict)
+        wanted = "tail-removal" if case in listed else "identical"
+        assert verdict["verdict"] == wanted, (case, "listed" if case in listed else "unlisted",
+                                              f"layout verdict {verdict['verdict']}, required {wanted}", verdict["problems"])
     try:
         if full:
             probe = worker("O06", "package", state=state, output=Path(tempfile.mkdtemp(prefix="tc-availability-", dir=OUTPUT)) / "O06",
@@ -990,6 +1150,7 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
                 assert not comparison.get("failed_keys"), (case, "unlisted case fails its public-tolerance comparison",
                                                            comparison["failed_keys"])
                 gates["unlisted_passed"].append(case)
+            check_layout(case)
             print(case, "listed" if case in listed else "unlisted", "PASS",
                   gates["listed"].get(case, ""), flush=True)
         remaining = limit - (time.monotonic() - started)
@@ -1005,6 +1166,13 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
             else:
                 assert record["passed"], (case, "unlisted contract fails its public-tolerance comparison")
                 gates["unlisted_passed"].append(case)
+            check_layout(case)
+        if layout_correction is not None:
+            missing = sorted(set(listed) - set(gates["layout"]))
+            assert not missing, ("listed but not run", missing)
+            settings_dir = tempfile.mkdtemp(prefix="approve-settings-", dir=OUTPUT)
+            layout_settings, carried, settings_problems = check_case_settings(listed, state, settings_dir, manifest)
+            assert not settings_problems, ("settings proof failed", settings_problems)
         for case in listed:
             for suffix in ("json", "npz"):
                 path = OUTPUT / "package" / f"{case}.{suffix}"
@@ -1017,12 +1185,15 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
         state["approval_candidates"] = []
         (OUTPUT / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
     summary = dict(action="approve", listed=listed, reason=reason, tier=tier, package_commit=head, skipped=skipped,
-                   gates=gates, failure=failure, elapsed_seconds=time.monotonic() - started)
+                   layout_correction=layout_correction, gates=gates, failure=failure, elapsed_seconds=time.monotonic() - started)
     if failure:
         (OUTPUT / "approve-summary.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
         print("APPROVE FAIL (nothing promoted):", failure, flush=True)
         return 1
-    settings = capture_example_settings(listed, state, tempfile.mkdtemp(prefix="approve-settings-", dir=OUTPUT))
+    if layout_correction is None:
+        settings, carried = capture_example_settings(listed, state, tempfile.mkdtemp(prefix="approve-settings-", dir=OUTPUT)), []
+    else:
+        settings = layout_settings
     files = {case: dict(json=OUTPUT / "package" / f"{case}.json", npz=OUTPUT / "package" / f"{case}.npz") for case in listed}
     for case, path in settings.items():
         files[case]["settings"] = path
@@ -1036,12 +1207,21 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
                                contract_assertion_groups="passed for " + ", ".join(contracts),
                                unlisted_cases_passed_public_tolerance=gates["unlisted_passed"]),
                     listed_cases=gates["listed"],
-                    deviations_vs_previous={case: public_deviations(case, record) for case, record in deviations.items()},
                     settings_captured=sorted(settings))
+    if layout_correction is None:
+        document["deviations_vs_previous"] = {case: public_deviations(case, record) for case, record in deviations.items()}
+    else:
+        document["gates"]["unlisted_cases_bit_identical"] = sorted(
+            case for case, verdict in gates["layout"].items() if verdict["verdict"] == "identical")
+        document.update(layout_correction=layout_correction,
+                        layout_verdicts={case: gates["layout"][case] for case in listed},
+                        settings_carried_forward=sorted(carried))
     approval_id = tools.new_id(manifest, project=PROJECT, output=OUTPUT, package_commit=head, now=now)
     record = dict(created_utc=created, package_commit=head, reason=reason, tier=tier, cases=listed)
+    if layout_correction is not None:
+        record["layout_correction"] = layout_correction
     tools.promote(project=PROJECT, output=OUTPUT, manifest_path=MANIFEST, approval_id=approval_id,
-                  record=record, files=files, report=document)
+                  record=record, files=files, report=document, carried_forward=carried)
     validate_expected(checked)
     summary.update(approval_id=approval_id)
     (OUTPUT / "approve-summary.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
@@ -1094,9 +1274,18 @@ def main(argv=None):
                         help="update committed reports after a passing complete public quick/full run")
     parser.add_argument("--reason", help="approve only: the LEDGERS entry justifying the approval or rollback")
     parser.add_argument("--rollback", metavar="APPROVAL_ID", help="approve only: point that approval's cases back")
+    parser.add_argument("--layout-correction", choices=("r09-data-tail",),
+                        help="complete quick/full: non-promoting strict layout proof against the selected references; "
+                             "approve --cases: adopt an exact layout correction (tools/acceptance_layout.py)")
     args = parser.parse_args(argv)
     if args.record and (args.action not in {"quick","full"} or args.tolerance != "public" or args.cases is not None):
         parser.error("--record requires a complete public-tolerance quick or full run")
+    if args.layout_correction is not None:
+        if args.action == "approve":
+            if args.rollback is not None:
+                parser.error("--layout-correction belongs to approve --cases, not --rollback")
+        elif args.action not in {"quick", "full"} or args.cases is not None or args.record or args.reuse_targets:
+            parser.error("--layout-correction needs a complete quick/full run (no --cases, --record or --reuse-targets) or approve --cases")
     if args.action == "approve":
         if args.step is not None or args.research is not None or args.tolerance != "public":
             parser.error("approve takes no historical step, no research checkout and only public tolerance")
@@ -1132,7 +1321,9 @@ def main(argv=None):
     if args.action == "approve":
         if args.rollback is not None:
             return rollback_approval(args.rollback, reason=args.reason)
-        return approve(args.cases, reason=args.reason, tier=args.tier, require=args.require_family)
+        return approve(args.cases, reason=args.reason, tier=args.tier, require=args.require_family,
+                       layout_correction=args.layout_correction)
+    layout = args.layout_correction
     manifest = validate_research_checkout(args.research) if historical else json.loads(MANIFEST.read_text(encoding="utf-8"))
     full = args.action == "full" or args.tier == "full"
     cases, skipped = normal_cases(manifest, full=full, explicit=args.cases)
@@ -1152,11 +1343,14 @@ def main(argv=None):
     started = time.monotonic()
     started_timestamp = time.time()
     results, failures = {}, []
+    layout_results, comparison_failures = {}, []
     state = None
     if not historical:
         state = json.loads((OUTPUT / "state.json").read_text(encoding="utf-8")) if args.reuse_targets else setup_targets()
         state["repeatability_directory"] = tempfile.mkdtemp(prefix="unseeded-", dir=OUTPUT)
-        state["approval_candidates"] = []   # normal runs gate every contract comparison
+        # Normal runs gate every contract comparison. A layout run reports the comparisons and
+        # gates every contract on its layout verdict instead (assertion groups still gate).
+        state["approval_candidates"] = list(manifest["contracts"]) if layout else []
     elif args.step == "capture" and args.cases != ["O06"]:
         # Historical prepare writes to scratch; it never overwrites the adopted C24 input.
         worker("prepare", "reference", research=args.research, prepare=True,
@@ -1210,6 +1404,16 @@ def main(argv=None):
             result = {"capture":True} if historical else compare(case, report,
                 tolerance=args.tolerance, require=args.require_family)
             results[case] = result
+            if layout:
+                verdict = layout_verdict(case, layout, manifest)
+                layout_results[case] = verdict
+                if result.get("failed_keys"):
+                    comparison_failures.append(case)
+                if verdict["verdict"] == "other":
+                    failures.append(case)
+                print(case, "LAYOUT", verdict["verdict"].upper(), "comparison", "FAIL" if result.get("failed_keys") else "PASS",
+                      *verdict["problems"], flush=True)
+                continue
             if result.get("failed_keys"):
                 failures.append(case)
             print(case, "FAIL" if result.get("failed_keys") else "PASS",
@@ -1227,6 +1431,35 @@ def main(argv=None):
         except Exception as exc:
             failures.append("pytest")
             print("PYTEST FAIL", str(exc)[-3000:], flush=True)
+    if layout and tests:
+        for case in manifest["contracts"]:
+            try:
+                written = OUTPUT / "package" / (case + ".npz")
+                assert written.exists() and written.stat().st_mtime >= started_timestamp, (case, "contract not run in this layout run")
+                record = json.loads((OUTPUT / "package" / (case + ".deviations.json")).read_text(encoding="utf-8"))
+                verdict = layout_verdict(case, layout, manifest)
+            except Exception as exc:
+                verdict = dict(case=case, verdict="other", corrected=[], problems=[str(exc)[-1000:]])
+                record = dict(passed=False)
+            layout_results[case] = verdict
+            if not record["passed"]:
+                comparison_failures.append(case)
+            if verdict["verdict"] == "other":
+                failures.append(case)
+            print(case, "LAYOUT", verdict["verdict"].upper(), "comparison", "PASS" if record["passed"] else "FAIL",
+                  *verdict["problems"], flush=True)
+    layout_settings_problems = []
+    if layout:
+        differing = [case for case, verdict in layout_results.items() if verdict["verdict"] == "tail-removal"]
+        try:
+            _, _, layout_settings_problems = check_case_settings(
+                differing, state, tempfile.mkdtemp(prefix="layout-settings-", dir=OUTPUT), manifest)
+        except Exception as exc:
+            layout_settings_problems = ["settings proof failed: " + str(exc)[-1000:]]
+        if layout_settings_problems:
+            failures.append("settings")
+        for problem in layout_settings_problems:
+            print("SETTINGS FAIL", problem, flush=True)
     for case, reason in skipped.items():
         print(case, "SKIPPED", reason, flush=True)
     if historical:
@@ -1245,7 +1478,19 @@ def main(argv=None):
         summary["unseeded_repeatability"] = {entry["case"]:entry for entry in checks}
         print(f"Unseeded package repeatability: {len(checks)} cases checked twice; "
               f"{sum(not entry['bit_identical'] for entry in checks)} differences", flush=True)
-    (OUTPUT / (("historical-capture" if historical else args.action) + "-summary.json")).write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    if layout:
+        by_verdict = {name: sorted(case for case, verdict in layout_results.items() if verdict["verdict"] == name)
+                      for name in ("identical", "tail-removal", "other")}
+        mapped = sorted(set(by_verdict["tail-removal"]) & set(example_mapped_cases()))
+        summary["layout"] = dict(rule=layout, verdicts=by_verdict, comparison_failures=sorted(comparison_failures),
+                                 settings_checked=mapped, settings_problems=layout_settings_problems,
+                                 cases={case: layout_tools().structural(verdict) for case, verdict in layout_results.items()})
+        (OUTPUT / (args.action + "-layout-summary.json")).write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+        print(f"Layout {layout}: identical {len(by_verdict['identical'])}; tail-removal {len(by_verdict['tail-removal'])} "
+              f"{by_verdict['tail-removal']}; other {by_verdict['other']}; settings checked {mapped}, "
+              f"{len(layout_settings_problems)} problems; normal comparison failures (reported, not gated here) "
+              f"{sorted(comparison_failures)}", flush=True)
+    (OUTPUT / (("historical-capture" if historical else args.action) + "-summary.json")).write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     print(f"{len(results)} cases, {len(failures)} failures, {summary['elapsed_seconds']:.2f}s", flush=True)
     return 1 if failures else 0
 

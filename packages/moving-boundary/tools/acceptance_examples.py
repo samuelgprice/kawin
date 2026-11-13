@@ -23,9 +23,13 @@ validated by ``acceptance.validate_research_checkout``): it re-records
 every mapped case into a fresh ``settings-capture-*`` scratch folder, never into
 ``example_settings/``, and reports whether each capture equals the adopted file byte for byte.
 
+``run --layout-correction RULE`` is a non-promoting structural check (``acceptance_layout``): an
+example whose arrays differ from its fixture passes only as an exact layout correction of it, with
+settings, key set and stop status checked as always (summary in ``examples-layout-summary.json``).
+
 Commands (through the conda wrapper, from any directory):
     python tools/acceptance_examples.py capture-settings --research <frozen research checkout>
-    python tools/acceptance_examples.py run [--tier quick|full] [--slow] [--reuse-targets]
+    python tools/acceptance_examples.py run [--tier quick|full] [--slow] [--reuse-targets] [--layout-correction r09-data-tail]
 """
 from pathlib import Path
 import argparse
@@ -136,19 +140,27 @@ def check_input_hash(tool, name, private):
     return tool.private_input_problems(name, private)
 
 
-def compare_case(tool, settings, case, entry, allowed, digests):
+def compare_case(tool, settings, case, entry, allowed, digests, layout=None, verdicts=None):
     """Compare one package run with its expected fixture; returns a list of failures.
 
     The fixture is ``tool.expected_reference(entry["reference"])``: ``reference/<case>`` with the
     adopted ``example_settings`` file, or, for an approved case, the approval's arrays with the
     package-captured settings stored and hashed beside them (an approved mapped case without
-    them fails).
+    them fails). An approval that carried O04/O05's private settings forward keeps the adopted
+    file, checked against its private digest in ``digests``.
+
+    ``layout`` (a rule of ``acceptance_layout``, e.g. ``r09-data-tail``) is a non-promoting
+    structural check: when arrays differ, the example output must be an exact layout correction of
+    the fixture (verdict ``tail-removal``); the key set, stop status and settings are checked as
+    always and any other array difference still fails. The verdict (``identical``,
+    ``tail-removal`` or ``other``) is stored in ``verdicts[case]`` when a dict is passed.
+    Returns ``(failures, seconds)``.
     """
     import numpy as np
     failures = []
     got = tool.OUTPUT / "package_examples" / case
     selected = tool.expected_reference(entry["reference"])
-    if selected["source"] == "reference":
+    if selected["source"] == "reference" or selected.get("settings_carried_forward"):
         recorded = tool.OUTPUT / "example_settings" / (entry["reference"] + ".settings.json")
     elif selected["settings"] is None:
         recorded = None
@@ -167,12 +179,21 @@ def compare_case(tool, settings, case, entry, allowed, digests):
     actual = json.loads(got.with_suffix(".json").read_text(encoding="utf-8"))
     if expected.get("stop_status") != actual["stop_status"]:
         failures.append("stop status differs")
+    verdict = None
     with np.load(selected["npz"]) as ref, np.load(got.with_suffix(".npz")) as new:
         if set(ref.files) != set(new.files):
             failures.append(f"key set differs: missing {sorted(set(ref.files) - set(new.files))}, extra {sorted(set(new.files) - set(ref.files))}")
-        for key in sorted(set(ref.files) & set(new.files)):
-            if not tool.bit_identical(ref[key], new[key]):
-                failures.append("array differs: " + key)
+        differing = [key for key in sorted(set(ref.files) & set(new.files)) if not tool.bit_identical(ref[key], new[key])]
+        if layout is not None and set(ref.files) == set(new.files):
+            result = tool.layout_tools().classify(entry["reference"], {key: ref[key] for key in ref.files},
+                                                  {key: new[key] for key in new.files}, rule=layout)
+            verdict = result["verdict"]
+            if verdict == "other":
+                failures.extend("layout: " + problem for problem in result["problems"])
+        else:
+            failures.extend("array differs: " + key for key in differing)
+    if verdicts is not None and verdict is not None:
+        verdicts[case] = verdict
     return failures, actual["elapsed_seconds"]
 
 
@@ -223,9 +244,13 @@ def main(argv=None):
     parser.add_argument("--reuse-targets", action="store_true", help="reuse the last installed wheel")
     parser.add_argument("--skip-tests", action="store_true")
     parser.add_argument("--research", type=Path, help="frozen research checkout; capture-settings (historical) only")
+    parser.add_argument("--layout-correction", choices=("r09-data-tail",),
+                        help="run only: accept an exact layout correction of the fixture arrays (non-promoting)")
     args = parser.parse_args(argv)
     if (args.action == "capture-settings") != (args.research is not None):
         parser.error("--research is required by capture-settings and not accepted by run")
+    if args.layout_correction is not None and args.action != "run":
+        parser.error("--layout-correction belongs to run")
     tool = load_tool()
     config = json.loads((PROJECT / ".verification/public-environment.json").read_text())
     executable = Path(config["python"])
@@ -253,6 +278,7 @@ def main(argv=None):
     started = time.monotonic()
     failures = {}
     skipped = {}
+    verdicts = {}
     private = private_inputs(tool)
     digests = settings_digests(manifest, private)
     for case, entry in manifest["cases"].items():
@@ -271,10 +297,12 @@ def main(argv=None):
             continue
         try:
             worker(tool, "package", case, state, tool.OUTPUT / "package_examples" / case, env_case=case)
-            found, seconds = compare_case(tool, settings, case, entry, manifest["allowed_setting_differences"].get(case, {}), digests)
+            found, seconds = compare_case(tool, settings, case, entry, manifest["allowed_setting_differences"].get(case, {}),
+                                          digests, layout=args.layout_correction, verdicts=verdicts)
         except Exception as exc:
             found, seconds = ["worker failed: " + str(exc)[-1500:]], 0.0
-        print(case, entry["example"], entry["config"], "vs", entry["reference"], "FAIL" if found else "PASS", f"{seconds:.1f}s", *found, flush=True)
+        print(case, entry["example"], entry["config"], "vs", entry["reference"], "FAIL" if found else "PASS", f"{seconds:.1f}s",
+              *([f"layout={verdicts[case]}"] if case in verdicts else []), *found, flush=True)
         if found:
             failures[case] = found
     tests = None
@@ -286,7 +314,11 @@ def main(argv=None):
     elapsed = time.monotonic() - started
     summary = dict(tier=args.tier, cases=len(manifest["cases"]), failures=failures, skipped=skipped, tests=tests,
                    pending_fixture=sorted(manifest["pending_fixture"]), elapsed_seconds=elapsed)
-    (tool.OUTPUT / "examples-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    if args.layout_correction is not None:
+        summary["layout"] = dict(rule=args.layout_correction, verdicts=verdicts)
+        print("Layout", args.layout_correction, "verdicts:", json.dumps(verdicts), flush=True)
+    name = "examples-layout-summary.json" if args.layout_correction else "examples-summary.json"
+    (tool.OUTPUT / name).write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"{len(failures)} failing cases, pending fixtures {sorted(manifest['pending_fixture'])}, {elapsed:.1f}s", flush=True)
     return 1 if failures else 0
 
