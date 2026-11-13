@@ -209,6 +209,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
       upper cap.
     - **Phases:** exactly two. A vanishing phase is not handled beyond the
       optional terminal thin-phase stop.
+    - **Output:** ``toDict``/``save`` write recorded histories only. Restart
+      is not supported: ``fromDict`` and ``load`` raise ``NotImplementedError``.
     """
 
     def __init__(
@@ -2890,8 +2892,34 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             )
         return drift
 
+    @classmethod
+    def fromDict(cls, data):
+        """
+        Rejects restart because output dictionaries do not hold the accepted state.
+
+        The inherited loader restored only the physical profiles and time, not
+        the transformed profiles, interface position and eta, previous-step
+        state or reference inventory (even where ``toDict`` records their
+        histories), so it left a model reporting the loaded time with its old
+        interface (LEDGERS R11). The inherited ``load`` calls this method, so it
+        also raises before any state changes. Read saved output with
+        ``numpy.load`` instead.
+        """
+        raise NotImplementedError(
+            "Ternary Illingworth output files cannot be restarted because deserialization "
+            "does not reconstruct the accepted state (interface position and eta, transformed "
+            "profiles, previous step and reference inventory); read saved output with numpy.load."
+        )
+
     def toDict(self):
-        """Converts solved ternary Illingworth histories to a restart dictionary."""
+        """
+        Converts solved ternary Illingworth histories to an output dictionary.
+
+        The dictionary holds the recorded physical profiles, interface position
+        and eta, inventory and, when recorded, the transformed p/q histories.
+        It is not a complete restart representation: ``fromDict`` and ``load``
+        raise (LEDGERS R11).
+        """
         data = super().toDict()
         data.update(
             {

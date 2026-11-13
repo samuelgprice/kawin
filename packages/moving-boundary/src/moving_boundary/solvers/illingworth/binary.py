@@ -409,6 +409,8 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     - **Phases:** exactly two, one interface. A vanishing phase is not handled;
       the step fails once the interface would leave the domain.
     - **Temperature:** may vary; the diffusivities follow it.
+    - **Output:** ``toDict``/``save`` write recorded histories only. Restart
+      is not supported: ``fromDict`` and ``load`` raise ``NotImplementedError``.
     """
 
     def __init__(
@@ -1787,6 +1789,24 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
                 stacklevel=2,
             )
         return drift
+
+    @classmethod
+    def fromDict(cls, data):
+        """
+        Rejects restart because output dictionaries do not hold the accepted state.
+
+        ``toDict`` and ``save`` write the recorded physical-profile history
+        only. The interface position, transformed profiles, previous-step state
+        and reference inventory are not stored, so the inherited loader left a
+        model reporting the loaded time with its old interface (LEDGERS R11).
+        The inherited ``load`` calls this method, so it also raises before any
+        state changes. Read saved output with ``numpy.load`` instead.
+        """
+        raise NotImplementedError(
+            "Binary Illingworth output files cannot be restarted because deserialization "
+            "does not reconstruct the accepted state (interface position, transformed profiles, "
+            "previous step and reference inventory); read saved output with numpy.load."
+        )
 
     def checkMassIntegral(self, p, q, s):
         """
