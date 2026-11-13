@@ -33,6 +33,7 @@ from moving_boundary.solvers.illingworth.shared import (
     _profile_within_floor_bounds,
     _project_shift_roundoff_to_floor,
     _validate_eta_bounds,
+    _validate_ternary_numerical_controls,
     _validate_ternary_diffusivity_matrix,
     _validate_ternary_diffusivity_stack,
 )
@@ -311,6 +312,11 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
       (``kawin/tests/test_illingworth_ternary_three_phase_similarity.py``).
       Use fine interface grids or Richardson extrapolation for benchmark
       numbers.
+    - **Numerical controls:** ``time_step``, ``tolerance`` and the effective
+      ``residual_tolerance`` must be positive and finite, as must
+      ``semiLog_dt`` and ``semiLogT0`` when ``dt_mode='semi_log'`` (they are
+      ignored in fixed mode). They are checked before the host constructor
+      runs and again at the start of every ``solve``.
     """
 
     def __init__(
@@ -473,6 +479,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         # Reference seam: False forces the NumPy interval assembly (tests compare both).
         self._useCompiledIntervalAssembly = True
 
+        _validate_ternary_numerical_controls(self)
         super().__init__(
             mesh=mesh,
             elements=elements,
@@ -532,12 +539,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         validate_interstitial_element_order(self.allElements)
         if self.geometry != "planar":
             raise NotImplementedError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel currently implements only planar geometry.")
-        if not np.isfinite(self.timeStep) or self.timeStep <= 0.0:
-            raise ValueError("time_step must be a positive finite value.")
-        if self.dtMode not in {"fixed", "semi_log"}:
-            raise ValueError("dt_mode must be 'fixed' or 'semi_log'.")
-        if self.dtMode == "semi_log" and ((self.semiLog_dt is None) or (self.semiLogT0 is None)):
-            raise ValueError("semiLog_dt and semiLogT0 must be specified when dt_mode is 'semi_log'.")
+        _validate_ternary_numerical_controls(self)
         if self.initialEtaMethod != "instantaneous_balance":
             raise ValueError("initial_eta_method must be 'instantaneous_balance'.")
         if self.initialEtaRootXtol is not None and not (np.isfinite(self.initialEtaRootXtol) and self.initialEtaRootXtol > 0.0):
@@ -1461,7 +1463,15 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             )
 
     def solve(self, simTime, iterator=explicitEulerIterator, verbose=False, vIt=10, minDtFrac=1e-8, maxDtFrac=1):
-        """Advances by ``simTime`` through an Euler wrapper without reinitializing accepted state."""
+        """
+        Advances by ``simTime`` through an Euler wrapper without reinitializing accepted state.
+
+        ``simTime`` must be positive and finite. The duration, the timestep
+        fractions and the stored numerical controls
+        (``_validate_ternary_numerical_controls``) are checked before any
+        bookkeeping, setup or schedule allocation, so a control changed after
+        construction is refused without modifying the model.
+        """
         if iterator is not explicitEulerIterator:
             raise ValueError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel supports only explicitEulerIterator.")
         if not np.isfinite(simTime) or simTime <= 0.0:
@@ -1470,6 +1480,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             raise ValueError("minDtFrac must be nonnegative and maxDtFrac must be positive and finite.")
         if minDtFrac > maxDtFrac:
             raise ValueError("minDtFrac cannot exceed maxDtFrac for the implicit three-phase solver.")
+        _validate_ternary_numerical_controls(self)
         self._solveMinDtFrac = float(minDtFrac)
         self._solveMaxDtFrac = float(maxDtFrac)
         return super().solve(simTime, iterator=iterator, verbose=verbose, vIt=vIt, minDtFrac=minDtFrac, maxDtFrac=maxDtFrac)

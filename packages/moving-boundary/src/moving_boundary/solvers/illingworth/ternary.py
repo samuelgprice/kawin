@@ -75,6 +75,7 @@ from moving_boundary.solvers.illingworth.shared import (
     _outer_timestep_limits,
     _pending_step_mismatches,
     _validate_outer_dt_fractions,
+    _validate_ternary_numerical_controls,
 )
 
 class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
@@ -211,6 +212,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
       optional terminal thin-phase stop.
     - **Output:** ``toDict``/``save`` write recorded histories only. Restart
       is not supported: ``fromDict`` and ``load`` raise ``NotImplementedError``.
+    - **Numerical controls:** ``time_step``, ``tolerance`` and the effective
+      ``residual_tolerance`` must be positive and finite, as must
+      ``semiLog_dt`` and ``semiLogT0`` when ``dt_mode='semi_log'`` (they are
+      ignored in fixed mode). They are checked before the host constructor
+      runs and again at the start of every ``solve``.
     """
 
     def __init__(
@@ -365,6 +371,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._D_left = None
         self._D_right = None
 
+        _validate_ternary_numerical_controls(self)
         super().__init__(
             mesh=mesh,
             elements=elements,
@@ -426,10 +433,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             raise ValueError("MovingBoundaryIllingworthTernaryFD1DModel requires exactly two explicit phases.")
         if self.geometry != "planar":
             raise NotImplementedError("MovingBoundaryIllingworthTernaryFD1DModel currently implements only planar geometry.")
-        if not np.isfinite(self.timeStep) or self.timeStep <= 0:
-            raise ValueError("time_step must be a positive finite value.")
-        if self.dtMode not in {"fixed", "semi_log"}:
-            raise ValueError("dt_mode must be 'fixed' or 'semi_log'.")
+        _validate_ternary_numerical_controls(self)
         self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(self.bulkDiffusivityMode)
         if self.bulkPicardRtol is not None and (not np.isfinite(self.bulkPicardRtol) or self.bulkPicardRtol <= 0.0):
             raise ValueError("bulk_picard_rtol must be positive when specified.")
@@ -439,8 +443,6 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             raise ValueError("bulk_picard_max_iterations must be at least 1.")
         if not np.isfinite(self.bulkPicardRelaxation) or not (0.0 < self.bulkPicardRelaxation <= 1.0):
             raise ValueError("bulk_picard_relaxation must be in the interval (0, 1].")
-        if self.dtMode == "semi_log" and ((self.semiLog_dt is None) or (self.semiLogT0 is None)):
-            raise ValueError("semiLog_dt and semiLogT0 must be specified when dt_mode is 'semi_log'.")
         _validate_eta_bounds(self.interfaceEquilibrium)
         if self.initialEtaMethod != "instantaneous_balance":
             raise ValueError("initial_eta_method must be 'instantaneous_balance'.")
@@ -1225,10 +1227,19 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         step below ``minDtFrac * simTime`` raises ``ValueError``; only the exact
         final remainder may be shorter. ``postProcess`` refuses to commit an
         outer update that does not reproduce the converged candidate.
+
+        ``simTime`` must be finite and nonnegative; ``simTime=0`` runs setup and
+        takes no step. The duration, the timestep fractions and the stored
+        numerical controls (``_validate_ternary_numerical_controls``) are checked
+        before any bookkeeping, setup or schedule allocation, so a control
+        changed after construction is refused without modifying the model.
         """
         if iterator is not explicitEulerIterator:
             raise ValueError("MovingBoundaryIllingworthTernaryFD1DModel supports only explicitEulerIterator.")
+        if not np.isfinite(simTime) or simTime < 0.0:
+            raise ValueError("simTime must be finite and nonnegative.")
         _validate_outer_dt_fractions(minDtFrac, maxDtFrac, "MovingBoundaryIllingworthTernaryFD1DModel")
+        _validate_ternary_numerical_controls(self)
         self._solveMinDtFrac = float(minDtFrac)
         self._solveMaxDtFrac = float(maxDtFrac)
         return super().solve(simTime, iterator=iterator, verbose=verbose, vIt=vIt, minDtFrac=minDtFrac, maxDtFrac=maxDtFrac)

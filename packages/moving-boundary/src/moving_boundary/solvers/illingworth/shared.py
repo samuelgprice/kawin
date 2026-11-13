@@ -94,6 +94,39 @@ def _validate_outer_dt_fractions(min_dt_frac, max_dt_frac, model_name):
         raise ValueError(f"minDtFrac cannot exceed maxDtFrac for {model_name}.")
 
 
+def _validate_ternary_numerical_controls(model):
+    """
+    Rejects invalid timestep and convergence controls of a ternary Illingworth model (LEDGERS R12).
+
+    Reads only ``timeStep``, ``dtMode``, ``semiLog_dt``, ``semiLogT0``,
+    ``tolerance`` and the stored effective ``residualTolerance``; it changes
+    nothing, so the two-phase and three-phase models call it before the host
+    constructor, inside their configuration validators and at the start of
+    ``solve`` (before any bookkeeping, setup or schedule allocation).
+
+    ``time_step``, ``tolerance`` and ``residual_tolerance`` must always be
+    positive and finite; ``tolerance`` is checked even when an explicit residual
+    tolerance and Picard rtol leave it unused. The semi-log spacing and first
+    target are checked only when ``dt_mode='semi_log'``: unused values in fixed
+    mode are ignored. Picard tolerances keep their own checks.
+    """
+    if not np.isfinite(model.timeStep) or model.timeStep <= 0:
+        raise ValueError("time_step must be a positive finite value.")
+    if model.dtMode not in {"fixed", "semi_log"}:
+        raise ValueError("dt_mode must be 'fixed' or 'semi_log'.")
+    if not np.isfinite(model.tolerance) or model.tolerance <= 0.0:
+        raise ValueError("tolerance must be a positive finite value.")
+    if not np.isfinite(model.residualTolerance) or model.residualTolerance <= 0.0:
+        raise ValueError("residual_tolerance must be a positive finite value.")
+    if model.dtMode == "semi_log":
+        if model.semiLog_dt is None or model.semiLogT0 is None:
+            raise ValueError("semiLog_dt and semiLogT0 must be specified when dt_mode is 'semi_log'.")
+        if not np.isfinite(model.semiLog_dt) or model.semiLog_dt <= 0.0:
+            raise ValueError("semiLog_dt must be a positive finite value.")
+        if not np.isfinite(model.semiLogT0) or model.semiLogT0 <= 0.0:
+            raise ValueError("semiLogT0 must be a positive finite value.")
+
+
 def _outer_timestep_limits(min_dt_frac, max_dt_frac, initial_time, final_time):
     """
     Returns the outer wrapper's ``(minimum, maximum)`` timestep for one ``solve``.

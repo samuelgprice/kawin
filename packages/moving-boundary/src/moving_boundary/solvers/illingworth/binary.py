@@ -1049,9 +1049,14 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         ``minDtFrac`` when ``max_step_retries > 1``); only the exact final
         remainder may be shorter. ``postProcess`` refuses to commit an outer
         update that does not reproduce the converged candidate.
+
+        ``simTime`` must be finite and nonnegative and is checked before setup;
+        ``simTime=0`` runs setup and takes no step.
         """
         if iterator is not explicitEulerIterator:
             raise ValueError("MovingBoundaryIllingworthFD1DModel supports only explicitEulerIterator.")
+        if not np.isfinite(simTime) or simTime < 0.0:
+            raise ValueError("simTime must be finite and nonnegative.")
         _validate_outer_dt_fractions(minDtFrac, maxDtFrac, "MovingBoundaryIllingworthFD1DModel")
         self._solveMinDtFrac = float(minDtFrac)
         self._solveMaxDtFrac = float(maxDtFrac)
