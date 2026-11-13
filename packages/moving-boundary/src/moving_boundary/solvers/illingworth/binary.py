@@ -27,9 +27,12 @@ from moving_boundary.solvers.illingworth.shared import (
     _all_or_nothing,
     _check_trial_dt_against_outer_minimum,
     _coerce_bulk_diffusivity_mode,
+    _finalize_histories_atomically,
     _magnitude,
     _outer_timestep_limits,
     _pending_step_mismatches,
+    _record_histories_atomically,
+    _restore_history_snapshots,
     _validate_outer_dt_fractions,
 )
 from moving_boundary.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D
@@ -1764,6 +1767,18 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         time and stops the solve. Once checked, the candidate is consumed and
         ``_awaitingFreshCandidate`` stays set until the commit completes, so an
         update whose commit raised part-way cannot be resubmitted unchecked.
+
+        Prepare, then commit (LEDGERS R10b): the interface is clipped and
+        checked, the interface-node overrides applied and the physical profile
+        and inventory computed without touching model state; then the history
+        records, accepted state, ``currentTime`` and ``updateCoupledModels`` run
+        as one unit. If anything raises, time, accepted state and every history
+        (rows, capacity, bookkeeping) are unchanged, the candidate stays
+        consumed and commits stay refused until ``getdXdt`` solves a new one,
+        which reproduces an untouched model's step. A failing coupled model
+        rolls back this model only: coupled models updated before it keep their
+        update, so recovery matches an untouched run only if the caller
+        restores or discards that external state before retrying.
         """
         self._verify_pending_candidate(time, x)
         if self._nearFinalNoop:
@@ -1773,7 +1788,6 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr], True
         self._pendingCandidate = None
         self._awaitingFreshCandidate = True
-        GenericModel.postProcess(self, time, x)
         p = np.asarray(x[0], dtype=np.float64).reshape(-1).copy()
         q = np.asarray(x[1], dtype=np.float64).reshape(-1).copy()
         s = self._clipInterfacePosition(float(x[2]), strict=True)
@@ -1781,19 +1795,24 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         q[0] = self.interfaceCompositions[1]
 
         physical = self._reconstruct_physical_profile(p, q, s)[:, np.newaxis]
-        self.data.record(time, physical)
-        self.interfaceData.record(time, s)
+        records = [(self.data, physical), (self.interfaceData, s)]
         if self.recordPqData:
-            self.pData.record(time, p)
-            self.qData.record(time, q)
+            records.extend([(self.pData, p), (self.qData, q)])
+        records.append((self.concData, self.checkMassIntegral(p, q, s)))
 
-        self.concData.record(time, self.checkMassIntegral(p, q, s))
-
-        self._s_old = float(self._s_curr)
-        self._p_curr = p
-        self._q_curr = q
-        self._s_curr = float(s)
-        self.updateCoupledModels()
+        previous = (self.currentTime, self._s_old, self._p_curr, self._q_curr, self._s_curr)
+        snapshots = _record_histories_atomically(time, records)
+        try:
+            GenericModel.postProcess(self, time, x)
+            self._s_old = float(self._s_curr)
+            self._p_curr = p
+            self._q_curr = q
+            self._s_curr = float(s)
+            self.updateCoupledModels()
+        except BaseException:
+            _restore_history_snapshots(snapshots)
+            self.currentTime, self._s_old, self._p_curr, self._q_curr, self._s_curr = previous
+            raise
         self._awaitingFreshCandidate = False
         return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr], False
 
@@ -1806,14 +1825,19 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         removed the interval-1 duplicate ``data`` row). All histories share their
         recorded times; ``data`` row 0 still holds the profile before the
         transformed-state reconstruction of ``setup``.
+
+        All histories are finalized as one unit (``_finalize_histories_atomically``,
+        LEDGERS R10b): if one raises, every history is restored to its state
+        before the call and the exception re-raised; calling ``postSolve`` again
+        is the retry. A continued solve without that retry records as if the
+        first solve had never been finalized.
         """
-        self.data.finalize()
-        self.interfaceData.finalize()
-        self.concData.finalize()
+        histories = [self.data, self.interfaceData, self.concData]
         if self.pData is not None:
-            self.pData.finalize()
+            histories.append(self.pData)
         if self.qData is not None:
-            self.qData.finalize()
+            histories.append(self.qData)
+        _finalize_histories_atomically(histories)
 
     def getInterfacePosition(self, time=None):
         """Returns the current accepted interface position, or the recorded one at ``time`` (interpolated)."""

@@ -169,6 +169,163 @@ def _all_or_nothing(skip_when_setup=False):
     return decorate
 
 
+# Atomic history recording (LEDGERS R10b). Moved from the three-phase model
+# with unchanged behavior and shared by all three families.
+
+
+def _history_value_shape(history):
+    """Shape of one recorded value: ``shape`` (shared arrays), ``yShape`` (``MeshData``), ``(n_components,)`` (binary p/q), else scalar."""
+    if hasattr(history, "shape"):
+        return tuple(history.shape)
+    if hasattr(history, "yShape"):
+        return tuple(history.yShape)
+    if hasattr(history, "n_components"):
+        return (int(history.n_components),)
+    return ()
+
+
+def _history_record_target(history):
+    """Returns the row a regular history record will write (shared R09 row rule), or ``None``."""
+    return _history_row_target(history)
+
+
+def _ensure_history_record_capacity(history, target):
+    """
+    Ensures one history target row exists before an atomic record sequence.
+
+    Grows by ``max(batchSize, missing rows)`` zero rows, which for an
+    append-only target is exactly the growth ``record`` itself would apply, so
+    recorded values and capacity are unchanged.
+    """
+    if target is None or target < history._time.shape[0]:
+        return
+    growth = max(int(getattr(history, "batchSize", 1000)), target + 1 - history._time.shape[0])
+    history._time = np.pad(history._time, (0, growth))
+    history._y = np.pad(history._y, ((0, growth), *[(0, 0) for _ in range(history._y.ndim - 1)]))
+
+
+def _record_histories_atomically(time, records):
+    """
+    Records ``(history, value)`` pairs at ``time`` as one unit and returns the snapshots.
+
+    Value shapes are checked before anything changes. Each history's
+    bookkeeping (``N``, cadence counter, row counter, stored-row flag,
+    ``currentY``/``currentTime``), the row it is about to write and its
+    capacity are snapshotted; if growing capacity or any ``record`` raises,
+    every history is restored (``_restore_history_snapshots``) and the
+    exception re-raised. The caller passes the returned snapshots to
+    ``_restore_history_snapshots`` if a later part of its commit fails.
+    """
+    prepared = []
+    for history, value in records:
+        values = np.asarray(value, dtype=np.float64)
+        expected_shape = _history_value_shape(history)
+        if values.shape != tuple(expected_shape):
+            raise ValueError(f"Expected history value with shape {tuple(expected_shape)}, got {values.shape}.")
+        target = _history_record_target(history)
+        prepared.append((history, value, target))
+
+    snapshots = []
+    for history, _, target in prepared:
+        old_capacity = int(history._time.shape[0])
+        row = None if target is None or target >= old_capacity else history._y[target].copy()
+        row_time = None if target is None or target >= old_capacity else float(history._time[target])
+        current_y = np.asarray(history.currentY).copy() if np.ndim(history.currentY) else float(history.currentY)
+        snapshots.append(
+            (
+                history,
+                target,
+                row,
+                row_time,
+                history.currentIndex,
+                history.N,
+                current_y,
+                history.currentTime,
+                old_capacity,
+                history._rowCount,
+                history._lastRecordStored,
+            )
+        )
+    try:
+        for history, _, target in prepared:
+            _ensure_history_record_capacity(history, target)
+        for history, value, _ in prepared:
+            history.record(time, value)
+    except BaseException:
+        _restore_history_snapshots(snapshots)
+        raise
+    return snapshots
+
+
+def _restore_history_snapshots(snapshots):
+    """Restores metadata (including the row counter and stored-row flag), written rows, and capacity."""
+    for (
+        history, target, row, row_time, current_index, index, current_y, current_time, old_capacity,
+        row_count, last_record_stored,
+    ) in snapshots:
+        if target is not None and target < old_capacity:
+            history._y[target] = row
+            history._time[target] = row_time
+        if history._time.shape[0] != old_capacity:
+            history._time = history._time[:old_capacity].copy()
+            history._y = history._y[:old_capacity].copy()
+        history.currentIndex = current_index
+        history.N = index
+        history.currentY = current_y
+        history.currentTime = current_time
+        history._rowCount = row_count
+        history._lastRecordStored = last_record_stored
+
+
+def _finalize_histories_atomically(histories):
+    """
+    Finalizes every history (``history.finalize()``, the shared R09 row rule) as one unit.
+
+    Targeted snapshot per history, no whole-history copy: the original
+    ``_y``/``_time`` arrays (finalize truncates by rebinding, so keeping them
+    restores the capacity), a copy of the row a forced final record would
+    write, ``N``, the cadence counter, the row counter, the stored-row flag and
+    the ``currentY``/``currentTime`` bindings. If any finalization raises,
+    every history is restored and the exception re-raised; calling the
+    finalization again is the retry and is idempotent once it succeeds.
+    """
+    snapshots = []
+    for history in histories:
+        target = None
+        if history.recordInterval <= 0 or not history._lastRecordStored:
+            target = _history_row_target(history, force=True)
+        y, times = history._y, history._time
+        inside = target is not None and target < times.shape[0]
+        snapshots.append(
+            (
+                history, y, times, target if inside else None,
+                y[target].copy() if inside else None, float(times[target]) if inside else None,
+                history.N, history.currentIndex, history._rowCount, history._lastRecordStored,
+                history.currentY, history.currentTime,
+            )
+        )
+    try:
+        for history in histories:
+            history.finalize()
+    except BaseException:
+        for (
+            history, y, times, target, row, row_time, index, current_index, row_count, last_record_stored,
+            current_y, current_time,
+        ) in snapshots:
+            if target is not None:
+                y[target] = row
+                times[target] = row_time
+            history._y = y
+            history._time = times
+            history.N = index
+            history.currentIndex = current_index
+            history._rowCount = row_count
+            history._lastRecordStored = last_record_stored
+            history.currentY = current_y
+            history.currentTime = current_time
+        raise
+
+
 def _validate_outer_dt_fractions(min_dt_frac, max_dt_frac, model_name):
     """Rejects outer timestep fractions that no implicit step can satisfy."""
     if not np.isfinite(min_dt_frac) or not np.isfinite(max_dt_frac) or min_dt_frac < 0.0 or max_dt_frac <= 0.0:

@@ -72,6 +72,9 @@ from moving_boundary.solvers.illingworth.shared import (
     _PendingImplicitStep,
     _all_or_nothing,
     _check_trial_dt_against_outer_minimum,
+    _finalize_histories_atomically,
+    _record_histories_atomically,
+    _restore_history_snapshots,
     _magnitude,
     _outer_timestep_limits,
     _pending_step_mismatches,
@@ -2438,6 +2441,11 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
 
         Also stages the converged state in ``_pendingCandidate`` (start time
         ``start_time``, default ``currentTime``) for ``postProcess`` to verify.
+        ``_currdt``, ``_lastStepRetries``, ``_lastInterfaceCompositions`` and the
+        interface D values are last-trial diagnostics and may describe a
+        proposal that is later rejected. ``_lastAcceptedDt`` (which sets the next
+        extrapolated Newton start) is accepted state and is set only when
+        ``postProcess`` commits the candidate (LEDGERS R10b, D7).
         """
         p_new, q_new, s_new, eta_new, c_left_new, c_right_new, D_left, D_right = result
         p_committed = np.asarray(p_new, dtype=np.float64).reshape((-1, 2)).copy()
@@ -2456,7 +2464,6 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             ),
         )
         self._currdt = float(trial_dt)
-        self._lastAcceptedDt = float(trial_dt)
         self._lastStepRetries = int(retry)
         # Staged only: getdXdt proposes the step; postProcess commits it and
         # adds these to the cumulative projection totals.
@@ -2707,6 +2714,21 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         time and stops the solve. Once checked, the candidate is consumed and
         ``_awaitingFreshCandidate`` stays set until the commit completes, so an
         update whose commit raised part-way cannot be resubmitted unchecked.
+
+        Prepare, then commit (LEDGERS R10b): the interface is clipped and
+        checked, the interface-node overrides applied, the transformed profiles
+        checked against the composition bounds and the physical profile and
+        inventory computed without touching model state; then the history
+        records, accepted state, ``currentTime``, the cumulative projection
+        totals, ``_lastAcceptedDt`` (the candidate's dt, accepted state per D7)
+        and ``updateCoupledModels`` run as one unit. If anything raises, all of
+        these are unchanged, the candidate and its staged projection totals and
+        terminal thin-phase stop stay consumed, and commits stay refused until
+        ``getdXdt`` solves a new candidate, which reproduces an untouched
+        model's step. A failing coupled model rolls back this model only:
+        coupled models updated before it keep their update, so recovery matches
+        an untouched run only if the caller restores or discards that external
+        state before retrying.
         """
         self._verify_pending_candidate(time, x)
         if self._nearFinalNoop:
@@ -2715,36 +2737,57 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             self._pendingStepProjection = None
             self._pendingCandidate = None
             return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr, self._eta_curr], True
+        pending = self._pendingCandidate
         self._pendingCandidate = None
         self._awaitingFreshCandidate = True
-        GenericModel.postProcess(self, time, x)
-        p = np.asarray(x[0], dtype=np.float64).reshape((-1, 2)).copy()
-        q = np.asarray(x[1], dtype=np.float64).reshape((-1, 2)).copy()
-        s = self._clipInterfacePosition(float(x[2]), strict=True)
-        eta = float(x[3])
-        c_left, c_right = self._interface_compositions(eta)
-        p[-1] = c_left
-        q[0] = c_right
+        try:
+            p = np.asarray(x[0], dtype=np.float64).reshape((-1, 2)).copy()
+            q = np.asarray(x[1], dtype=np.float64).reshape((-1, 2)).copy()
+            s = self._clipInterfacePosition(float(x[2]), strict=True)
+            eta = float(x[3])
+            c_left, c_right = self._interface_compositions(eta)
+            p[-1] = c_left
+            q[0] = c_right
 
-        self._validate_profile_compositions(p, "left transformed profile")
-        self._validate_profile_compositions(q, "right transformed profile")
-        physical = self._reconstruct_physical_profile(p, q, s)
-        self.data.record(time, physical)
-        self.interfaceData.record(time, s)
-        self.etaData.record(time, eta)
-        if self.recordPqData:
-            self.pData.record(time, p)
-            self.qData.record(time, q)
-        self.inventoryData.record(time, self.getTotalInventoryFromState(p, q, s))
+            self._validate_profile_compositions(p, "left transformed profile")
+            self._validate_profile_compositions(q, "right transformed profile")
+            physical = self._reconstruct_physical_profile(p, q, s)
+            records = [(self.data, physical), (self.interfaceData, s), (self.etaData, eta)]
+            if self.recordPqData:
+                records.extend([(self.pData, p), (self.qData, q)])
+            records.append((self.inventoryData, self.getTotalInventoryFromState(p, q, s)))
 
-        self._s_old = float(self._s_curr)
-        self._eta_old = float(self._eta_curr)
-        self._p_curr = p
-        self._q_curr = q
-        self._s_curr = float(s)
-        self._eta_curr = float(eta)
-        self._commit_pending_step_projection()
-        self.updateCoupledModels()
+            previous = (
+                self.currentTime, self._s_old, self._eta_old, self._p_curr, self._q_curr, self._s_curr,
+                self._eta_curr, self._cumulativeProjectionInventoryChange, self._cumulativeProjectionAbsoluteChange,
+                self._cumulativeProjectedNodes, self._lastAcceptedDt,
+            )
+            snapshots = _record_histories_atomically(time, records)
+            try:
+                GenericModel.postProcess(self, time, x)
+                self._s_old = float(self._s_curr)
+                self._eta_old = float(self._eta_curr)
+                self._p_curr = p
+                self._q_curr = q
+                self._s_curr = float(s)
+                self._eta_curr = float(eta)
+                self._commit_pending_step_projection()
+                if pending is not None:
+                    self._lastAcceptedDt = float(pending.dt)
+                self.updateCoupledModels()
+            except BaseException:
+                _restore_history_snapshots(snapshots)
+                (
+                    self.currentTime, self._s_old, self._eta_old, self._p_curr, self._q_curr, self._s_curr,
+                    self._eta_curr, self._cumulativeProjectionInventoryChange, self._cumulativeProjectionAbsoluteChange,
+                    self._cumulativeProjectedNodes, self._lastAcceptedDt,
+                ) = previous
+                raise
+        except BaseException:
+            self._pendingStepProjection = None
+            self._terminalThinPhaseStop = False
+            self._terminalThinPhaseInfo = None
+            raise
         self._awaitingFreshCandidate = False
         if self._terminalThinPhaseStop:
             self.finalTime = time
@@ -2787,15 +2830,19 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if its latest record stored no row; a repeated call adds nothing, and all
         histories share their recorded times (R09c removed the interval-1
         duplicate ``data`` row).
+
+        All histories are finalized as one unit (``_finalize_histories_atomically``,
+        LEDGERS R10b): if one raises, every history is restored to its state
+        before the call and the exception re-raised; calling ``postSolve`` again
+        is the retry. A continued solve without that retry records as if the
+        first solve had never been finalized.
         """
-        self.data.finalize()
-        self.interfaceData.finalize()
-        self.etaData.finalize()
-        self.inventoryData.finalize()
+        histories = [self.data, self.interfaceData, self.etaData, self.inventoryData]
         if self.pData is not None:
-            self.pData.finalize()
+            histories.append(self.pData)
         if self.qData is not None:
-            self.qData.finalize()
+            histories.append(self.qData)
+        _finalize_histories_atomically(histories)
 
     def getInterfacePosition(self, time=None):
         """Returns the current accepted interface position, or the recorded one at ``time`` (interpolated)."""

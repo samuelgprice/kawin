@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 import numpy as np
 from moving_boundary.compatibility import DiffusionModel
-from moving_boundary.compatibility.recording import _finalize_history_rows, _history_row_target
 from moving_boundary.solvers.illingworth._interstitials import (
     composition_bound_violation,
     full_mole_fractions,
@@ -29,6 +28,9 @@ from moving_boundary.solvers.illingworth.shared import (
     _FloorProjection,
     _all_or_nothing,
     _bounded_finite_difference_perturbation,
+    _finalize_histories_atomically,
+    _record_histories_atomically,
+    _restore_history_snapshots,
     _coerce_bulk_diffusivity_mode,
     _loge_arange,
     _no_floor_projection,
@@ -2689,81 +2691,16 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             dependent_closure_error=dependent_closure_error,
         )
 
-    def _history_record_target(self, history):
-        """Returns the row a regular history record will write (shared R09 row rule), or ``None``."""
-        return _history_row_target(history)
-
-    def _ensure_history_record_capacity(self, history, target):
-        """Ensures one history target row exists before an atomic record sequence."""
-        if target is None or target < history._time.shape[0]:
-            return
-        growth = max(int(getattr(history, "batchSize", 1000)), target + 1 - history._time.shape[0])
-        history._time = np.pad(history._time, (0, growth))
-        history._y = np.pad(history._y, ((0, growth), *[(0, 0) for _ in range(history._y.ndim - 1)]))
-
-    def _record_histories_atomically(self, time, records):
-        """Records synchronized histories and restores rows and capacity on failure."""
-        prepared = []
-        for history, value in records:
-            values = np.asarray(value, dtype=np.float64)
-            expected_shape = getattr(history, "shape", getattr(history, "yShape", ()))
-            if values.shape != tuple(expected_shape):
-                raise ValueError(f"Expected history value with shape {tuple(expected_shape)}, got {values.shape}.")
-            target = self._history_record_target(history)
-            prepared.append((history, value, target))
-
-        snapshots = []
-        for history, _, target in prepared:
-            old_capacity = int(history._time.shape[0])
-            row = None if target is None or target >= old_capacity else history._y[target].copy()
-            row_time = None if target is None or target >= old_capacity else float(history._time[target])
-            current_y = np.asarray(history.currentY).copy() if np.ndim(history.currentY) else float(history.currentY)
-            snapshots.append(
-                (
-                    history,
-                    target,
-                    row,
-                    row_time,
-                    history.currentIndex,
-                    history.N,
-                    current_y,
-                    history.currentTime,
-                    old_capacity,
-                    history._rowCount,
-                    history._lastRecordStored,
-                )
-            )
-        try:
-            for history, _, target in prepared:
-                self._ensure_history_record_capacity(history, target)
-            for history, value, _ in prepared:
-                history.record(time, value)
-        except Exception:
-            self._restore_history_snapshots(snapshots)
-            raise
-        return snapshots
-
-    def _restore_history_snapshots(self, snapshots):
-        """Restores metadata (including the row counter and stored-row flag), written rows, and capacity."""
-        for (
-            history, target, row, row_time, current_index, index, current_y, current_time, old_capacity,
-            row_count, last_record_stored,
-        ) in snapshots:
-            if target is not None and target < old_capacity:
-                history._y[target] = row
-                history._time[target] = row_time
-            if history._time.shape[0] != old_capacity:
-                history._time = history._time[:old_capacity].copy()
-                history._y = history._y[:old_capacity].copy()
-            history.currentIndex = current_index
-            history.N = index
-            history.currentY = current_y
-            history.currentTime = current_time
-            history._rowCount = row_count
-            history._lastRecordStored = last_record_stored
-
     def _commit_accepted_state(self, time, accepted):
-        """Commits one prepared state and all synchronized histories as one transaction."""
+        """
+        Commits one prepared state and all synchronized histories as one transaction.
+
+        Uses the shared atomic history helpers (``_record_histories_atomically``,
+        ``_restore_history_snapshots``); a failure in recording, in the state
+        assignment or in ``updateCoupledModels`` restores this model's
+        histories and accepted state. Coupled models updated before the failing
+        one keep their update (LEDGERS R10, D6).
+        """
         records = [
             (self.data, accepted.fixed_mesh_profile),
             (self.interfaceData, accepted.interfaces),
@@ -2787,7 +2724,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             self._lastInterfaceCompositions,
             self.currentTime,
         )
-        snapshots = self._record_histories_atomically(time, records)
+        snapshots = _record_histories_atomically(time, records)
         try:
             previous_interfaces = self._interfaces_curr.copy()
             accepted_dt = float(time) - float(self.currentTime)
@@ -2802,7 +2739,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             self.currentTime = float(time)
             self.updateCoupledModels()
         except Exception:
-            self._restore_history_snapshots(snapshots)
+            _restore_history_snapshots(snapshots)
             (
                 self._profiles_curr,
                 self._interfaces_old,
@@ -2899,6 +2836,12 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         stored no row (an off-cadence final step); times are not compared, and a
         repeated call adds nothing, and all histories stay synchronized (the same
         rule as the compatibility ``MeshData.finalize``).
+
+        All histories are finalized as one unit (``_finalize_histories_atomically``,
+        LEDGERS R10b): if one raises, every history is restored to its state
+        before the call and the exception re-raised; calling ``postSolve`` again
+        is the retry. A continued solve without that retry records as if the
+        first solve had never been finalized.
         """
         histories = [
             self.data,
@@ -2912,8 +2855,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         ]
         if self.profileData is not None:
             histories.extend(self.profileData)
-        for history in histories:
-            _finalize_history_rows(history)
+        _finalize_histories_atomically(histories)
 
     @_all_or_nothing()
     def reset(self):
