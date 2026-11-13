@@ -852,7 +852,10 @@ Decisions are the user's (R08_HANDOFF §2-§4, all recommended options approved)
 
 ### R09: sparse recording mixes live state with recorded snapshots
 
-**Status:** open; medium priority. **Scope:** binary history classes, shared
+**Status:** partially resolved 2026-11-13 by R09a (commit `3047510`; resolution below); C25/C29
+approved as `20261113T174227Z-3047510-1` (commit `83b5887`). **Still open (R09c):** at interval 1
+the binary/two-phase `data` history keeps one duplicate final row per `postSolve`, so it is out of
+step with the other histories. **Scope:** binary history classes, shared
 `_ScalarHistory`/`_ArrayHistory`, and solver getters that delegate to them.
 
 With recording every third step, the binary `getInterfacePosition()` returned
@@ -871,6 +874,64 @@ snapshots, preserve the initial record, and append forced final records without
 corrupting the sampling cadence. Cover intervals greater than one, runs shorter
 than the interval, continued solves, disabled recording and disabled profile
 history. Check synchronization of interface, eta, profile and inventory histories.
+
+**Resolution, stage R09a (2026-11-13, commit `3047510`; decisions D2-D4 and the flag-based
+dedup are the user's).**
+- *Row rule.* One helper set in `compatibility/recording.py` (`_history_row_target`,
+  `_advance_history_rows`, `_finalize_history_rows`) is used by the binary
+  `_ScalarHistory`/`_VectorHistory`, the shared `_ScalarHistory`/`_ArrayHistory`, the compatibility
+  `MeshData` and three-phase `_history_record_target`. Rows are append-only: row 0 is never
+  overwritten; a regular row is stored every `k` accepted steps, counted from `reset` across
+  continued solves (`currentIndex` is the cadence counter); a forced final row is appended and uses
+  no cadence slot. `N` still means "last stored row", so `toDict` index fields keep their meaning.
+  The new bookkeeping (`_rowCount`, `_lastRecordStored`) lives on each history, not on the model.
+- *Final dedup.* `finalize` appends the current state only if the most recent `record` call stored
+  no row. No time tolerance is used, so a distinct snapshot 5e-15 after the last stored row is kept
+  (the 1e-14 rule dropped it). Repeated `postSolve` calls add nothing, except the legacy duplicate
+  below. Three-phase `postSolve` uses the same rule for every history, `data` included, and its
+  atomic commit snapshot/restore also covers the two new fields.
+- *Getters.* With no time, every getter returns the current accepted state at any interval,
+  including disabled recording (`y(None)` returns `currentY`). A timed request keeps the historical
+  rules: scalars interpolate and clamp, arrays need an exactly recorded time (atol 1e-14) or raise,
+  `MeshData` interpolates unless interpolation is disabled. Asking for the current, unstored time
+  returns the last stored row (D3). Binary/two-phase `getTransformedState()` with no time returns
+  the accepted `p`/`q` without p/q histories (D4); a timed call still raises.
+- *Examples at interval 3.* 1 step: `[0, 1]`; 4 steps: `[0, 3, 4]`; 2 + 2 steps: `[0, 2, 3, 4]`
+  (all times x dt, identical in every history); `solve(0)` adds nothing.
+- *Kept for R09c (deliberately).* At interval 1 the compatibility `MeshData.finalize` still always
+  appends a row, so binary/two-phase `data` ends `[0, 1, 2, 2]` while the other histories end
+  `[0, 1, 2]`, and each continued solve adds another duplicate. Binary `data` row 0 still holds the
+  profile before the setup reconstruction (documented exception). Recording-disabled histories keep
+  one row.
+- *Reference effect.* Every run case and the interval-1 layout are bit-identical. Contracts C25
+  (model0, model4) and C29 (model1) changed in `profiles/compositions` only: binary models at t = 0
+  with no committed step, captured with `getCompositions()`. That now returns the reconstructed
+  initial profile the solver starts from (`data.currentY`) instead of stored row 0 (max change
+  0.30 and 0.34 in mole fraction); `getCompositions(0.0)` still returns row 0. The user chose to
+  adopt this (no setup-only exception).
+- *Tests.* `tests/test_illingworth_history_contract.py` (48). 26 defect tests failed before the
+  change for the intended reason: overwritten or missing rows (1, 4 and 2 + 2 steps at interval 3,
+  all families), stale no-time getters (all families), an extra `data` row from `solve(0)` or a
+  repeated `postSolve` at interval 3, `ValueError` without p/q histories, the dropped close-time
+  snapshot (four package history classes and binary/ternary direct commits), and the binary t = 0
+  live profile. 22 passed before and after: interval-1 layout including the duplicate, repeated
+  `postSolve` on package histories, disabled recording, on-cadence final row, final state equal
+  for `record=1, 3, False`, explicit-time rules, D3, three-phase `solve(0)` rejection, three-phase
+  failed-commit restoration of every history field, and the `MeshData` close-time case (its host
+  finalize never deduplicated).
+- *Approval* `20261113T174227Z-3047510-1` (user-authorized; `approve --tier full` in a clean clone
+  of `3047510` with fresh targets and the local inputs copied hash-verified; commit `83b5887`):
+  exactly C25 and C29. Gates: 40 run cases (live O06) each repeated bit-identically,
+  `approval_criteria` for every case, whole suite on the installed wheel 1337 passed with nothing
+  skipped, every unlisted case and contract within public tolerance, 1006 s. Beyond that, an exact
+  full run of `3047510` in the same clone gave 40/40 runs and C26-C28 bit-identical, with C25/C29
+  differing in exactly the three arrays above. `reference/` and the R08 approval artifacts are
+  unchanged; the new artifacts were copied back and match the manifest hashes.
+- *Gates after the approval* (from `83b5887`, fresh targets, 2026-11-13, not `--record`ed): exact
+  full 40/40 runs and 5 contracts bit-identical against the selected references, live O06, 34
+  repeat pairs with no differences, 542 s; examples E01-E10 pass with 68 tests (E11 a pending
+  fixture), 157 s; full `tests/` 1332 passed, 5 skipped (C25-C29 comparisons outside an acceptance
+  run), 1 deselected (`slow`), 298 s.
 
 ### R10: failed initialization or output preparation can leave partial state
 

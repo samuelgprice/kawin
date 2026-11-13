@@ -118,7 +118,13 @@ quick exact 30/30 runs and 5 contracts bit-identical, full `tests/` 1176 passed.
 semi-log controls are validated before the host constructor and at the start of `solve`, and
 binary/two-phase reject negative, NaN and infinite durations before setup; exact full 40/40 runs
 and 5 contracts bit-identical (live O06), examples E01-E10 pass, full `tests/` 1284 passed.
-R09 and R10 are open, and R13 (ternary/three-phase residual scales) is recorded.
+R09 is partially resolved (2026-11-13, R09a commit `3047510`): sparse histories are append-only
+with initial, regular and forced final rows, dedup is flag-based, and no-time getters are live.
+Contracts C25/C29 (binary time-zero `profiles/compositions`) are approved as
+`20261113T174227Z-3047510-1` (commit `83b5887`). Gates from `83b5887`: exact full 40/40 runs and
+5 contracts bit-identical (live O06, 34 repeat pairs), examples E01-E10 pass, full `tests/` 1332
+passed. The interval-1 binary/two-phase `data` duplicate row remains, pending R09c. R10 is open,
+and R13 (ternary/three-phase residual scales) is recorded.
 
 ## Installed solving and research-owned generation
 
