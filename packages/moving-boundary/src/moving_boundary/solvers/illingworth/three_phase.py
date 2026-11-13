@@ -27,6 +27,7 @@ from moving_boundary.solvers.illingworth.shared import (
     _INTERFACE_ETA_FD_STEP,
     _SUPPORTED_BULK_DIFFUSIVITY_MODES,
     _FloorProjection,
+    _all_or_nothing,
     _bounded_finite_difference_perturbation,
     _coerce_bulk_diffusivity_mode,
     _loge_arange,
@@ -1267,8 +1268,18 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             or "Three-phase trial geometry" in message
         )
 
+    @_all_or_nothing(skip_when_setup=True)
     def setup(self):
-        """Initializes the three-phase state once and preserves accepted state on continuation."""
+        """
+        Initializes the three-phase state once and preserves accepted state on continuation.
+
+        All-or-nothing (LEDGERS R10a): if setup raises (an invalid setting, a
+        failing provider or tie-line closure), the exact pre-setup state is
+        restored, including ``isSetup=False``, and the exception re-raised.
+        External state (provider caches, a created ``mesh.boundaryConditions``)
+        is not restored; ``_interfaceCompositionCache`` is model-owned and is
+        restored with the other bindings.
+        """
         if self.isSetup:
             return
         super().setup()
@@ -2904,7 +2915,19 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         for history in histories:
             _finalize_history_rows(history)
 
+    @_all_or_nothing()
     def reset(self):
+        """
+        Returns the model to its initial state (time 0, initial records, ``isSetup=False``).
+
+        All-or-nothing (LEDGERS R10a): if any part raises (the host reset and
+        provider ``clearCache``, or the interstitial u-fraction re-recording),
+        every model-owned field is restored and the exception re-raised, so the
+        previous simulation is kept. Provider caches and other external state
+        are not restored. The host reset records the raw ``mesh.y`` as row 0,
+        not the constructor's u-fraction conversion, so reset + solve can differ
+        from a freshly constructed model in the last bits (pre-existing).
+        """
         super().reset()
         if has_interstitials(self.allElements):
             record_initial_u_fractions(self)

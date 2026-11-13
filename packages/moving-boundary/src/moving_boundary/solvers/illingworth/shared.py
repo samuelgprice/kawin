@@ -1,4 +1,5 @@
 # Complete shared helper section from samuelgprice/kawin fae6149ccc6ebfda2100c4ed5a9b99b962e77620 (R06 three-phase correction on top of main 720d122), MovingBoundaryIllingworthTernaryFDM.py
+import functools
 import math
 import warnings
 from dataclasses import dataclass
@@ -89,6 +90,83 @@ class _PendingImplicitStep:
     dt: float
     state: tuple
     scales: tuple
+
+
+def _is_recorded_history(value):
+    """True for the Illingworth/``MeshData`` history objects (they carry ``_y``, ``_time`` and ``recordInterval``)."""
+    return hasattr(value, "_y") and hasattr(value, "_time") and hasattr(value, "recordInterval")
+
+
+def _snapshot_model_for_rollback(model):
+    """
+    Captures everything ``_restore_model_after_failure`` needs to undo a failed ``setup``/``reset``.
+
+    That is every attribute binding of ``model`` (``vars(model)``) and, for each
+    history object reachable from it (directly or in a list/tuple such as the
+    three-phase ``profileData``), its attribute bindings plus a copy of the
+    contents of every array it holds. Copying contents rather than rebinding to
+    copies keeps object identity and aliasing (e.g. a ``currentY`` that is a view
+    of ``_y``) intact. Other referenced objects (mesh, provider, closures,
+    temperature, coupled models) are external and only their bindings are kept.
+    """
+    bindings = dict(vars(model))
+    histories = {}
+    for value in bindings.values():
+        for candidate in value if isinstance(value, (list, tuple)) else (value,):
+            if _is_recorded_history(candidate) and id(candidate) not in histories:
+                attributes = dict(vars(candidate))
+                contents = [(array, array.copy()) for array in attributes.values() if isinstance(array, np.ndarray)]
+                histories[id(candidate)] = (candidate, attributes, contents)
+    return bindings, tuple(histories.values())
+
+
+def _restore_model_after_failure(model, snapshot):
+    """Restores the bindings and history contents captured by ``_snapshot_model_for_rollback``."""
+    bindings, histories = snapshot
+    for history, attributes, contents in histories:
+        vars(history).clear()
+        vars(history).update(attributes)
+        for array, saved in contents:
+            if array.flags.writeable:
+                array[...] = saved
+    vars(model).clear()
+    vars(model).update(bindings)
+
+
+def _all_or_nothing(skip_when_setup=False):
+    """
+    Makes a model lifecycle method (``setup``/``reset``) all-or-nothing (LEDGERS R10a).
+
+    If the method raises (any exception, including from the host
+    ``DiffusionModel`` part or a provider), every model-owned field is restored
+    to its value before the call and the exception is re-raised: time,
+    ``isSetup``, accepted state, every history (rows, capacity and row
+    bookkeeping), the pending candidate and rejection latch, and diagnostics.
+    The method body is unchanged, so a successful call computes exactly as
+    before. External state is not restored: provider state and caches (e.g. a
+    partially cleared cache), closure bindings assigned on first use,
+    ``mesh.boundaryConditions`` created when absent, temperature parameters,
+    coupled models and printed diagnostics.
+
+    With ``skip_when_setup``, an already set-up model calls the method directly
+    without a snapshot (``setup`` is then a no-op, and ``solve`` calls it on
+    every call).
+    """
+    def decorate(method):
+        @functools.wraps(method)
+        def wrapper(self, *args, **kwargs):
+            if skip_when_setup and getattr(self, "isSetup", False):
+                return method(self, *args, **kwargs)
+            snapshot = _snapshot_model_for_rollback(self)
+            try:
+                return method(self, *args, **kwargs)
+            except BaseException:
+                _restore_model_after_failure(self, snapshot)
+                raise
+
+        return wrapper
+
+    return decorate
 
 
 def _validate_outer_dt_fractions(min_dt_frac, max_dt_frac, model_name):

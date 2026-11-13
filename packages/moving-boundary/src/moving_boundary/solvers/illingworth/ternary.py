@@ -70,6 +70,7 @@ from moving_boundary.solvers.illingworth.shared import (
     _ScalarHistory,
     _ArrayHistory,
     _PendingImplicitStep,
+    _all_or_nothing,
     _check_trial_dt_against_outer_minimum,
     _magnitude,
     _outer_timestep_limits,
@@ -730,7 +731,17 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if getattr(self, "_bulkDiffusivityCountingActive", False):
             self._currentBulkFaceMatricesEvaluated += int(count)
 
+    @_all_or_nothing()
     def reset(self):
+        """
+        Returns the model to its initial state (time 0, initial records, ``isSetup=False``).
+
+        All-or-nothing (LEDGERS R10a): if any part raises (the host reset and
+        provider ``clearCache``, the interstitial u-fraction re-recording, or the
+        configuration validation at the end), every model-owned field is
+        restored and the exception re-raised, so the previous simulation is
+        kept. Provider caches and other external state are not restored.
+        """
         super().reset()
         if has_interstitials(self.allElements):
             record_initial_u_fractions(self)
@@ -832,6 +843,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             )
         return min(estimates, key=lambda estimate: estimate.residual_norm)
 
+    @_all_or_nothing(skip_when_setup=True)
     def setup(self):
         """
         Initializes the two-phase state once and preserves accepted state on continuation.
@@ -842,6 +854,13 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         already-modified profile and restart the histories mid-run. Later calls
         are therefore no-ops until ``reset`` clears ``isSetup``; call ``reset``
         after changing model settings that setup consumes.
+
+        All-or-nothing (LEDGERS R10a): if setup raises (an invalid setting, a
+        failing provider or tie-line closure), the exact pre-setup state is
+        restored, including ``isSetup=False``, and the exception re-raised.
+        External state is not restored: provider caches, a created
+        ``mesh.boundaryConditions``, and the ``thermodynamics``/``phases`` bound
+        to a ``ThermodynamicTernaryInterfaceEquilibrium`` on first use.
         """
         if self.isSetup:
             return

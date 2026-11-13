@@ -24,6 +24,7 @@ from moving_boundary.solvers.illingworth.shared import (
     _BULK_DIFFUSIVITY_IMPLICIT,
     _BULK_DIFFUSIVITY_PHASE_UNIFORM,
     _PendingImplicitStep,
+    _all_or_nothing,
     _check_trial_dt_against_outer_minimum,
     _coerce_bulk_diffusivity_mode,
     _magnitude,
@@ -699,7 +700,17 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             self.mesh.boundaryConditions = bc
         return bc
 
+    @_all_or_nothing()
     def reset(self):
+        """
+        Returns the model to its initial state (time 0, initial records, ``isSetup=False``).
+
+        All-or-nothing (LEDGERS R10a): if any part raises (the host reset and
+        provider ``clearCache``, the interstitial u-fraction re-recording, or the
+        configuration validation at the end), every model-owned field is
+        restored and the exception re-raised, so the previous simulation is
+        kept. Provider caches and other external state are not restored.
+        """
         super().reset()
         if has_interstitials(self.allElements):
             record_initial_u_fractions(self)
@@ -740,6 +751,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         if hasattr(self, "mesh") and self.mesh is not None:
             self._validateModelConfiguration()
 
+    @_all_or_nothing(skip_when_setup=True)
     def setup(self):
         """
         Initializes the transformed two-phase state once; later calls are no-ops.
@@ -752,6 +764,12 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         restart the p/q histories and reset the reference inventory on every
         continued ``solve``. Later calls are no-ops until ``reset`` clears
         ``isSetup``; call ``reset`` after changing settings that setup consumes.
+
+        All-or-nothing (LEDGERS R10a): if setup raises (e.g. an invalid setting
+        or a failing diffusivity provider), the exact pre-setup state is
+        restored, including ``isSetup=False``, and the exception re-raised; fix
+        the cause and call ``setup``/``solve`` again. External state (provider
+        caches, a created ``mesh.boundaryConditions``) is not restored.
         """
         if self.isSetup:
             return
