@@ -138,8 +138,8 @@ Committed approval reports contain public hashes and structural or public eviden
   solve already differed from a fresh model in the last bits before R10 (the host reset records the
   raw `mesh.y`, the constructor its u-fraction conversion); this is outside R10.
   *Later (2026-11-13, user-authorized follow-up):* three-phase reset now records the constructor's
-  conversion, so (b) as originally written holds for all families (implemented; contract C27
-  adoption pending; LEDGERS R10).
+  conversion, so (b) as originally written holds for all families (resolved: fix `9595574`, contract
+  C27 approved as `20261113T232720Z-9595574-1`, commit `ff01469`; LEDGERS R10).
 
 ### R10b: binary/two-phase prepare-then-commit, plus atomic multi-history finalization
 
@@ -319,5 +319,6 @@ Compare state bytewise (time, `isSetup`, accepted state, every history's rows, `
 
 ## 11. Genuinely unresolved decisions
 
-None for R10. The three-phase reset/fresh-construction last-bit difference recorded here is being
-corrected by a user-authorized follow-up (implemented; contract C27 adoption pending; LEDGERS R10).
+None for R10. The three-phase reset/fresh-construction last-bit difference once recorded here is
+resolved by a user-authorized follow-up (fix `9595574`, C27 approval `20261113T232720Z-9595574-1`,
+commit `ff01469`; LEDGERS R10).

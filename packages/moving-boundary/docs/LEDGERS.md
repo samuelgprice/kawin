@@ -1054,7 +1054,8 @@ coupled-model failures without silently advancing accepted state.
     before and after R10: the host `reset` records the raw `mesh.y` as row 0, while the constructor
     stores its u-fraction conversion (11 of 31 nodes differ by up to 2.8e-17 in the test fixture).
     This pre-existing limitation is outside R10 and pinned by a preservation test. (Superseded:
-    corrected by the reset-parity follow-up below, user-authorized 2026-11-13.)
+    resolved by the reset-parity follow-up below, user-authorized 2026-11-13; (b) now holds against a
+    fresh model for every family.)
   - Gates before the commit (fresh target): focused tests 275 passed; full `tests/` 1428 passed,
     5 skipped, 1 deselected.
 - *R10b (commit `ded279d`): binary/two-phase prepare-then-commit and atomic finalization.*
@@ -1108,9 +1109,9 @@ coupled-model failures without silently advancing accepted state.
   model. Gates (fresh targets, no approval): focused lifecycle/R07/R09/three-phase suites 519
   passed; full `tests/` 1459 passed, 5 skipped, 1 deselected; exact full 40/40 runs and 5 contracts
   bit-identical, live O06, 34 repeat pairs, 630 s; examples E01-E10 pass with 68 tests.
-- *Follow-up (2026-11-13, user-authorized): three-phase reset parity (implemented; C27 adoption
-  pending).* A three-phase model that has run, then successfully resets and solves, now equals a
-  freshly constructed model bit for bit.
+- *Follow-up (2026-11-13, user-authorized): three-phase reset parity (resolved: fix `9595574`, C27
+  approved as `20261113T232720Z-9595574-1`, commit `ff01469`).* A three-phase model that has run,
+  then successfully resets and solves, now equals a freshly constructed model bit for bit.
   - Cause: the constructor runs `reset()` and then `_validateMeshComposition()` (clamps near-bound
     compositions in `mesh.y`, whose flattened form is a view, then converts x to u). Three-phase
     `reset` re-recorded the raw `mesh.y` (substitutional) or the interstitial-only
@@ -1130,8 +1131,20 @@ coupled-model failures without silently advancing accepted state.
     three-phase model), in 9 arrays at round-off level (`data`, `etaData`, `inventoryData`,
     `profileData0`/`1` values, `profiles/compositions`, `profiles/phase0`/`1/x`,
     `state/_initialInventory`; max abs 1.9e-16, max rel 1.3e-15): the frozen reference recorded the
-    old reset. The candidate `model4` equals the contract's fresh `model0` in all 34 arrays. Adoption
-    of exactly C27 is authorized and pending.
+    old reset. The candidate `model4` equals the contract's fresh `model0` in all 34 arrays.
+  - Approval `20261113T232720Z-9595574-1` (user-authorized; commit `ff01469`): `approve --tier full
+    --cases C27` in a clean clone of `9595574` with the local inputs copied hash-verified (316
+    files), 870 s. Before it, a non-promoting exact full run in the clone confirmed exactly the 9
+    `model4` arrays above, `model4` equal to `model0` in all 34 arrays, C25, C26, C28, C29 and all 40
+    runs bit-identical. Gates: 40 repeat pairs bit-identical, `approval_criteria`, whole suite 1470
+    passed, 44 unlisted cases and contracts passed. The promoted `C27.npz` is byte-identical to the
+    checked candidate; only C27 changed selection (from `reference`); no private hash is in the
+    manifest or report. The approved artifacts were copied back and match the manifest; the 314
+    pre-existing reference, approval, input, settings and pilot files are unchanged.
+  - Gates after the approval (from `ff01469`, fresh targets, no special flags, not `--record`ed):
+    exact full 40/40 runs and 5 contracts bit-identical against the selected references, live O06,
+    34 repeat pairs with no differences, 550 s; examples E01-E10 pass with 68 tests (E11 a pending
+    fixture), 157 s.
 
 ### R11: inherited deserialization does not restore the solver state
 

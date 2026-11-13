@@ -135,9 +135,11 @@ all-or-nothing in every family (R10a `c1b2aae`), and binary/two-phase steps prep
 an atomic commit, ternary `_lastAcceptedDt` is accepted state and `postSolve` finalizes all
 histories atomically (R10b `ded279d`). Gates at `ded279d` (fresh targets): exact full 40/40 runs and
 5 contracts bit-identical (live O06, 34 repeat pairs), examples E01-E10 pass, full `tests/` 1448
-passed, 5 skipped, 1 deselected. Three-phase reset now reproduces fresh construction bit for bit
-(LEDGERS R10 reset-parity follow-up; implemented, adoption of contract C27 pending). R13
-(ternary/three-phase residual scales) is recorded.
+passed, 5 skipped, 1 deselected. Follow-ups: interrupted three-phase commits roll back (`b04b818`);
+three-phase reset reproduces fresh construction bit for bit (fix `9595574`; contract C27 approved as
+`20261113T232720Z-9595574-1`, commit `ff01469`). Gates from `ff01469` (fresh targets): exact full
+40/40 runs and 5 contracts bit-identical (live O06, 34 repeat pairs), examples E01-E10 pass. The
+approved artifacts are local (four approvals). R13 (ternary/three-phase residual scales) is recorded.
 
 ## Installed solving and research-owned generation
 
