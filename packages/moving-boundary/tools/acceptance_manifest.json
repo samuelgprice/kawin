@@ -1595,6 +1595,7 @@
       "C24": "20261113T194742Z-1993bb9-1",
       "C25": "20261113T194742Z-1993bb9-1",
       "C26": "20261113T194742Z-1993bb9-1",
+      "C27": "20261113T232720Z-9595574-1",
       "C29": "20261113T194742Z-1993bb9-1",
       "C30": "20261113T194742Z-1993bb9-1",
       "C31": "20261113T194742Z-1993bb9-1",
@@ -1919,6 +1920,29 @@
           "path": "docs/approvals/20261113T194742Z-1993bb9-1.json",
           "sha256": "d4fe73325612fe5e3e8e45c10a84e25b96a1d9e12d60077180d6c61cf7c95086"
         }
+      },
+      "20261113T232720Z-9595574-1": {
+        "created_utc": "2026-11-13T23:27:20Z",
+        "package_commit": "9595574abcb22f6f590386f65371b5f410126b65",
+        "reason": "LEDGERS R10 reset-parity follow-up: three-phase reset + setup now reproduces fresh construction bit for bit (C27 model4 equals the fresh model0)",
+        "tier": "full",
+        "cases": [
+          "C27"
+        ],
+        "directory": "reference-approved/20261113T232720Z-9595574-1",
+        "artifacts": {
+          "C27": {
+            "json": "29996eb76863962b30738c83b85c44489c9e11a34b5f099e898eefb96c0a9c1d",
+            "npz": "f187652521b20b2b4ae1ebe711a13da2aa94d79d26aeab5dea956b4e47105319"
+          }
+        },
+        "previous": {
+          "C27": "reference"
+        },
+        "report": {
+          "path": "docs/approvals/20261113T232720Z-9595574-1.json",
+          "sha256": "a2189c4db6f8957142516dbb002b4b73eac8e9af5594766cb9a8ae9949d78348"
+        }
       }
     },
     "history": [
@@ -1983,6 +2007,14 @@
           "C25",
           "C26",
           "C29"
+        ]
+      },
+      {
+        "event": "approve",
+        "approval_id": "20261113T232720Z-9595574-1",
+        "utc": "2026-11-13T23:27:20Z",
+        "cases": [
+          "C27"
         ]
       }
     ]
