@@ -895,7 +895,8 @@ coupled-model failures without silently advancing accepted state.
 
 ### R11: inherited deserialization does not restore the solver state
 
-**Status:** open; medium priority. **Scope:** binary and two-phase ternary
+**Status:** fixed 2026-11-12 by rejecting restart (resolution below); full restart and a
+historical-output loader are not implemented. **Scope:** binary and two-phase ternary
 `fromDict` inherited from the host; ternary `toDict` documentation.
 
 Host deserialization restores physical snapshots and time without restoring the
@@ -910,6 +911,30 @@ dictionary. Three-phase already rejects incomplete restart loading explicitly.
 correct the output-dictionary documentation. Full restart can be separate work;
 if implemented, verify complete state restoration and continued-solve equivalence.
 Historical output loading should have an explicit contract distinct from restart.
+
+**Resolution (2026-11-12, commit `6296bd9`).**
+
+- *Contract.* Binary and two-phase ternary `fromDict` are class methods that raise
+  `NotImplementedError` ("... cannot be restarted ...") before changing any state, as
+  three-phase already did. The inherited `load` calls `fromDict`, so it raises too; its API
+  is unchanged. `toDict`/`save` output is unchanged (no marker key added). Saved output is
+  read with `numpy.load`. The ternary `toDict` docstring now calls the output an output
+  dictionary, and both class docstrings list the restriction.
+- *Compatibility.* `model.load(file)`/`fromDict(data)` on these two families now raise instead
+  of partially loading. No package, example, tool or ported-test caller existed; the research
+  `save`/`load` tests exercise other `MovingBoundaryFDM` models.
+- *Tests.* `tests/test_illingworth_restart_contract.py`. 14 defect tests failed before the fix:
+  12 with `DID NOT RAISE NotImplementedError` (instance `fromDict` into a fresh, set-up and the
+  source model; instance `load` into fresh and set-up models; continued solve after a refused
+  load), and the 2 class-level `fromDict` calls with `TypeError` (the host loader is an
+  instance method). 4 preservation tests (`toDict` keys and history identity, `save`
+  contents) passed before and after. The no-mutation checks compare time, setup flag,
+  accepted state and every history bytewise.
+- *Gates* (fresh installed targets, 2026-11-12): focused 18 new + the 2 three-phase
+  rejection tests passed; full `tests/` 1176 passed, 5 skipped (C25-C29 comparisons outside
+  an acceptance run), 1 deselected (`slow`), 234 s; `acceptance.py quick --tolerance exact`
+  30/30 runs and 5 contracts bit-identical against the selected references, 33 cases
+  repeated with no differences, no skips, 414 s (not `--record`ed). No reference approval.
 
 ### R12: ternary numerical controls lack consistent validation
 

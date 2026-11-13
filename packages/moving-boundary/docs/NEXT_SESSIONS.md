@@ -111,7 +111,10 @@ R08 (binary tolerance units) is implemented in the package (2026-11-11): dimensi
 position tolerance plus a conservative, inventory-normalized residual check, with the
 call sites migrated (generated files through the recorded `api_migration` transform).
 Its binary reference changes are approved as `20261111T222849Z-5aedde7-1` (commit `34c02d2`;
-LEDGERS R08). R09-R12 are open, and R13 (ternary/three-phase residual scales) is recorded.
+LEDGERS R08). R11 (restart loading) is fixed by rejection (2026-11-12, commit `6296bd9`):
+binary and two-phase ternary `fromDict`/`load` raise before changing state, output unchanged;
+quick exact 30/30 runs and 5 contracts bit-identical, full `tests/` 1176 passed. R09, R10 and
+R12 are open, and R13 (ternary/three-phase residual scales) is recorded.
 
 ## Installed solving and research-owned generation
 
