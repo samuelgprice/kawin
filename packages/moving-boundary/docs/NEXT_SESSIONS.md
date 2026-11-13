@@ -130,8 +130,13 @@ r09-data-tail`, strict layout proof, O04/O05 private settings carried forward). 
 (fresh targets, no layout flag): exact full 40/40 runs and 5 contracts bit-identical (live O06, 34
 repeat pairs), examples E01-E10 pass, full `tests/` 1391 passed, 5 skipped, 1 deselected. The
 approved artifacts are local (`.verification/acceptance/reference-approved/`, three approvals); another
-checkout needs them copied in. R10 is open (next), and R13 (ternary/three-phase residual scales) is
-recorded.
+checkout needs them copied in. R10 is resolved (2026-11-13, no reference changed): setup/reset are
+all-or-nothing in every family (R10a `c1b2aae`), and binary/two-phase steps prepare outputs before
+an atomic commit, ternary `_lastAcceptedDt` is accepted state and `postSolve` finalizes all
+histories atomically (R10b `ded279d`). Gates at `ded279d` (fresh targets): exact full 40/40 runs and
+5 contracts bit-identical (live O06, 34 repeat pairs), examples E01-E10 pass, full `tests/` 1448
+passed, 5 skipped, 1 deselected. Three-phase reset + solve still differs from a fresh model in the
+last bits (pre-existing, LEDGERS R10). R13 (ternary/three-phase residual scales) is recorded.
 
 ## Installed solving and research-owned generation
 

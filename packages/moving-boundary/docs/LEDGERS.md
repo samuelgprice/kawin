@@ -1013,7 +1013,8 @@ user to R09c before R10).**
 
 ### R10: failed initialization or output preparation can leave partial state
 
-**Status:** open; medium priority. **Scope:** all three setup methods; binary and
+**Status:** fixed 2026-11-13 (R10a `c1b2aae`, R10b `ded279d`; resolution below; no reference
+changed). **Scope:** all three setup methods; binary and
 two-phase ternary accepted-state preparation/commit paths.
 
 Each solver calls host `setup()` before completing initialization; the host sets
@@ -1031,6 +1032,69 @@ restore a coherent uninitialized state on failure. Prepare/validate outputs befo
 advancing accepted time/state and histories; audit trial-only diagnostics such as
 `_lastAcceptedDt` too. Test recovery after provider, validation, recording and
 coupled-model failures without silently advancing accepted state.
+
+**Resolution (2026-11-13; user-reviewed decisions D5, D-R1, D6, D7; handoff
+`docs/R10_HANDOFF.md`).** Tests: `tests/test_illingworth_lifecycle_transactions.py`.
+- *R10a (commit `c1b2aae`): setup and reset are all-or-nothing in every family.* A shared wrapper
+  (`shared._all_or_nothing`) snapshots every attribute binding of the model plus the contents of each
+  reachable history, and on any exception from `setup()`/`reset()` restores them and re-raises: time,
+  `isSetup`, accepted state, every history (rows, capacity, cadence and row counters, stored-row
+  flag), candidate, latch and diagnostics. The method bodies are unchanged. A failed setup leaves
+  `isSetup=False` with the exact pre-setup state (D5); a reset failing in the host part or provider
+  `clearCache`, the interstitial u-fraction re-recording, or the configuration validation at its end
+  keeps the previous simulation (D-R1). An already set-up model's `setup` takes no snapshot.
+  - Defect tests (31) failed at `4bf4ba9` for the intended reasons: a failed reset rewound
+    `currentTime` to 0 (clearCache) or cleared state, histories and time (validation); a failed
+    setup left `isSetup=True` (provider, invalid setting on a direct `setup()`, tie-line closure).
+    Their recovery parts check: a continued solve equals an untouched continuation; after a failed
+    setup, setup/solve equal an untouched model.
+  - Recovery guarantee (b) restated (user decision 2026-11-13): a repeated reset + solve equals an
+    untouched model's successful reset + solve; for binary and two-phase ternary it also equals a
+    freshly constructed model. Three-phase reset + solve differs from a fresh model in the last bits,
+    before and after R10: the host `reset` records the raw `mesh.y` as row 0, while the constructor
+    stores its u-fraction conversion (11 of 31 nodes differ by up to 2.8e-17 in the test fixture).
+    This pre-existing limitation is outside R10 and pinned by a preservation test.
+  - Gates before the commit (fresh target): focused tests 275 passed; full `tests/` 1428 passed,
+    5 skipped, 1 deselected.
+- *R10b (commit `ded279d`): binary/two-phase prepare-then-commit and atomic finalization.*
+  - `postProcess` verifies the update (R07 unchanged), consumes the candidate and sets the latch,
+    prepares every output without touching model state (interface clip and check, interface-node
+    overrides, ternary composition check, profile reconstruction, inventory), then commits history
+    records, accepted state, `currentTime`, cumulative projection totals, ternary `_lastAcceptedDt`
+    and `updateCoupledModels` as one unit, and clears the latch. On a failure all of these are
+    unchanged; the candidate (with its staged projection totals and terminal thin-phase stop) stays
+    consumed and the latch set, so a resubmission, or the originally correct update, is refused and
+    a new `getdXdt` reproduces an untouched model's step bit for bit.
+  - Coupled models (D6): a failure in `updateCoupledModels` rolls back this model only. Coupled
+    models updated before the failing one keep their update; recovery equals an untouched run only if
+    the caller restores or discards that state (tested with a stateful recorder: with the entry
+    discarded the pair equals an untouched pair, otherwise the recorder holds a duplicate).
+  - D7: ternary `_lastAcceptedDt` is accepted state, set to the committed candidate's dt in
+    `postProcess` (no longer by `getdXdt`), so a rejected retry-reduced proposal changes neither it
+    nor the next extrapolated Newton start. `_currdt`, `_lastStepRetries`, `_lastImplicit*`,
+    interface D values, `_lastInterfaceCompositions`, `_lastStepProjection*` and
+    `_cumulativeProjectedSolves` remain documented last-trial diagnostics.
+  - `postSolve` (all families) finalizes every history as one unit with targeted per-history
+    snapshots (original `_y`/`_time` arrays, the forced-target row, `N`, counters, flag,
+    `currentY`/`currentTime`); a failure restores every history and repeating `postSolve` is the
+    retry. A continued solve without that retry records as if the first solve was never finalized.
+  - The three-phase atomic history helpers moved to `shared.py` with unchanged behavior (value shape
+    check extended to the binary p/q histories) and are used by all families; three-phase commit
+    logic is unchanged.
+  - Defect tests (20) failed at `c1b2aae` for the intended reasons (time advanced by a failed
+    reconstruction or composition check; histories recorded before a failing record or coupled
+    model; ternary `_lastAcceptedDt` left at the rejected 0.005 instead of the committed 0.01; a
+    failed `postSolve` changed the histories finalized before it, at intervals 3 and 1).
+  - Gates before the commit (fresh targets, 2026-11-13, nothing `--record`ed, no approval):
+    focused tests 399 passed (with the R07, R09 and three-phase suites); full `tests/` 1448 passed,
+    5 skipped, 1 deselected; exact full 40/40 runs and 5 contracts bit-identical against the
+    selected references, live O06, 34 repeat pairs with no differences, 579 s; examples E01-E10
+    pass with 68 tests (E11 a pending fixture), 166 s.
+- *Not restored (documented):* provider state and caches (a partially cleared cache), the ternary
+  `ThermodynamicTernaryInterfaceEquilibrium.thermodynamics`/`.phases` binding, a created
+  `mesh.boundaryConditions`, temperature parameters, coupled models, printed diagnostics. Unchanged:
+  the near-final no-op step, a direct `postProcess` without a proposal (commits unchecked),
+  three-phase `solve(0)` rejection and the binary/two-phase `solve(0)` setup-only no-op.
 
 ### R11: inherited deserialization does not restore the solver state
 
