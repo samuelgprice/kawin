@@ -1,0 +1,1309 @@
+{
+  "schema": 1,
+  "kind": "approval",
+  "created_utc": "2026-11-13T19:47:42Z",
+  "package_commit": "1993bb9398b43f094b2c01a5cce198c8b9582a23",
+  "reason": "LEDGERS R09c: remove the interval-1 duplicate final data row (exact r09-data-tail layout correction)",
+  "tier": "full",
+  "tolerance": "public",
+  "cases": [
+    "C01",
+    "C02",
+    "C03",
+    "C04",
+    "C05",
+    "C06",
+    "C07",
+    "C08",
+    "C13",
+    "C14",
+    "C15",
+    "C16",
+    "C17",
+    "C18",
+    "C19",
+    "C24",
+    "C30",
+    "C31",
+    "F04",
+    "LEGACY",
+    "O01",
+    "O03a",
+    "O04",
+    "O05",
+    "O06",
+    "O07",
+    "C25",
+    "C26",
+    "C29"
+  ],
+  "skipped": {},
+  "gates": {
+    "pytest": {
+      "tests": 1396,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "repeatability": {
+      "C01": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C02": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C03": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C04": {
+        "bit_identical": true,
+        "arrays": 13
+      },
+      "C05": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C06": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C07": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C08": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C09": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C10": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C11": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "C12": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "C13": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C14": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C15": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C16": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C17": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C18": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C19": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C20": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C21": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C22": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C23": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C24": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C30": {
+        "bit_identical": true,
+        "arrays": 16
+      },
+      "C31": {
+        "bit_identical": true,
+        "arrays": 13
+      },
+      "C32": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "LEGACY": {
+        "bit_identical": true,
+        "arrays": 45
+      },
+      "O05": {
+        "bit_identical": true,
+        "arrays": 42
+      },
+      "O08": {
+        "bit_identical": true,
+        "arrays": 7
+      },
+      "F04": {
+        "bit_identical": true,
+        "arrays": 13
+      },
+      "F11": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "F12": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "O01": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "O02": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "O03a": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "O03b": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "O04": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "O07": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "O06": {
+        "bit_identical": true,
+        "arrays": 56
+      }
+    },
+    "criteria": {
+      "C01": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.16087958848638e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C02": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 2.323951227191913e-13,
+          "limit": 8.8e-10,
+          "passed": true
+        }
+      ],
+      "C03": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 4.983222070331357e-14,
+          "limit": 4.6e-10,
+          "passed": true
+        }
+      ],
+      "C04": [
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0017016579983828474,
+          "limit": 0.0035,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.03803348826564909,
+          "limit": 0.077,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory",
+          "value": 3.7207515060239214e-16,
+          "limit": 4.6e-11,
+          "passed": true
+        }
+      ],
+      "C05": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.789433494973977e-14,
+          "limit": 1.8e-13,
+          "passed": true
+        }
+      ],
+      "C06": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 7.35235399804747e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C07": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.8333119097572857e-14,
+          "limit": 1.9e-13,
+          "passed": true
+        }
+      ],
+      "C08": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.7896616261916362e-14,
+          "limit": 1.8e-13,
+          "passed": true
+        }
+      ],
+      "C09": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 1.1720350484400818e-09,
+          "limit": 1.2e-08,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C10": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 1.1720350484400818e-09,
+          "limit": 1.2e-08,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C11": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.02563555761567038,
+          "limit": 0.052,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0007851674498030037,
+          "limit": 0.0016,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.021168965190825284,
+          "limit": 0.043,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 2.5026577937560134e-10,
+          "limit": 2.6e-09,
+          "passed": true
+        }
+      ],
+      "C12": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.02730326732117505,
+          "limit": 0.055,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0007900185122861059,
+          "limit": 0.0016,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.02122624261501943,
+          "limit": 0.043,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.8495829921742875e-10,
+          "limit": 1.9e-09,
+          "passed": true
+        }
+      ],
+      "C13": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 3.869372991174674e-14,
+          "limit": 2e-11,
+          "passed": true
+        }
+      ],
+      "C14": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 4.1595759655127746e-14,
+          "limit": 2e-11,
+          "passed": true
+        }
+      ],
+      "C15": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 4.20103353327536e-14,
+          "limit": 2.1e-11,
+          "passed": true
+        }
+      ],
+      "C16": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 6.717256000362792e-09,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C17": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 6.717270946867225e-09,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C18": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 6.717287987326384e-09,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C19": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 6.717270946867225e-09,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C20": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 3.3668842903103264e-11,
+          "limit": 3.4e-10,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C21": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 3.3668842903103264e-11,
+          "limit": 3.4e-10,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C22": [
+        {
+          "criterion": "conservation/closure",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 1.017844131958004e-11,
+          "limit": 1.1e-10,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C23": [
+        {
+          "criterion": "conservation/closure",
+          "value": 1.0477378964424132e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C24": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C30": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.8279576286028575e-14,
+          "limit": 1.1e-10,
+          "passed": true
+        }
+      ],
+      "C31": [
+        {
+          "criterion": "analytic/interface",
+          "value": 0.000414533072367591,
+          "limit": 0.00083,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.015217443059959868,
+          "limit": 0.031,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.1672329162125367e-14,
+          "limit": 2.5e-10,
+          "passed": true
+        }
+      ],
+      "C32": [
+        {
+          "criterion": "conservation/closure",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 1.299134596557501e-10,
+          "limit": 1.3e-09,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "LEGACY": [
+        {
+          "criterion": "conservation/inventory_composition_dependent_implicit",
+          "value": 3.48263876545914e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory_composition_dependent_lagged",
+          "value": 5.804397942431901e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory_phase_uniform",
+          "value": 1.16087958848638e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "O05": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.5358481682540948e-12,
+          "limit": 1.6e-11,
+          "passed": true
+        }
+      ],
+      "F04": [
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0070354710016330285,
+          "limit": 0.015,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.002771260643791157,
+          "limit": 0.0056,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.2520328817770494e-13,
+          "limit": 5.2e-09,
+          "passed": true
+        }
+      ],
+      "F11": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.02563555761567038,
+          "limit": 0.052,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.002188472287251775,
+          "limit": 0.0044,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.013733198006571357,
+          "limit": 0.028,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 2.506153412914764e-10,
+          "limit": 2.6e-09,
+          "passed": true
+        }
+      ],
+      "F12": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.02730326732117505,
+          "limit": 0.055,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0022445461740739914,
+          "limit": 0.0045,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.014037397089284198,
+          "limit": 0.029,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.85229598890565e-10,
+          "limit": 1.9e-09,
+          "passed": true
+        }
+      ],
+      "O01": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O02": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O03a": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O03b": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O04": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O07": [
+        {
+          "criterion": "conservation/inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O06": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ]
+    },
+    "contract_assertion_groups": "passed for C25, C26, C27, C28, C29",
+    "unlisted_cases_passed_public_tolerance": [
+      "C09",
+      "C10",
+      "C11",
+      "C12",
+      "C20",
+      "C21",
+      "C22",
+      "C23",
+      "C32",
+      "O08",
+      "F11",
+      "F12",
+      "O02",
+      "O03b",
+      "C27",
+      "C28"
+    ],
+    "unlisted_cases_bit_identical": [
+      "C09",
+      "C10",
+      "C11",
+      "C12",
+      "C20",
+      "C21",
+      "C22",
+      "C23",
+      "C27",
+      "C28",
+      "C32",
+      "F11",
+      "F12",
+      "O02",
+      "O03b",
+      "O08"
+    ]
+  },
+  "listed_cases": {
+    "C01": "differs",
+    "C02": "differs",
+    "C03": "differs",
+    "C04": "differs",
+    "C05": "differs",
+    "C06": "differs",
+    "C07": "differs",
+    "C08": "differs",
+    "C13": "differs",
+    "C14": "differs",
+    "C15": "differs",
+    "C16": "differs",
+    "C17": "differs",
+    "C18": "differs",
+    "C19": "differs",
+    "C24": "differs",
+    "C30": "differs",
+    "C31": "differs",
+    "LEGACY": "differs",
+    "O05": "differs",
+    "F04": "differs",
+    "O01": "differs",
+    "O03a": "differs",
+    "O04": "differs",
+    "O07": "differs",
+    "O06": "differs",
+    "C25": "differs",
+    "C26": "differs",
+    "C29": "differs"
+  },
+  "settings_captured": [
+    "C04",
+    "C16",
+    "C24",
+    "F04"
+  ],
+  "layout_correction": "r09-data-tail",
+  "layout_verdicts": {
+    "C01": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C02": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C03": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C04": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C05": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C06": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C07": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C08": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C13": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C14": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C15": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C16": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C17": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C18": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C19": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C24": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C30": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C31": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "F04": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "LEGACY": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "binary_composition_dependent_implicit__data_time",
+          "binary_composition_dependent_implicit__data_y"
+        ],
+        [
+          "binary_composition_dependent_lagged__data_time",
+          "binary_composition_dependent_lagged__data_y"
+        ],
+        [
+          "binary_phase_uniform__data_time",
+          "binary_phase_uniform__data_y"
+        ]
+      ],
+      "problems": []
+    },
+    "O01": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "O03a": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "O04": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "O05": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "O06": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "O07": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "data/time",
+          "data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C25": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "model1/data/time",
+          "model1/data/values"
+        ],
+        [
+          "model2/data/time",
+          "model2/data/values"
+        ],
+        [
+          "model3/data/time",
+          "model3/data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C26": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "model1/data/time",
+          "model1/data/values"
+        ],
+        [
+          "model2/data/time",
+          "model2/data/values"
+        ],
+        [
+          "model3/data/time",
+          "model3/data/values"
+        ]
+      ],
+      "problems": []
+    },
+    "C29": {
+      "rule": "r09-data-tail",
+      "verdict": "tail-removal",
+      "corrected": [
+        [
+          "model0/data/time",
+          "model0/data/values"
+        ]
+      ],
+      "problems": []
+    }
+  },
+  "settings_carried_forward": [
+    "O04",
+    "O05"
+  ],
+  "approval_id": "20261113T194742Z-1993bb9-1",
+  "directory": "reference-approved/20261113T194742Z-1993bb9-1",
+  "artifacts": {
+    "C01": {
+      "json": "827e3a456cee7f8f2a46eecf6ebc37e297c1cd0a7c09a235b7af51ecdd0577b4",
+      "npz": "f7d13002421960cbeac9f885b2a73b6de19479b0be3f1a3b3a83250043430e8f"
+    },
+    "C02": {
+      "json": "9b17fac58e87141aa895973cb6340b0d7c22f8e01ad9599e65193f0894300f19",
+      "npz": "3284bc4c30d62630f2ec6337ce9564cb67d9296b587509eac0d4bf62b4feb622"
+    },
+    "C03": {
+      "json": "bffbdee67484199bc89f3067f976a6c399ccafe0c5e5e119b519d8c4339d1bdb",
+      "npz": "bf2fa113e526f48de6d4e0fe5f45422d6d79ce58c94d80656848e6ebcc1524b5"
+    },
+    "C04": {
+      "json": "ae80863260161fa284392d8a678e212bce49151426f902f577a2b8a15c80b0df",
+      "npz": "21c53c271723d01c57755b840763ad57a303c320db014bcb5de5bcfe3d9b1927",
+      "settings": "73103cc88720a30983fb1d10c6a56d55e1ee3621b1dc01ca1295907c796ca7c3"
+    },
+    "C05": {
+      "json": "b126c345a3ccd5fc97377f1abb90e27d2da0310f88c06cfeffa2b3e8f1161d8d",
+      "npz": "17c83cb0da1f24782bfbcbd1cb47982276a9cbc9f58af344003b3c0fd8a1d3f8"
+    },
+    "C06": {
+      "json": "024541922e28279af797f252590ab0e26e6412b2afe27a9a8f1a22d7664162a8",
+      "npz": "7eec9e212733f49356d664027d5fe82974eb2db3f34befdf5be0fdff5e297ce2"
+    },
+    "C07": {
+      "json": "9c7c5dc0ae1446d491e89870c7f111e2164e2315332f54e4ff0ba754d52f5ab9",
+      "npz": "3a44a5e04f68104c6fc7b0328f95bc7ecdda4be00a484db48c1728a05c1d54a2"
+    },
+    "C08": {
+      "json": "548a3fd8b8e74024a773aab063ee04396c5cbb6da5ab7853a1a44f233882c133",
+      "npz": "ae2466ddad0bd1901f6aa454ab7afaf6271380ef97ac56def2f5e9d71bd4f902"
+    },
+    "C13": {
+      "json": "f39b099f9776d166d850494d02e0418ed65b01841b959e118982f4539200fd2c",
+      "npz": "aaf99f804abd10576ecda4cbaeb8a1a9ff026d3e40acea7862acae7aecdff346"
+    },
+    "C14": {
+      "json": "df148455461987fecbd33df6d98db0cb4d1c210ab1e2a6cc7f7cf2d062d4692e",
+      "npz": "f694d11e53f783603efaf61039a8fce119d1c8b7f77dd7183d72ceb1bee27f45"
+    },
+    "C15": {
+      "json": "c6e8badf06019ec1bae52869b5412a2db48834e0e7acaeaf58558fe8a56e99f4",
+      "npz": "460df90d379044954712e51fc4945074fa9cc146c5e060f6aab5ef4f5a3380ad"
+    },
+    "C16": {
+      "json": "87042f66c621b71d440cbfaa17d65f1088f15bcbc558b4f3e9523d5b444471a4",
+      "npz": "eae792ce58c1a265e9118ddbf41534967f3cd537cfcb06f665aa2758fa66a0dd",
+      "settings": "66b7271aa2a99c56ba7c4effaa7b95ec693ca3bc9a5b3d197df045d809b2f0d2"
+    },
+    "C17": {
+      "json": "e7721f5c83414bf60545ee1a1239072c67d58ce9dbce542afa2ff1ad4e055530",
+      "npz": "30b0a7cf27a66d837913ed007a076be40123d9f00f63e00dff56d3e4ac81ae55"
+    },
+    "C18": {
+      "json": "90c163e96231b9fe19d2738e6d1f9bec044da4b749b601d545eb5e38fb47b56c",
+      "npz": "9aab4a04bb252066ece3262255743a3bfc5c593f4d4fc594068368152c44dacd"
+    },
+    "C19": {
+      "json": "a94bb2aa20a2445d2c12dc90255c0bf43e9bf98f6a62971962446f7b32707a1a",
+      "npz": "98f994989267df1ca9f723e137903c520482500a72daf6d58138ea9d4bbf6cc7"
+    },
+    "C24": {
+      "json": "724de878e25160ef2d39c458f7420bbdad82ba19ef6d5e23ad75943753eb9cf9",
+      "npz": "08d83a65b8ae31157ed6840b51468e0f0cc02ea1c937e7d49690c944b6a7d41d",
+      "settings": "3b6b95248c8e6f0f39233ce96a306433e503208f0f47479ea10019d2582eaae4"
+    },
+    "C30": {
+      "json": "08564b00756d68b0a65887a4abc6452e4e2f12ab0d2fe8a7152f8a38bd23d0ab",
+      "npz": "633c0916e633f62b751300eb4cb77314f1067e98d420cb08475b98c01792163e"
+    },
+    "C31": {
+      "json": "14820e0e1c3d9542b1813b02eab63d2a02c839479851d2e51a3f8bc7e0f6e76a",
+      "npz": "ac40148288e61f5fe46afb0f57f65266ea404b5bb3b470ac78f51859ced32575"
+    },
+    "F04": {
+      "json": "2eeebc59c2a1bec1b9030195d86933a17776ef16f01dfc29694cdc42b00efe8e",
+      "npz": "df1da29b0ea2d15bd50e86fb15a5094203f44a8c1bf0efea980a986d201d2ad7",
+      "settings": "6d7d8034928301ba12b48f9f7befb0464f41d56f7fe45ec33accce6d2f6c9a7b"
+    },
+    "LEGACY": {
+      "json": "e8b3c553990d2ce9dae3b08201936ca4527f77413fb2e436b0d026378a8c4ff3",
+      "npz": "7fb6b97fb66dc6bd6da4028752e95459ee8eb13f80b23a09d43b56b5d5869dbe"
+    },
+    "O01": {
+      "json": "0a10aab6255357fdcbd21588548a0654fa91482470608d4460855d5ccb0a459b",
+      "npz": "8824c71b02dda4d72ce19b0af8b7c976d5cb33fc08bcf4e8dbce18100a25f109"
+    },
+    "O03a": {
+      "json": "f7fb98b1f1fc393c6a5db718077bf5731b5a8a7752b5ef2f6c9c1106a69402f6",
+      "npz": "ba8c4c76c8808589ff0f56dcb5791a5f8b898c248ab87a434175e3ef8da9acad"
+    },
+    "O04": {
+      "json": "c16f33979e84af563bd7cf17384642c22dc00173ce7d67c182479a8a7c1bf5ca",
+      "npz": "c4cabf80fbc46469ee49dba147cc1c4c823c8d8f00e0e606c18270b10cdec68e",
+      "settings": "private-carried-forward"
+    },
+    "O05": {
+      "json": "3d56b72a5aaec4b42e376dabcc8421492358bcae183f6e3ec2ff6a24612e417b",
+      "npz": "46514cb4d2c98a3aa8beecef4a8d894ea3715c5b8fac93ef1ffeb03be8e78e71",
+      "settings": "private-carried-forward"
+    },
+    "O06": {
+      "json": "9e4a417ac11bcd10dd53ee334a0031e17af20a6f9672001b01abb9beca9c4e04",
+      "npz": "400ef10b2aac2cefa783817b214beea8f22033663c8841f3080c62d2acab363d"
+    },
+    "O07": {
+      "json": "0cab906e2f88602ee0ca8e93e90c57becf83d9a39999ac5cc1b2ae02bc486f56",
+      "npz": "ca683c34f0270911098f314fe4c3c42b9b288a08cfbc700287336aa94643fec6"
+    },
+    "C25": {
+      "json": "c178cb65c9c7960cfa7aaffc44dc41755889d6e5c64b3bbc0e72d4f48a871dd6",
+      "npz": "6103cf824eadf99d5b1c099d6a18221783d23f90d3f66c56a653f3a25908f352"
+    },
+    "C26": {
+      "json": "7771fe3c5cded97b11e94d83bb4f8113e7f891bcb66404b9dc8c4389b0f9ae91",
+      "npz": "af70ed6c8ac18b41148e9c69e05f65382d78ddec2b9f6c7b177af0ba3310041f"
+    },
+    "C29": {
+      "json": "f5e585166470f69c74c7949f73b432a6186236f8eee12d82ccb5f236892bd8cf",
+      "npz": "871b712643a03cd7788a4c01cfe4bfea856cb82e718efca47f181d0bf6b8df97"
+    }
+  },
+  "previous": {
+    "C01": "reference",
+    "C02": "20261111T222849Z-5aedde7-1",
+    "C03": "20261111T222849Z-5aedde7-1",
+    "C04": "20261111T222849Z-5aedde7-1",
+    "C05": "reference",
+    "C06": "reference",
+    "C07": "reference",
+    "C08": "reference",
+    "C13": "20261111T222849Z-5aedde7-1",
+    "C14": "20261111T222849Z-5aedde7-1",
+    "C15": "20261111T222849Z-5aedde7-1",
+    "C16": "reference",
+    "C17": "reference",
+    "C18": "reference",
+    "C19": "reference",
+    "C24": "reference",
+    "C30": "20261111T222849Z-5aedde7-1",
+    "C31": "20261111T222849Z-5aedde7-1",
+    "F04": "20261111T222849Z-5aedde7-1",
+    "LEGACY": "reference",
+    "O01": "reference",
+    "O03a": "reference",
+    "O04": "reference",
+    "O05": "reference",
+    "O06": "reference",
+    "O07": "20261111T222849Z-5aedde7-1",
+    "C25": "20261113T174227Z-3047510-1",
+    "C26": "reference",
+    "C29": "20261113T174227Z-3047510-1"
+  }
+}
