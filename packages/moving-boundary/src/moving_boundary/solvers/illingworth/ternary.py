@@ -2761,6 +2761,14 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             self._validate_profile_compositions(profile, f"candidate {side} transformed profile")
 
     def postSolve(self):
+        """
+        Finalizes every history after a solve (shared row rule, LEDGERS R09).
+
+        Each package history appends the final accepted state only if its latest
+        record stored no row; a repeated call adds nothing. Legacy exception
+        until R09c: at interval 1 ``data`` (compatibility ``MeshData``) appends a
+        duplicate of its last row on every call.
+        """
         self.data.finalize()
         self.interfaceData.finalize()
         self.etaData.finalize()
@@ -2771,6 +2779,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             self.qData.finalize()
 
     def getInterfacePosition(self, time=None):
+        """Returns the current accepted interface position, or the recorded one at ``time`` (interpolated)."""
         return self.interfaceData.y(time)
 
     def getInterfacePositions(self, time=None):
@@ -2783,7 +2792,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         return np.asarray([self.getInterfacePosition(time)], dtype=np.float64)
 
     def getInterfaceEta(self, time=None):
-        """Returns the recorded scalar tie-line coordinate."""
+        """Returns the current accepted tie-line coordinate, or the recorded one at ``time`` (interpolated)."""
         return self.etaData.y(time)
 
     def getInterfaceEtas(self, time=None):
@@ -2799,17 +2808,27 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         return self._interface_compositions(self.getInterfaceEta(time))
 
     def getTransformedState(self, time=None):
-        """Returns the recorded transformed left and right ternary profiles."""
+        """
+        Returns the transformed left and right ternary profiles ``(p, q)``.
+
+        Without ``time`` this is a copy of the current accepted state, also when
+        the p/q histories are disabled (``record_pq_data=False``). A timed
+        request needs the histories and an exactly recorded time.
+        """
         return self.getTransformedStateLeft(time), self.getTransformedStateRight(time)
 
     def getTransformedStateLeft(self, time=None):
-        """Returns the recorded left transformed composition matrix ``p``."""
+        """Returns the left transformed composition matrix ``p`` (current, or recorded at ``time``)."""
+        if time is None and self._p_curr is not None:
+            return self._p_curr.copy()
         if self.pData is None:
             raise ValueError("Transformed left-state history is not available; set record_pq_data=True.")
         return self.pData.y(time)
 
     def getTransformedStateRight(self, time=None):
-        """Returns the recorded right transformed composition matrix ``q``."""
+        """Returns the right transformed composition matrix ``q`` (current, or recorded at ``time``)."""
+        if time is None and self._q_curr is not None:
+            return self._q_curr.copy()
         if self.qData is None:
             raise ValueError("Transformed right-state history is not available; set record_pq_data=True.")
         return self.qData.y(time)

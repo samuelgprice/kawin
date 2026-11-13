@@ -7,6 +7,11 @@ import numpy as np
 
 from moving_boundary.compatibility import GenericModel
 from moving_boundary.compatibility import DiffusionModel
+from moving_boundary.compatibility.recording import (
+    _advance_history_rows,
+    _finalize_history_rows,
+    _history_row_target,
+)
 from moving_boundary.solvers.illingworth._interstitials import (
     has_interstitials,
     record_initial_u_fractions,
@@ -131,6 +136,18 @@ def _binary_residual_scale(inventory, domain_length, composition_floor):
     return float(scale)
 
 class _ScalarHistory:
+    """
+    Scalar time history of the binary Illingworth model (interface, inventory).
+
+    ``record`` follows the shared row rule (``compatibility.recording``,
+    LEDGERS R09): with ``record=k`` the initial row and one row every ``k``
+    accepted steps (counted from ``reset`` across solves) are appended, a
+    forced row is appended without consuming a cadence slot, and nothing is
+    overwritten. ``record=False`` keeps one row holding the current value.
+    ``N`` is the last stored row, ``currentIndex`` the cadence counter,
+    ``_rowCount`` the number of stored rows and ``_lastRecordStored`` whether
+    the latest ``record`` call stored a row.
+    """
     def __init__(self, record: bool | int = False):
         if isinstance(record, bool):
             self.recordInterval = 1 if record else -1
@@ -146,6 +163,8 @@ class _ScalarHistory:
         self.currentY = 0.0
         self.currentTime = 0.0
         self.N = 0
+        self._rowCount = 0
+        self._lastRecordStored = False
 
     def preallocate(self, capacity):
         """Preallocates scalar history storage without changing recorded values."""
@@ -160,34 +179,33 @@ class _ScalarHistory:
         self._time = time_new
 
     def record(self, time, y, force: bool = False):
-        if self.recordInterval > 0:
-            if self.currentIndex % self.recordInterval == 0 or force:
-                self.N = int(self.currentIndex / self.recordInterval)
-                if self.N >= self._time.shape[0]:
-                    self._y = np.pad(self._y, (0, self.batchSize))
-                    self._time = np.pad(self._time, (0, self.batchSize))
-                self._y[self.N] = y
-                self._time[self.N] = time
-            self.currentIndex += 1
-        else:
-            self._y[self.N] = y
-            self._time[self.N] = time
+        """Stores ``y`` under the shared row rule; ``currentY``/``currentTime`` always take this call's values."""
+        target = _history_row_target(self, force)
+        if target is not None:
+            if target >= self._time.shape[0]:
+                self._y = np.pad(self._y, (0, self.batchSize))
+                self._time = np.pad(self._time, (0, self.batchSize))
+            self._y[target] = y
+            self._time[target] = time
+        _advance_history_rows(self, target, force)
 
         self.currentY = float(y)
         self.currentTime = float(time)
 
     def finalize(self):
-        if self.recordInterval > 0 and self.N >= 0 and np.isclose(self._time[self.N], self.currentTime, rtol=0.0, atol=1e-14):
-            self._y = self._y[: self.N + 1]
-            self._time = self._time[: self.N + 1]
-            return
-        self.record(self.currentTime, self.currentY, force=True)
-        self._y = self._y[: self.N + 1]
-        self._time = self._time[: self.N + 1]
+        """Appends the current value unless the latest record stored a row, then trims (flag-based, no time tolerance)."""
+        _finalize_history_rows(self)
 
     def y(self, time=None):
+        """
+        Returns the current value without ``time``; otherwise a stored-row lookup.
+
+        A timed request interpolates linearly between stored rows and clamps to
+        the first/last stored row, so the current time of an unstored step
+        returns the last stored row, not the live value.
+        """
         if time is None:
-            return float(self._y[self.N])
+            return float(self.currentY)
         if self.recordInterval > 0:
             if time <= self._time[0]:
                 return float(self._y[0])
@@ -201,6 +219,12 @@ class _ScalarHistory:
         return float(self._y[0])
 
 class _VectorHistory:
+    """
+    Vector time history (fixed length) of the binary transformed profiles ``p``/``q``.
+
+    Recording follows the same shared row rule and bookkeeping as
+    ``_ScalarHistory``. Timed lookups need an exactly recorded time.
+    """
     def __init__(self, n_components: int, record: bool | int = False):
         if isinstance(record, bool):
             self.recordInterval = 1 if record else -1
@@ -220,6 +244,8 @@ class _VectorHistory:
         self.currentY = np.zeros(self.n_components, dtype=np.float64)
         self.currentTime = 0.0
         self.N = 0
+        self._rowCount = 0
+        self._lastRecordStored = False
 
     def preallocate(self, capacity):
         """Preallocates vector history storage without changing recorded values."""
@@ -235,44 +261,37 @@ class _VectorHistory:
 
     def record(self, time, y, force: bool = False):
         '''
-        Stores current state of time and vector variable.
+        Stores current state of time and vector variable under the shared row rule.
         '''
         values = np.asarray(y, dtype=np.float64).reshape(-1)
         if values.size != self.n_components:
             raise ValueError(f"Expected {self.n_components} components, got {values.size}.")
-        if self.recordInterval > 0:
-            if self.currentIndex % self.recordInterval == 0 or force:
-                self.N = int(self.currentIndex / self.recordInterval)
-                if self.N >= self._time.shape[0]:
-                    self._y = np.pad(self._y, ((0, self.batchSize), (0, 0)))
-                    self._time = np.pad(self._time, (0, self.batchSize))
-                self._y[self.N] = values
-                self._time[self.N] = time
-            self.currentIndex += 1
-        else:
-            self._y[self.N] = values
-            self._time[self.N] = time
+        target = _history_row_target(self, force)
+        if target is not None:
+            if target >= self._time.shape[0]:
+                self._y = np.pad(self._y, ((0, self.batchSize), (0, 0)))
+                self._time = np.pad(self._time, (0, self.batchSize))
+            self._y[target] = values
+            self._time[target] = time
+        _advance_history_rows(self, target, force)
         self.currentY = values.copy()
         self.currentTime = float(time)
 
     def finalize(self):
         '''
-        Removes extra padding.
+        Appends the current value unless the latest record stored a row, then
+        removes extra padding (flag-based, no time tolerance).
         '''
-        if self.recordInterval > 0 and self.N >= 0 and np.isclose(self._time[self.N], self.currentTime, rtol=0.0, atol=1e-14):
-            self._y = self._y[: self.N + 1]
-            self._time = self._time[: self.N + 1]
-            return
-        self.record(self.currentTime, self.currentY, force=True)
-        self._y = self._y[: self.N + 1]
-        self._time = self._time[: self.N + 1]
+        _finalize_history_rows(self)
 
     def y(self, time=None):
         '''
-        Returns vector value at an exact recorded time.
+        Returns a copy of the current vector without ``time``; otherwise the
+        value at an exactly recorded time (``atol=1e-14``, last match), or
+        ``ValueError``. The live value is never substituted for an unstored time.
         '''
         if time is None:
-            return self._y[self.N].copy()
+            return np.array(self.currentY, dtype=np.float64)
         recorded_time = self._time[: self.N + 1]
         matches = np.where(np.isclose(recorded_time, float(time), atol=1e-14, rtol=0.0))[0]
         if len(matches) == 0:
@@ -368,7 +387,11 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
     non-positive scale raises ``ValueError``.
     The transformed profile histories ``pData`` and ``qData`` are recorded by
     default, but may be disabled with ``record_pq_data=False`` to reduce
-    memory use in long runs. Recording arrays can also be preallocated once the
+    memory use in long runs; ``getTransformedState()`` without a time still
+    returns the accepted ``p``/``q``. With ``record=k`` every history stores the
+    initial row, one row every ``k`` accepted steps and a final row per solve;
+    getters without a time always return the current accepted state (LEDGERS
+    R09). Recording arrays can also be preallocated once the
     timestep schedule is known; this avoids repeated padding but may allocate
     large full-profile histories up front. Custom transformed grids may be
     supplied with ``transformed_u_grid`` and ``transformed_v_grid`` for planar
@@ -828,9 +851,12 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         """
         Estimates rows needed by the history record/finalize convention.
 
-        Histories already contain the initial state when this is called. The
-        extra two rows cover the final forced record path and roundoff-driven
-        near-final no-op step.
+        For a solve started after ``reset`` this bounds the rows stored: the
+        initial row, one regular row every ``record_interval`` steps and the
+        appended forced final row (which uses no cadence slot); the extra rows
+        also cover a roundoff-driven near-final no-op step. Continued solves may
+        need more, which the normal ``record`` growth path supplies; capacity
+        never changes the stored values.
         """
         if record_interval <= 0:
             return 1
@@ -1684,22 +1710,30 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
 
     def getTransformedState(self, time=None):
         """
-        Returns the recorded transformed left/right phase state at an exact time.
+        Returns the transformed left/right phase state ``(p, q)``.
+
+        Without ``time`` this is a copy of the current accepted state, also when
+        the p/q histories are disabled (``record_pq_data=False``). A timed
+        request needs the histories and an exactly recorded time.
         """
         return self.getTransformedStateLeft(time), self.getTransformedStateRight(time)
 
     def getTransformedStateLeft(self, time=None):
         """
-        Returns the recorded left transformed composition vector ``p``.
+        Returns the left transformed composition vector ``p`` (current, or recorded at ``time``).
         """
+        if time is None and self._p_curr is not None:
+            return self._p_curr.copy()
         if self.pData is None:
             raise ValueError("Transformed left-state history is not available; set record_pq_data=True.")
         return self.pData.y(time)
 
     def getTransformedStateRight(self, time=None):
         """
-        Returns the recorded right transformed composition vector ``q``.
+        Returns the right transformed composition vector ``q`` (current, or recorded at ``time``).
         """
+        if time is None and self._q_curr is not None:
+            return self._q_curr.copy()
         if self.qData is None:
             raise ValueError("Transformed right-state history is not available; set record_pq_data=True.")
         return self.qData.y(time)
@@ -1746,6 +1780,16 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         return [self._p_curr.copy(), self._q_curr.copy(), self._s_curr], False
 
     def postSolve(self):
+        """
+        Finalizes every history after a solve (shared row rule, LEDGERS R09).
+
+        Each package history appends the final accepted state only if its latest
+        record stored no row; a repeated call adds nothing. Legacy exception
+        until R09c: at interval 1 ``data`` (compatibility ``MeshData``) appends a
+        duplicate of its last row on every call. Histories stay synchronized
+        otherwise, except that ``data`` row 0 holds the profile before the
+        transformed-state reconstruction of ``setup``.
+        """
         self.data.finalize()
         self.interfaceData.finalize()
         self.concData.finalize()
@@ -1755,6 +1799,7 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
             self.qData.finalize()
 
     def getInterfacePosition(self, time=None):
+        """Returns the current accepted interface position, or the recorded one at ``time`` (interpolated)."""
         return self.interfaceData.y(time)
 
     def getTotalInventoryFromState(self, p, q, s):

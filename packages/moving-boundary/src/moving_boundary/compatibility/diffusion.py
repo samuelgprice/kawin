@@ -36,6 +36,7 @@ class DiffusionModel(_HostDiffusion, GenericModel):
                          constraints=constraints, record=record)
         data = MeshData(mesh, record)
         data.__dict__.update(self.data.__dict__)
+        data._syncRowBookkeeping()
         self.data = data
 
     def _validateMeshComposition(self):

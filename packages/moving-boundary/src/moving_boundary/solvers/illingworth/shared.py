@@ -8,6 +8,11 @@ from moving_boundary._spectral_validation import TERNARY_DIFFUSIVITY_POSITIVE_EI
 
 from moving_boundary.compatibility import GenericModel
 from moving_boundary.compatibility import DiffusionModel
+from moving_boundary.compatibility.recording import (
+    _advance_history_rows,
+    _finalize_history_rows,
+    _history_row_target,
+)
 from kawin.diffusion.DiffusionParameters import TemperatureParameters
 from moving_boundary.solvers.illingworth._interstitials import (
     composition_bound_violation,
@@ -1184,6 +1189,18 @@ def estimate_initial_eta_from_instantaneous_balance(
 
 
 class _ScalarHistory:
+    """
+    Scalar time history of a ternary/three-phase Illingworth model (interface, eta, ...).
+
+    ``record`` follows the shared row rule (``compatibility.recording``,
+    LEDGERS R09): with ``record=k`` the initial row and one row every ``k``
+    accepted steps (counted from ``reset`` across solves) are appended, a
+    forced row is appended without consuming a cadence slot, and nothing is
+    overwritten. ``record=False`` keeps one row holding the current value.
+    ``N`` is the last stored row, ``currentIndex`` the cadence counter,
+    ``_rowCount`` the number of stored rows and ``_lastRecordStored`` whether
+    the latest ``record`` call stored a row.
+    """
     def __init__(self, record: bool | int = False):
         if isinstance(record, bool):
             self.recordInterval = 1 if record else -1
@@ -1199,35 +1216,36 @@ class _ScalarHistory:
         self.currentY = 0.0
         self.currentTime = 0.0
         self.N = 0
+        self._rowCount = 0
+        self._lastRecordStored = False
 
     def record(self, time, y, force: bool = False):
-        if self.recordInterval > 0:
-            if self.currentIndex % self.recordInterval == 0 or force:
-                self.N = int(self.currentIndex / self.recordInterval)
-                if self.N >= self._time.shape[0]:
-                    self._y = np.pad(self._y, (0, self.batchSize))
-                    self._time = np.pad(self._time, (0, self.batchSize))
-                self._y[self.N] = y
-                self._time[self.N] = time
-            self.currentIndex += 1
-        else:
-            self._y[self.N] = y
-            self._time[self.N] = time
+        """Stores ``y`` under the shared row rule; ``currentY``/``currentTime`` always take this call's values."""
+        target = _history_row_target(self, force)
+        if target is not None:
+            if target >= self._time.shape[0]:
+                self._y = np.pad(self._y, (0, self.batchSize))
+                self._time = np.pad(self._time, (0, self.batchSize))
+            self._y[target] = y
+            self._time[target] = time
+        _advance_history_rows(self, target, force)
         self.currentY = float(y)
         self.currentTime = float(time)
 
     def finalize(self):
-        if self.recordInterval > 0 and np.isclose(self._time[self.N], self.currentTime, rtol=0.0, atol=1e-14):
-            self._y = self._y[: self.N + 1]
-            self._time = self._time[: self.N + 1]
-            return
-        self.record(self.currentTime, self.currentY, force=True)
-        self._y = self._y[: self.N + 1]
-        self._time = self._time[: self.N + 1]
+        """Appends the current value unless the latest record stored a row, then trims (flag-based, no time tolerance)."""
+        _finalize_history_rows(self)
 
     def y(self, time=None):
+        """
+        Returns the current value without ``time``; otherwise a stored-row lookup.
+
+        A timed request interpolates linearly between stored rows and clamps to
+        the first/last stored row, so the current time of an unstored step
+        returns the last stored row, not the live value.
+        """
         if time is None:
-            return float(self._y[self.N])
+            return float(self.currentY)
         if self.recordInterval > 0:
             if time <= self._time[0]:
                 return float(self._y[0])
@@ -1242,6 +1260,12 @@ class _ScalarHistory:
 
 
 class _ArrayHistory:
+    """
+    Array-valued time history (fixed ``shape``) of a ternary/three-phase Illingworth model.
+
+    Recording follows the same shared row rule and bookkeeping as
+    ``_ScalarHistory``. Timed lookups need an exactly recorded time.
+    """
     def __init__(self, shape, record: bool | int = False):
         if isinstance(record, bool):
             self.recordInterval = 1 if record else -1
@@ -1258,38 +1282,39 @@ class _ArrayHistory:
         self.currentY = np.zeros(self.shape, dtype=np.float64)
         self.currentTime = 0.0
         self.N = 0
+        self._rowCount = 0
+        self._lastRecordStored = False
 
     def record(self, time, y, force: bool = False):
+        """Stores a copy of ``y`` under the shared row rule; ``currentY`` always takes this call's value."""
         values = np.asarray(y, dtype=np.float64)
         if values.shape != self.shape:
             raise ValueError(f"Expected history value with shape {self.shape}, got {values.shape}.")
-        if self.recordInterval > 0:
-            if self.currentIndex % self.recordInterval == 0 or force:
-                self.N = int(self.currentIndex / self.recordInterval)
-                if self.N >= self._time.shape[0]:
-                    self._y = np.pad(self._y, ((0, self.batchSize), *[(0, 0) for _ in self.shape]))
-                    self._time = np.pad(self._time, (0, self.batchSize))
-                self._y[self.N] = values
-                self._time[self.N] = time
-            self.currentIndex += 1
-        else:
-            self._y[self.N] = values
-            self._time[self.N] = time
+        target = _history_row_target(self, force)
+        if target is not None:
+            if target >= self._time.shape[0]:
+                self._y = np.pad(self._y, ((0, self.batchSize), *[(0, 0) for _ in self.shape]))
+                self._time = np.pad(self._time, (0, self.batchSize))
+            self._y[target] = values
+            self._time[target] = time
+        _advance_history_rows(self, target, force)
         self.currentY = values.copy()
         self.currentTime = float(time)
 
     def finalize(self):
-        if self.recordInterval > 0 and np.isclose(self._time[self.N], self.currentTime, rtol=0.0, atol=1e-14):
-            self._y = self._y[: self.N + 1]
-            self._time = self._time[: self.N + 1]
-            return
-        self.record(self.currentTime, self.currentY, force=True)
-        self._y = self._y[: self.N + 1]
-        self._time = self._time[: self.N + 1]
+        """Appends the current value unless the latest record stored a row, then trims (flag-based, no time tolerance)."""
+        _finalize_history_rows(self)
 
     def y(self, time=None):
+        """
+        Returns a copy of the current value without ``time``; otherwise an exact-time lookup.
+
+        A timed request must match a stored time within ``atol=1e-14`` (the last
+        match wins) or ``ValueError`` is raised; the live value is never
+        substituted for an unstored time.
+        """
         if time is None:
-            return self._y[self.N].copy()
+            return np.array(self.currentY, dtype=np.float64)
         recorded_time = self._time[: self.N + 1]
         matches = np.where(np.isclose(recorded_time, float(time), atol=1e-14, rtol=0.0))[0]
         if len(matches) == 0:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from moving_boundary.compatibility import DiffusionModel
+from moving_boundary.compatibility.recording import _finalize_history_rows, _history_row_target
 from moving_boundary.solvers.illingworth._interstitials import (
     composition_bound_violation,
     full_mole_fractions,
@@ -2678,12 +2679,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         )
 
     def _history_record_target(self, history):
-        """Returns the row a normal history record will overwrite, or ``None``."""
-        if history.recordInterval > 0:
-            if history.currentIndex % history.recordInterval != 0:
-                return None
-            return int(history.currentIndex / history.recordInterval)
-        return int(history.N)
+        """Returns the row a regular history record will write (shared R09 row rule), or ``None``."""
+        return _history_row_target(history)
 
     def _ensure_history_record_capacity(self, history, target):
         """Ensures one history target row exists before an atomic record sequence."""
@@ -2721,6 +2718,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
                     current_y,
                     history.currentTime,
                     old_capacity,
+                    history._rowCount,
+                    history._lastRecordStored,
                 )
             )
         try:
@@ -2734,8 +2733,11 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return snapshots
 
     def _restore_history_snapshots(self, snapshots):
-        """Restores metadata, overwritten rows, and pretransaction capacity."""
-        for history, target, row, row_time, current_index, index, current_y, current_time, old_capacity in snapshots:
+        """Restores metadata (including the row counter and stored-row flag), written rows, and capacity."""
+        for (
+            history, target, row, row_time, current_index, index, current_y, current_time, old_capacity,
+            row_count, last_record_stored,
+        ) in snapshots:
             if target is not None and target < old_capacity:
                 history._y[target] = row
                 history._time[target] = row_time
@@ -2746,6 +2748,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             history.N = index
             history.currentY = current_y
             history.currentTime = current_time
+            history._rowCount = row_count
+            history._lastRecordStored = last_record_stored
 
     def _commit_accepted_state(self, time, accepted):
         """Commits one prepared state and all synchronized histories as one transaction."""
@@ -2877,6 +2881,15 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return self.getCurrentX(), False
 
     def postSolve(self):
+        """
+        Finalizes every history, ``data`` included, with the shared flag rule (LEDGERS R09).
+
+        A history appends the final accepted state only if its latest record
+        stored no row (an off-cadence final step); times are not compared, and a
+        repeated call adds nothing. ``data`` bypasses the compatibility
+        ``MeshData.finalize`` interval-1 duplicate, so all histories stay
+        synchronized.
+        """
         histories = [
             self.data,
             self.interfaceData,
@@ -2890,13 +2903,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         if self.profileData is not None:
             histories.extend(self.profileData)
         for history in histories:
-            if history.recordInterval > 0 and np.isclose(
-                history._time[history.N], history.currentTime, rtol=0.0, atol=1e-14
-            ):
-                history._y = history._y[: history.N + 1]
-                history._time = history._time[: history.N + 1]
-            else:
-                history.finalize()
+            _finalize_history_rows(history)
 
     def reset(self):
         super().reset()
@@ -2966,11 +2973,11 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         self._cumulativeProjectedSolves = 0
 
     def getInterfacePositions(self, time=None):
-        """Returns the two recorded interface positions ``[s_AB, s_BC]``."""
+        """Returns the current accepted interface positions ``[s_AB, s_BC]``, or the recorded ones at an exact ``time``."""
         return self.interfaceData.y(time)
 
     def getInterfaceEtas(self, time=None):
-        """Returns the two recorded tie-line coordinates ``[eta_AB, eta_BC]``."""
+        """Returns the current accepted tie-line coordinates ``[eta_AB, eta_BC]``, or the recorded ones at an exact ``time``."""
         return self.etaData.y(time)
 
     def getInterfaceCompositions(self, time=None):
@@ -2978,7 +2985,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         return self._interface_compositions(self.getInterfaceEtas(time))
 
     def getTransformedState(self, time=None):
-        """Returns the three recorded transformed phase profiles."""
+        """Returns the three transformed phase profiles: current (copies) without ``time``, else recorded at an exact ``time``."""
         if time is None and self._profiles_curr is not None:
             return tuple(profile.copy() for profile in self._profiles_curr)
         if self.profileData is None:
