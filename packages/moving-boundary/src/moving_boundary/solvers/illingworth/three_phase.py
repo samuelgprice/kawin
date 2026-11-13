@@ -2886,9 +2886,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
 
         A history appends the final accepted state only if its latest record
         stored no row (an off-cadence final step); times are not compared, and a
-        repeated call adds nothing. ``data`` bypasses the compatibility
-        ``MeshData.finalize`` interval-1 duplicate, so all histories stay
-        synchronized.
+        repeated call adds nothing, and all histories stay synchronized (the same
+        rule as the compatibility ``MeshData.finalize``).
         """
         histories = [
             self.data,

@@ -1783,11 +1783,10 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
         """
         Finalizes every history after a solve (shared row rule, LEDGERS R09).
 
-        Each package history appends the final accepted state only if its latest
-        record stored no row; a repeated call adds nothing. Legacy exception
-        until R09c: at interval 1 ``data`` (compatibility ``MeshData``) appends a
-        duplicate of its last row on every call. Histories stay synchronized
-        otherwise, except that ``data`` row 0 holds the profile before the
+        Every history, ``data`` included, appends the final accepted state only
+        if its latest record stored no row; a repeated call adds nothing (R09c
+        removed the interval-1 duplicate ``data`` row). All histories share their
+        recorded times; ``data`` row 0 still holds the profile before the
         transformed-state reconstruction of ``setup``.
         """
         self.data.finalize()

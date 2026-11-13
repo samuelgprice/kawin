@@ -1,4 +1,4 @@
-"""R09: Illingworth history recording and no-time getters (stage R09a).
+"""R09: Illingworth history recording and no-time getters (stages R09a and R09c).
 
 Contract (LEDGERS R09):
 
@@ -13,14 +13,17 @@ Contract (LEDGERS R09):
 - Final deduplication is flag-based: ``finalize`` adds its row unless the most
   recent record call itself stored one. Times are not compared, so a genuinely
   new snapshot a few 1e-15 after the last stored row is kept.
-- At interval 1 the binary and two-phase ternary ``data`` history still gains one
-  legacy duplicate row per ``postSolve`` (removal is R09c). Recording-disabled
-  histories keep a single row holding the current state.
+- The ``data`` history (compatibility ``MeshData``) follows the same rule at every
+  interval, so all histories of a model share their recorded times: R09c removed
+  the legacy duplicate final row that binary and two-phase ternary ``data`` gained
+  per ``postSolve`` at interval 1. Recording-disabled histories keep a single row
+  holding the current state.
 - Binary and two-phase ternary ``getTransformedState()`` with no time returns the
   live transformed state even without a p/q history.
 
-Defect tests fail before R09a for the stated reason (wrong rows, a stale value or
-a missing row). Preservation tests pass before and after it.
+Defect tests fail before R09a (or, in their own section, before R09c) for the
+stated reason (wrong rows, a stale value, a missing or duplicate row).
+Preservation tests pass before and after.
 """
 
 import dataclasses
@@ -374,9 +377,9 @@ def _history_factories():
 def test_finalize_keeps_a_new_snapshot_closely_after_the_last_stored_row(kind):
     """Interval 2: a final accepted snapshot 5e-15 after the last stored row is appended, not dropped.
 
-    ``MeshData`` is checked at interval 2 because its interval-1 finalize keeps
-    the legacy duplicate until R09c. Its case passes before R09a too (the host
-    finalize never deduplicated); the four package histories failed there.
+    At interval 2 the last call stores no row, so a forced row is needed. The
+    ``MeshData`` case passes before R09a too (the host finalize never
+    deduplicated); the four package histories failed there.
     """
     make, value = _history_factories()[kind]
     history = make(2)
@@ -410,55 +413,62 @@ def test_post_solve_keeps_a_direct_commit_closely_after_the_last_stored_row(fami
     assert _stale_getters(family, model) == []
 
 
-# Preservation tests (pass before and after R09a)
+# R09c defect tests (binary/two-phase cases fail before R09c; three-phase passes before and after)
 
 
 @pytest.mark.parametrize("family", sorted(_FAMILIES))
-def test_interval_one_layout_including_the_legacy_data_duplicate(family):
-    """Interval 1: binary/two-phase data repeats its final row once per postSolve (R09c); others do not.
+def test_interval_one_histories_are_synchronized_without_a_duplicate_data_row(family):
+    """Interval 1, two steps then one more: every history, data included, holds each accepted time once.
 
-    This test is deliberately replaced when R09c removes the duplicate.
+    Replaces the R09a preservation test that kept the legacy duplicate data row.
     """
     build, step = _FAMILIES[family]
     model = build(True)
     accepted = _track_commits(model)
     model.solve(2 * step, minDtFrac=1e-14)
-    first = np.asarray(accepted)
+    _assert_rows(model, np.asarray(accepted))
     model.solve(step, minDtFrac=1e-14)
-    second = np.asarray(accepted)
 
-    if family == "three_phase":
-        _assert_rows(model, second)
-        return
-    _assert_rows(model, second, skip=("data",))
-    expected_data = np.concatenate((first, first[-1:], second[-1:], second[-1:]))
-    assert np.array_equal(_times(model.data), expected_data), _times(model.data).tolist()
-    assert _freeze(model.data._y[3]) == _freeze(model.data._y[2])
-    assert _freeze(model.data._y[5]) == _freeze(model.data._y[4])
+    _assert_rows(model, np.asarray(accepted))
+    assert model.data.N == model.interfaceData.N == len(accepted) - 1
+    assert model.data._time.shape[0] == model.data.N + 1
 
 
 @pytest.mark.parametrize("family", sorted(_FAMILIES))
-def test_repeated_post_solve_adds_no_package_history_row(family):
-    """Package histories (and three-phase data) are unchanged by a repeated postSolve, at intervals 1 and 3.
-
-    At interval 1 the binary/two-phase data history adds exactly one legacy duplicate per call.
-    """
+def test_repeated_post_solve_adds_no_row_to_any_history(family):
+    """Every history, data included, is unchanged by a repeated postSolve, at intervals 1 and 3."""
     build, step = _FAMILIES[family]
     for record in (True, 3):
         model = build(record)
         model.solve(4 * step, minDtFrac=1e-14)
-        before = {name: _freeze((_times(h), h._y[: h.N + 1], h.N)) for name, h in _histories(model).items()}
-        data_rows = model.data.N + 1
+        before = {name: _freeze((h._time, h._y, h.N)) for name, h in _histories(model).items()}
 
         model.postSolve()
 
-        for name, history in _histories(model).items():
-            if name == "data" and family in _TWO_PHASE:
-                continue
-            assert _freeze((_times(history), history._y[: history.N + 1], history.N)) == before[name], (record, name)
-        if family in _TWO_PHASE and record is True:
-            assert model.data.N + 1 == data_rows + 1
-            assert _freeze(model.data._y[model.data.N]) == _freeze(model.data._y[model.data.N - 1])
+        changed = [name for name, h in _histories(model).items() if _freeze((h._time, h._y, h.N)) != before[name]]
+        assert changed == [], f"record={record}: a repeated postSolve changed {changed}"
+
+
+def test_mesh_data_interval_one_finalize_adds_no_duplicate():
+    """MeshData at interval 1: finalize appends nothing (every record stored a row), also when repeated.
+
+    A distinct snapshot 5e-15 after the previous row is a regular row and is kept.
+    """
+    make, value = _history_factories()["mesh_data"]
+    history = make(True)
+    times = [0.0, 1.0, 1.0 + 5.0e-15]
+    for k, time in enumerate(times):
+        history.record(time, value(k))
+
+    history.finalize()
+    history.finalize()
+
+    assert _times(history).tolist() == times
+    assert history._time.shape[0] == 3 and history._y.shape[0] == 3
+    assert _freeze(np.asarray(history._y[2])) == _freeze(np.asarray(value(2), dtype=np.float64))
+
+
+# Preservation tests (pass before and after R09a and R09c)
 
 
 @pytest.mark.parametrize("family", sorted(_FAMILIES))

@@ -76,10 +76,10 @@ class MeshData(_HostData):
     regular rows are never overwritten and a forced final row is appended
     without consuming a cadence slot. ``y()`` without a time returns the current
     state (``currentY``) even when the latest accepted step was not stored.
-    Legacy exception (until LEDGERS R09c): at interval 1 ``finalize`` always
-    appends a row, so binary and two-phase ternary ``data`` end with a duplicate
-    of their last row after every ``postSolve``. Three-phase finalizes ``data``
-    with ``_finalize_history_rows`` directly and has no duplicate.
+    ``finalize`` uses the shared flag rule at every interval (LEDGERS R09c), so
+    ``data`` stays synchronized with the other Illingworth histories: no
+    duplicate final row, and a repeated ``finalize`` adds nothing. (Before R09c
+    the host behavior of always appending a row was kept at interval 1.)
     """
     def __init__(self, mesh, record=False):
         """Initialize host storage and the optional exact-time lookup policy."""
@@ -130,17 +130,12 @@ class MeshData(_HostData):
 
     def finalize(self):
         """
-        Appends the forced final row if needed and trims unused rows.
+        Appends the forced final row if needed and trims unused rows (``_finalize_history_rows``).
 
-        At interval 1 this keeps the legacy host behavior of always appending the
-        current state (a duplicate of the last accepted row; removal is LEDGERS
-        R09c). At other intervals it follows ``_finalize_history_rows``.
+        The current state is appended only when the latest ``record`` stored no
+        row; times are not compared. At interval 1 every record stores a row, so
+        nothing is appended (the host always appended a duplicate; LEDGERS R09c).
         """
-        if self.recordInterval == 1:
-            self.record(self.currentTime, self.currentY, force=True)
-            self._y = self._y[: self.N + 1]
-            self._time = self._time[: self.N + 1]
-            return
         _finalize_history_rows(self)
 
     def preallocate(self, capacity):
