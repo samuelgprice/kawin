@@ -123,8 +123,13 @@ with initial, regular and forced final rows, dedup is flag-based, and no-time ge
 Contracts C25/C29 (binary time-zero `profiles/compositions`) are approved as
 `20261113T174227Z-3047510-1` (commit `83b5887`). Gates from `83b5887`: exact full 40/40 runs and
 5 contracts bit-identical (live O06, 34 repeat pairs), examples E01-E10 pass, full `tests/` 1332
-passed. The interval-1 binary/two-phase `data` duplicate row remains, pending R09c. R10 is open,
-and R13 (ternary/three-phase residual scales) is recorded.
+passed. R09c is implemented (2026-11-13; tooling `d56f25e`, fix `24a2d39`): the interval-1
+binary/two-phase `data` duplicate row is gone, and `--layout-correction r09-data-tail` proves the
+changed references strictly (29 cases `tail-removal`, 16 `identical`, 0 `other`; live O06; settings
+equal case versus case). **Reference adoption is pending:** until a user-authorized
+`approve --layout-correction r09-data-tail` for those 29 cases (LEDGERS R09), normal exact
+acceptance fails exactly 26 runs and contracts C25, C26, C29, and examples E01-E06, by design.
+R10 is open (now after R09c), and R13 (ternary/three-phase residual scales) is recorded.
 
 ## Installed solving and research-owned generation
 

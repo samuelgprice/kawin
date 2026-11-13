@@ -88,7 +88,9 @@ last research oracle; it is never moved again.
   approval takes effect locally as soon as it is written. `approve --rollback ID` points those
   cases back, and its manifest change is committed the same way.
   `reference/` is never rewritten. The first real approval is `20261111T222849Z-5aedde7-1`
-  (LEDGERS R08, 11 binary cases, commit `34c02d2`).
+  (LEDGERS R08, 11 binary cases, commit `34c02d2`). A pure storage-layout change is adopted with
+  `approve --layout-correction RULE`, which adds a strict structural proof on top of every gate
+  (`tools/acceptance_layout.py`; LEDGERS R09, stage R09c).
 - **Item 7.** Contract cases C25-C29 compare with per-model molar-volume scales
   (`contract_model_scales`, user-approved), as run cases do.
 - **Item 14 supersession.** Supersession is recorded only in the package docs (this entry,
@@ -852,10 +854,11 @@ Decisions are the user's (R08_HANDOFF §2-§4, all recommended options approved)
 
 ### R09: sparse recording mixes live state with recorded snapshots
 
-**Status:** partially resolved 2026-11-13 by R09a (commit `3047510`; resolution below); C25/C29
-approved as `20261113T174227Z-3047510-1` (commit `83b5887`). **Still open (R09c):** at interval 1
-the binary/two-phase `data` history keeps one duplicate final row per `postSolve`, so it is out of
-step with the other histories. **Scope:** binary history classes, shared
+**Status:** implemented; reference adoption pending. R09a (commit `3047510`) with C25/C29
+approved as `20261113T174227Z-3047510-1` (commit `83b5887`); R09c (tooling `d56f25e`, fix
+`24a2d39`, 2026-11-13; resolution below) removes the interval-1 duplicate `data` row. Until a
+user-authorized `approve --layout-correction r09-data-tail` adopts the 26 runs and 3 contracts it
+changes, normal exact acceptance fails for exactly those cases by design. **Scope:** binary history classes, shared
 `_ScalarHistory`/`_ArrayHistory`, and solver getters that delegate to them.
 
 With recording every third step, the binary `getInterfacePosition()` returned
@@ -932,6 +935,66 @@ dedup are the user's).**
   repeat pairs with no differences, 542 s; examples E01-E10 pass with 68 tests (E11 a pending
   fixture), 157 s; full `tests/` 1332 passed, 5 skipped (C25-C29 comparisons outside an acceptance
   run), 1 deselected (`slow`), 298 s.
+
+**Resolution, stage R09c (2026-11-13; implemented, reference adoption pending; order changed by the
+user to R09c before R10).**
+- *Tooling (R09c-1, commit `d56f25e`).* `tools/acceptance_layout.py` classifies a candidate against
+  the case's previously selected reference as `identical` (key set, dtype, shape, bytes),
+  `tail-removal` or `other`. `tail-removal` requires the same key set, every array outside the
+  declared pairs identical, and each changed pair (`data/time`+`data/values`,
+  `model<i>/data/time`+`/values`, LEGACY `<mode>__data_time`+`__data_y`) to have lost exactly its
+  last row, a bitwise duplicate of the row before it (`candidate == reference[:-1]`). Only O06's
+  existing metadata-path normalization applies; a change within public tolerance is `other`.
+  - `quick|full --layout-correction r09-data-tail` and `acceptance_examples.py run
+    --layout-correction r09-data-tail` are non-promoting checks: every normal gate runs, normal
+    comparisons are recorded and reported, any `other` fails, and corrected mapped cases need
+    case-versus-case settings equality.
+  - `approve --layout-correction r09-data-tail --cases ...` keeps every existing gate and adds:
+    listed cases and contracts must be `tail-removal`, unlisted ones `identical` (so the listed set
+    equals the differing set). For mapped cases the selected settings are hash-validated first,
+    fresh `--settings-only` settings are captured, and
+    `example_settings.differences(selected, captured, allowed=())` must be empty (BOOKKEEPING only;
+    no example-versus-case exceptions; the 6 R07 bookkeeping fields missing from older records are
+    thereby tolerated). Public cases store the full capture with its committed hash as before.
+    O04/O05 only, and only in this mode, get the `private-carried-forward` marker: the adopted file
+    and its private hash validation stay, no settings file or hash is published, and temporary
+    captures are deleted before promotion. The committed report carries structural verdicts
+    (key names) instead of numerical deviations.
+  - Tests: `tests/test_acceptance_layout.py` (58): every structural rejection, O06 normalization,
+    the listed/differing-set rule, failed criteria, repeat mismatch and package-test/contract
+    failures blocking promotion even when the layout passes, settings (changed genuine settings,
+    unrecorded attribute, older records, hash and private-hash failures, no example exceptions),
+    marker restrictions and validation, crash-safe promotion and rollback with a carried-forward
+    case, example checks and CLI refusals. Normal gates unchanged at `d56f25e` (exact full 40/40
+    runs and 5 contracts bit-identical, live O06, 34 repeat pairs, 553 s; examples E01-E10 pass;
+    full `tests/` 1390 passed, 5 skipped, 1 deselected).
+- *Fix (R09c-2, commit `24a2d39`).* The compatibility `MeshData.finalize` uses the shared flag rule
+  at every interval, so binary/two-phase `data` holds each accepted time once, is synchronized with
+  the other histories, and repeated `postSolve` adds nothing. Tests: the R09a test that preserved
+  the duplicate is replaced; 5 tests (interval-1 synchronization and repeated `postSolve` for
+  binary/ternary, `MeshData` interval 1) failed against `d56f25e` for the duplicate row, and all 49
+  history-contract tests pass after.
+- *Affected set, confirmed against the selected references* (frozen, R08 approval, and the R09a
+  approval for C25/C29): every selected reference with a duplicate data tail has exactly one, with
+  no interior repeats. Runs (26): C01-C08, C13-C19, C24, C30, C31, F04, LEGACY (all three modes),
+  O01, O03a, O04, O05, O06, O07. Contracts (3): C25 (model1-3), C26 (model1-3), C29 (model0).
+  Examples: E01-E06 through C04, F04, C16, C24, O05, O04.
+- *Gates at `24a2d39`* (fresh targets, 2026-11-13, nothing `--record`ed, no approval):
+  - full `tests/` 1391 passed, 5 skipped, 1 deselected;
+  - `full --tolerance exact --layout-correction r09-data-tail`: 29 `tail-removal` (exactly the set
+    above), 16 `identical` (all three-phase cases and contracts, O02, O03b, O08), 0 `other`; live
+    O06; 34 repeat pairs with no differences; contract assertion groups and the gate's package tests
+    passed; settings equal case versus case for C04, C16, C24, F04, O04, O05; 628 s;
+  - example layout check: E01-E06 `tail-removal`, E07-E10 `identical`, 68 tests passed;
+  - normal gates fail by design until the approval: exact full has 14 runs bit-identical and fails
+    exactly the 26 runs (only their `accepted_times`/`profiles` groups, i.e. `data/time` and
+    `data/values`) and contracts C25, C26, C29; normal examples fail E01-E06 on `data/time` and
+    `data/values` only, E07-E10 pass.
+- *Pending (user authorization):* the real approval, from a clean clone of the committed revision
+  with the local inputs copied hash-verified, for exactly the 29 cases above:
+  `acceptance.py approve --tier full --layout-correction r09-data-tail --cases C01 C02 C03 C04 C05
+  C06 C07 C08 C13 C14 C15 C16 C17 C18 C19 C24 C30 C31 F04 LEGACY O01 O03a O04 O05 O06 O07 C25 C26
+  C29 --reason "LEDGERS R09c: ..."`, then committing its manifest entry and report separately.
 
 ### R10: failed initialization or output preparation can leave partial state
 
