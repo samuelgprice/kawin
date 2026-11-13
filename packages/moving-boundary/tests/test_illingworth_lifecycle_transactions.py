@@ -13,11 +13,11 @@ Contract (LEDGERS R10):
   solve, and setup/solve after a failed setup equals an untouched model, all
   bit for bit.
 
-A successful reset and solve equals a freshly constructed model for binary and
-two-phase ternary. Three-phase does not, before or after R10 (a pre-existing
-limitation outside R10, user decision 2026-11-13): the host ``reset`` records
-the raw ``mesh.y`` while the constructor stores its u-fraction conversion,
-which differs from it in the last bits at some nodes.
+A successful reset and solve equals a freshly constructed model in every
+family. For three-phase this holds since the R10 reset-parity follow-up: reset
+records the constructor's u-fraction conversion of ``mesh.y`` (before it, reset
+recorded the raw ``mesh.y``, or a different interstitial conversion, which
+differed from the constructor's in the last bits at some nodes).
 
 - R10b: binary and two-phase ternary ``postProcess`` prepare every output
   before changing model state and commit histories, accepted state, time,
@@ -56,6 +56,7 @@ from test_illingworth_history_contract import (
     _histories,
     _track_commits,
 )
+from test_illingworth_interstitials_three_phase import _model as _three_phase_interstitial_model
 
 
 def _is_history(value):
@@ -162,7 +163,7 @@ def test_reset_clear_cache_failure_then_continued_solve_equals_an_untouched_cont
 
 
 def _assert_reset_recovery(family, model):
-    """A repeated reset and solve equals an untouched model's reset and solve (and a fresh model where that holds)."""
+    """A repeated reset and solve equals an untouched model's reset and solve, and a freshly constructed model."""
     build, step = _FAMILIES[family]
     model.reset()
     model.solve(2 * step, minDtFrac=1e-14)
@@ -171,10 +172,9 @@ def _assert_reset_recovery(family, model):
     untouched.solve(2 * step, minDtFrac=1e-14)
 
     _assert_same_result(model, untouched)
-    if family in _TWO_PHASE:
-        fresh = build(3)
-        fresh.solve(2 * step, minDtFrac=1e-14)
-        _assert_same_result(model, fresh)
+    fresh = build(3)
+    fresh.solve(2 * step, minDtFrac=1e-14)
+    _assert_same_result(model, fresh)
 
 
 @pytest.mark.parametrize("family", sorted(_FAMILIES))
@@ -299,8 +299,9 @@ def test_recovery_after_a_failed_setup_equals_an_untouched_model(fault, family):
 # R10a preservation tests (pass before and after R10a)
 
 
-@pytest.mark.parametrize("family", _TWO_PHASE)
+@pytest.mark.parametrize("family", sorted(_FAMILIES))
 def test_successful_reset_then_solve_equals_a_fresh_model(family):
+    """Binary/two-phase: preservation. Three-phase: fails before the R10 reset-parity follow-up (last-bit differences)."""
     build, step = _FAMILIES[family]
     for record in (True, 3):
         model = build(record)
@@ -314,30 +315,101 @@ def test_successful_reset_then_solve_equals_a_fresh_model(family):
         _assert_same_result(model, fresh)
 
 
-def test_three_phase_successful_reset_records_the_raw_mesh_profile():
-    """Pre-existing three-phase reset behavior, kept by R10: row 0 is the raw ``mesh.y``, not the constructor's conversion.
+# R10 reset-parity follow-up: three-phase reset has the constructor's initialization
+# semantics (fail before the follow-up, at the last bits of the initial profile).
 
-    The fixture's raw profile differs from its u-fraction conversion in the last
-    bits at some nodes, so reset + solve is reproducible but not equal to a fresh model.
+_THREE_PHASE_FIXTURES = {
+    "substitutional": (lambda: _FAMILIES["three_phase"][0](True), _FAMILIES["three_phase"][1]),
+    "interstitial": (lambda: _three_phase_interstitial_model()[0], 1.0e-4),
+}
+
+
+def _initial_profile(model):
+    return {
+        "currentY": _freeze(np.asarray(model.data.currentY, dtype=np.float64)),
+        "row0": _freeze(np.asarray(model.data._y[0], dtype=np.float64)),
+        "mesh.y": _freeze(np.asarray(model.mesh.y, dtype=np.float64)),
+    }
+
+
+@pytest.mark.parametrize("fixture", sorted(_THREE_PHASE_FIXTURES))
+def test_three_phase_reset_records_the_constructor_initial_state(fixture):
+    """After a run, reset gives exactly the freshly constructed initial state (profile, histories, time, ``isSetup``).
+
+    ``mesh.y`` is not modified by reset, and repeated resets give the same state
+    (the conversion is applied once to ``mesh.y``, never to an already converted profile).
     """
-    build, step = _FAMILIES["three_phase"]
-    model = build(3)
-    constructed = np.array(model.data.currentY, copy=True)
+    build, step = _THREE_PHASE_FIXTURES[fixture]
+    fresh = build()
+    model = build()
+    model.solve(2 * step, minDtFrac=1e-14)
+    mesh_before = _freeze(np.asarray(model.mesh.y, dtype=np.float64))
+
+    for _ in range(2):
+        model.reset()
+
+        assert _freeze(np.asarray(model.mesh.y, dtype=np.float64)) == mesh_before
+        assert _initial_profile(model) == _initial_profile(fresh)
+        _assert_same_result(model, fresh)
+
+
+@pytest.mark.parametrize("fixture", sorted(_THREE_PHASE_FIXTURES))
+def test_three_phase_reset_then_solve_equals_a_fresh_model(fixture):
+    """Run, reset, solve (and again after two consecutive resets) reproduces a fresh model's setup and solve bit for bit."""
+    build, step = _THREE_PHASE_FIXTURES[fixture]
+    model = build()
     model.solve(2 * step, minDtFrac=1e-14)
 
-    assert model.reset() is None
+    model.reset()
+    model.setup()
+    fresh = build()
+    fresh.setup()
+    _assert_same_result(model, fresh)
+    model.solve(3 * step, minDtFrac=1e-14)
+    fresh.solve(3 * step, minDtFrac=1e-14)
+    _assert_same_result(model, fresh)
 
-    raw = np.asarray(model.mesh.flattenResponse(model.mesh.y), dtype=np.float64)
-    assert model.isSetup is False and model.currentTime == 0
-    assert _freeze(np.asarray(model.data.currentY, dtype=np.float64)) == _freeze(raw)
-    assert _freeze(np.asarray(model.data._y[0], dtype=np.float64)) == _freeze(raw)
-    assert not np.array_equal(raw, constructed)
+    model.reset()
+    model.reset()
     model.solve(2 * step, minDtFrac=1e-14)
-    again = build(3)
-    again.solve(2 * step, minDtFrac=1e-14)
-    again.reset()
+    again = build()
     again.solve(2 * step, minDtFrac=1e-14)
     _assert_same_result(model, again)
+
+
+@pytest.mark.parametrize("fixture", sorted(_THREE_PHASE_FIXTURES))
+def test_three_phase_reset_failing_while_recording_the_initial_profile_keeps_the_simulation(fixture):
+    """R10a guarantees for the new step: a failure while reset re-records the initial profile restores the run.
+
+    Continuation then equals an untouched continuation, and a successful retry
+    equals an untouched model doing the same reset sequence and a fresh model.
+    """
+    build, step = _THREE_PHASE_FIXTURES[fixture]
+    model = build()
+    model.solve(2 * step, minDtFrac=1e-14)
+    model.data.setResponseAtN = _raise("recording the initial profile failed")
+    before = _image(model)
+
+    with pytest.raises(RuntimeError, match="recording the initial profile failed"):
+        model.reset()
+
+    changed = _image_changes(before, _image(model))
+    del model.data.setResponseAtN
+    assert changed == [], f"a failed reset changed {changed}"
+    untouched = build()
+    untouched.solve(2 * step, minDtFrac=1e-14)
+    model.solve(step, minDtFrac=1e-14)
+    untouched.solve(step, minDtFrac=1e-14)
+    _assert_same_result(model, untouched)
+
+    model.reset()
+    untouched.reset()
+    model.solve(2 * step, minDtFrac=1e-14)
+    untouched.solve(2 * step, minDtFrac=1e-14)
+    fresh = build()
+    fresh.solve(2 * step, minDtFrac=1e-14)
+    _assert_same_result(model, untouched)
+    _assert_same_result(model, fresh)
 
 
 @pytest.mark.parametrize("family", sorted(_FAMILIES))

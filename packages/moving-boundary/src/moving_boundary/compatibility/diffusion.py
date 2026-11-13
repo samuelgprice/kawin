@@ -43,6 +43,9 @@ class DiffusionModel(_HostDiffusion, GenericModel):
         '''
         Checks that composition along mesh will be between min/max limits (set by DiffusionConstraints.minComposition)
         Since the mesh can store y in an arbitrary shape, we use the flatten array and unflatten it to store back in the mesh
+
+        Near-bound compositions are clamped in ``mesh.y`` (``yFlat`` is a view);
+        the result is then recorded by ``_recordInitialMeshComposition``.
         '''
         yFlat = self.mesh.flattenResponse(self.mesh.y)
         ySum = np.sum(yFlat, axis=1)
@@ -54,7 +57,19 @@ class DiffusionModel(_HostDiffusion, GenericModel):
         if ((1-ySum)<scaledMinComp).any() or (yFlat<scaledMinComp).any():
             yFlat[yFlat > scaledMinComp] = yFlat[yFlat > scaledMinComp] - scaledMinComp
             yFlat[yFlat < scaledMinComp] = self.constraints.minComposition
+        self._recordInitialMeshComposition(yFlat)
 
+    def _recordInitialMeshComposition(self, yFlat):
+        '''
+        Stores the mole-fraction profile ``yFlat`` as independent u-fractions in the current data row and ``currentY``.
+
+        This is the conversion and recording step of ``_validateMeshComposition``
+        (no bounds check or clamping). ``yFlat`` from ``mesh.flattenResponse`` is
+        a view, so the clamping in the constructor has already been applied to
+        ``mesh.y`` in place; a model can therefore call this after ``reset`` with
+        ``mesh.flattenResponse(mesh.y)`` to re-record exactly the constructor's
+        initial profile, without clamping or converting twice.
+        '''
         # Convert composition to u-fraction and store into mesh
         yFull = expand_x_frac(yFlat)
         uFull = x_to_u_frac(yFull, self.allElements, interstitials, return_usum=False)

@@ -1053,7 +1053,8 @@ coupled-model failures without silently advancing accepted state.
     freshly constructed model. Three-phase reset + solve differs from a fresh model in the last bits,
     before and after R10: the host `reset` records the raw `mesh.y` as row 0, while the constructor
     stores its u-fraction conversion (11 of 31 nodes differ by up to 2.8e-17 in the test fixture).
-    This pre-existing limitation is outside R10 and pinned by a preservation test.
+    This pre-existing limitation is outside R10 and pinned by a preservation test. (Superseded:
+    corrected by the reset-parity follow-up below, user-authorized 2026-11-13.)
   - Gates before the commit (fresh target): focused tests 275 passed; full `tests/` 1428 passed,
     5 skipped, 1 deselected.
 - *R10b (commit `ded279d`): binary/two-phase prepare-then-commit and atomic finalization.*
@@ -1107,6 +1108,30 @@ coupled-model failures without silently advancing accepted state.
   model. Gates (fresh targets, no approval): focused lifecycle/R07/R09/three-phase suites 519
   passed; full `tests/` 1459 passed, 5 skipped, 1 deselected; exact full 40/40 runs and 5 contracts
   bit-identical, live O06, 34 repeat pairs, 630 s; examples E01-E10 pass with 68 tests.
+- *Follow-up (2026-11-13, user-authorized): three-phase reset parity (implemented; C27 adoption
+  pending).* A three-phase model that has run, then successfully resets and solves, now equals a
+  freshly constructed model bit for bit.
+  - Cause: the constructor runs `reset()` and then `_validateMeshComposition()` (clamps near-bound
+    compositions in `mesh.y`, whose flattened form is a view, then converts x to u). Three-phase
+    `reset` re-recorded the raw `mesh.y` (substitutional) or the interstitial-only
+    `record_initial_u_fractions` conversion, which differ from the constructor's in the last bits
+    (reproduced: 11/31 nodes up to 2.8e-17 substitutional, 21/31 up to 5.6e-17 interstitial; every
+    accepted field and history then differed after a solve).
+  - Fix: the conversion and recording step of the compatibility `_validateMeshComposition` is
+    extracted unchanged as `_recordInitialMeshComposition`; three-phase `reset` applies it to
+    `mesh.y` (already clamped, not modified, converted once). The constructor, binary and two-phase
+    ternary are unchanged (they still use `record_initial_u_fractions` after reset).
+  - Tests: the preservation test that pinned the discrepancy is replaced by parity regression tests
+    (both fixtures: initial profile, histories, time and `isSetup` after one and two resets, setup and
+    solve parity, a failed re-recording that keeps the run and recovers); 8 failed before the fix.
+    Focused suites 449 passed; full `tests/` 1465 passed, 5 skipped, 1 deselected.
+  - Acceptance: 40/40 runs, contracts C25, C26, C28, C29, 34 repeat pairs, live O06 and E01-E10
+    bit-identical. Contract C27 differs only in `model4` (the contract's run, `reset()`, `setup()`
+    three-phase model), in 9 arrays at round-off level (`data`, `etaData`, `inventoryData`,
+    `profileData0`/`1` values, `profiles/compositions`, `profiles/phase0`/`1/x`,
+    `state/_initialInventory`; max abs 1.9e-16, max rel 1.3e-15): the frozen reference recorded the
+    old reset. The candidate `model4` equals the contract's fresh `model0` in all 34 arrays. Adoption
+    of exactly C27 is authorized and pending.
 
 ### R11: inherited deserialization does not restore the solver state
 

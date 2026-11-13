@@ -137,6 +137,9 @@ Committed approval reports contain public hashes and structural or public eviden
   successful reset + solve, and also a fresh model for binary/two-phase ternary. Three-phase reset +
   solve already differed from a fresh model in the last bits before R10 (the host reset records the
   raw `mesh.y`, the constructor its u-fraction conversion); this is outside R10.
+  *Later (2026-11-13, user-authorized follow-up):* three-phase reset now records the constructor's
+  conversion, so (b) as originally written holds for all families (implemented; contract C27
+  adoption pending; LEDGERS R10).
 
 ### R10b: binary/two-phase prepare-then-commit, plus atomic multi-history finalization
 
@@ -316,5 +319,5 @@ Compare state bytewise (time, `isSetup`, accepted state, every history's rows, `
 
 ## 11. Genuinely unresolved decisions
 
-None for R10. Recorded outside R10: three-phase reset + solve differs from a fresh model in the last
-bits (pre-existing; changing it would change reset semantics).
+None for R10. The three-phase reset/fresh-construction last-bit difference recorded here is being
+corrected by a user-authorized follow-up (implemented; contract C27 adoption pending; LEDGERS R10).

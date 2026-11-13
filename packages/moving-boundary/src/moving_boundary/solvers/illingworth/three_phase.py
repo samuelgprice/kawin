@@ -10,7 +10,6 @@ from moving_boundary.solvers.illingworth._interstitials import (
     full_mole_fractions,
     has_interstitials,
     independent_interstitial_mask,
-    record_initial_u_fractions,
     resolve_diffusivity_provider,
     resolve_interface_equilibrium,
     validate_interstitial_element_order,
@@ -2875,17 +2874,23 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         """
         Returns the model to its initial state (time 0, initial records, ``isSetup=False``).
 
+        The initial profile is recorded with the constructor's semantics: the
+        host reset records the raw mole fractions of ``mesh.y``, which are then
+        replaced by the constructor's u-fraction conversion
+        (``_recordInitialMeshComposition``, the recording step of
+        ``_validateMeshComposition``). ``mesh.y`` already holds the constructor's
+        clamped values, so it is neither clamped nor modified again, and repeated
+        resets convert the same ``mesh.y``. Reset + solve therefore equals a
+        freshly constructed model bit for bit, with or without interstitials.
+
         All-or-nothing (LEDGERS R10a): if any part raises (the host reset and
-        provider ``clearCache``, or the interstitial u-fraction re-recording),
-        every model-owned field is restored and the exception re-raised, so the
+        provider ``clearCache``, or re-recording the initial profile), every
+        model-owned field is restored and the exception re-raised, so the
         previous simulation is kept. Provider caches and other external state
-        are not restored. The host reset records the raw ``mesh.y`` as row 0,
-        not the constructor's u-fraction conversion, so reset + solve can differ
-        from a freshly constructed model in the last bits (pre-existing).
+        are not restored.
         """
         super().reset()
-        if has_interstitials(self.allElements):
-            record_initial_u_fractions(self)
+        self._recordInitialMeshComposition(self.mesh.flattenResponse(self.mesh.y))
         self.interfaceData.reset()
         self.interfaceData.record(0, self.initialInterfacePositions)
         self.etaData.reset()
