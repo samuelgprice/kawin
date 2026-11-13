@@ -123,13 +123,15 @@ with initial, regular and forced final rows, dedup is flag-based, and no-time ge
 Contracts C25/C29 (binary time-zero `profiles/compositions`) are approved as
 `20261113T174227Z-3047510-1` (commit `83b5887`). Gates from `83b5887`: exact full 40/40 runs and
 5 contracts bit-identical (live O06, 34 repeat pairs), examples E01-E10 pass, full `tests/` 1332
-passed. R09c is implemented (2026-11-13; tooling `d56f25e`, fix `24a2d39`): the interval-1
-binary/two-phase `data` duplicate row is gone, and `--layout-correction r09-data-tail` proves the
-changed references strictly (29 cases `tail-removal`, 16 `identical`, 0 `other`; live O06; settings
-equal case versus case). **Reference adoption is pending:** until a user-authorized
-`approve --layout-correction r09-data-tail` for those 29 cases (LEDGERS R09), normal exact
-acceptance fails exactly 26 runs and contracts C25, C26, C29, and examples E01-E06, by design.
-R10 is open (now after R09c), and R13 (ternary/three-phase residual scales) is recorded.
+passed. R09 is resolved (2026-11-13): R09c (tooling `d56f25e`, fix `24a2d39`) removed the
+interval-1 binary/two-phase `data` duplicate row, and its 26 runs and contracts C25, C26, C29 are
+approved as `20261113T194742Z-1993bb9-1` (commit `6fd3be8`; `approve --layout-correction
+r09-data-tail`, strict layout proof, O04/O05 private settings carried forward). Gates from `6fd3be8`
+(fresh targets, no layout flag): exact full 40/40 runs and 5 contracts bit-identical (live O06, 34
+repeat pairs), examples E01-E10 pass, full `tests/` 1391 passed, 5 skipped, 1 deselected. The
+approved artifacts are local (`.verification/acceptance/reference-approved/`, three approvals); another
+checkout needs them copied in. R10 is open (next), and R13 (ternary/three-phase residual scales) is
+recorded.
 
 ## Installed solving and research-owned generation
 

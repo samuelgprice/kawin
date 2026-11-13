@@ -854,11 +854,10 @@ Decisions are the user's (R08_HANDOFF §2-§4, all recommended options approved)
 
 ### R09: sparse recording mixes live state with recorded snapshots
 
-**Status:** implemented; reference adoption pending. R09a (commit `3047510`) with C25/C29
-approved as `20261113T174227Z-3047510-1` (commit `83b5887`); R09c (tooling `d56f25e`, fix
-`24a2d39`, 2026-11-13; resolution below) removes the interval-1 duplicate `data` row. Until a
-user-authorized `approve --layout-correction r09-data-tail` adopts the 26 runs and 3 contracts it
-changes, normal exact acceptance fails for exactly those cases by design. **Scope:** binary history classes, shared
+**Status:** resolved 2026-11-13. R09a (commit `3047510`) with C25/C29 approved as
+`20261113T174227Z-3047510-1` (commit `83b5887`); R09c (tooling `d56f25e`, fix `24a2d39`) with its
+26 runs and 3 contracts approved as `20261113T194742Z-1993bb9-1` (commit `6fd3be8`). Resolutions
+below. **Scope:** binary history classes, shared
 `_ScalarHistory`/`_ArrayHistory`, and solver getters that delegate to them.
 
 With recording every third step, the binary `getInterfacePosition()` returned
@@ -990,11 +989,27 @@ user to R09c before R10).**
     exactly the 26 runs (only their `accepted_times`/`profiles` groups, i.e. `data/time` and
     `data/values`) and contracts C25, C26, C29; normal examples fail E01-E06 on `data/time` and
     `data/values` only, E07-E10 pass.
-- *Pending (user authorization):* the real approval, from a clean clone of the committed revision
-  with the local inputs copied hash-verified, for exactly the 29 cases above:
-  `acceptance.py approve --tier full --layout-correction r09-data-tail --cases C01 C02 C03 C04 C05
-  C06 C07 C08 C13 C14 C15 C16 C17 C18 C19 C24 C30 C31 F04 LEGACY O01 O03a O04 O05 O06 O07 C25 C26
-  C29 --reason "LEDGERS R09c: ..."`, then committing its manifest entry and report separately.
+- *Approval* `20261113T194742Z-1993bb9-1` (user-authorized; commit `6fd3be8`): `approve --tier
+  full --layout-correction r09-data-tail` in a clean clone of `1993bb9` with fresh targets and the
+  local inputs copied hash-verified, for exactly the 29 cases above (reason "LEDGERS R09c: remove
+  the interval-1 duplicate final data row (exact r09-data-tail layout correction)"), 952 s.
+  - Gates: 40 run cases (live O06) each repeated bit-identically; `approval_criteria` for every
+    case; whole suite on the installed wheel 1396 passed, nothing skipped; all 29 listed cases
+    `tail-removal` against their previously selected references; all 16 unlisted cases and
+    contracts bit-identical (and within public tolerance).
+  - Settings: equal case versus case. C04, F04, C16 and C24 captures are stored with the approval
+    under their committed hashes. O04/O05 carry `private-carried-forward`: no settings file in the
+    approval folder, and none of the local private hashes appears in the manifest or report. Example
+    acceptance still checks their unchanged adopted `example_settings/O0x.settings.json` against
+    the private digests.
+  - Artifacts: the 62 approved files were copied back and match the manifest hashes, as does the
+    committed report. `reference/`, the R08 and R09a approval folders, `example_settings/` and
+    `private-inputs.json` are byte-identical to before the approval (218 files).
+- *Gates after the approval* (from `6fd3be8`, fresh targets, 2026-11-13, no layout flag, not
+  `--record`ed): exact full 40/40 runs and 5 contracts bit-identical against the selected
+  references, live O06, 34 repeat pairs with no differences, 557 s; examples E01-E10 pass with 68
+  tests (E11 a pending fixture), 199 s; full `tests/` 1391 passed, 5 skipped (C25-C29 comparisons
+  outside an acceptance run), 1 deselected (`slow`), 288 s.
 
 ### R10: failed initialization or output preparation can leave partial state
 
