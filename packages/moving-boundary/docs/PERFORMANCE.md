@@ -27,6 +27,11 @@ containing both `comparison.json` and `comparison.txt`. They never write either
 input or automatically select/promote a baseline. Timing review flags do not
 produce a failing exit status; invalid simulations and execution failures do.
 
+Curated, tracked milestone results are kept in `benchmarks/baselines/`; see the
+[saved baseline instructions](../benchmarks/baselines/README.md). Export local
+results with the documented helper before comparing them with a saved baseline,
+so local path normalization is consistent on both sides.
+
 The launcher builds an offline wheel and installs it into a **new empty private
 target on every run**, using the activated `kawin` environment for pip. It then
 activates the selected public Conda environment for an isolated `python -S`
