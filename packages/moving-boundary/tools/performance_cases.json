@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "protocol": "warm-process-fresh-model-v1",
+  "profiles": {
+    "standard": {"warmups": 1, "samples": 7, "steps": 1600},
+    "smoke": {"warmups": 1, "samples": 2, "steps": 3}
+  },
+  "cases": [
+    {"id": "binary-constant-small-record", "family": "binary", "mode": "phase_uniform", "variable": false, "phase_nodes": [21, 21], "physical_nodes": 101, "record": true, "dt": 0.005, "conservation_atol": 1e-7},
+    {"id": "binary-lagged-large-off", "family": "binary", "mode": "composition_dependent_lagged", "variable": true, "phase_nodes": [161, 241], "physical_nodes": 801, "record": false, "dt": 0.005, "conservation_atol": 1e-7},
+    {"id": "binary-implicit-large-record", "family": "binary", "mode": "composition_dependent_implicit", "variable": true, "phase_nodes": [161, 241], "physical_nodes": 801, "record": true, "dt": 0.005, "conservation_atol": 1e-7},
+    {"id": "ternary-constant-small-record", "family": "ternary", "mode": "phase_uniform", "variable": false, "phase_nodes": [21, 21], "physical_nodes": 101, "record": true, "dt": 0.0001, "conservation_atol": 1e-7},
+    {"id": "ternary-constant-large-off", "family": "ternary", "mode": "phase_uniform", "variable": false, "phase_nodes": [161, 241], "physical_nodes": 801, "record": false, "dt": 0.0001, "conservation_atol": 1e-7},
+    {"id": "ternary-lagged-large-record", "family": "ternary", "mode": "composition_dependent_lagged", "variable": true, "phase_nodes": [161, 241], "physical_nodes": 801, "record": true, "dt": 0.0001, "conservation_atol": 1e-7},
+    {"id": "ternary-implicit-small-off", "family": "ternary", "mode": "composition_dependent_implicit", "variable": true, "phase_nodes": [21, 21], "physical_nodes": 101, "record": false, "dt": 0.0001, "conservation_atol": 1e-7},
+    {"id": "three-constant-small-record", "family": "three_phase", "mode": "phase_uniform", "variable": false, "phase_nodes": [9, 9, 9], "physical_nodes": 101, "record": true, "dt": 0.00001, "conservation_atol": 1e-7},
+    {"id": "three-lagged-large-off", "family": "three_phase", "mode": "composition_dependent_lagged", "variable": true, "phase_nodes": [65, 65, 65], "physical_nodes": 401, "record": false, "dt": 0.00001, "conservation_atol": 1e-7}
+  ]
+}

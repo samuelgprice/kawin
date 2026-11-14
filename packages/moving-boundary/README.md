@@ -201,3 +201,9 @@ PUBLIC_KAWIN_MILESTONE.md for ownership, scope and method-level source mapping.
 Package identity/audience, publication, pushing, MAP outreach, upstream contribution
 and changing the prompt default remain user decisions. LICENSE/NOTICE preserve
 attribution without claiming unresolved local/MAP redistribution rights are cleared.
+
+## Manual performance measurements
+
+See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the independent benchmark
+suite, smoke mode, and explicit baseline comparisons. It is separate from pytest,
+acceptance and reference approvals; all measurements stay in ignored run folders.

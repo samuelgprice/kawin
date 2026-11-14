@@ -7,3 +7,6 @@ __pycache__/
 !docs/verification.json
 !docs/git-audit.txt
 !docs/assessment.json
+
+# Versioned manual performance workloads (override local Git excludes).
+!tools/performance_cases.json
