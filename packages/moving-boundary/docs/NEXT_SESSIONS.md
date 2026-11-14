@@ -138,7 +138,10 @@ histories atomically (R10b `ded279d`). Gates at `ded279d` (fresh targets): exact
 passed, 5 skipped, 1 deselected. Follow-ups: interrupted three-phase commits roll back (`b04b818`);
 three-phase reset reproduces fresh construction bit for bit (fix `9595574`; contract C27 approved as
 `20261113T232720Z-9595574-1`, commit `ff01469`). Gates from `ff01469` (fresh targets): exact full
-40/40 runs and 5 contracts bit-identical (live O06, 34 repeat pairs), examples E01-E10 pass. The
+40/40 runs and 5 contracts bit-identical (live O06, 34 repeat pairs), examples E01-E10 pass.
+Two-phase ternary reset also reproduces fresh construction (initial profile through the
+constructor's conversion, and `initialEta` restored to NaN); binary needed no change (identical
+bits); no reference changed, exact full and E01-E10 bit-identical, full `tests/` 1506 passed. The
 approved artifacts are local (four approvals). R13 (ternary/three-phase residual scales) is recorded.
 
 ## Installed solving and research-owned generation

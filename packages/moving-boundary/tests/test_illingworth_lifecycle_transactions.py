@@ -13,11 +13,14 @@ Contract (LEDGERS R10):
   solve, and setup/solve after a failed setup equals an untouched model, all
   bit for bit.
 
-A successful reset and solve equals a freshly constructed model in every
-family. For three-phase this holds since the R10 reset-parity follow-up: reset
-records the constructor's u-fraction conversion of ``mesh.y`` (before it, reset
-recorded the raw ``mesh.y``, or a different interstitial conversion, which
-differed from the constructor's in the last bits at some nodes).
+A successful reset (before setup) and a reset followed by setup and solve equal
+a freshly constructed model in every family. This holds since the R10
+reset-parity follow-ups: three-phase and two-phase ternary reset record the
+constructor's u-fraction conversion of ``mesh.y`` (before, they recorded the raw
+``mesh.y``, or a different interstitial conversion, which differed from the
+constructor's in the last bits at some nodes for some profiles), and two-phase
+ternary reset restores the unestimated ``initialEta`` (NaN) instead of recording
+the previous setup's estimate. Binary reset needed no change (identical bits).
 
 - R10b: binary and two-phase ternary ``postProcess`` prepare every output
   before changing model state and commit histories, accepted state, time,
@@ -43,13 +46,22 @@ after.
 import numpy as np
 import pytest
 
+import test_illingworth_interstitials as _fe_c_tests
+import test_illingworth_interstitials_ternary as _fe_c_mn_tests
+from moving_boundary.analytic import FixedMatrixTernaryDiffusivity
 from moving_boundary.compatibility import recording as recording_module
+from moving_boundary.mesh import CartesianFD1D, MixedBoundary1D, ProfileBuilder, StepProfile1D
+from moving_boundary.mesh.TransformedGrids import two_phase_landau_grids
+from moving_boundary.solvers import MovingBoundaryIllingworthTernaryFD1DModel
 from moving_boundary.solvers.illingworth import binary as binary_module
 from moving_boundary.solvers.illingworth import shared as shared_module
 from moving_boundary.solvers.illingworth import three_phase as three_phase_module
+from moving_boundary.solvers.illingworth._interstitials import has_interstitials, x_to_u_independent
 from test_illingworth_history_contract import (
     _FAMILIES,
     _TWO_PHASE,
+    _CoupledTernaryThermodynamics,
+    _CurvedInterfaceEquilibrium,
     _accepted,
     _assert_rows,
     _freeze,
@@ -301,7 +313,8 @@ def test_recovery_after_a_failed_setup_equals_an_untouched_model(fault, family):
 
 @pytest.mark.parametrize("family", sorted(_FAMILIES))
 def test_successful_reset_then_solve_equals_a_fresh_model(family):
-    """Binary/two-phase: preservation. Three-phase: fails before the R10 reset-parity follow-up (last-bit differences)."""
+    """Preservation for the shared fixtures (their conversion is exact for binary/two-phase; the inexact
+    profiles are covered by the reset-parity tests below)."""
     build, step = _FAMILIES[family]
     for record in (True, 3):
         model = build(record)
@@ -315,13 +328,81 @@ def test_successful_reset_then_solve_equals_a_fresh_model(family):
         _assert_same_result(model, fresh)
 
 
-# R10 reset-parity follow-up: three-phase reset has the constructor's initialization
-# semantics (fail before the follow-up, at the last bits of the initial profile).
+# R10 reset-parity follow-ups: reset has the constructor's initialization semantics.
+#
+# Profile: three-phase and two-phase ternary reset record the constructor's u-fraction
+# conversion of ``mesh.y`` (``_recordInitialMeshComposition``). Before, they recorded the raw
+# ``mesh.y`` (no interstitials) or ``record_initial_u_fractions`` (interstitials), which differ
+# from the constructor's conversion in the last bits for some profiles (the "inexact" fixtures);
+# such tests fail before the fix for the family at the initial-profile bytes. Binary reset is
+# unchanged: with one independent component both paths give identical bits (``fl(1 - x) + x``
+# rounds to exactly 1, and the interstitial divisor is ``1 - x`` either way), so its fixtures are
+# preservation evidence, as are the ternary fixtures whose conversion is exact.
+#
+# Eta (two-phase ternary): setup stores its estimate in ``initialEta``; reset recorded that stale
+# estimate as ``etaData`` row 0 instead of the constructor's unestimated NaN. Reset now restores
+# ``initialEta = NaN`` first (configured initialization inputs are untouched).
 
-_THREE_PHASE_FIXTURES = {
-    "substitutional": (lambda: _FAMILIES["three_phase"][0](True), _FAMILIES["three_phase"][1]),
-    "interstitial": (lambda: _three_phase_interstitial_model()[0], 1.0e-4),
+
+def _ternary_substitutional_model(left):
+    """The history-contract ternary fixture with left composition ``left`` (right as there)."""
+    mesh = CartesianFD1D(["X", "Y"], [0.0, 1.0], 21)
+    mesh.setResponseProfile(
+        ProfileBuilder([(StepProfile1D(0.45, np.asarray(left), np.asarray([0.3261538461538461, 0.193])), ["X", "Y"])]),
+        boundaryConditions=MixedBoundary1D(2),
+    )
+    return MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh, elements=["Z", "X", "Y"], phases=["ALPHA", "BETA"],
+        thermodynamics=_CoupledTernaryThermodynamics(), temperature=1000.0, interfacePosition=0.45,
+        interface_equilibrium=_CurvedInterfaceEquilibrium(), initial_eta_bracket=(0.0, 1.0),
+        time_step=1.0e-2, tolerance=1.0e-11, max_iterations=50, record=True,
+    )
+
+
+def _ternary_interstitial_model(x_left):
+    """Fe-C-Mn (C interstitial) two-phase model of the ported interstitial tests, with left mole fractions ``x_left``."""
+    mesh = CartesianFD1D(["C", "MN"], [0.0, _fe_c_mn_tests.DOMAIN_LENGTH], 400)
+    x_right = _fe_c_mn_tests._x_from_u(_fe_c_mn_tests.U_RIGHT_FAR)
+    mesh.setResponseProfile(ProfileBuilder([(StepProfile1D(_fe_c_mn_tests.S0, np.asarray(x_left), x_right), ["C", "MN"])]))
+    u_grid, v_grid = two_phase_landau_grids(21, 21, method="linear", spacing_ratio=0.1)
+    D_left, D_right = _fe_c_mn_tests._diffusivities(1.0e-2)
+    return MovingBoundaryIllingworthTernaryFD1DModel(
+        mesh=mesh, elements=_fe_c_mn_tests.FE_C_MN, phases=["ALPHA", "BETA"],
+        thermodynamics=FixedMatrixTernaryDiffusivity({"ALPHA": D_left, "BETA": D_right}, ["ALPHA", "BETA"]),
+        temperature=1000.0, interfacePosition=_fe_c_mn_tests.S0, interface_equilibrium=_fe_c_mn_tests._closure(),
+        initial_eta_bracket=(0.0, 1.0), time_step=1.0e-3, tolerance=1.0e-11, max_iterations=50,
+        terminal_thin_phase_policy="continue", record=True, transformed_u_grid=u_grid, transformed_v_grid=v_grid,
+        initial_eta_componentwise_scaling=True,
+    )
+
+
+def _ternary_interstitial_left(offset):
+    return _fe_c_mn_tests._x_from_u(_fe_c_mn_tests.U_LEFT_FAR) + np.asarray([0.0, offset])
+
+
+def _binary_interstitial_model():
+    """Fe-C (C interstitial) binary model of the ported interstitial tests."""
+    therm = _fe_c_tests._ConstantBinaryThermodynamics({"ALPHA": 1.0, "BETA": 0.5})
+    return _fe_c_tests._binary_model(["FE", "C"], therm, StepProfile1D(1.0, 0.0123, 0.0377), (0.001, 0.02))
+
+
+# fixture -> (family, builder, one step, inexact conversion)
+_RESET_PARITY_FIXTURES = {
+    "binary-substitutional": ("binary", lambda: _FAMILIES["binary"][0](True), _FAMILIES["binary"][1], False),
+    "binary-interstitial": ("binary", _binary_interstitial_model, 0.05, False),
+    "ternary-substitutional": ("ternary", lambda: _FAMILIES["ternary"][0](True), _FAMILIES["ternary"][1], False),
+    "ternary-substitutional-inexact": ("ternary", lambda: _ternary_substitutional_model([0.176, 0.076]), 1.0e-2, True),
+    "ternary-interstitial": ("ternary", lambda: _ternary_interstitial_model(_ternary_interstitial_left(0.0)), 1.0e-3, False),
+    "ternary-interstitial-inexact": (
+        "ternary", lambda: _ternary_interstitial_model(_ternary_interstitial_left(1.0e-5)), 1.0e-3, True,
+    ),
+    "three_phase-substitutional": ("three_phase", lambda: _FAMILIES["three_phase"][0](True), _FAMILIES["three_phase"][1], True),
+    "three_phase-interstitial": ("three_phase", lambda: _three_phase_interstitial_model()[0], 1.0e-4, True),
 }
+# Fixtures whose reset re-records the initial profile through ``data.setResponseAtN`` (binary
+# without interstitials keeps the host reset's raw record, which equals the constructor's).
+_RECORDING_FIXTURES = sorted(name for name in _RESET_PARITY_FIXTURES if name != "binary-substitutional")
+_TERNARY_FIXTURES = sorted(name for name, spec in _RESET_PARITY_FIXTURES.items() if spec[0] == "ternary")
 
 
 def _initial_profile(model):
@@ -332,14 +413,35 @@ def _initial_profile(model):
     }
 
 
-@pytest.mark.parametrize("fixture", sorted(_THREE_PHASE_FIXTURES))
-def test_three_phase_reset_records_the_constructor_initial_state(fixture):
-    """After a run, reset gives exactly the freshly constructed initial state (profile, histories, time, ``isSetup``).
+def _previous_reset_record(model):
+    """What reset recorded before the follow-ups: raw ``mesh.y`` or, with interstitials, ``x_to_u_independent``."""
+    x = np.asarray(model.mesh.flattenResponse(model.mesh.y), dtype=np.float64)
+    if has_interstitials(model.allElements):
+        return x_to_u_independent(x, model.allElements)
+    return x
 
-    ``mesh.y`` is not modified by reset, and repeated resets give the same state
+
+@pytest.mark.parametrize("fixture", sorted(_RESET_PARITY_FIXTURES))
+def test_reset_parity_fixture_conversion_is_exact_or_inexact_as_declared(fixture):
+    """Guards the fixtures: "inexact" ones really have a constructor conversion that differs in the last bits."""
+    family, build, _, inexact = _RESET_PARITY_FIXTURES[fixture]
+    fresh = build()
+    constructor = np.asarray(fresh.data.currentY, dtype=np.float64).reshape(fresh.mesh.flattenResponse(fresh.mesh.y).shape)
+    previous = _previous_reset_record(fresh)
+
+    differing = int(np.sum(np.any(constructor != previous, axis=1)))
+    assert (differing > 0) is inexact, f"{differing} nodes differ"
+    np.testing.assert_allclose(constructor, previous, rtol=1e-15, atol=0.0)
+
+
+@pytest.mark.parametrize("fixture", sorted(_RESET_PARITY_FIXTURES))
+def test_reset_records_the_constructor_initial_profile(fixture):
+    """After a run, reset (once and again) records exactly the fresh initial profile and ``data`` history.
+
+    ``mesh.y`` is not modified by reset, and repeated resets give the same profile
     (the conversion is applied once to ``mesh.y``, never to an already converted profile).
     """
-    build, step = _THREE_PHASE_FIXTURES[fixture]
+    _, build, step, _ = _RESET_PARITY_FIXTURES[fixture]
     fresh = build()
     model = build()
     model.solve(2 * step, minDtFrac=1e-14)
@@ -350,13 +452,27 @@ def test_three_phase_reset_records_the_constructor_initial_state(fixture):
 
         assert _freeze(np.asarray(model.mesh.y, dtype=np.float64)) == mesh_before
         assert _initial_profile(model) == _initial_profile(fresh)
+        assert _freeze(dict(vars(model.data))) == _freeze(dict(vars(fresh.data)))
+
+
+@pytest.mark.parametrize("fixture", sorted(_RESET_PARITY_FIXTURES))
+def test_reset_restores_the_constructor_state(fixture):
+    """After a run, reset (once and again) gives exactly the fresh state: histories, accepted state, time, ``isSetup``."""
+    _, build, step, _ = _RESET_PARITY_FIXTURES[fixture]
+    fresh = build()
+    model = build()
+    model.solve(2 * step, minDtFrac=1e-14)
+
+    for _ in range(2):
+        model.reset()
+
         _assert_same_result(model, fresh)
 
 
-@pytest.mark.parametrize("fixture", sorted(_THREE_PHASE_FIXTURES))
-def test_three_phase_reset_then_solve_equals_a_fresh_model(fixture):
-    """Run, reset, solve (and again after two consecutive resets) reproduces a fresh model's setup and solve bit for bit."""
-    build, step = _THREE_PHASE_FIXTURES[fixture]
+@pytest.mark.parametrize("fixture", sorted(_RESET_PARITY_FIXTURES))
+def test_reset_then_solve_equals_a_fresh_model(fixture):
+    """Run, reset, setup and solve (and again after two consecutive resets) reproduce a fresh model bit for bit."""
+    _, build, step, _ = _RESET_PARITY_FIXTURES[fixture]
     model = build()
     model.solve(2 * step, minDtFrac=1e-14)
 
@@ -377,14 +493,27 @@ def test_three_phase_reset_then_solve_equals_a_fresh_model(fixture):
     _assert_same_result(model, again)
 
 
-@pytest.mark.parametrize("fixture", sorted(_THREE_PHASE_FIXTURES))
-def test_three_phase_reset_failing_while_recording_the_initial_profile_keeps_the_simulation(fixture):
-    """R10a guarantees for the new step: a failure while reset re-records the initial profile restores the run.
+def _assert_failed_reset_keeps_the_run_and_recovers(fixture, model, untouched, step):
+    """Continuation equals an untouched continuation; a successful retry equals the untouched reset and a fresh model."""
+    build = _RESET_PARITY_FIXTURES[fixture][1]
+    model.solve(step, minDtFrac=1e-14)
+    untouched.solve(step, minDtFrac=1e-14)
+    _assert_same_result(model, untouched)
 
-    Continuation then equals an untouched continuation, and a successful retry
-    equals an untouched model doing the same reset sequence and a fresh model.
-    """
-    build, step = _THREE_PHASE_FIXTURES[fixture]
+    model.reset()
+    untouched.reset()
+    model.solve(2 * step, minDtFrac=1e-14)
+    untouched.solve(2 * step, minDtFrac=1e-14)
+    fresh = build()
+    fresh.solve(2 * step, minDtFrac=1e-14)
+    _assert_same_result(model, untouched)
+    _assert_same_result(model, fresh)
+
+
+@pytest.mark.parametrize("fixture", _RECORDING_FIXTURES)
+def test_reset_failing_while_recording_the_initial_profile_keeps_the_simulation(fixture):
+    """R10a guarantees for the re-recording step: a failure there restores the run, which then continues and recovers."""
+    _, build, step, _ = _RESET_PARITY_FIXTURES[fixture]
     model = build()
     model.solve(2 * step, minDtFrac=1e-14)
     model.data.setResponseAtN = _raise("recording the initial profile failed")
@@ -398,18 +527,75 @@ def test_three_phase_reset_failing_while_recording_the_initial_profile_keeps_the
     assert changed == [], f"a failed reset changed {changed}"
     untouched = build()
     untouched.solve(2 * step, minDtFrac=1e-14)
-    model.solve(step, minDtFrac=1e-14)
-    untouched.solve(step, minDtFrac=1e-14)
-    _assert_same_result(model, untouched)
+    _assert_failed_reset_keeps_the_run_and_recovers(fixture, model, untouched, step)
 
-    model.reset()
-    untouched.reset()
-    model.solve(2 * step, minDtFrac=1e-14)
-    untouched.solve(2 * step, minDtFrac=1e-14)
+
+_ETA_INPUTS = (
+    "initialEtaMethod", "initialEtaBracket", "initialEtaGuess", "initialVelocityGuess", "initialEtaRootXtol",
+    "initialEtaRootRtol", "initialEtaRootMaxiter", "initialEtaComponentwiseScaling",
+)
+
+
+def _eta_state(model):
+    return {
+        "initialEta": _freeze(float(model.initialEta)),
+        "etaData": _freeze(dict(vars(model.etaData))),
+        "getInterfaceEta": _freeze(np.asarray(model.getInterfaceEta(), dtype=np.float64)),
+    }
+
+
+def _eta_inputs(model):
+    return _freeze({name: getattr(model, name) for name in _ETA_INPUTS})
+
+
+@pytest.mark.parametrize("fixture", _TERNARY_FIXTURES)
+def test_ternary_reset_restores_the_unestimated_initial_eta(fixture):
+    """Before setup, ``initialEta``, ``etaData`` and ``getInterfaceEta()`` are NaN after reset, as after construction.
+
+    Repeated resets keep that state, configured initialization inputs (method,
+    bracket, guesses, root controls) are unchanged, and setup/solve still equals
+    a fresh model.
+    """
+    _, build, step, _ = _RESET_PARITY_FIXTURES[fixture]
     fresh = build()
-    fresh.solve(2 * step, minDtFrac=1e-14)
-    _assert_same_result(model, untouched)
+    model = build()
+    configured = _eta_inputs(model)
+    assert np.isnan(fresh.initialEta) and np.isnan(fresh.getInterfaceEta())
+    model.solve(2 * step, minDtFrac=1e-14)
+    assert np.isfinite(model.initialEta)
+
+    for _ in range(2):
+        model.reset()
+
+        assert _eta_state(model) == _eta_state(fresh)
+        assert _eta_inputs(model) == configured == _eta_inputs(fresh)
+
+    model.solve(3 * step, minDtFrac=1e-14)
+    fresh.solve(3 * step, minDtFrac=1e-14)
     _assert_same_result(model, fresh)
+    assert _freeze(float(model.initialEta)) == _freeze(float(fresh.initialEta))
+
+
+@pytest.mark.parametrize("fixture", _TERNARY_FIXTURES)
+def test_ternary_reset_failing_after_restoring_the_initial_eta_keeps_the_estimate(fixture):
+    """A failure later in reset (``inventoryData.reset``) restores ``initialEta`` and ``etaData`` with everything else."""
+    _, build, step, _ = _RESET_PARITY_FIXTURES[fixture]
+    model = build()
+    model.solve(2 * step, minDtFrac=1e-14)
+    estimated = _eta_state(model)
+    model.inventoryData.reset = _raise("resetting the inventory history failed")
+    before = _image(model)
+
+    with pytest.raises(RuntimeError, match="resetting the inventory history failed"):
+        model.reset()
+
+    changed = _image_changes(before, _image(model))
+    del model.inventoryData.reset
+    assert changed == [], f"a failed reset changed {changed}"
+    assert _eta_state(model) == estimated and np.isfinite(model.initialEta)
+    untouched = build()
+    untouched.solve(2 * step, minDtFrac=1e-14)
+    _assert_failed_reset_keeps_the_run_and_recovers(fixture, model, untouched, step)
 
 
 @pytest.mark.parametrize("family", sorted(_FAMILIES))

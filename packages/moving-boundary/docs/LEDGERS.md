@@ -1145,6 +1145,49 @@ coupled-model failures without silently advancing accepted state.
     exact full 40/40 runs and 5 contracts bit-identical against the selected references, live O06,
     34 repeat pairs with no differences, 550 s; examples E01-E10 pass with 68 tests (E11 a pending
     fixture), 157 s.
+- *Follow-up (2026-11-13, user-authorized): binary and two-phase ternary reset parity.* Goal: with
+  identical configuration and deterministic inputs, a successful reset followed by setup/solve equals
+  a freshly constructed model bit for bit, including the initial profile and every history. The two
+  families were checked separately with fixtures whose constructor conversion is not exact (scratch
+  diagnostics, not committed).
+  - Binary: no defect reproduced; unchanged. With one independent component the constructor's
+    conversion and the reset record give identical bits: without interstitials the divisor
+    `fl(fl(1 - x) + x)` rounds to exactly 1 (the rounding error of `1 - x` is at most 2^-54), and with
+    an interstitial both divide `x` by the same `1 - x`. Evidence: 0 of 400000 random profiles differ
+    in each case; the shared fixture, a 0.1/0.3 profile and two Fe-C interstitial profiles match a
+    fresh model after reset, setup and solve. Binary reset still uses `record_initial_u_fractions`.
+  - Two-phase ternary, defect 1 (initial profile): reset recorded the raw `mesh.y` (no interstitials)
+    or `record_initial_u_fractions` (interstitials, divisor `1 - x_C`), while the constructor records
+    `x_to_u_frac(expand_x_frac(x))`, whose divisor `((1 - (x1 + x2)) + x1) + x2` (or `... + x_Mn`) can
+    round away from 1 (or from `1 - x_C`). Reproduced: 4% of random substitutional and 26% of random
+    Fe-C-Mn profiles differ; a substitutional fixture (left 0.176/0.076) differs in 18 of 42 values
+    (up to 2.8e-17) and an Fe-C-Mn fixture in 400 of 800 values (up to 1.7e-18); setup then starts
+    from a different `c0`, and every accepted field and history differs after a solve. The existing
+    shared and interstitial fixtures convert exactly, which is why the earlier preservation test
+    passed. Fix: reset applies the constructor's `_recordInitialMeshComposition` to `mesh.y`, as
+    three-phase does (`mesh.y` is already clamped, is not modified and is converted once; the
+    constructor and the solver equations are unchanged).
+  - Two-phase ternary, defect 2 (stale eta): `setup` stores its eta estimate in `initialEta`, and
+    reset recorded that estimate as `etaData` row 0, while a fresh model has the unestimated NaN; so
+    between reset and setup `initialEta`, `etaData` and `getInterfaceEta()` returned the previous
+    run's eta (all four ternary fixtures). The next `setup` resets and re-records `etaData`, so
+    setup/solve results were not affected. Fix: reset restores `initialEta = NaN` before recording
+    (user decision 2026-11-13); configured initialization inputs (method, bracket, guesses, root
+    controls) are unchanged.
+  - R10a guarantees hold for both steps (reset stays wrapped): a failure while re-recording the
+    profile, or later in reset after `initialEta` was restored, keeps the previous run (including
+    `initialEta` and `etaData`); continuation equals an untouched continuation and a successful retry
+    equals the untouched reset and a fresh model.
+  - Tests: the three-phase parity tests are generalized to all families (8 fixtures: binary
+    substitutional and Fe-C, ternary shared, inexact substitutional, Fe-C-Mn and inexact Fe-C-Mn,
+    three-phase substitutional and interstitial): fixture exactness guard, initial profile and `data`
+    after one and two resets with `mesh.y` unchanged, the full state after reset, setup and solve
+    parity after one and two resets, recovery from a failed re-recording; plus ternary eta tests
+    (NaN state after one and two resets, unchanged inputs, setup/solve parity, rollback of a later
+    reset failure). 17 failed at `af52be7`, each for its stated cause (initial-profile bytes, stale
+    eta, or "did not raise" because substitutional reset did not re-record); binary and three-phase
+    cases passed (preservation). Focused suites (lifecycle, history, outer time-step limits, binary, ternary and three-phase interstitials, setup and diagnostics, ternary, ternary physical scale) 532 passed; full `tests/` 1506 passed, 5 skipped, 1 deselected.
+  - Acceptance: no reference changed. Exact full 40/40 runs and 5 contracts (C25, C26 included) bit-identical, live O06, 34 repeat pairs with no differences, 528 s; examples E01-E10 pass with 68 tests (E11 a pending fixture), 159 s. No approval was made.
 
 ### R11: inherited deserialization does not restore the solver state
 

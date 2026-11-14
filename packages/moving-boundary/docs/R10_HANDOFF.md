@@ -139,7 +139,10 @@ Committed approval reports contain public hashes and structural or public eviden
   raw `mesh.y`, the constructor its u-fraction conversion); this is outside R10.
   *Later (2026-11-13, user-authorized follow-up):* three-phase reset now records the constructor's
   conversion, so (b) as originally written holds for all families (resolved: fix `9595574`, contract
-  C27 approved as `20261113T232720Z-9595574-1`, commit `ff01469`; LEDGERS R10).
+  C27 approved as `20261113T232720Z-9595574-1`, commit `ff01469`; LEDGERS R10). Binary/two-phase
+  ternary were then checked with profiles whose conversion is inexact: binary gives identical bits
+  (unchanged); two-phase ternary reset now also records the constructor's conversion and restores
+  `initialEta` to NaN, with no reference change (LEDGERS R10 follow-up).
 
 ### R10b: binary/two-phase prepare-then-commit, plus atomic multi-history finalization
 

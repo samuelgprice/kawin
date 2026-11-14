@@ -14,7 +14,6 @@ from moving_boundary.solvers.illingworth._interstitials import (
     full_mole_fractions,
     has_interstitials,
     independent_interstitial_mask,
-    record_initial_u_fractions,
     resolve_diffusivity_provider,
     resolve_interface_equilibrium,
     validate_interstitial_element_order,
@@ -739,17 +738,34 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         """
         Returns the model to its initial state (time 0, initial records, ``isSetup=False``).
 
+        The state equals the constructor's, so reset + setup/solve equals a
+        freshly constructed model bit for bit (LEDGERS R10 follow-up):
+
+        - The initial profile is recorded with the constructor's semantics: the
+          host reset records the raw mole fractions of ``mesh.y``, which are then
+          replaced by the constructor's u-fraction conversion
+          (``_recordInitialMeshComposition``, the recording step of
+          ``_validateMeshComposition``), with or without interstitials.
+          ``mesh.y`` already holds the constructor's clamped values, so it is
+          neither clamped nor modified again, and repeated resets convert the
+          same ``mesh.y``.
+        - ``initialEta`` (the estimate stored by ``setup``) returns to the
+          constructor's unestimated NaN, which ``etaData`` row 0 records, so
+          ``getInterfaceEta()`` is NaN until the next ``setup``. Configured
+          initialization inputs (method, bracket, guesses, root controls) are
+          unchanged.
+
         All-or-nothing (LEDGERS R10a): if any part raises (the host reset and
-        provider ``clearCache``, the interstitial u-fraction re-recording, or the
+        provider ``clearCache``, re-recording the initial profile, or the
         configuration validation at the end), every model-owned field is
         restored and the exception re-raised, so the previous simulation is
         kept. Provider caches and other external state are not restored.
         """
         super().reset()
-        if has_interstitials(self.allElements):
-            record_initial_u_fractions(self)
+        self._recordInitialMeshComposition(self.mesh.flattenResponse(self.mesh.y))
         self.interfaceData.reset()
         self.interfaceData.record(0, self.initialInterfacePosition)
+        self.initialEta = np.nan
         self.etaData.reset()
         self.etaData.record(0, self.initialEta)
         self.inventoryData.reset()

@@ -153,11 +153,14 @@ def record_initial_u_fractions(model):
 
     ``DiffusionModel.__init__`` converts the mesh profile from mole fractions to
     u-fractions in ``_validateMeshComposition``, but ``DiffusionModel.reset``
-    re-records the raw mole fractions. The binary and two-phase ternary
-    Illingworth models call this after ``reset`` when interstitials are present
-    so ``setup`` always starts from u-fractions. (The three-phase model instead
-    re-records with the constructor's own conversion,
-    ``DiffusionModel._recordInitialMeshComposition``.) The mesh profile was already clamped in place by the first
+    re-records the raw mole fractions. The binary Illingworth model calls this
+    after ``reset`` when interstitials are present so ``setup`` always starts
+    from u-fractions; with a single independent component it gives the same
+    bits as the constructor's conversion (both divide by ``1 - x``). (The
+    two-phase ternary and three-phase models instead re-record with the
+    constructor's own conversion, ``DiffusionModel._recordInitialMeshComposition``,
+    because with two independent components the two conversions can differ in
+    the last bits.) The mesh profile was already clamped in place by the first
     ``_validateMeshComposition`` call, so it is converted here without clamping
     again.
     """
