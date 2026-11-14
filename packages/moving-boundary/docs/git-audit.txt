@@ -116,17 +116,17 @@ M	kawin/thermo/MultiTherm.py
 M	kawin/thermo/Surrogate.py
 M	kawin/thermo/Thermodynamics.py
 Baseline input hashes:
+Path fields below are displayed relative to the extraction repository root;
+only the path display is abbreviated, and the recorded hashes are unchanged.
 
 
 Algorithm : SHA256
 Hash      : 2A31C47B5F54E43337B769F5410577795EC796038BFAC18B64B6783DA11C7842
-Path      : C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab 
-            Data\Price\code\moving-boundary-extraction\kawin\tests\illingworth_baseline_cases.py
+Path      : kawin/tests/illingworth_baseline_cases.py
 
 Algorithm : SHA256
 Hash      : BA0AF5D95224D524AEA6BBCE290AFD0F83747D59EDD8E1AC6AA1A1B4000E295C
-Path      : C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab 
-            Data\Price\code\moving-boundary-extraction\kawin\tests\data\illingworth_substitutional_baseline.npz
+Path      : kawin/tests/data/illingworth_substitutional_baseline.npz
 
 
 

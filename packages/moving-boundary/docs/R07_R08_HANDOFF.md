@@ -20,8 +20,9 @@ implementation and testing can go ahead here; approval can happen later in a cle
 
 ## 2. Current checkpoint [verified]
 
-- Worktree: `C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\moving-boundary-extraction`.
-  The package is `packages/moving-boundary`.
+- Worktree: the extraction repository root (`.`). Relative filesystem paths in this
+  handoff start there unless another working directory is stated. The package is
+  `packages/moving-boundary`.
 - Branch `refactor/package-extraction`, HEAD `822ca69546b12d3fbbecf09a593963e257b4c383`,
   82 commits ahead of `main`. **Nothing is pushed.**
 - **The authority switch is complete** (2026-11-11; every completion criterion is met; see the plan).
@@ -166,8 +167,9 @@ directly, and with bounded timeouts. Tell the user before any run expected to ex
 - **Activation:**
   - Research env (acceptance tools re-launch themselves in `mb-public-050`):
     `cmd.exe /d /c 'call "C:\ProgramData\anaconda3\Scripts\activate.bat" "C:\ProgramData\anaconda3\envs\kawin" && <cmd>'`.
-  - Package env: replace the env path with
-    `C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\mb-public-050`.
+  - Package env: use the sibling prefix `..\mb-public-050`, relative to the
+    extraction repository root. Resolve it before changing to the package directory;
+    for a different layout, use the local `.verification/public-environment.json` pointer.
 - **`mb-public-050` must stay free of any `moving-boundary` install, editable or not**
   (the editable install was removed 2026-11-11; README "Local acceptance").
 - **Targeted and full package tests**, run in `mb-public-050`, with a **new, empty target folder

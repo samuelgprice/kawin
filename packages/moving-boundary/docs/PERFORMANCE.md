@@ -44,11 +44,16 @@ network access or dependency installation. Build and install each have a
 termination on timeout. stdin is closed and unexpected `input()` calls raise.
 
 The default host comes from `.verification/public-environment.json` when present,
-otherwise the active environment. To choose explicitly, append:
+otherwise the active environment. To choose the sibling `mb-public-050` explicitly,
+append the following to a `run` command launched from the extraction repository root:
 
 ```powershell
---environment "C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\mb-public-050"
+--environment "..\mb-public-050"
 ```
+
+The argument is resolved from the command's working directory. If your environment
+lives elsewhere, substitute its location locally or use the ignored environment
+pointer; keep machine-specific absolute paths out of committed documentation.
 
 Use a host with **unmodified public kawin==0.5.0**, NumPy, SciPy and the package's
 other dependencies. The host environment pointer is optional; no private

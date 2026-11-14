@@ -74,7 +74,9 @@ Committed approval reports contain public hashes and structural or public eviden
 
       cmd.exe /d /c 'call "C:\ProgramData\anaconda3\Scripts\activate.bat" "C:\ProgramData\anaconda3\envs\kawin" && <command>'
 
-- Package env for direct tests: `C:\Users\samth\OneDrive - Northwestern University\WS_DL\Lab Data\Price\code\mb-public-050`.
+- Package env for direct tests: the sibling prefix `..\mb-public-050`, relative to
+  the extraction repository root. Resolve it before changing to the package directory;
+  for a different layout, use the local `.verification/public-environment.json` pointer.
   Never install into it. Use a **new, empty** target per revision:
 
       mkdir <scratch>\mb-target-<rev> && python -m pip install <package> --no-deps --no-build-isolation --no-index --target <scratch>\mb-target-<rev>
