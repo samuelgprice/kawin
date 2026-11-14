@@ -1360,14 +1360,21 @@ within the separately authorized O06 scope.
 
 ## Redistribution and scientific maintenance
 
-NOTICE retains upstream MIT text. Repository history classifies local additions
-without proving independent authorship; the binary code identifies a MAP C++ port.
-Local/MAP licensing, outreach and clearance remain unresolved. No PDF, C++ source,
-digitized figure data, database, trained model or TC-derived reference is packaged
-or committed. No external legal terms were reverified or external contact made.
+NOTICE retains upstream MIT text and separately records the MAP provenance and
+published redistribution conditions for the modified Python adaptation of
+ConservativeIFF by T.C. Illingworth and I.O. Golosnoy. MAP permits modification and
+redistribution with attribution in documentation/source, identification of changes
+and no charge for distribution; NOTICE links the authoritative terms and disclaimer.
+The terms were checked on November 14, 2026; no external contact was made. Source
+headers credit MAP and the originators and identify the adaptation. This supersedes
+the earlier statement that MAP's redistribution permission was unresolved; it does
+not grant rights in separately authored local additions or select a package-wide
+license (see LICENSE). No solver behavior, references or acceptance criteria changed.
+No PDF, C++ source, digitized figure data, database, trained model or TC-derived
+reference is packaged or committed.
 
 Package name, audience/distribution, release/maintenance ownership, pushing,
-upstream contribution, MAP outreach and ternary prompt-default changes remain
+upstream contribution, optional MAP outreach and ternary prompt-default changes remain
 user decisions. Scientific repairs have one authoritative source and deliberate
 port records; baseline refreshes are separate reviewed changes. Do not maintain
 independent scientific fixes or regenerate fixtures to hide a discrepancy.

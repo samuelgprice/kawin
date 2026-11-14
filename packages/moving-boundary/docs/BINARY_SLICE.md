@@ -48,8 +48,12 @@ includes supported interstitial/three-phase volume combinations, irregular grid,
 real pycalphad sampling, saved providers and configured terminal retry stopping.
 Binary/two-phase unequal volumes and topology transitions are unsupported.
 
-Upstream MIT text remains verbatim in NOTICE. The binary scheme identifies a port
-of the authors' MAP C++ code; local/MAP rights remain unresolved. No C++ source,
+Upstream MIT text remains verbatim in NOTICE. The binary solver and its numerical
+helpers are modified Python adaptations of T.C. Illingworth and I.O. Golosnoy's
+ConservativeIFF code from MAP. NOTICE credits MAP and the originators, identifies
+modifications and links MAP's attribution, modification-marking and no-charge
+redistribution conditions. Ownership/licensing of separately authored local additions
+and a package-wide license remain separate decisions (LICENSE). No C++ source,
 PDFs, digitized data, databases or TC outputs enter the wheel. Numerical fixes
 must have one authority and explicit source/port records. Package identity,
-audience, publication, licensing outreach and prompt-default changes remain open.
+audience, publication and prompt-default changes remain open; MAP outreach is optional.

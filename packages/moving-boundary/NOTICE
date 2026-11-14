@@ -28,5 +28,34 @@ Complete local Illingworth/numerical/mesh/provider modules and bounded
 host-policy methods are relocated/adapted from
 samuelgprice/kawin at 06dc7b4ab56f67226ceabfde41ebf2690c088841.
 See docs/BINARY_SLICE.md and source module headers for function-level mappings.
-The binary scheme identifies MAP C++ provenance. The MIT notice above is retained
-for upstream attribution and does not resolve rights to local/MAP-derived code.
+The MIT notice above covers upstream kawin material; it is not a blanket license
+for MAP-origin material or separately authored local additions.
+
+Materials Algorithms Project (MAP) attribution and redistribution conditions
+The binary solver and its numerical helpers adapt the ConservativeIFF C++ program
+by T.C. Illingworth and I.O. Golosnoy, Department of Materials Science and Metallurgy,
+University of Cambridge, contributed to MAP in February 2005:
+https://www.phase-trans.msm.cam.ac.uk/map/kinetics/programs/ConservativeIFF.html
+Method reference: T.C. Illingworth and I.O. Golosnoy, Journal of Computational Physics
+209 (2005), 207-225, doi:10.1016/j.jcp.2005.02.031.
+
+MAP permits modification and redistribution subject to these conditions (summary):
+- Credit MAP and the original authors in both documentation and source.
+- Clearly identify modifications.
+- Do not charge for subsequent distribution of the code.
+The authoritative wording is in section 2 of MAP's contributor guidance:
+https://www.phase-trans.msm.cam.ac.uk/map/donor/advice.html
+MAP supplies its programs without warranty and disclaims liability as described at:
+https://www.phase-trans.msm.cam.ac.uk/map/entry.html
+These published terms were checked on November 14, 2026; no external contact was made.
+
+Modifications: this is a Python adaptation, not the unchanged MAP distribution.
+The binary implementation adds vectorized assembly, optional compiled tridiagonal
+solves, deviation-form phase solves, composition-dependent diffusivity modes,
+interstitial support, and package-specific timestep, convergence and lifecycle
+controls. The ternary/two-phase and three-phase solvers are local extensions.
+Source headers identify the MAP-derived binary modules; docs/LEDGERS.md records
+subsequent changes and docs/BINARY_SLICE.md records the extraction provenance.
+This acknowledgment does not imply that MAP or the originators endorse these changes.
+MAP's conditions do not settle ownership or licensing of separately authored additions;
+see LICENSE for the remaining package-wide licensing decision.

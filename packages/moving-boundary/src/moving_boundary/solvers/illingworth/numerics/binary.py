@@ -1,5 +1,12 @@
 # Relocated from samuelgprice/kawin 06dc7b4ab56f67226ceabfde41ebf2690c088841
-# Source: kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py; import changes only. See NOTICE and docs/LEDGERS.md.
+# Original relocation source: kawin/diffusion/mesh/MovingBoundaryIllingworthFD1D.py; see NOTICE and docs/LEDGERS.md.
+# MAP provenance: Materials Algorithms Project, ConservativeIFF, by T.C. Illingworth
+# and I.O. Golosnoy, University of Cambridge (February 2005).
+# https://www.phase-trans.msm.cam.ac.uk/map/kinetics/programs/ConservativeIFF.html
+# Modified Python adaptation of the tridiagonal recurrence, with optional compiled
+# execution and package state/reconstruction helpers; see docs/LEDGERS.md.
+# MAP-origin material retains MAP conditions: attribution, identified modifications,
+# and no charge for redistribution. See NOTICE for the terms and source links.
 from dataclasses import dataclass
 
 import numpy as np

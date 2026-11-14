@@ -1,5 +1,12 @@
 # Relocated from samuelgprice/kawin 25bf6cd60732ed34ed6f70b94716a515c76b714c (R06 correction on top of main 5f4ad57).
-# Source: kawin/diffusion/MovingBoundaryIllingworthFDM.py; import changes only. See NOTICE and docs/LEDGERS.md.
+# Original relocation source: kawin/diffusion/MovingBoundaryIllingworthFDM.py; see NOTICE and docs/LEDGERS.md.
+# MAP provenance: Materials Algorithms Project, ConservativeIFF, by T.C. Illingworth
+# and I.O. Golosnoy, University of Cambridge (February 2005).
+# https://www.phase-trans.msm.cam.ac.uk/map/kinetics/programs/ConservativeIFF.html
+# Modified Python port: vectorized/deviation-form solves, diffusivity and interstitial
+# extensions, and package timestep/convergence/lifecycle controls; see docs/LEDGERS.md.
+# MAP-origin material retains MAP conditions: attribution, identified modifications,
+# and no charge for redistribution. See NOTICE for the terms and source links.
 import warnings
 from dataclasses import dataclass
 

@@ -1,11 +1,16 @@
 Development checkpoint only; no blanket redistribution license is asserted.
 
-Local Illingworth solver, numerical/mesh and provider modules, plus bounded
-host-policy methods, are copied/adapted from the research fork. Public kawin
-services remain dependency-owned. The binary scheme
-describes a port of MAP C++ code. Applicable permissions and
-ownership of local extensions must be resolved before a public release. This file is a statement
-of unresolved licensing status, not a new grant covering the fork.
+Upstream kawin material retains its MIT notice, reproduced verbatim in NOTICE.
+Public kawin services remain dependency-owned.
 
-The upstream kawin MIT notice is reproduced in NOTICE for attribution. It does
-not by itself settle the rights to local additions or MAP-derived material.
+MAP-origin material is subject to the Materials Algorithms Project's published
+redistribution conditions, summarized with attribution and source links in NOTICE:
+credit MAP and the originators in documentation and source, identify modifications,
+and do not charge for subsequent distribution. These conditions are distinct from
+the upstream MIT terms; MAP-origin material is not offered under a blanket MIT grant.
+
+Local Illingworth solver, numerical/mesh and provider modules, plus bounded
+host-policy methods, are copied/adapted from the research fork. Recording MAP's
+permission does not determine ownership or grant a license for separately authored
+local additions. Their ownership and a package-wide license remain separate release
+decisions; this file makes no new grant covering the whole fork.

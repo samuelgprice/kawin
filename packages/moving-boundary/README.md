@@ -198,9 +198,13 @@ only after a complete passing public-tolerance gate; per-array detail stays loca
 See docs/BINARY_SLICE.md, LEDGERS.md and
 PUBLIC_KAWIN_MILESTONE.md for ownership, scope and method-level source mapping.
 
-Package identity/audience, publication, pushing, MAP outreach, upstream contribution
-and changing the prompt default remain user decisions. LICENSE/NOTICE preserve
-attribution without claiming unresolved local/MAP redistribution rights are cleared.
+The binary implementation adapts MAP's ConservativeIFF code by T.C. Illingworth
+and I.O. Golosnoy. [NOTICE](NOTICE) records MAP's attribution, modification-marking
+and no-charge redistribution conditions, separately from upstream kawin's MIT terms.
+[LICENSE](LICENSE) records the remaining ownership/package-wide licensing decision
+for separately authored local additions. Package identity/audience, publication,
+pushing, upstream contribution and changing the prompt default remain user decisions;
+MAP outreach is optional and has not been undertaken.
 
 ## Manual performance measurements
 
