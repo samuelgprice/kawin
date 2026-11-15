@@ -825,3 +825,74 @@ def test_cli_rejects_misplaced_private_settings_requests(tmp_path, monkeypatch, 
     with pytest.raises(SystemExit) as error:
         tool.main(argv)
     assert error.value.code == 2
+
+
+# A capture that fails or is interrupted part-way leaves no private capture behind (LEDGERS R13 follow-up)
+
+
+def _failing_capture(tool, monkeypatch, error, calls):
+    """Capture that completes C01 and O04, then fails while O05 is being captured (a partial O05 file exists)."""
+    def capture(cases, state, directory):
+        calls.append(sorted(cases))
+        for case in sorted(cases):
+            path = Path(directory) / f"{case}.settings.json"
+            if case == "O05":
+                path.write_text('{"class": "Mod', encoding="utf-8")   # truncated, as an interrupted worker would leave it
+                raise error
+            path.write_text(json.dumps(_settings_record(duration="2.0") if case == "O04" else _settings_record(),
+                                       indent=1, sort_keys=True), encoding="utf-8")
+        return {}
+    monkeypatch.setattr(tool, "capture_example_settings", capture)
+
+
+def _captures_in(directory):
+    return sorted(path.name for path in Path(directory).iterdir())
+
+
+@pytest.mark.parametrize("error", [RuntimeError("worker timed out"), KeyboardInterrupt()], ids=["failure", "interruption"])
+def test_check_case_settings_removes_private_captures_when_a_later_capture_fails(tmp_path, monkeypatch, error):
+    """O04 is captured, O05's capture fails: both private files go, the original exception propagates."""
+    tool, _, output, path, calls = _approve_project(tmp_path, monkeypatch, variants=NUMERICAL, with_o04=True)
+    _failing_capture(tool, monkeypatch, error, calls)
+    directory = tmp_path / "captures"
+    directory.mkdir()
+    (directory / "notes.txt").write_text("unrelated", encoding="utf-8")
+    (directory / "O05.settings.json.keep").write_text("unrelated", encoding="utf-8")
+    adopted = {name: (output / "example_settings" / name).read_bytes() for name in ("C01.settings.json", "O04.settings.json", "O05.settings.json")}
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    with pytest.raises(type(error)) as raised:
+        tool.check_case_settings(["C01", "O04", "O05"], dict(target="t", host="h"), directory, manifest)
+    assert raised.value is error
+    # The private captures are gone, complete or partial; the public capture and unrelated files are not touched.
+    assert _captures_in(directory) == ["C01.settings.json", "O05.settings.json.keep", "notes.txt"]
+    for name, data in adopted.items():
+        assert (output / "example_settings" / name).read_bytes() == data
+    _no_private_capture_left(output)
+    assert calls == [["C01", "O04", "O05"]]
+
+
+@pytest.mark.parametrize("mode", ["private-settings", "layout"])
+def test_approval_promotes_nothing_and_leaves_no_private_capture_when_a_capture_fails(tmp_path, monkeypatch, mode):
+    variants = NUMERICAL if mode == "private-settings" else dict(C01="tail", C02="identical", O05="tail", O04="tail")
+    tool, _, output, path, calls = _approve_project(tmp_path, monkeypatch, variants=variants, with_o04=True)
+    _failing_capture(tool, monkeypatch, RuntimeError("worker timed out"), calls)
+    before = path.read_bytes()
+    kwargs = dict(verify_private_settings=True) if mode == "private-settings" else dict(layout_correction=RULE)
+    assert tool.approve(["C01", "O04", "O05"], reason="LEDGERS R13", **kwargs) == 1
+    _nothing_promoted(tmp_path, output, path, before)
+    assert "worker timed out" in json.loads((output / "approve-summary.json").read_text(encoding="utf-8"))["failure"]
+    _no_private_capture_left(output)
+
+
+@pytest.mark.parametrize("mode", ["private-settings", "layout"])
+def test_an_interrupted_capture_promotes_nothing_and_leaves_no_private_capture(tmp_path, monkeypatch, mode):
+    variants = NUMERICAL if mode == "private-settings" else dict(C01="tail", C02="identical", O05="tail", O04="tail")
+    tool, _, output, path, calls = _approve_project(tmp_path, monkeypatch, variants=variants, with_o04=True)
+    _failing_capture(tool, monkeypatch, KeyboardInterrupt(), calls)
+    before = path.read_bytes()
+    kwargs = dict(verify_private_settings=True) if mode == "private-settings" else dict(layout_correction=RULE)
+    with pytest.raises(KeyboardInterrupt):
+        tool.approve(["C01", "O04", "O05"], reason="LEDGERS R13", **kwargs)
+    _nothing_promoted(tmp_path, output, path, before)
+    _no_private_capture_left(output)
+    assert len(calls) == 1

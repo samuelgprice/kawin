@@ -990,7 +990,12 @@ def check_case_settings(cases, state, directory, manifest):
     ``example_settings.differences(selected, captured, allowed=())`` to be empty. Only the named
     ``BOOKKEEPING`` attributes are skipped; the example-versus-case exceptions of
     ``example_manifest.allowed_setting_differences`` do not apply. Captures of private cases
-    (O04/O05) are deleted again here, so no private capture outlives the check.
+    (O04/O05) are deleted again here, so no private capture outlives the check. That holds on
+    every exit: the capture step is inside the cleanup, and the capture files are removed by
+    their known names ``<directory>/<case>.settings.json``, so a capture that fails or is
+    interrupted after an earlier private case was written (or while one is being written) leaves
+    nothing behind, and the original exception propagates unchanged. Only those capture files
+    are removed; adopted settings, public captures and other files are never touched.
 
     Returns ``(public, private, problems)``: ``{case: captured path}`` for public cases, the
     private cases that passed, and the failures (empty when every mapped case matches).
@@ -1011,8 +1016,9 @@ def check_case_settings(cases, state, directory, manifest):
             selections[case] = (path, is_private)
     if problems:
         return public, private, problems
-    captured = capture_example_settings(mapped, state, directory)
+    captured = {}
     try:
+        captured = capture_example_settings(mapped, state, directory)
         for case in mapped:
             path, is_private = selections[case]
             found = settings.differences(json.loads(path.read_text(encoding="utf-8")),
@@ -1021,9 +1027,14 @@ def check_case_settings(cases, state, directory, manifest):
             if not found:
                 (private.append(case) if is_private else public.__setitem__(case, captured[case]))
     finally:
+        # ``captured`` is empty when the capture step itself raised, so the files are also named directly.
         for case in mapped:
-            if selections[case][1] and case in captured:
-                Path(captured[case]).unlink(missing_ok=True)
+            if selections[case][1]:
+                for path in {Path(directory) / f"{case}.settings.json", *([Path(captured[case])] if case in captured else [])}:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError as exc:   # never mask the exception being propagated
+                        print(f"WARNING: private settings capture not removed: {path.name}: {exc}", flush=True)
     return public, private, problems
 
 
