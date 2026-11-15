@@ -334,15 +334,95 @@ def _validate_outer_dt_fractions(min_dt_frac, max_dt_frac, model_name):
         raise ValueError(f"minDtFrac cannot exceed maxDtFrac for {model_name}.")
 
 
+_ZERO_INVENTORY_RESIDUAL_SCALE_FACTOR = 64.0 * np.finfo(float).eps
+
+
+def _componentwise_residual_scale(inventory, domain_length, composition_floor):
+    """
+    Returns the default normalization of a ternary interface residual, per component (ledger R13).
+
+    ``scale_k = max(|inventory_k|, domain_length * composition_floor)``: the
+    rule of the binary model (``binary._binary_residual_scale``, ledger R08)
+    applied to each independent component. ``inventory`` is the accepted old
+    inventory the residual rows sum to (transformed for the two-phase model,
+    density-weighted for the three-phase one), ``domain_length`` the length
+    term ``L`` in the same units, and ``composition_floor`` is
+    ``constraints.minComposition``. The residual check
+    ``|r_k| <= residual_tolerance * scale_k`` is therefore relative to the
+    component's own inventory while ``|inventory_k| >= L * floor``, and an
+    absolute change of mean composition of ``residual_tolerance * floor``
+    below that.
+
+    Only when a component's inventory and the floor are both exactly zero
+    (possible only with ``minComposition = 0``) is its scale
+    ``64 eps * domain_length``, an absolute round-off-level bound. A positive
+    floor whose product with the length underflows to zero is not that case.
+
+    Raises ``ValueError`` naming the quantity for a non-finite inventory, a
+    non-finite or non-positive length, a non-finite or negative floor, and a
+    scale that overflows or underflows to a non-positive value. Nothing is
+    replaced by a substitute value; in particular there is no ``1e-300``
+    clamp here (explicit ``interface_residual_composition_scale`` values keep
+    their own legacy expression in the models).
+    """
+    inventory = np.asarray(inventory, dtype=np.float64)
+    domain_length = float(domain_length)
+    composition_floor = float(composition_floor)
+    if not np.all(np.isfinite(inventory)):
+        raise ValueError(f"Illingworth residual normalization: the old inventory {inventory!r} is not finite.")
+    if not np.isfinite(domain_length) or domain_length <= 0.0:
+        raise ValueError(f"Illingworth residual normalization: the domain length {domain_length!r} must be positive and finite.")
+    if not np.isfinite(composition_floor) or composition_floor < 0.0:
+        raise ValueError(
+            f"Illingworth residual normalization: the composition floor {composition_floor!r} must be non-negative and finite."
+        )
+    scale = np.maximum(np.abs(inventory), domain_length * composition_floor)
+    if composition_floor == 0.0:
+        scale = np.where(inventory == 0.0, domain_length * _ZERO_INVENTORY_RESIDUAL_SCALE_FACTOR, scale)
+    if not np.all(np.isfinite(scale)) or np.any(scale <= 0.0):
+        raise ValueError(
+            f"Illingworth residual normalization: the scale {scale!r} (inventory {inventory!r}, domain length "
+            f"{domain_length!r}, composition floor {composition_floor!r}) must be positive and finite."
+        )
+    return scale
+
+
+def _validate_default_residual_floor(model):
+    """
+    Rejects a ``constraints.minComposition`` the default residual normalization cannot use (ledger R13).
+
+    Only when no explicit ``interface_residual_composition_scale`` is set does
+    the per-step residual scale read ``constraints.minComposition``
+    (``_componentwise_residual_scale``); it must then be finite and
+    non-negative. ``constraints`` exists only after the host constructor, so
+    the two ternary models call this from their configuration validators and
+    at the start of ``solve``, not before construction. It changes nothing.
+    """
+    if model.interfaceResidualCompositionScale is not None:
+        return
+    floor = float(model.constraints.minComposition)
+    if not np.isfinite(floor) or floor < 0.0:
+        raise ValueError(
+            "constraints.minComposition must be non-negative and finite: it is the composition floor of the "
+            "default interface residual normalization."
+        )
+
+
 def _validate_ternary_numerical_controls(model):
     """
     Rejects invalid timestep and convergence controls of a ternary Illingworth model (LEDGERS R12).
 
     Reads only ``timeStep``, ``dtMode``, ``semiLog_dt``, ``semiLogT0``,
-    ``tolerance`` and the stored effective ``residualTolerance``; it changes
+    ``tolerance``, the stored effective ``residualTolerance`` and
+    ``interfaceResidualCompositionScale``; it changes
     nothing, so the two-phase and three-phase models call it before the host
     constructor, inside their configuration validators and at the start of
     ``solve`` (before any bookkeeping, setup or schedule allocation).
+
+    An explicit ``interface_residual_composition_scale`` must be a scalar or
+    two values, all positive and finite (ledger R13: the accepted values are
+    unchanged; they are now refused here, also when the attribute was changed
+    after construction, instead of only by the configuration validator).
 
     ``time_step``, ``tolerance`` and ``residual_tolerance`` must always be
     positive and finite; ``tolerance`` is checked even when an explicit residual
@@ -365,6 +445,13 @@ def _validate_ternary_numerical_controls(model):
             raise ValueError("semiLog_dt must be a positive finite value.")
         if not np.isfinite(model.semiLogT0) or model.semiLogT0 <= 0.0:
             raise ValueError("semiLogT0 must be a positive finite value.")
+    if model.interfaceResidualCompositionScale is not None:
+        try:
+            scale = np.broadcast_to(np.asarray(model.interfaceResidualCompositionScale, dtype=np.float64), (2,))
+        except (TypeError, ValueError):
+            raise ValueError("interface_residual_composition_scale must be a scalar or two values.") from None
+        if not (np.all(np.isfinite(scale)) and np.all(scale > 0.0)):
+            raise ValueError("interface_residual_composition_scale must be positive and finite.")
 
 
 def _outer_timestep_limits(min_dt_frac, max_dt_frac, initial_time, final_time):

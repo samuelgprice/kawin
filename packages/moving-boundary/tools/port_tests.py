@@ -95,7 +95,23 @@ DEFERRED = {
 # Tests superseded by a deliberate package change: removed here like deferred tests, but recorded
 # with the reason and the package test that replaces them (``replaced_by``, a pytest node id under
 # ``tests/``). Not listed in FUTURE_PORTS.md: nothing remains to be ported.
-SUPERSEDED = {}
+SUPERSEDED = {
+    "test_illingworth_ternary.py": {
+        "test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work": dict(
+            reason="LEDGERS R13: it pins the scaled residual of the earlier default normalization (divided by the "
+                   "domain length); its builder takes no keyword arguments and serves many other tests, which stay "
+                   "on the new default",
+            replaced_by="tests/test_illingworth_ternary_residual_normalization.py::"
+                        "test_superseded_research_diagnostics_test_holds_with_the_unit_scale"),
+    },
+    "test_illingworth_ternary_three_phase_similarity.py": {
+        "test_three_phase_unit_composition_scale_matches_default_bitwise": dict(
+            reason="LEDGERS R13: an explicit scale of 1.0 no longer equals the default; it selects the earlier "
+                   "default expression",
+            replaced_by="tests/test_illingworth_ternary_residual_normalization.py::"
+                        "test_unit_scale_reproduces_the_pre_r13_default_run"),
+    },
+}
 # Research example modules whose helpers were relocated into the package (plan §6, FUTURE_PORTS.md
 # "Deferred tests": the similarity helpers exist in moving_boundary.analytic). Each name must exist.
 EXAMPLE_MODULES = {

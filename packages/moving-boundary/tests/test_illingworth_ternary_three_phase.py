@@ -462,7 +462,7 @@ def test_three_phase_rejects_molar_volumes_with_nonfinite_reciprocals():
 
 
 def test_three_phase_molar_volume_state_is_immutable_and_equal_volume_kinematics_are_exact():
-    model, _ = _make_stationary_model(record=False, phase_molar_volumes=(7.2e-6, 7.2e-6, 7.2e-6))
+    model, _ = _make_stationary_model(record=False, phase_molar_volumes=(7.2e-6, 7.2e-6, 7.2e-6), interface_residual_composition_scale=1.0)
     model.setup()
     old_interfaces = np.asarray([0.35, 0.70], dtype=np.float64)
     new_interfaces = np.asarray([0.41, 0.66], dtype=np.float64)

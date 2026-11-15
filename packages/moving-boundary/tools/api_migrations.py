@@ -39,6 +39,7 @@ An edit may carry its own ``reason`` (the ledger entry that required it); withou
 import ast
 
 REASON = "LEDGERS R08 binary tolerance API"
+R13_REASON = "LEDGERS R13 ternary residual normalization: the test asserts the earlier default scale"
 
 
 class MigrationError(ValueError):
@@ -79,6 +80,20 @@ EDITS = {
     # "keep 1e-8"), so the binary_planar_growth examples, which use the defaults, reproduce them.
     "examples/Illingworth2005/replicate_illingworth2005_fig4_5_6_planar.py": [
         dict(assignment="VALIDATION_PARAMS", op="module_dict_value", key="tolerance", old="1.0e-8", new="1.0e-12"),
+    ],
+    # LEDGERS R13: without an explicit scale the ternary models now normalize the interface residual by
+    # each component's inventory. These two research tests assert values of the earlier default (every
+    # row divided by the length term), so the model they call "default" requests it explicitly with
+    # ``interface_residual_composition_scale=1.0``, which keeps the earlier expression bit for bit.
+    # Both edits are scoped to the test function; no builder or materialized definition is touched.
+    "kawin/tests/test_illingworth_ternary_three_phase.py": [
+        dict(function="test_three_phase_molar_volume_state_is_immutable_and_equal_volume_kinematics_are_exact",
+             op="insert_keyword", call="_make_stationary_model", after="phase_molar_volumes",
+             arg="interface_residual_composition_scale", new="1.0", reason=R13_REASON),
+    ],
+    "kawin/tests/test_illingworth_ternary_three_phase_similarity.py": [
+        dict(function="test_three_phase_interface_residual_composition_scale_rows", op="append_keyword",
+             call="_build_model", arg="interface_residual_composition_scale", new="1.0", reason=R13_REASON),
     ],
 }
 

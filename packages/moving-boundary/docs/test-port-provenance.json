@@ -509,11 +509,12 @@
    "source": "kawin/tests/test_illingworth_ternary.py",
    "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
    "source_sha256": "abd346b716ce0c79a118606b9b4bee9dabb0d33863c0bcc2aead886224127025",
-   "output_sha256": "3d1217918137376851e8f9b979140b1c60961b219377ca946b0b0234e4a13501",
+   "output_sha256": "362230d0668a3a55eb90fc78dd99e6a4f15404ff56ef01453ba061eeebb68308",
    "counts": {
     "total": 155,
     "deferred": 4,
-    "ported": 151
+    "ported": 150,
+    "superseded": 1
    },
    "transforms": [
     {
@@ -735,6 +736,12 @@
      "kind": "deferred test",
      "name": "test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case",
      "reason": "builds its binary reference with build_fig3_present_work_model/build_fig6_illingworth_case_params from the research example examples/Illingworth2005/compare_illingworth2005_planar.py, which is not ported (FUTURE_PORTS entry 6, decision per script)"
+    },
+    {
+     "kind": "superseded test",
+     "name": "test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work",
+     "reason": "LEDGERS R13: it pins the scaled residual of the earlier default normalization (divided by the domain length); its builder takes no keyword arguments and serves many other tests, which stay on the new default",
+     "replaced_by": "tests/test_illingworth_ternary_residual_normalization.py::test_superseded_research_diagnostics_test_holds_with_the_unit_scale"
     }
    ]
   },
@@ -871,7 +878,7 @@
    "source": "kawin/tests/test_illingworth_ternary_three_phase.py",
    "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
    "source_sha256": "1c9ab98da800c0c7bada0e4295647c79608ad86479b3af793617adcf72cfd032",
-   "output_sha256": "54add32998c519c111d4a14be44f32169f0c4ddf3fb2befd9b5e1e4516759625",
+   "output_sha256": "367cc46e33c3d1a03b0e4e6ea3b17735e88e492a4cf7e0301b4087507c0e8293",
    "counts": {
     "total": 62,
     "deferred": 0,
@@ -962,6 +969,17 @@
      "kind": "string",
      "research": "kawin.diffusion.mesh.MovingBoundaryIllingworthTernaryFD1D",
      "package": "moving_boundary.solvers.illingworth.numerics.ternary"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R13 ternary residual normalization: the test asserts the earlier default scale",
+     "line": 468,
+     "function": "test_three_phase_molar_volume_state_is_immutable_and_equal_volume_kinematics_are_exact",
+     "op": "insert_keyword",
+     "call": "_make_stationary_model",
+     "arg": "interface_residual_composition_scale",
+     "after": "phase_molar_volumes",
+     "new": "1.0"
     }
    ]
   },
@@ -970,11 +988,12 @@
    "source": "kawin/tests/test_illingworth_ternary_three_phase_similarity.py",
    "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
    "source_sha256": "1dc0db22a6a97aac314ab3f9efacf366469e1e5f597bf5213f31816f22412b5c",
-   "output_sha256": "094f8e0ae34a4e633c57e10cd822e128844ae1621545346f1d1a6b6a82b679fe",
+   "output_sha256": "f42ffa4e3e42122a21bee541a52cbacbb1c9f9d14d2903827f36cbe7e8de0ee9",
    "counts": {
     "total": 8,
     "deferred": 0,
-    "ported": 8
+    "ported": 7,
+    "superseded": 1
    },
    "transforms": [
     {
@@ -1031,6 +1050,22 @@
      "kind": "import",
      "research": "kawin.diffusion.mesh.TransformedGrids.landau_grid",
      "package": "moving_boundary.mesh.TransformedGrids.landau_grid"
+    },
+    {
+     "kind": "api_migration",
+     "reason": "LEDGERS R13 ternary residual normalization: the test asserts the earlier default scale",
+     "line": 229,
+     "function": "test_three_phase_interface_residual_composition_scale_rows",
+     "op": "append_keyword",
+     "call": "_build_model",
+     "arg": "interface_residual_composition_scale",
+     "new": "1.0"
+    },
+    {
+     "kind": "superseded test",
+     "name": "test_three_phase_unit_composition_scale_matches_default_bitwise",
+     "reason": "LEDGERS R13: an explicit scale of 1.0 no longer equals the default; it selects the earlier default expression",
+     "replaced_by": "tests/test_illingworth_ternary_residual_normalization.py::test_unit_scale_reproduces_the_pre_r13_default_run"
     }
    ]
   },

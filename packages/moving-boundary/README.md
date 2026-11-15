@@ -63,10 +63,21 @@ not been established.
   transformed solute inventory, relative while `|I_old| >= R * c_floor`, and an
   absolute change of mean composition `residual_tolerance * c_floor` below that.
 - `interface_residual_composition_scale` (new) sets `c_floor`; when omitted it is
-  `constraints.minComposition`. The ternary models use the same name but default
-  to a composition scale of 1, so their default tolerance bounds a change of mean
-  composition per step, not a relative solute loss, unless a component's
-  inventory exceeds the length term (see LEDGERS R13).
+  `constraints.minComposition`.
+
+The two-phase ternary and three-phase models normalize their interface residual per
+component in the same way since LEDGERS R13 (implemented; reference adoption pending):
+without `interface_residual_composition_scale` the scale of component `k` is
+`max(|I_k|, L * constraints.minComposition)`, so `residual_tolerance` bounds the
+per-step change of each component's inventory relative to that inventory, however
+dilute (in the three-phase model each interface row, hence twice the tolerance for a
+component's total). Their tolerance defaults are unchanged (`tolerance=1e-8`,
+`residual_tolerance=None`, meaning `tolerance`). Before R13 the default divided by
+the length term, which bounded a change of mean composition and so weakened for dilute
+components; results of runs that relied on that default change at about the level of
+the tolerance. An explicit `interface_residual_composition_scale` keeps the earlier
+expression `max(|I_k|, L * scale_k, 1e-300)` bit for bit, and `1.0` requests the old
+default.
 - `bulk_picard_rtol=None` now means `1e-10` in implicit mode; it no longer
   follows `tolerance`. Pass it explicitly to keep an older effective value.
 

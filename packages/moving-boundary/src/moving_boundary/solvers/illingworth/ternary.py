@@ -78,6 +78,8 @@ from moving_boundary.solvers.illingworth.shared import (
     _outer_timestep_limits,
     _pending_step_mismatches,
     _validate_outer_dt_fractions,
+    _componentwise_residual_scale,
+    _validate_default_residual_floor,
     _validate_ternary_numerical_controls,
 )
 
@@ -134,15 +136,19 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     ``getPhysicalPhaseProfiles`` return mole fractions. For substitutional
     systems ``u == x`` and every result is unchanged.
 
-    ``interface_residual_composition_scale`` (default ``None``, i.e. ``1.0``)
-    sets the composition scale of the per-step interface residual; a smaller
-    value per component tightens the balance of a dilute or slow component.
-    With the default the residual of component ``k`` is divided by
-    ``max(|I_k|, R, 1e-300)`` (``I_k`` the transformed inventory). This is
-    ``R`` whenever ``|I_k| <= R``, and the tolerance then bounds the change of
-    mean composition per step, not a relative solute loss; an interstitial
-    u-fraction inventory can exceed ``R`` and is then bounded relative to
-    itself (see ``_interface_residual_scale`` and ledger R13).
+    The per-step interface residual of component ``k`` equals the step's
+    change of its transformed inventory ``I_k`` and is accepted when
+    ``|r_k| <= residual_tolerance * scale_k``. By default (ledger R13)
+    ``scale_k = max(|I_k|, R * constraints.minComposition)``: the tolerance
+    bounds the change of each component's inventory per step relative to that
+    inventory, however dilute, and below the floor an absolute change of mean
+    composition of ``residual_tolerance * minComposition``.
+    ``interface_residual_composition_scale`` (default ``None``; a scalar or
+    one value per component) instead selects the earlier expression
+    ``max(|I_k|, R * s_k, 1e-300)``, unchanged bit for bit; ``1.0`` is the
+    default used before R13, for which the tolerance bounded the change of
+    mean composition wherever ``|I_k| <= R`` (see
+    ``_interface_residual_scale``).
     ``initial_eta_componentwise_scaling`` scales each row of the startup eta
     balance separately (see ``estimate_initial_eta_from_instantaneous_balance``).
     ``interface_newton_start`` chooses where each step's interface Newton
@@ -434,15 +440,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._validate_external_boundary_conditions()
         self._validate_isothermal_temperature()
         validate_interstitial_element_order(self.allElements)
-        if self.interfaceResidualCompositionScale is not None and not (
-            np.all(np.isfinite(self.interfaceResidualCompositionScale)) and np.all(self.interfaceResidualCompositionScale > 0.0)
-        ):
-            raise ValueError("interface_residual_composition_scale must be positive and finite.")
         if len(self.phases) != 2:
             raise ValueError("MovingBoundaryIllingworthTernaryFD1DModel requires exactly two explicit phases.")
         if self.geometry != "planar":
             raise NotImplementedError("MovingBoundaryIllingworthTernaryFD1DModel currently implements only planar geometry.")
         _validate_ternary_numerical_controls(self)
+        _validate_default_residual_floor(self)
         self.bulkDiffusivityMode = _coerce_bulk_diffusivity_mode(self.bulkDiffusivityMode)
         if self.bulkPicardRtol is not None and (not np.isfinite(self.bulkPicardRtol) or self.bulkPicardRtol <= 0.0):
             raise ValueError("bulk_picard_rtol must be positive when specified.")
@@ -1284,6 +1287,7 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
             raise ValueError("simTime must be finite and nonnegative.")
         _validate_outer_dt_fractions(minDtFrac, maxDtFrac, "MovingBoundaryIllingworthTernaryFD1DModel")
         _validate_ternary_numerical_controls(self)
+        _validate_default_residual_floor(self)
         self._solveMinDtFrac = float(minDtFrac)
         self._solveMaxDtFrac = float(maxDtFrac)
         return super().solve(simTime, iterator=iterator, verbose=verbose, vIt=vIt, minDtFrac=minDtFrac, maxDtFrac=maxDtFrac)
@@ -1904,37 +1908,44 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         """
         Builds fixed componentwise residual scales for one implicit timestep.
 
-        The physical residual has units of composition times length. Scaling by
-        the accepted old inventory or by ``R`` times an O(1) composition scale
-        gives a dimensionless residual norm whose tolerance is independent of
-        the chosen length units.
+        The physical residual has units of composition times length, and the
+        residual of component ``k`` equals the step's change of its
+        transformed inventory ``I_k`` up to round-off. Dividing by a scale
+        built from the accepted old inventory and ``R`` gives a dimensionless
+        norm whose tolerance is independent of the chosen length units, and
+        bounds ``|dI_k| <= residualTolerance * scale_k`` per step.
 
-        The scale is deliberately independent of ``dt``. The interface residual
-        of component ``k`` equals the step's change of its transformed
-        inventory ``I_k`` up to round-off, so the tolerance bounds
-        ``|dI_k| <= residualTolerance * scale_k`` per step, with
-        ``scale_k = max(|I_k|, R * s_k, 1e-300)`` and ``s_k`` the composition
-        scale. Where ``|I_k| <= R * s_k`` (and the ``1e-300`` floor is
-        inactive) this is a change of mean composition of at most
-        ``residualTolerance * s_k``, not a relative solute loss: relative to
-        the component's own inventory the permitted defect then grows without
-        limit as its mean composition falls. Where ``|I_k|`` is the larger term
-        (possible with the default ``s_k = 1`` only for interstitial
-        u-fractions, which can exceed one) the bound is relative to the
-        inventory. Because ``flux * dt`` can fall below this bound
-        for tiny steps, ``_solve_interface_planar`` never accepts the
-        unmodified starting iterate without first attempting a Newton update.
+        Default (no ``interface_residual_composition_scale``; ledger R13):
+        ``scale_k = max(|I_k|, R * constraints.minComposition)``
+        (``_componentwise_residual_scale``, the binary model's rule per
+        component). The bound is relative to the component's own inventory,
+        however dilute. Profiles are kept at or above ``minComposition``, so
+        the floor binds only at round-off or when ``minComposition`` is raised;
+        the bound is then an absolute change of mean composition of
+        ``residualTolerance * minComposition``. ``minComposition`` is read
+        here, once per step. Zero or invalid values follow the binary rule:
+        an exactly zero inventory with a zero floor gives ``64 eps R``, and
+        non-finite or non-positive results raise ``ValueError``.
 
-        The O(1) composition scale defaults to ``1.0`` for both components.
-        ``interface_residual_composition_scale`` replaces it (per component),
-        which tightens the balance of a component whose inventory change per
-        step is small compared with ``R``, such as a slow substitutional solute
-        next to a fast interstitial.
+        With ``interface_residual_composition_scale`` (``s_k`` per component)
+        the earlier expression is kept bit for bit:
+        ``scale_k = max(|I_k|, R * s_k, 1e-300)``. Where ``|I_k| <= R * s_k``
+        the bound is a change of mean composition of at most
+        ``residualTolerance * s_k``, not a relative solute loss; ``s_k = 1`` is
+        the default used before R13. An inventory above ``R * s_k`` (for
+        ``s_k = 1`` possible only for interstitial u-fractions, which can
+        exceed one) is bounded relative to itself.
+
+        The scale is deliberately independent of ``dt``. Because ``flux * dt``
+        can fall below the bound for tiny steps, ``_solve_interface_planar``
+        never accepts the unmodified starting iterate without first
+        attempting a Newton update.
         """
         old_inventory = integrate_planar_transformed_profile_components(p, q, s, self._R, self._u_grid, self._v_grid)
-        composition_scale = 1.0 if self.interfaceResidualCompositionScale is None else self.interfaceResidualCompositionScale
+        if self.interfaceResidualCompositionScale is None:
+            return _componentwise_residual_scale(old_inventory, self._R, self.constraints.minComposition)
         floor = 1e-300
-        return np.maximum(np.maximum(np.abs(old_inventory), self._R * composition_scale), floor)
+        return np.maximum(np.maximum(np.abs(old_inventory), self._R * self.interfaceResidualCompositionScale), floor)
 
     def _scaled_interface_variables_in_bounds(self, x_hat, lower, upper):
         """Returns whether scaled interface variables satisfy the solver bounds."""
@@ -2170,6 +2181,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         self._reset_implicit_diagnostics()
         self._currentBulkDiffusivityProviderCalls = 0
         self._currentBulkFaceMatricesEvaluated = 0
+        # Before the counting flag is set: a scale error must not leave it on.
+        residual_scale = self._interface_residual_scale(p, q, s)
         self._bulkDiffusivityCountingActive = True
         eta_lower, _, eta_span = self._eta_scaling_bounds()
         lower, upper = self._interface_scaled_bounds()
@@ -2177,7 +2190,6 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if not self._scaled_interface_variables_in_bounds(x_hat, lower, upper):
             self._bulkDiffusivityCountingActive = False
             raise ValueError("Initial nonlinear interface iterate lies outside scaled solve bounds.")
-        residual_scale = self._interface_residual_scale(p, q, s)
         c_left_old = np.asarray(p[-1], dtype=np.float64).copy()
         c_right_old = np.asarray(q[0], dtype=np.float64).copy()
         best_scaled_norm = np.inf

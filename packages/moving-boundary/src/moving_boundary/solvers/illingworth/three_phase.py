@@ -36,6 +36,8 @@ from moving_boundary.solvers.illingworth.shared import (
     _profile_within_floor_bounds,
     _project_shift_roundoff_to_floor,
     _validate_eta_bounds,
+    _componentwise_residual_scale,
+    _validate_default_residual_floor,
     _validate_ternary_numerical_controls,
     _validate_ternary_diffusivity_matrix,
     _validate_ternary_diffusivity_stack,
@@ -245,17 +247,19 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     (``_fill_three_phase_interval_system``) that is bitwise identical to the
     NumPy assembly used otherwise.
 
-    Two options, as in the two-phase model, keep a slow or dilute component's
-    interface balance converged next to a fast one (e.g. Mn or Ni next to C):
-    ``interface_residual_composition_scale`` (scalar or one value per
-    component; default ``None``, i.e. ``1.0``) sets the composition scale of
-    the per-step interface residual (see ``_residual_scale``), and
-    ``initial_eta_componentwise_scaling`` scales each row of the startup eta
-    balance separately (see ``_estimate_initial_etas``). The defaults leave
-    results unchanged. With the default scale every residual row is divided
-    by the normalized specimen length ``L``, so the tolerance bounds a change
-    of mean composition per step (at most twice the tolerance for a
-    component's total), not a relative solute loss (ledger R13).
+    The per-step interface residual rows are normalized per component (see
+    ``_residual_scale``; ledger R13). By default the two rows of component
+    ``k`` are divided by ``max(|I~_k|, L * constraints.minComposition)``,
+    with ``I~_k`` its density-weighted inventory and ``L`` the normalized
+    specimen length, so the tolerance bounds each row, and the change of the
+    component's inventory per step by twice that, relative to the component's
+    own inventory, however dilute. ``interface_residual_composition_scale``
+    (scalar or one value per component; default ``None``) instead selects the
+    earlier expression ``max(|I~_k|, L * s_k, 1e-300)``, unchanged bit for
+    bit; ``1.0`` reproduces the default used before R13 (every row divided by
+    ``L``) while ``|I~_k| <= L``. ``initial_eta_componentwise_scaling`` scales
+    each row of the startup eta balance separately (see
+    ``_estimate_initial_etas``); its default leaves results unchanged.
 
     **Deviation form (ledger R06).** Each interval is solved for the deviation
     ``w = C - r`` from a reference profile ``r``: the interface composition for
@@ -546,16 +550,13 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         if self.geometry != "planar":
             raise NotImplementedError("MovingBoundaryIllingworthTernaryThreePhaseFD1DModel currently implements only planar geometry.")
         _validate_ternary_numerical_controls(self)
+        _validate_default_residual_floor(self)
         if self.initialEtaMethod != "instantaneous_balance":
             raise ValueError("initial_eta_method must be 'instantaneous_balance'.")
         if self.initialEtaRootXtol is not None and not (np.isfinite(self.initialEtaRootXtol) and self.initialEtaRootXtol > 0.0):
             raise ValueError("initial_eta_root_xtol must be positive.")
         if not (np.isfinite(self.initialEtaRootRtol) and self.initialEtaRootRtol > 0.0):
             raise ValueError("initial_eta_root_rtol must be positive and finite.")
-        if self.interfaceResidualCompositionScale is not None and not (
-            np.all(np.isfinite(self.interfaceResidualCompositionScale)) and np.all(self.interfaceResidualCompositionScale > 0.0)
-        ):
-            raise ValueError("interface_residual_composition_scale must be positive and finite.")
         if self.initialEtaRootMaxiter < 1:
             raise ValueError("initial_eta_root_maxiter must be at least 1.")
         if self.initialVelocityGuess is not None and self.initialVelocityGuess.shape != (2,):
@@ -1497,6 +1498,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         if minDtFrac > maxDtFrac:
             raise ValueError("minDtFrac cannot exceed maxDtFrac for the implicit three-phase solver.")
         _validate_ternary_numerical_controls(self)
+        _validate_default_residual_floor(self)
         self._solveMinDtFrac = float(minDtFrac)
         self._solveMaxDtFrac = float(maxDtFrac)
         return super().solve(simTime, iterator=iterator, verbose=verbose, vIt=vIt, minDtFrac=minDtFrac, maxDtFrac=maxDtFrac)
@@ -2142,31 +2144,43 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         Returns the four interface-residual scales for one implicit step.
 
         The residual is a density-weighted inventory defect (composition times
-        length), so it is scaled by the normalized specimen length ``L``
-        (``R0`` with equal molar volumes) times an O(1) composition scale.
-        The two rows of component ``k`` sum to the step's change of its
-        density-weighted inventory up to round-off, so each row is bounded by
-        ``residualTolerance * scale_k`` and the component's inventory change
-        by twice that. By default every row uses ``L``: the bound is then a
-        change of mean composition of at most ``2 * residualTolerance`` per
-        step, not a relative solute loss, and relative to a component's own
-        inventory it grows without limit as its mean composition falls. The
-        rows can cancel in the sum while each misplaces solute between the
-        interfaces, which is why both are tested.
-        With ``interface_residual_composition_scale``,
-        component ``k`` at both interfaces uses
-        ``max(|old density-weighted inventory_k|, L * scale_k)``, as in the
-        two-phase model: a small ``scale_k`` tightens the balance of a dilute
-        or slow component, down to its own inventory. The scale does not
-        depend on ``dt``.
+        length). With ``I~_k = sum_alpha (rho_alpha / rho_A) w_alpha <c_k>_alpha``
+        the accepted old inventory of component ``k`` (physical moles are
+        ``rho_A * I~_k``) and ``L`` the normalized specimen length (``R0`` with
+        equal molar volumes), the two rows of component ``k`` sum to the
+        step's change of ``I~_k`` up to round-off. Both rows use the same
+        ``scale_k``, so each row is bounded by ``residualTolerance * scale_k``
+        and the component's inventory change per step by twice that. The rows
+        can cancel in the sum while each misplaces solute between the
+        interfaces, which is why both are tested and not only their sum. The
+        dependent component has no row; its error is minus the sum of the
+        substitutional independent ones.
+
+        Default (no ``interface_residual_composition_scale``; ledger R13):
+        ``scale_k = max(|I~_k|, L * constraints.minComposition)``
+        (``_componentwise_residual_scale``, the binary model's rule per
+        component), so the bounds are relative to the component's own
+        inventory, however dilute. Where the floor binds, the bound on the
+        component's total is an absolute change of mean composition of
+        ``2 * residualTolerance * minComposition``. ``minComposition`` is read
+        here, once per step; an exactly zero inventory with a zero floor gives
+        ``64 eps L`` and non-finite or non-positive results raise
+        ``ValueError``.
+
+        With ``interface_residual_composition_scale`` (``s_k`` per component)
+        the earlier expression is kept bit for bit:
+        ``scale_k = max(|I~_k|, L * s_k, 1e-300)``. ``s_k = 1`` reproduces the
+        default used before R13 (every row divided by ``L``, a bound on the
+        change of mean composition of ``2 * residualTolerance``) while
+        ``|I~_k| <= L``. The scale does not depend on ``dt``.
         """
         normalized_total = float(self._R0) if self._equalPhaseMolarVolumes else float(self._initialTotalAmount / self._phaseMolarDensities[0])
-        if self.interfaceResidualCompositionScale is None:
-            return np.full(4, max(normalized_total, 1e-300), dtype=np.float64)
         widths = self._phase_widths(interfaces, right_boundary=self._right_boundary_from_interfaces(interfaces))
         inventory = np.zeros(2, dtype=np.float64)
         for density, width, profile, grid in zip(self._normalizedPhaseMolarDensities, widths, profiles, self._grids):
             inventory += density * width * np.trapezoid(np.asarray(profile, dtype=np.float64), grid, axis=0)
+        if self.interfaceResidualCompositionScale is None:
+            return np.tile(_componentwise_residual_scale(inventory, normalized_total, self.constraints.minComposition), 2)
         component = np.maximum(np.maximum(np.abs(inventory), normalized_total * self.interfaceResidualCompositionScale), 1e-300)
         return np.tile(component, 2)
 
@@ -2304,9 +2318,7 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         The residual scale (``_residual_scale``) does not depend on ``dt``, so the
         unmodified old state can meet the tolerance when ``flux * dt`` is tiny,
         which would accept a step with both interfaces frozen and leave the
-        untransferred solute as an inventory defect (with the default scale
-        the tolerance is relative to the specimen length, not to a component's
-        inventory; see ``_residual_scale``). A candidate is therefore
+        untransferred solute as an inventory defect. A candidate is therefore
         accepted only after at least one Newton update. While the start already
         meets the tolerance, a line-search trial is accepted if it improves the
         residual or also meets the tolerance. If that mandatory update cannot be

@@ -2,7 +2,7 @@
 ``1dc0db22a6a97aac314ab3f9efacf366469e1e5f597bf5213f31816f22412b5c``) by
 ``tools/port_tests.py`` (batch 3); do not edit by hand. Imports resolve to the package as
 ``tools/definitions/_bindings.py`` does; the full transform list is in
-``docs/test-port-provenance.json``. Excluded tests: none.
+``docs/test-port-provenance.json``. Excluded tests: test_three_phase_unit_composition_scale_matches_default_bitwise (superseded by tests/test_illingworth_ternary_residual_normalization.py::test_unit_scale_reproduces_the_pre_r13_default_run).
 
 
 Three-phase ternary Illingworth solver against the exact asymmetric similarity solution.
@@ -228,7 +228,7 @@ def test_three_phase_interface_residual_composition_scale_must_be_positive(scale
 
 def test_three_phase_interface_residual_composition_scale_rows():
     solution = _solution("opposite")
-    default = _build_model(solution, 21)
+    default = _build_model(solution, 21, interface_residual_composition_scale=1.0)
     scaled = _build_model(solution, 21, interface_residual_composition_scale=(1.0, 1.0e-3))
     for model in (default, scaled):
         model.setup()
@@ -239,19 +239,6 @@ def test_three_phase_interface_residual_composition_scale_rows():
     expected = np.maximum(np.abs(inventory), DOMAIN_LENGTH * np.array([1.0, 1.0e-3]))
     np.testing.assert_allclose(scaled._residual_scale(profiles, interfaces), np.tile(expected, 2), rtol=1.0e-14)
     assert expected[1] == pytest.approx(abs(inventory[1]))  # Y is limited by its own inventory
-
-
-def test_three_phase_unit_composition_scale_matches_default_bitwise():
-    """A scale of 1.0 gives max(|inventory|, L) = L, i.e. exactly the default residual scale."""
-    solution = _solution("drift")
-    histories = []
-    for kwargs in ({}, {"interface_residual_composition_scale": 1.0}):
-        model = _build_model(solution, 21, semi_log_dt=0.05, **kwargs)
-        model.solve(0.05, iterator=explicitEulerIterator)
-        n = model.interfaceData.N + 1
-        histories.append((model.interfaceData._y[:n].copy(), model.etaData._y[:n].copy()))
-    for default, scaled in zip(*histories):
-        np.testing.assert_array_equal(default, scaled)
 
 
 def test_three_phase_componentwise_initial_eta_converges_every_row():

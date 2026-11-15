@@ -2,7 +2,7 @@
 ``abd346b716ce0c79a118606b9b4bee9dabb0d33863c0bcc2aead886224127025``) by
 ``tools/port_tests.py`` (batch 4); do not edit by hand. Imports resolve to the package as
 ``tools/definitions/_bindings.py`` does; the full transform list is in
-``docs/test-port-provenance.json``. Excluded tests: test_surrogate_construction_provenance_records_line_and_bulk_samples (deferred: see FUTURE_PORTS.md § Deferred tests); test_surrogate_construction_dashboard_has_phase_tabs (deferred: see FUTURE_PORTS.md § Deferred tests); test_surrogate_construction_report_includes_thermocalc_metadata (deferred: see FUTURE_PORTS.md § Deferred tests); test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case (deferred: see FUTURE_PORTS.md § Deferred tests).
+``docs/test-port-provenance.json``. Excluded tests: test_surrogate_construction_provenance_records_line_and_bulk_samples (deferred: see FUTURE_PORTS.md § Deferred tests); test_surrogate_construction_dashboard_has_phase_tabs (deferred: see FUTURE_PORTS.md § Deferred tests); test_surrogate_construction_report_includes_thermocalc_metadata (deferred: see FUTURE_PORTS.md § Deferred tests); test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case (deferred: see FUTURE_PORTS.md § Deferred tests); test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work (superseded by tests/test_illingworth_ternary_residual_normalization.py::test_superseded_research_diagnostics_test_holds_with_the_unit_scale).
 """
 from pathlib import Path
 
@@ -2623,23 +2623,6 @@ def test_ternary_scaled_line_search_keeps_forced_outward_eta_trials_feasible():
     assert np.any(s_trials > s / model._R)
     assert np.all((s_trials >= lower[0]) & (s_trials <= upper[0]))
     assert np.all((eta_trials >= lower[1]) & (eta_trials <= upper[1]))
-
-
-def test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work():
-    model = _make_length_scaled_illingworth_model(1.0)
-    model.setup()
-    x = model.getCurrentX()
-
-    model.getdXdt(model.currentTime, x)
-
-    assert model._lastImplicitConverged is True
-    assert model._lastImplicitIterations == 2
-    assert model._lastImplicitCandidateEvaluations == 4
-    assert model._lastImplicitFunctionEvaluations == model._lastImplicitCandidateEvaluations
-    assert model._lastImplicitJacobianEvaluations == 1
-    assert model._lastImplicitMotionBranch == "positive"
-    assert model._lastImplicitFailureReason is None
-    assert np.isclose(model._lastImplicitResidual, 4.494315292342209e-15, rtol=0.0, atol=1.0e-21)
 
 
 @pytest.mark.parametrize("flip_branch", [False, True])

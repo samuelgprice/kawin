@@ -25,6 +25,11 @@ Test bodies are unchanged except that ``_profile_within_floor_bounds`` and
 fine-grid model takes its research helpers (``kawin/tests/test_illingworth_interstitials_ternary.py``:
 ``_closure``, ``_diffusivities``, ``_x_from_u`` and the case constants) from the copy
 reproduced below. Imports are the package's.
+
+LEDGERS R13 (hand edit, this file is not generated): ``test_interface_residual_is_smooth_near_a_fine_grid_step``
+sets ``interfaceResidualCompositionScale`` to 1.0 on its model, i.e. the default residual normalization in
+force when it was written, because its ``1e-15`` noise threshold is in units of that scale (residual over
+the domain length). The other tests, including the no-retry run, use the current default.
 """
 
 from decimal import Decimal, localcontext
@@ -916,6 +921,7 @@ def test_interface_residual_is_smooth_near_a_fine_grid_step():
     from kawin.solver import explicitEulerIterator
 
     model = _fine_grid_interstitial_model(30.0)
+    model.interfaceResidualCompositionScale = np.ones(2)  # LEDGERS R13: the threshold below is in this scale's units
     model.solve(30.0, iterator=explicitEulerIterator, minDtFrac=1.0e-14)
     p, q = model._p_curr.copy(), model._q_curr.copy()
     s, old_s, eta = float(model._s_curr), float(model._s_old), float(model._eta_curr)

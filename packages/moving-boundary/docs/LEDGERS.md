@@ -1297,30 +1297,177 @@ after setup (binary) or never terminates in fixed mode (two-phase ternary, by in
   tests (E11 a pending fixture), 160 s. No configuration was newly rejected and no reference
   approval was made.
 
-### R13: ternary and three-phase residual scales are R-scaled by default (recorded during R08)
+### R13: ternary and three-phase residual normalization (implemented; reference adoption pending)
 
-**Status:** open; recorded 2026-11-11 from the R08 survey; not changed within R08.
-**Scope:** `ternary.py:_interface_residual_scale` and `three_phase.py:_residual_scale`, plus
-their constructor and docstring descriptions of `interface_residual_composition_scale`.
+**Status:** implemented 2026-11-14; **reference adoption pending**. Recorded 2026-11-11 from the
+R08 survey. The solver change, its tests and the approval tooling are committed. No reference was
+approved: the runs listed under *Expected reference changes* differ from their selected references
+by design and are not passing acceptance results until a separately authorized approval.
+**Scope:** `ternary.py:_interface_residual_scale`, `three_phase.py:_residual_scale`, their
+validation, and the docstring and README descriptions of `interface_residual_composition_scale`.
+Binary numerics, the attempted Newton update and its fallback, clamping and floor projection,
+Picard tolerances, convergence diagnostics, history and lifecycle code are unchanged.
 
-- *Misleading description.* Both docstrings call the default normalization a "relative
-  solute loss per step". With the default composition scale of 1, the scale is
-  `max(|I_k|, R * 1)` (three-phase: the normalized length `L`). That equals `R` whenever the
-  mean composition of component `k` is below 1, which covers every mole or u-fraction. The
-  default tolerance therefore bounds a defect in the *mean composition* per step, not a
-  relative solute-inventory error. For a component with mean composition `c`, the bound on
-  the relative inventory error per step is about `residual_tolerance / c`.
-- *Dilution weakness.* The R08 binary survey (scratch, 2026-11-11) measured the same
-  normalization on the binary. At residual tolerance 1e-10, the final relative inventory
-  drift was 4.8e-10 for the unscaled R08 problem, 7.1e-6 with every composition scaled by
-  1e-4, and 1.8e-2 at 1e-8 (with a 14% interface error). An inventory-based scale gave the
-  same dimensionless result at every composition scale. A smaller per-component
-  `interface_residual_composition_scale` already turns the ternary scale into an
-  inventory-based one; only the default is affected.
-- **Investigate:** correct the docstrings first; that is documentation only. Changing the
-  default (for example to the inventory-based scale with a `minComposition` floor that R08
-  implemented for the binary) would change ternary and three-phase references. It needs its own
-  measurements, tests and approval, and is a user decision.
+**Finding (verified against the code).** Per step and up to floating-point round-off (at most
+6e-16 of the inventory in the survey fixtures), the residual is the inventory defect:
+two-phase `dI_k = r_k`; three-phase `dI~_k = r_ab,k + r_bc,k`, with
+`I~_k = sum_alpha (rho_alpha / rho_A) w_alpha <c_k>_alpha` (physical moles `rho_A * I~_k`), for
+equal and unequal molar volumes, a moving right boundary and u-fractions.
+
+- *Earlier default.* Two-phase: `scale_k = max(|I_k|, R, 1e-300)`. This reduces to `R` only where
+  the inventory does not exceed the length term and the `1e-300` floor is inactive. That holds
+  for mole fractions. It is not universal: an interstitial u-fraction can exceed one, and its
+  inventory is then the scale. Three-phase: `L` for all four rows (`L = R0`, or `N_tot / rho_A`
+  with unequal volumes), without looking at the inventory.
+- *What it bounded.* Where the scale was the length term, the tolerance bounded a change of mean
+  composition per step (`tol`; three-phase total `2 * tol`), not a relative solute loss. The
+  permitted defect relative to the inventory of a component was `tol / cbar_k` (three-phase
+  `2 * tol / cbar_k`), with no upper bound as the mean composition `cbar_k` approaches zero. The
+  docstring wording "relative solute loss per step" was wrong; it was corrected first (`cdde760`).
+- *Three-phase rows.* A small sum does not bound the rows: opposite-signed `r_ab`, `r_bc`
+  conserve the total but misplace solute between the interfaces, so both rows stay in the test.
+  The dependent component has no row; its error is minus the sum of the substitutional
+  independent ones.
+
+**Change.** Without an explicit `interface_residual_composition_scale`, per component:
+`scale_k = max(|I_k|, L * constraints.minComposition)` (`shared._componentwise_residual_scale`,
+the binary R08 rule applied per component; binary code unchanged). Three-phase uses `I~_k` and the
+same `scale_k` for both interfaces.
+
+- *Enforced per step, up to round-off.* Two-phase `|dI_k| <= tol * scale_k`. Three-phase: each
+  row `|r| <= tol * scale_k`, hence `|dI~_k| <= 2 * tol * scale_k`. These are relative to the
+  inventory of the component itself while `|I_k| >= L * minComposition`. Where the floor binds
+  the bound is absolute: a change of mean composition of at most `tol * minComposition`
+  (three-phase total `2 * tol * minComposition`). This is what the test enforces per step; it is
+  not a statement about accumulated drift or solution accuracy.
+- *Zero and invalid values (default path only).* Inventory and `minComposition` both exactly zero
+  give `64 eps L`; a non-finite inventory, a non-positive or non-finite `L`, a negative or
+  non-finite `minComposition`, and a scale that overflows or underflows raise `ValueError`. No
+  `1e-300` clamp on this path.
+- *Explicit scales.* Unchanged bit for bit, including the `1e-300` lower bound:
+  `max(max(|I_k|, L * s_k), 1e-300)`. `1.0` requests the earlier default (three-phase: while
+  `|I~_k| <= L`).
+- *Tolerance defaults.* Unchanged (`tolerance=1e-8`, `residual_tolerance=None`, meaning
+  `tolerance`).
+- *Validation.* The accepted values are unchanged; only the time of rejection is. An explicit
+  scale (a scalar or two values, positive and finite) is checked by
+  `shared._validate_ternary_numerical_controls`: before the host constructor, in the
+  configuration validator and at the start of every `solve`. `constraints.minComposition` (finite,
+  non-negative) is checked only on the default path, in the configuration validator and at the
+  start of `solve` (`shared._validate_default_residual_floor`), because `constraints` does not
+  exist before the host constructor. In `ternary.py:_solve_interface_planar` the scale is
+  computed before `_bulkDiffusivityCountingActive` is set.
+
+**Callers.** Definitions, examples and benchmark cases that relied on the default run the new
+default with no source change (user decision 2026-11-14). The only definition with an explicit
+scale is `tools/definitions/ferrite_growth_le.py` (O03a), which is unchanged.
+
+**Tests.** `tests/test_illingworth_ternary_residual_normalization.py` (113 items) was written first
+and run on the unchanged solver (`38a6595`): 61 failed, 52 passed.
+
+- *Defect tests* (61 items). 59 failed before the change for their stated reasons: the scale
+  helper did not exist; the default scale was the length term (default scale values, floor
+  binding, zero and invalid values); iteration counts, interface positions and eta depended on
+  dilution; per-step rows and inventory changes exceeded `tol * |I_k|` (also undiluted, in all
+  five fixtures); an invalid explicit scale reached the host constructor or `setup`; a
+  wrong-shaped scale and an invalid `minComposition` were not refused; the accumulated drift of
+  a 201-node interstitial run exceeded `N * tol * |I_k|`.
+- *Two dilution-invariance items passed before the change:* the two-phase and the three-phase
+  substitutional couples with only component Y diluted (by 1e-6 and 1e-4). In those runs the
+  row of the undiluted component decided every step, so loosening the Y row changed neither the
+  iteration counts nor the results to 1e-10. They are kept as written; they show no defect for
+  that pattern and guard it now.
+- *Characterization* (1 item, differs before the change by construction): the interface-solve
+  diagnostics of the superseded research test on the new default. The counts are the same; the
+  scaled residual is the same physical defect over the component inventory.
+- *Preservation and robustness* (51 items) passed before and after: the residual and inventory
+  identities; explicit scalar and per-component scales equal to the earlier expression bit for
+  bit, including `1e-200` and the subnormal `1e-310` with ordinary and zero inventories; `1.0`
+  equal to the earlier default scale and reproducing recorded pre-R13 default runs (iterations,
+  positions and eta to 1e-13); length-unit invariance; the attempted Newton update and its
+  fallback in both families; a 201-node interstitial run at 1e-13 without retries.
+- *Corrections to the new tests* (recorded so the counts can be reproduced). On their very first
+  run on the unchanged solver the result was 63 failed, 50 passed, because of two faults in the
+  tests themselves: the length-unit test compared against a run of a different duration (it was
+  rewritten to compare metres with micrometres), and the fine-grid test mixed a no-retry check
+  (preservation) with a drift bound (defect) and was split in two. The counts above are from the
+  corrected file on the same unchanged solver. After the change, one expected error message was
+  widened: the two-phase inventory integral already refuses a non-finite profile with its own
+  `ValueError`.
+- *Research tests that pinned the earlier default* (five; under the candidate default the
+  existing suite gave 1051 passed, 5 failed):
+  - `test_illingworth_ternary_three_phase.py::test_three_phase_molar_volume_state_is_immutable_and_equal_volume_kinematics_are_exact`
+    and `test_illingworth_ternary_three_phase_similarity.py::test_three_phase_interface_residual_composition_scale_rows`
+    assert values of the earlier default scale. Their "default" model now requests it with
+    `interface_residual_composition_scale=1.0` (recorded `api_migration` edits scoped to the test
+    function; reason in `docs/test-port-provenance.json`).
+  - `test_ternary_deviation_form.py::test_interface_residual_is_smooth_near_a_fine_grid_step`
+    (hand-ported file): a hand edit sets the scale to 1.0 on its model, because its `1e-15` noise
+    threshold is in units of the earlier scale. The no-retry run in that file stays on the new
+    default and passes.
+  - `test_illingworth_ternary.py::test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work`
+    and `test_illingworth_ternary_three_phase_similarity.py::test_three_phase_unit_composition_scale_matches_default_bitwise`
+    are superseded (`tools/port_tests.py:SUPERSEDED`, recorded with reason and replacement). The
+    builder of the first takes no keyword arguments and serves many tests that should stay on
+    the new default; the premise of the second, "1.0 equals the default", is no longer true.
+    Package tests repeat the assertions of the first verbatim with the scale set to 1.0 and cover
+    the second with the explicit-1.0 runs.
+- Full `tests/` on a freshly installed target: 1653 passed, 5 skipped (the same five as before the
+  change), 1 deselected. Both generators reproduce every file (`--check`).
+
+**Tooling added for R13.**
+
+- `tools/api_migrations.py`: an edit may carry its own reason; `append_keyword` adds a keyword to a
+  keyword-free call. `tools/port_tests.py`: `SUPERSEDED` tests are removed like deferred ones and
+  recorded with their reason and the package test that replaces them (`9157592`).
+- `tools/acceptance.py approve --verify-private-settings` (`38a6595`): an ordinary numerical
+  approval may list O04/O05. Every existing gate runs unchanged. Before promotion the adopted,
+  privately hashed settings must equal a fresh package capture; a missing, unhashed, changed or
+  different setting refuses the approval. The cases keep their adopted settings
+  (`private-carried-forward`) and the record states `private_settings: verified-equal`. No
+  settings content, settings hash or private digest is committed, and the per-array deviations of
+  O04/O05 are committed as verdicts only. Tested on synthetic temporary projects only; no
+  approval was made with it.
+
+**Survey (planning phase, open-input fixtures only; fixture observations, not guarantees).** Five
+fixtures (two-phase substitutional and interstitial; three-phase with equal volumes, unequal
+volumes and interstitial), each diluted by factors down to 1e-6 with the exact `(s, eta)` path
+unchanged; 488 runs, no step retry, no step failure, no forced-update fallback.
+
+- The earlier default behaved exactly as a tolerance of `tol / g` under a dilution `g`; the new
+  default gave the same iteration counts and results at every dilution, for all or one
+  component, substitutional and interstitial, equal and unequal volumes.
+- Once the earlier tolerance was loose enough, every step took exactly one Newton update and the
+  measured errors stopped growing with further dilution. This was observed in these
+  well-conditioned fixtures. It is not a bound: the earlier rule permitted the relative defect
+  above, and the fallback can accept a start with no update.
+- *Newton iteration counts, same tolerance, earlier to new default, undiluted:* unchanged for
+  the two substitutional fixtures at 1e-8 (556 and 925); two-phase interstitial at the default
+  1e-8: 556 to 651 (about +17%); two-phase substitutional at 1e-11: 606 to 687 (+13%);
+  two-phase interstitial at 1e-10: 632 to 717 (+13%); three-phase at 1e-11: 1095 to 1120 (+2%).
+- *Measured runtime* (single runs, not a benchmark, reported separately from iteration counts):
+  the new default at 1e-13 against 1e-8 took about 25% to 45% longer for 19% to 30% more
+  iterations. Runtime at equal tolerance was not measured in the survey.
+- The two-phase interstitial fixture at the default 1e-8, undiluted: relative inventory drift
+  4e-6 with the earlier default and 2e-7 with the new one.
+
+**Follow-up (open, not part of R13).**
+
+- *Tighter default tolerance.* On the fixtures, 1e-11 gave drift of at most 2e-10 for about 20%
+  more iterations than 1e-8, and the new default converged at 1e-15 on 201-node grids and at
+  1e-13 with composition-dependent diffusivity (lagged and implicit). This is not established for
+  TC-derived cases or very fine grids (the documented Fe-Mn-C 3201-node floor is about 1e-13
+  relative to carbon). The defaults are unchanged.
+- *Picard absolute tolerance.* `bulk_picard_atol=1e-12` is an absolute composition, so the
+  implicit-mode inner tolerance is also dilution-sensitive. Not examined.
+- *Startup eta estimate.* With only one component diluted by 1e-4 or more, the two-phase startup
+  eta estimate fails without `initial_eta_componentwise_scaling`, under both normalizations (16
+  survey runs stopped at setup). Not an R13 effect.
+
+**Expected reference changes (pending approval).** Runs C05-C12, C16-C24, C32, F11, F12, O01, O02,
+O03b, O04, O05, O06; contracts C26, C27, C28, C29; examples E03-E10. Unchanged: all binary runs,
+C25, O03a, O07, O08. Acceptance limits, `approval_criteria` and contract assertions are not
+edited, regenerated or relaxed.
 
 ## Example acceptance (pending tier approval)
 

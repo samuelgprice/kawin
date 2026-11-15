@@ -142,7 +142,9 @@ three-phase reset reproduces fresh construction bit for bit (fix `9595574`; cont
 Two-phase ternary reset also reproduces fresh construction (initial profile through the
 constructor's conversion, and `initialEta` restored to NaN); binary needed no change (identical
 bits); no reference changed, exact full and E01-E10 bit-identical, full `tests/` 1506 passed. The
-approved artifacts are local (four approvals). R13 (ternary/three-phase residual scales) is recorded.
+approved artifacts are local (four approvals). R13 (ternary/three-phase residual normalization) is implemented;
+reference adoption is pending (LEDGERS R13: the listed runs, contracts and examples differ from their
+references by design until a separately authorized approval).
 
 ## Installed solving and research-owned generation
 
