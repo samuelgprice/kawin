@@ -1,6 +1,16 @@
 """Approved scientific inputs, independent of reference/installed solver selection."""
 from pathlib import Path
+import importlib.util
 import numpy as np
+
+
+def two_phase_similarity_module():
+    """The package-owned C33/F33 definitions (``tools/two_phase_similarity_cases.py``), loaded by file."""
+    spec = importlib.util.spec_from_file_location("two_phase_similarity_cases",
+                                                  Path(__file__).resolve().parent / "two_phase_similarity_cases.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def build_case(inputs, case_id, scratch):
@@ -100,6 +110,9 @@ def build_case(inputs, case_id, scratch):
         model.terminalThinPhaseWidth = .31
         model.terminalThinPhaseExtraRetries = 25
         duration = 2e-6
+    elif case_id in {"C33", "F33"}:
+        # Package-owned (no research definitions); see tools/two_phase_similarity_cases.py.
+        model, duration, analytic = two_phase_similarity_module().build(inputs, case_id)
     else:
         raise KeyError(case_id)
     return model, duration, analytic
@@ -111,6 +124,9 @@ def collect(model, analytic=None):
     Quantities keep phase/component ordering and existing NaN masks. Unsupported
     APIs are absent and reported N/A; no reconstructed display integral is treated
     as the conservative inventory. Analytic errors are computed independently.
+    ``analytic = (kind, exact, start)`` with exact time = model time + ``start``; kinds are
+    ``binary``, ``three_phase`` and ``two_phase`` (C33/F33, arrays defined by
+    ``two_phase_similarity_cases.exact_arrays``).
     """
     arrays = {}
     histories = ("data", "interfaceData", "concData", "etaData", "inventoryData", "pData", "qData",
@@ -148,6 +164,9 @@ def collect(model, analytic=None):
             z = np.ravel(model.mesh.z)
             exact_profile = exact.planar_exact_profile(z, model.currentTime + start, params)
             arrays["exact/profile_error"] = np.ravel(model.data.currentY) - np.ravel(exact_profile)
+        elif kind == "two_phase":
+            arrays.update(two_phase_similarity_module().exact_arrays(
+                model, exact, start, arrays["interfaceData/values"], arrays["interfaceData/time"], arrays["etaData/values"]))
         else:
             arrays["exact/interface_error"] = arrays["interfaceData/values"] - np.asarray([exact.interface_positions(t) for t in times])
             arrays["exact/eta_error"] = arrays["etaData/values"] - np.asarray(exact.etas)

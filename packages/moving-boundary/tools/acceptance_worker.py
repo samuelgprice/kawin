@@ -16,8 +16,21 @@ _SAFETY["forbid_input"]()
 _SAFETY["guard_independence"]()   # opt-in research/Git guards (MB_FORBID_RESEARCH, MB_FORBID_GIT)
 # Cases whose package role builds from tools/definitions (materialized, hash-checked) instead of
 # the historical acceptance_inputs AST loader; the reference role always keeps the loader.
+# C33/F33 are package-owned (tools/two_phase_similarity_cases.py, through the same bindings
+# Context) and have no reference role at all.
 PACKAGE_DEFINITIONS = ({f"C{n:02d}" for n in range(1, 33)} | {"LEGACY", "prepare", "F04", "F11", "F12"}
-                       | {"O01", "O02", "O03a", "O03b", "O04", "O05", "O06", "O07", "O08"})
+                       | {"O01", "O02", "O03a", "O03b", "O04", "O05", "O06", "O07", "O08"} | {"C33", "F33"})
+PACKAGE_OWNED = {"C33", "F33"}
+
+
+def case_family(case):
+    """The solver family a case's package mesh check requires (``binary``, ``ternary``, ``three_phase``)."""
+    number = int(case[1:]) if case.startswith("C") else -1
+    if case in {"LEGACY","F04","O07"} or number in list(range(1,5))+[13,14,15,25,30,31]:
+        return "binary"
+    if case in {"O01","O03a","O04","O05","O06","F33"} or number in [5,6,7,8,16,17,18,19,24,26,33]:
+        return "ternary"
+    return "three_phase"
 
 
 def module(name, path):
@@ -34,7 +47,11 @@ def main():
 
     The package role takes no ``--root``; every case it accepts is in ``PACKAGE_DEFINITIONS``
     and takes its inputs from ``tools/definitions/_bindings.Context``: ``acceptance_inputs`` is
-    never imported (asserted after the run) and no research file is read. The reference role
+    never imported (asserted after the run) and no research file is read. C33/F33
+    (``PACKAGE_OWNED``) build from ``tools/two_phase_similarity_cases.py`` through that same
+    Context, are refused in the reference role, and also report ``residual_budget_inputs`` (the
+    solved model's effective residual tolerance, ``minComposition``, ``R``, explicit scale and
+    inventory record interval) for the diagnostic budget D. The reference role
     (historical only) needs ``--root``, the frozen research checkout. LEGACY's research baseline-npz assertion runs in
     the reference role only; the package role relies on ``compare()`` against the hashed
     ``reference/LEGACY.npz`` (decision F5) and keeps the recorded stop status label. Contracts
@@ -64,6 +81,7 @@ def main():
     else:
         assert args.root is None, "the package role takes no research root"
         assert args.case in PACKAGE_DEFINITIONS, args.case + " has no package-owned definitions"
+    assert not (args.role == "reference" and args.case in PACKAGE_OWNED), args.case + " is package-owned; it has no reference role"
     sys.path.extend(site.getsitepackages())
     if args.role == "reference":
         sys.path.insert(0, str(args.root.resolve()))
@@ -87,13 +105,7 @@ def main():
     else:
         inputs_module = module("acceptance_inputs", HERE / "acceptance_inputs.py")
         inputs = inputs_module.CaseInputs(args.root, args.role)
-    number = int(args.case[1:]) if args.case.startswith("C") else -1
-    if args.case in {"LEGACY","F04","O07"} or number in list(range(1,5))+[13,14,15,25,30,31]:
-        inputs.family = "binary"
-    elif args.case in {"O01","O03a","O04","O05","O06"} or number in [5,6,7,8,16,17,18,19,24,26]:
-        inputs.family = "ternary"
-    else:
-        inputs.family = "three_phase"
+    inputs.family = case_family(args.case)
     inputs.artifacts = args.artifacts
     # O05's transient pycalphad sample goes next to this worker's output, never into --artifacts.
     inputs.pycalphad_sample = args.output.with_name(args.output.name + ".pycalphad.npz")
@@ -188,6 +200,14 @@ def main():
             volumes = getattr(model, "_phaseMolarVolumes", None)
             if volumes is not None:
                 report["minimum_molar_volume"] = float(np.min(volumes))
+            if args.case in PACKAGE_OWNED:
+                # Effective inputs of the diagnostic residual-tolerance budget D (acceptance_baseline).
+                scale = model.interfaceResidualCompositionScale
+                report["residual_budget_inputs"] = dict(
+                    residual_tolerance=float(model.residualTolerance),
+                    min_composition=float(model.constraints.minComposition), domain_length=float(model._R),
+                    explicit_composition_scale=None if scale is None else [float(x) for x in np.ravel(scale)],
+                    inventory_record_interval=int(model.inventoryData.recordInterval))
             if args.role == "package":
                 for name, provider in inputs.providers.items():
                     if provider.startswith("moving_boundary"):
@@ -201,7 +221,8 @@ def main():
             report["thermocalc_generation" if args.case == "O06" else "pycalphad_generation"] = audit
         if definitions:
             assert "acceptance_inputs" not in sys.modules, "package-owned definitions imported the historical loader"
-            report["case_definitions"] = "tools/definitions"
+            report["case_definitions"] = ("tools/two_phase_similarity_cases.py" if args.case in PACKAGE_OWNED
+                                          else "tools/definitions")
         report.update(status="PASS", arrays=len(arrays))
     except Exception:
         report.update(status="FAIL", error=traceback.format_exc())

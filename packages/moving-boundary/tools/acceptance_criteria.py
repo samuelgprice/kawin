@@ -8,7 +8,7 @@ approval, 2026-11-10); they are never recomputed from a previous output.
 Metrics (``measure``), each computed from one run's arrays (a reference or package ``.npz``):
 
 - ``max_abs``: largest |value| over the named arrays (analytic interface, eta and three-phase
-  per-phase profile errors).
+  per-phase profile errors; two-phase C33/F33 per-component profile and fitted-k errors).
 - ``max_abs_outside_nodes``: largest |value| of a binary planar profile error outside a *frozen*
   node range around the exact final interface (centre = exact final interface of the reference,
   half-width = approved interface-error limit + 2h on the uniform mesh). Inside it the exact and
@@ -26,8 +26,13 @@ or a profile whose length differs from the frozen mesh each raise ``CriteriaErro
 Limit rules (``propose``): analytic = 2 x current, rounded up to two significant figures;
 conservation = 10 x current, rounded up to two significant figures, never below 1e-13.
 
+Inactive cases (``PENDING_ANALYTIC``: C33/F33 before activation) are in no registry, so ``propose``
+and ``check`` never require their baselines; ``preview`` measures one fixture pair by the same
+rules (``proposal_for``) and writes nothing.
+
     python tools/acceptance_criteria.py check     # evaluate the frozen references against the manifest
     python tools/acceptance_criteria.py propose OUT.json   # regenerate the proposal (historical record)
+    python tools/acceptance_criteria.py preview --case C33 --json C33.json --npz C33.npz
 """
 from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
@@ -44,6 +49,13 @@ CONSERVATION_FLOOR = 1e-13
 
 ANALYTIC_CASES = {"C04": "binary", "C31": "binary", "F04": "binary",
                   "C11": "three_phase", "C12": "three_phase", "F11": "three_phase", "F12": "three_phase"}
+# Registered but inactive (Stage 1): not in any registry ``propose``/``check`` iterate, so their
+# missing baselines affect nothing; ``preview`` alone measures them. Activation moves them into
+# ANALYTIC_CASES (kind "two_phase").
+PENDING_ANALYTIC = {"C33": "two_phase", "F33": "two_phase"}
+TWO_PHASE_INVENTORY = ("composition inventory, relative normalized drift: max over t and k of |I_k(t) - I_k(0)| / "
+                       "max_k |I_k(0)| (dimensionless); distinct from the absolute source bound "
+                       "|I_k(t_end) - I_k(0)| <= 1e-9 m checked at baseline capture")
 BINARY = ("C01", "C02", "C03", "C04", "C13", "C14", "C15", "C30", "C31", "F04", "O07")
 TERNARY = ("C05", "C06", "C07", "C08", "C16", "C17", "C18", "C19", "C24", "O01", "O03a", "O04", "O05", "O06")
 THREE_PHASE_IMPLICIT_EQUAL = ("C11", "C12", "F11", "F12", "O02", "O03b")   # no explicit volumes (Vm = 1)
@@ -143,16 +155,31 @@ def round_up(value, factor, floor=0.0):
     return max(floor, float(rounded))
 
 
-def _specs(case, report):
-    """Unlimited criterion specs for ``case`` (metric definitions only; limits added by ``propose``)."""
+def _specs(case, report, kind=None):
+    """Unlimited criterion specs for ``case`` (metric definitions only; limits added by ``propose``).
+
+    ``kind`` defaults to the registered analytic kind (``ANALYTIC_CASES``); ``preview`` passes the
+    pending kind of an inactive case. Two-phase (C33/F33): interface, eta, per-component profile
+    and fitted-k errors, and the composition inventory labelled as a relative normalized drift.
+    """
     analytic, conservation = {}, {}
-    if ANALYTIC_CASES.get(case) == "binary":
+    kind = ANALYTIC_CASES.get(case) if kind is None else kind
+    if kind == "binary":
         analytic["interface"] = dict(metric="max_abs", arrays=["exact/interface_error"])
         analytic["profile"] = dict(metric="max_abs_outside_nodes", arrays=["exact/profile_error"])
-    elif ANALYTIC_CASES.get(case) == "three_phase":
+    elif kind == "three_phase":
         analytic["interface"] = dict(metric="max_abs", arrays=["exact/interface_error"])
         analytic["eta"] = dict(metric="max_abs", arrays=["exact/eta_error"])
         analytic["profile"] = dict(metric="max_abs", arrays=[f"exact/profile_error{i}" for i in range(3)])
+    elif kind == "two_phase":
+        analytic["interface"] = dict(metric="max_abs", arrays=["exact/interface_error"])
+        analytic["eta"] = dict(metric="max_abs", arrays=["exact/eta_error"])
+        analytic["profile_X"] = dict(metric="max_abs", arrays=["exact/profile_error_X"])
+        analytic["profile_Y"] = dict(metric="max_abs", arrays=["exact/profile_error_Y"])
+        analytic["k"] = dict(metric="max_abs", arrays=["exact/k_rel_error"])
+        conservation["composition_inventory"] = dict(metric="relative_drift", arrays=["inventoryData/values"],
+                                                     quantity=TWO_PHASE_INVENTORY)
+        return analytic, conservation
     if case == "LEGACY":
         for mode in LEGACY_MODES:
             conservation[f"inventory_{mode}"] = dict(metric="relative_drift", arrays=[f"binary_{mode}__concData_y"],
@@ -191,40 +218,14 @@ def load_reference(case, expected):
 
 def propose(expected):
     """Measure today's references and derive every limit by the approved rules (deterministic)."""
-    import numpy as np
     criteria = dict(analytic={}, conservation={}, reported_only={})
     cases = sorted(set(ANALYTIC_CASES) | set(BINARY) | set(TERNARY) | set(THREE_PHASE_IMPLICIT_EQUAL)
                    | set(THREE_PHASE_UNEQUAL) | set(THREE_PHASE_EXPLICIT_EQUAL) | {"LEGACY"})
     for case in cases:
         report, arrays = load_reference(case, expected)
-        analytic, conservation = _specs(case, report)
-        if "interface" in analytic:
-            current = measure(arrays, analytic["interface"])
-            analytic["interface"].update(current=current, limit=round_up(current, 2))
-        if analytic.get("profile", {}).get("metric") == "max_abs_outside_nodes":
-            # Freeze the mask: centre on the exact final interface, half-width = interface limit + 2h.
-            profile = np.ravel(_get(arrays, "exact/profile_error"))
-            length = float(report["length_scale"])
-            z = np.linspace(0.0, length, profile.size)    # CartesianFD1D(["CR"], [0, R], 401): uniform
-            h = float(z[1] - z[0])
-            exact_interface = float(np.ravel(_get(arrays, "interfaceData/values"))[-1]
-                                    - np.ravel(_get(arrays, "exact/interface_error"))[-1])
-            half_width = analytic["interface"]["limit"] + 2 * h
-            excluded = np.flatnonzero(np.abs(z - exact_interface) <= half_width)
-            analytic["profile"].update(nodes=int(profile.size), excluded_nodes=[int(excluded[0]), int(excluded[-1])],
-                                       mask=dict(centre="exact final interface", exact_interface=exact_interface,
-                                                 half_width=half_width, h=h, mesh=f"uniform {profile.size} nodes on [0, {length}]"))
-        for key in ("profile", "eta"):
-            if key in analytic:
-                current = measure(arrays, analytic[key])
-                analytic[key].update(current=current, limit=round_up(current, 2))
-        for spec in conservation.values():
-            current = measure(arrays, spec)
-            spec.update(current=current, limit=round_up(current, 10, CONSERVATION_FLOOR))
-        if case in THREE_PHASE_UNEQUAL:
-            criteria["reported_only"][case] = dict(
-                quantity="unweighted composition inventory (unequal molar volumes; not conserved)",
-                relative_drift=measure(arrays, dict(metric="relative_drift", arrays=["inventoryData/values"])))
+        analytic, conservation, reported = proposal_for(case, report, arrays)
+        if reported is not None:
+            criteria["reported_only"][case] = reported
         if analytic:
             criteria["analytic"][case] = analytic
         if conservation:
@@ -232,12 +233,76 @@ def propose(expected):
     return criteria
 
 
+def proposal_for(case, report, arrays, kind=None):
+    """One case's criteria with measured ``current`` values and rule-derived limits.
+
+    Returns ``(analytic, conservation, reported_only)`` (the last ``None`` unless the case has a
+    reported-only quantity). ``propose`` uses it for every registered case; ``preview`` uses it
+    with an explicit pending ``kind`` for an inactive case, without touching the manifest.
+    """
+    import numpy as np
+    analytic, conservation = _specs(case, report, kind)
+    if "interface" in analytic:
+        current = measure(arrays, analytic["interface"])
+        analytic["interface"].update(current=current, limit=round_up(current, 2))
+    if analytic.get("profile", {}).get("metric") == "max_abs_outside_nodes":
+        # Freeze the mask: centre on the exact final interface, half-width = interface limit + 2h.
+        profile = np.ravel(_get(arrays, "exact/profile_error"))
+        length = float(report["length_scale"])
+        z = np.linspace(0.0, length, profile.size)    # CartesianFD1D(["CR"], [0, R], 401): uniform
+        h = float(z[1] - z[0])
+        exact_interface = float(np.ravel(_get(arrays, "interfaceData/values"))[-1]
+                                - np.ravel(_get(arrays, "exact/interface_error"))[-1])
+        half_width = analytic["interface"]["limit"] + 2 * h
+        excluded = np.flatnonzero(np.abs(z - exact_interface) <= half_width)
+        analytic["profile"].update(nodes=int(profile.size), excluded_nodes=[int(excluded[0]), int(excluded[-1])],
+                                   mask=dict(centre="exact final interface", exact_interface=exact_interface,
+                                             half_width=half_width, h=h, mesh=f"uniform {profile.size} nodes on [0, {length}]"))
+    for key in ("profile", "eta", "profile_X", "profile_Y", "k"):
+        if key in analytic:
+            current = measure(arrays, analytic[key])
+            analytic[key].update(current=current, limit=round_up(current, 2))
+    for spec in conservation.values():
+        current = measure(arrays, spec)
+        spec.update(current=current, limit=round_up(current, 10, CONSERVATION_FLOOR))
+    reported = None
+    if case in THREE_PHASE_UNEQUAL:
+        reported = dict(
+            quantity="unweighted composition inventory (unequal molar volumes; not conserved)",
+            relative_drift=measure(arrays, dict(metric="relative_drift", arrays=["inventoryData/values"])))
+    return analytic, conservation, reported
+
+
+def preview(case, json_path, npz_path):
+    """Proposed criteria for an inactive (``PENDING_ANALYTIC``) case from one fixture pair; writes nothing.
+
+    No hash check and no manifest access: the output is a proposal for review. After activation
+    ``propose`` must reproduce it exactly from the hash-validated fixture.
+    """
+    import numpy as np
+    if case not in PENDING_ANALYTIC:
+        raise CriteriaError(f"{case}: not a pending (inactive) analytic case; registered cases use propose")
+    report = json.loads(Path(json_path).read_text(encoding="utf-8"))
+    with np.load(npz_path, allow_pickle=False) as data:
+        arrays = {key: data[key] for key in data.files}
+    analytic, conservation, _ = proposal_for(case, report, arrays, kind=PENDING_ANALYTIC[case])
+    return dict(case=case, kind=PENDING_ANALYTIC[case], analytic=analytic, conservation=conservation)
+
+
 def main(argv=None):
     """``check``: evaluate the frozen references against the manifest; ``propose OUT``: regenerate."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", choices=("check", "propose"))
+    parser.add_argument("action", choices=("check", "propose", "preview"))
     parser.add_argument("out", nargs="?", type=Path)
+    parser.add_argument("--case", help="preview only: an inactive PENDING_ANALYTIC case")
+    parser.add_argument("--json", type=Path, help="preview only: the case's fixture report")
+    parser.add_argument("--npz", type=Path, help="preview only: the case's fixture arrays")
     args = parser.parse_args(argv)
+    if args.action == "preview":
+        if args.out is not None or None in (args.case, args.json, args.npz):
+            parser.error("preview takes --case, --json and --npz and writes nothing")
+        print(json.dumps(preview(args.case, args.json, args.npz), indent=1, sort_keys=True))
+        return 0
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     expected = manifest["expected_artifacts"]["cases"]
     if args.action == "propose":

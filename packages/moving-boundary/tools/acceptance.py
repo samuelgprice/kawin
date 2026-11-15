@@ -19,6 +19,13 @@ reports the listed cases' deviations, and promotes their candidate artifacts cra
 (``tools/acceptance_approval.py``). ``approve --rollback ID --reason ...`` points those cases back.
 Normal runs read whichever reference is in effect (``expected_reference``) and stay Git-free.
 
+Package-owned baselines (``tools/acceptance_baseline.py``): ``baseline --cases C33 F33`` captures
+registered new cases (manifest ``package_baselines``) from a clean tree and fresh targets into a new
+``baseline-staging/<capture-id>/`` folder only, refusing any case that already has an expected
+artifact; ``baseline --verify --cases ...`` regenerates and compares scientific identity without
+writing. Historical actions skip these cases (they have no reference role). Registered cases stay
+inactive, absent from every tier and from ``expected_artifacts``, until their activation.
+
 Layout corrections (``tools/acceptance_layout.py``, rule ``r09-data-tail``) are an additional
 strict proof, never a relaxation. ``quick|full --layout-correction RULE`` is a non-promoting check:
 every gate of the normal run still runs (repeatability, contract assertion groups, the package
@@ -79,6 +86,16 @@ def criteria_tools():
     """Load the approval correctness criteria (``approval_criteria`` measurements)."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("acceptance_criteria", Path(__file__).resolve().parent / "acceptance_criteria.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@lru_cache(maxsize=1)
+def baseline_tools():
+    """Load the package-baseline helpers (``acceptance_baseline``; no Git, no workers)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("acceptance_baseline", Path(__file__).resolve().parent / "acceptance_baseline.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -450,8 +467,10 @@ def setup_targets():
         wheel, = wheel_dir.glob("*.whl")
         run([sys.executable, "-m", "pip", "install", str(wheel), "--no-deps", "--no-index",
              "--target", str(build / name)], timeout=120)
+    # The installed wheel's file name and digest (no path): capture provenance for package baselines.
     state = dict(host=str(host), target=str(build / "target"), public_version="0.5.0",
-                 manifest_sha256=hashlib.sha256(MANIFEST.read_bytes()).hexdigest())
+                 manifest_sha256=hashlib.sha256(MANIFEST.read_bytes()).hexdigest(),
+                 wheel_name=wheel.name, wheel_sha256=hashlib.sha256(wheel.read_bytes()).hexdigest())
     (OUTPUT / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
     return state
 
@@ -854,6 +873,119 @@ def repository_checks():
         except RuntimeError as exc:
             raise AssertionError(f"approval {approval_id}: package_commit {record['package_commit']} is not an ancestor of HEAD {head}") from exc
     return head
+
+
+def drop_package_baselines(manifest, cases, skipped):
+    """Historical actions skip package-owned cases (``package_baselines``): they have no reference role."""
+    owned = set(baseline_tools().registered(manifest))
+    for case in cases:
+        if case in owned:
+            skipped[case] = "package-owned baseline; no research reference role"
+    return [case for case in cases if case not in owned]
+
+
+def _tree_sha256(folder):
+    """One digest over every file (relative path and bytes) under ``folder``."""
+    digest = hashlib.sha256()
+    for path in sorted(Path(folder).rglob("*")):
+        if path.is_file() and "__pycache__" not in path.parts:
+            digest.update(path.relative_to(folder).as_posix().encode("utf-8") + b"\0" + path.read_bytes())
+    return digest.hexdigest()
+
+
+def baseline(cases, *, verify=False, now=None):
+    """Capture (or ``--verify``) package-owned baselines of registered new cases (C33/F33).
+
+    Capture: registered, entry-free cases only (``acceptance_baseline.check_registration``); a clean
+    package tree (``repository_checks``) and fresh targets (``setup_targets``); two unseeded
+    package runs per case that must be bit-identical (``_repeat_pair``); the fixed independent
+    source bounds of the case's ``package_baselines`` entry; then one new staging folder
+    ``baseline-staging/<capture-id>/`` written crash-safely with ``capture.json`` (commit,
+    environment, the installed wheel's file name and SHA-256, a digest of the installed
+    ``moving_boundary`` tree, per-run timings, repeat results, check values, the diagnostic
+    residual-tolerance budget D, hashes and ``scientific_sha256``; no absolute paths). Nothing is
+    written under ``reference/``: installation is the
+    documented ``acceptance_baseline.install_capture`` after review. Any failed gate writes no
+    capture. Prints the record and the criteria preview.
+
+    Verify: fresh targets, one package run per case, compared with the selected expected
+    reference by ``verify_identity`` (arrays bit for bit, retained report fields); the committed
+    ``scientific_sha256`` is checked while the original package baseline is in effect. Never writes
+    fixtures. Returns 0 when everything passed.
+    """
+    from datetime import datetime, timezone
+    from importlib.metadata import version
+    import numpy as np
+    tools = baseline_tools()
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    tools.check_registration(manifest, cases, verify=verify)
+    root = OUTPUT / tools.STAGING
+    leftovers = tools.leftovers(root, manifest)
+    if leftovers["partial"] or leftovers["unreferenced"]:
+        print("Inert staging folders (never read by any gate; remove manually after review):", json.dumps(leftovers), flush=True)
+    folder = Path(tempfile.mkdtemp(prefix="baseline-runs-", dir=OUTPUT))
+    if verify:
+        validate_expected(cases)
+        state = setup_targets()
+        results = {}
+        for case in cases:
+            report = worker(case, "package", state=state, output=folder / case, timeout=180 if case.startswith("F") else 60)
+            on_disk = json.loads((folder / f"{case}.json").read_text(encoding="utf-8"))
+            selected = expected_reference(case, manifest)
+            with np.load(folder / f"{case}.npz", allow_pickle=False) as fresh, \
+                 np.load(selected["npz"], allow_pickle=False) as adopted:
+                original = selected["source"] == "reference"
+                result = tools.verify_identity(on_disk, {k: fresh[k] for k in fresh.files},
+                                               json.loads(Path(selected["json"]).read_text(encoding="utf-8")),
+                                               {k: adopted[k] for k in adopted.files},
+                    manifest["expected_artifacts"]["cases"][case]["scientific_sha256"] if original else None)
+            result.update(reference=selected["source"], wall_seconds=report.get("wall_seconds"),
+                          npz_bytes_equal=(folder / f"{case}.npz").read_bytes() == Path(selected["npz"]).read_bytes())
+            results[case] = result
+            print(case, "VERIFY", "PASS" if result["passed"] else "FAIL", json.dumps(result), flush=True)
+        (OUTPUT / "baseline-verify-summary.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+        return 0 if all(result["passed"] for result in results.values()) else 1
+    head = repository_checks()
+    state = setup_targets()
+    entries, files, per_case = tools.registered(manifest), {}, {}
+    for case in cases:
+        result, reports = _repeat_pair(case, "package", folder=folder / case,
+                                       timeout=360 if case.startswith("F") else 120, state=state)
+        if result["failed_keys"]:
+            print(case, "BASELINE FAIL: repeat runs differ", result["failed_keys"], flush=True)
+            return 1
+        on_disk = json.loads((folder / case / "a.json").read_text(encoding="utf-8"))
+        stripped = tools.fixture_report(on_disk)
+        with np.load(folder / case / "a.npz", allow_pickle=False) as data:
+            arrays = {key: data[key] for key in data.files}
+        checks = tools.independent_checks(arrays, entries[case]["independent_bounds"],
+                                          entries[case]["configuration"]["similarity_origin"])
+        if not checks["passed"]:
+            print(case, "BASELINE FAIL: independent source bounds", json.dumps(checks), flush=True)
+            return 1
+        budget = tools.residual_budget_diagnostic(arrays, stripped.get("residual_budget_inputs"))   # reported, never gated
+        files[case] = dict(json=tools.fixture_json_bytes(stripped), npz=(folder / case / "a.npz").read_bytes())
+        per_case[case] = dict(repeat=dict(bit_identical=result["bit_identical"], arrays=result["arrays"]),
+                              run_elapsed_seconds=[r.get("elapsed_seconds") for r in reports],
+                              independent_checks=checks, residual_budget_diagnostic=budget,
+                              scientific_sha256=tools.scientific_sha256(stripped, arrays))
+    assert repository_checks() == head, "HEAD or the package tree changed during the capture"
+    now = now or datetime.now(timezone.utc)
+    record = dict(schema=1, kind="package-baseline capture", created_utc=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  package_commit=head, clean_tree=True, fresh_targets=True,
+                  environment=dict(python=sys.version.split()[0], numpy=version("numpy"), scipy=version("scipy"),
+                                   kawin=version("kawin")),
+                  wheel=dict(name=state["wheel_name"], sha256=state["wheel_sha256"]),
+                  target_tree_sha256=_tree_sha256(Path(state["target"]) / "moving_boundary"),
+                  manifest_sha256=state["manifest_sha256"], stripped_fields=list(tools.STRIPPED_FIELDS),
+                  cases=per_case)
+    capture_id = tools.new_capture_id(root, head, now)
+    final, hashes = tools.write_capture(root, capture_id, files, record)
+    previews = {case: criteria_tools().preview(case, final / f"{case}.json", final / f"{case}.npz") for case in cases}
+    summary = dict(capture_id=capture_id, folder=str(final), hashes=hashes, record=record, preview=previews)
+    (OUTPUT / "baseline-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(json.dumps(summary, indent=2), flush=True)
+    return 0
 
 
 def candidate_matches_repeat(case, state):
@@ -1345,7 +1477,7 @@ def main(argv=None):
     import runpy
     runpy.run_path(str(Path(__file__).resolve().parent / "batch_safety.py"))["guard_independence"]()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", choices=("quick", "full", "setup", "historical", "approve"))
+    parser.add_argument("action", choices=("quick", "full", "setup", "historical", "approve", "baseline"))
     parser.add_argument("step", nargs="?", choices=("capture", "repeat"), help="historical actions only")
     parser.add_argument("--research", type=Path, help="frozen research checkout; historical actions only")
     parser.add_argument("--cases", nargs="*")
@@ -1363,7 +1495,16 @@ def main(argv=None):
     parser.add_argument("--verify-private-settings", action="store_true",
                         help="approve --cases only: allow O04/O05 in a numerical approval after proving their adopted "
                              "private settings equal a fresh package capture; they are carried forward, never stored")
+    parser.add_argument("--verify", action="store_true",
+                        help="baseline only: regenerate and compare with the adopted package baseline; writes no fixture")
     args = parser.parse_args(argv)
+    if args.verify and args.action != "baseline":
+        parser.error("--verify belongs to baseline")
+    if args.action == "baseline":
+        if (args.step is not None or args.research is not None or not args.cases or args.record or args.reuse_targets
+                or args.layout_correction is not None or args.reason is not None or args.rollback is not None
+                or args.verify_private_settings):
+            parser.error("baseline takes --cases (registered package baselines) and optionally --verify only")
     if args.verify_private_settings and (args.action != "approve" or args.rollback is not None
                                          or args.layout_correction is not None):
         parser.error("--verify-private-settings belongs to approve --cases without --layout-correction")
@@ -1407,6 +1548,8 @@ def main(argv=None):
                 env=env, stdin=subprocess.DEVNULL, timeout=timeout).returncode
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / "inputs").mkdir(exist_ok=True)
+    if args.action == "baseline":
+        return baseline(args.cases, verify=args.verify)
     if args.action == "approve":
         if args.rollback is not None:
             return rollback_approval(args.rollback, reason=args.reason)
@@ -1416,6 +1559,8 @@ def main(argv=None):
     manifest = validate_research_checkout(args.research) if historical else json.loads(MANIFEST.read_text(encoding="utf-8"))
     full = args.action == "full" or args.tier == "full"
     cases, skipped = normal_cases(manifest, full=full, explicit=args.cases)
+    if historical:
+        cases = drop_package_baselines(manifest, cases, skipped)
     check_private_inputs(cases)
     if args.action == "setup":
         print(json.dumps(setup_targets()))
@@ -1457,10 +1602,12 @@ def main(argv=None):
                 failures.append(case)
             print(case, "SKIPPED " + result["skipped"] if "skipped" in result else ("PASS" if ok else "FAIL"),
                   result.get("error", ""), flush=True)
+        for case, reason in skipped.items():
+            print(case, "SKIPPED", reason, flush=True)
         validate_research_checkout(args.research)
         validate_expected(checked)
         summary = dict(action="historical repeat", research=str(args.research), directory=str(directory),
-                       cases=results, failures=failures, elapsed_seconds=time.monotonic()-started)
+                       cases=results, failures=failures, skipped=skipped, elapsed_seconds=time.monotonic()-started)
         (OUTPUT / "historical-repeat-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         print(f"Historical repeat: {len(results)} cases, {len(failures)} failures, {summary['elapsed_seconds']:.2f}s", flush=True)
         return 1 if failures else 0

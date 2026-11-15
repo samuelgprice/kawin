@@ -317,6 +317,98 @@
     "python_hash_seed": null,
     "numpy_seed": null
   },
+  "package_baselines": {
+    "description": "Registered package-owned analytic regression cases (two-phase ternary solver against the similarity solution). Inactive until their activation: absent from quick/full_drift, expected_artifacts and approval_criteria, so their missing baselines affect no existing command or validation. Captured only by `acceptance.py baseline` (tools/acceptance_baseline.py); installed into reference/ by the documented exclusive, hash-checked copy; never by historical actions.",
+    "stage0": "configuration and proposed limits frozen 2026-11-15 with approved evidence-rule revisions R1 (setup eta estimate counted as discretization under test; 10% nuisance budget = physical-mesh initialization + nonlinear) and R2 (matched domain/grid change <= 10% of proposed headroom; F33 interface 9.2%); the original failed rules (eta budget 12.3%, 1% domain screen) stay on record. Qualifications: time convergence ~first order; spatial orders below one at the finest tested pair; cancellation/pre-asymptotic flags; profile orders interpolation-qualified; domain/grid study shows sensitivity only. The cases are regression gates against the analytic solution and do not detect every possible regression.",
+    "cases": {
+      "C33": {
+        "tier_on_activation": "quick",
+        "source": {
+          "definition": "tools/two_phase_similarity_cases.py",
+          "constants": "tests/test_analytic.py (D_LEFT, D_RIGHT, far fields, linear closure); source research kawin/tests/test_illingworth_ternary_similarity.py at 06dc7b4",
+          "exact_solution": "moving_boundary.analytic.solve_similarity_roots (package-owned)"
+        },
+        "configuration": {
+          "domain_length": 0.6,
+          "similarity_origin": 0.30000000000099997,
+          "start_time": 0.1,
+          "end_time": 0.4,
+          "transformed_nodes": 31,
+          "spacing_ratio": 0.1,
+          "physical_nodes": 2401,
+          "dt_mode": "semi_log",
+          "semi_log_dt": 0.05,
+          "semi_log_t0": 0.0001,
+          "tolerance": 1e-11,
+          "max_iterations": 50,
+          "residual_scale": "default",
+          "initial_eta_guess": "analytic eta (seed only)",
+          "terminal_thin_phase_policy": "raise",
+          "k_fit_start": 0.2
+        },
+        "independent_bounds": {
+          "eta_max_abs": 0.005,
+          "profile_max_abs": 0.001,
+          "k_rel_abs": 0.01,
+          "interface_max_abs_over_displacement": 0.01,
+          "final_inventory_drift_abs": 1e-09
+        },
+        "independent_bounds_note": "fixed source bounds checked at capture, independent of the candidate: pytest bounds of tests/test_analytic.py::test_two_phase_solver_meets_source_bounds in the same units; final_inventory_drift_abs is the absolute source form |I_k(t_end) - I_k(0)| in m, distinct from the relative normalized drift criterion",
+        "frozen_proposed_limits": {
+          "interface": 8.7e-06,
+          "eta": 0.00093,
+          "profile_X": 0.00025,
+          "profile_Y": 0.00021,
+          "k": 0.0015,
+          "composition_inventory": 1.3e-09
+        },
+        "frozen_proposed_limits_note": "Stage 0 preview (2 x current analytic, 10 x current relative normalized drift); the capture's criteria preview must reproduce them or the activation stops for review"
+      },
+      "F33": {
+        "tier_on_activation": "full_drift",
+        "source": {
+          "definition": "tools/two_phase_similarity_cases.py",
+          "constants": "tests/test_analytic.py (D_LEFT, D_RIGHT, far fields, linear closure); source research kawin/tests/test_illingworth_ternary_similarity.py at 06dc7b4",
+          "exact_solution": "moving_boundary.analytic.solve_similarity_roots (package-owned)"
+        },
+        "configuration": {
+          "domain_length": 0.6,
+          "similarity_origin": 0.30000000000099997,
+          "start_time": 0.1,
+          "end_time": 1.0,
+          "transformed_nodes": 31,
+          "spacing_ratio": 0.1,
+          "physical_nodes": 2401,
+          "dt_mode": "semi_log",
+          "semi_log_dt": 0.05,
+          "semi_log_t0": 0.0001,
+          "tolerance": 1e-11,
+          "max_iterations": 50,
+          "residual_scale": "default",
+          "initial_eta_guess": "analytic eta (seed only)",
+          "terminal_thin_phase_policy": "raise",
+          "k_fit_start": 0.2
+        },
+        "independent_bounds": {
+          "eta_max_abs": 0.005,
+          "profile_max_abs": 0.001,
+          "k_rel_abs": 0.01,
+          "interface_max_abs_over_displacement": 0.01,
+          "final_inventory_drift_abs": 1e-09
+        },
+        "independent_bounds_note": "fixed source bounds checked at capture, independent of the candidate: pytest bounds of tests/test_analytic.py::test_two_phase_solver_meets_source_bounds in the same units; final_inventory_drift_abs is the absolute source form |I_k(t_end) - I_k(0)| in m, distinct from the relative normalized drift criterion",
+        "frozen_proposed_limits": {
+          "interface": 1.5e-05,
+          "eta": 0.00093,
+          "profile_X": 0.00026,
+          "profile_Y": 0.00022,
+          "k": 0.0018,
+          "composition_inventory": 1.3e-09
+        },
+        "frozen_proposed_limits_note": "Stage 0 preview (2 x current analytic, 10 x current relative normalized drift); the capture's criteria preview must reproduce them or the activation stops for review"
+      }
+    }
+  },
   "expected_artifacts": {
     "description": "sha256 of each existing reference/<case>.{json,npz}, hashed as-is on 2026-11-10 (M0) after a bit-identical research-role repeat; never refreshed. validate_expected() checks every pair on every normal run; reference selection is unchanged (every case reads reference/<case>).",
     "recorded_at_extraction": "518162b",
