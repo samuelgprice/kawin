@@ -26,13 +26,15 @@ or a profile whose length differs from the frozen mesh each raise ``CriteriaErro
 Limit rules (``propose``): analytic = 2 x current, rounded up to two significant figures;
 conservation = 10 x current, rounded up to two significant figures, never below 1e-13.
 
-Inactive cases (``PENDING_ANALYTIC``: C33/F33 before activation) are in no registry, so ``propose``
-and ``check`` never require their baselines; ``preview`` measures one fixture pair by the same
-rules (``proposal_for``) and writes nothing.
+Inactive cases (``PENDING_ANALYTIC``; C33/F33 until their activation, now empty) are in no registry,
+so ``propose`` and ``check`` never require their baselines; ``preview`` measures one fixture pair by
+the same rules (``proposal_for``) and writes nothing. Activated package-owned cases (C33/F33) are
+measured by ``propose``/``check`` from their hash-validated ``reference/`` baselines like every
+other case.
 
     python tools/acceptance_criteria.py check     # evaluate the frozen references against the manifest
     python tools/acceptance_criteria.py propose OUT.json   # regenerate the proposal (historical record)
-    python tools/acceptance_criteria.py preview --case C33 --json C33.json --npz C33.npz
+    python tools/acceptance_criteria.py preview --case CXX --json CXX.json --npz CXX.npz   # pending cases only
 """
 from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
@@ -48,11 +50,12 @@ REFERENCE = PROJECT / ".verification/acceptance/reference"
 CONSERVATION_FLOOR = 1e-13
 
 ANALYTIC_CASES = {"C04": "binary", "C31": "binary", "F04": "binary",
-                  "C11": "three_phase", "C12": "three_phase", "F11": "three_phase", "F12": "three_phase"}
-# Registered but inactive (Stage 1): not in any registry ``propose``/``check`` iterate, so their
-# missing baselines affect nothing; ``preview`` alone measures them. Activation moves them into
-# ANALYTIC_CASES (kind "two_phase").
-PENDING_ANALYTIC = {"C33": "two_phase", "F33": "two_phase"}
+                  "C11": "three_phase", "C12": "three_phase", "F11": "three_phase", "F12": "three_phase",
+                  "C33": "two_phase", "F33": "two_phase"}   # C33/F33: package-captured baselines (package_baselines)
+# Registered but inactive analytic cases: in no registry ``propose``/``check`` iterate, so their
+# missing baselines affect nothing; ``preview`` alone measures them. Empty since C33/F33 were
+# activated (moved into ANALYTIC_CASES, kind "two_phase").
+PENDING_ANALYTIC = {}
 TWO_PHASE_INVENTORY = ("composition inventory, relative normalized drift: max over t and k of |I_k(t) - I_k(0)| / "
                        "max_k |I_k(0)| (dimensionless); distinct from the absolute source bound "
                        "|I_k(t_end) - I_k(0)| <= 1e-9 m checked at baseline capture")
@@ -294,7 +297,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("action", choices=("check", "propose", "preview"))
     parser.add_argument("out", nargs="?", type=Path)
-    parser.add_argument("--case", help="preview only: an inactive PENDING_ANALYTIC case")
+    parser.add_argument("--case", help="preview only: an inactive PENDING_ANALYTIC case (none since C33/F33 activation)")
     parser.add_argument("--json", type=Path, help="preview only: the case's fixture report")
     parser.add_argument("--npz", type=Path, help="preview only: the case's fixture arrays")
     args = parser.parse_args(argv)

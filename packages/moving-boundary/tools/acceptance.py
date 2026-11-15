@@ -23,8 +23,10 @@ Package-owned baselines (``tools/acceptance_baseline.py``): ``baseline --cases C
 registered new cases (manifest ``package_baselines``) from a clean tree and fresh targets into a new
 ``baseline-staging/<capture-id>/`` folder only, refusing any case that already has an expected
 artifact; ``baseline --verify --cases ...`` regenerates and compares scientific identity without
-writing. Historical actions skip these cases (they have no reference role). Registered cases stay
-inactive, absent from every tier and from ``expected_artifacts``, until their activation.
+writing. Historical actions skip these cases (they have no reference role). A registered case stays
+inactive, absent from every tier and from ``expected_artifacts``, until its activation; C33 (quick)
+and F33 (full_drift) are active, with package-captured ``reference/`` baselines (``captured_role``
+``"package"``) validated like every other expected artifact.
 
 Layout corrections (``tools/acceptance_layout.py``, rule ``r09-data-tail``) are an additional
 strict proof, never a relaxation. ``quick|full --layout-correction RULE`` is a non-promoting check:

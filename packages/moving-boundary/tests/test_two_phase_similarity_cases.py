@@ -1,8 +1,8 @@
 """C33/F33 (package-owned two-phase ternary analytic cases): definition, metrics, criteria, registration.
 
-Stage 1 state: the cases are registered (``package_baselines``, worker, pending criteria kind) but
-inactive: no tier, no expected artifact and no criteria entry, so existing commands and validation
-are unaffected by their missing baselines. Activation changes the inactivity assertions here.
+Activated state (Stage 3): C33 runs in ``quick`` and F33 in ``full_drift``; both have package-captured
+``expected_artifacts`` entries (capture 20261115T224052Z-a26d099-1) and ``approval_criteria`` equal to
+the frozen Stage 0 limits; the criteria registry lists them as kind ``two_phase``.
 """
 import builtins
 import importlib.util
@@ -77,21 +77,41 @@ def test_frozen_configuration_matches_the_manifest_registration():
     np.testing.assert_array_equal(CASES.C_RIGHT_FAR, test_constants.C_RIGHT_FAR)
 
 
-def test_cases_are_registered_but_inactive_everywhere_validation_and_tiers_look():
-    for section in ("quick", "contracts", "full_drift", "cached"):
+CAPTURE_ID = "20261115T224052Z-a26d099-1"
+CAPTURE_COMMIT = "a26d0991a3c378cb0cdb70149b577e0ba877529b"
+
+
+def test_cases_are_activated_in_exactly_their_tiers_with_package_provenance():
+    assert "C33" in MANIFEST["quick"] and "F33" not in MANIFEST["quick"]
+    assert "F33" in MANIFEST["full_drift"] and "C33" not in MANIFEST["full_drift"]
+    for section in ("contracts", "cached"):
         assert not {"C33", "F33"} & set(MANIFEST[section]), section
-    assert not {"C33", "F33"} & set(MANIFEST["expected_artifacts"]["cases"])
-    for kind in ("analytic", "conservation"):
-        assert not {"C33", "F33"} & set(MANIFEST["approval_criteria"][kind])
+    entries = MANIFEST["package_baselines"]["cases"]
+    for case in ("C33", "F33"):
+        tier = entries[case]["tier_on_activation"]
+        assert case in MANIFEST[tier]
+        artifact = MANIFEST["expected_artifacts"]["cases"][case]
+        assert artifact["captured_role"] == "package" and artifact["capture_id"] == CAPTURE_ID
+        assert artifact["captured_by"] == artifact["capture_record"]["package_commit"] == CAPTURE_COMMIT
+        assert len(artifact["scientific_sha256"]) == 64 and artifact["capture_record"]["repeat"]["bit_identical"]
+        assert artifact["capture_record"]["independent_checks_passed"]
+        assert set(artifact["capture_record"]["wheel"]) == {"name", "sha256"}
+        adopted = {**{name: spec["limit"] for name, spec in MANIFEST["approval_criteria"]["analytic"][case].items()},
+                   **{name: spec["limit"] for name, spec in MANIFEST["approval_criteria"]["conservation"][case].items()}}
+        assert adopted == entries[case]["frozen_proposed_limits"], case
+    # The original package baselines are in effect (no approval selects other files).
     assert not {"C33", "F33"} & set((MANIFEST.get("approved_references") or {}).get("in_effect", {}))
     tool = _load("acceptance_tool", PROJECT / "tools/acceptance.py")
-    for full in (False, True):
-        cases, _ = tool.normal_cases(MANIFEST, full=full)
-        assert not {"C33", "F33"} & set(cases)
+    quick, _ = tool.normal_cases(MANIFEST, full=False)
+    full, _ = tool.normal_cases(MANIFEST, full=True)
+    assert "C33" in quick and "F33" not in quick and {"C33", "F33"} <= set(full)
     criteria = _load("acceptance_criteria", PROJECT / "tools/acceptance_criteria.py")
-    registries = (set(criteria.ANALYTIC_CASES) | set(criteria.BINARY) | set(criteria.TERNARY)
-                  | set(criteria.THREE_PHASE_IMPLICIT_EQUAL) | set(criteria.THREE_PHASE_UNEQUAL) | set(criteria.THREE_PHASE_EXPLICIT_EQUAL))
-    assert not {"C33", "F33"} & registries and criteria.PENDING_ANALYTIC == {"C33": "two_phase", "F33": "two_phase"}
+    assert criteria.ANALYTIC_CASES["C33"] == criteria.ANALYTIC_CASES["F33"] == "two_phase"
+    assert criteria.PENDING_ANALYTIC == {}
+    families = (set(criteria.BINARY) | set(criteria.TERNARY) | set(criteria.THREE_PHASE_IMPLICIT_EQUAL)
+                | set(criteria.THREE_PHASE_UNEQUAL) | set(criteria.THREE_PHASE_EXPLICIT_EQUAL))
+    assert not {"C33", "F33"} & families          # their conservation spec comes from the two_phase kind
+    assert "C33" in MANIFEST["approval_criteria"]["not_covered"]["ternary_analytic"]
 
 
 def test_worker_registers_the_cases_as_package_owned_ternary(monkeypatch):
@@ -170,11 +190,14 @@ def _fixture(tmp_path, exact, case="C33"):
     return arrays
 
 
-def test_preview_applies_the_existing_rules_with_explicit_labels(tmp_path, exact):
+def test_preview_applies_the_existing_rules_with_explicit_labels(tmp_path, exact, monkeypatch):
+    """Preview serves pending cases only: a synthetic pending two-phase case C99; activated C33 is refused."""
     criteria = _load("acceptance_criteria_preview", PROJECT / "tools/acceptance_criteria.py")
-    _fixture(tmp_path, exact)
+    monkeypatch.setattr(criteria, "PENDING_ANALYTIC", {"C99": "two_phase"})
+    _fixture(tmp_path, exact, case="C99")
+    _fixture(tmp_path, exact, case="C33")
     before = sorted(p.name for p in tmp_path.iterdir())
-    result = criteria.preview("C33", tmp_path / "C33.json", tmp_path / "C33.npz")
+    result = criteria.preview("C99", tmp_path / "C99.json", tmp_path / "C99.npz")
     assert sorted(p.name for p in tmp_path.iterdir()) == before          # writes nothing
     analytic, conservation = result["analytic"], result["conservation"]
     assert set(analytic) == {"interface", "eta", "profile_X", "profile_Y", "k"}
@@ -186,12 +209,13 @@ def test_preview_applies_the_existing_rules_with_explicit_labels(tmp_path, exact
     assert inventory["current"] == pytest.approx(2e-11 / 0.174)
     assert inventory["limit"] == criteria.round_up(inventory["current"], 10, 1e-13)
     assert "relative normalized drift" in inventory["quantity"] and "absolute source bound" in inventory["quantity"]
-    with pytest.raises(criteria.CriteriaError, match="not a pending"):
-        criteria.preview("C11", tmp_path / "C33.json", tmp_path / "C33.npz")
-    assert criteria.main(["preview", "--case", "C33", "--json", str(tmp_path / "C33.json"),
-                          "--npz", str(tmp_path / "C33.npz")]) == 0
+    for registered in ("C11", "C33"):          # registered (activated) cases use propose
+        with pytest.raises(criteria.CriteriaError, match="not a pending"):
+            criteria.preview(registered, tmp_path / "C33.json", tmp_path / "C33.npz")
+    assert criteria.main(["preview", "--case", "C99", "--json", str(tmp_path / "C99.json"),
+                          "--npz", str(tmp_path / "C99.npz")]) == 0
     with pytest.raises(SystemExit):
-        criteria.main(["preview", "--case", "C33"])
+        criteria.main(["preview", "--case", "C99"])
 
 
 def test_registered_kinds_keep_their_specs():

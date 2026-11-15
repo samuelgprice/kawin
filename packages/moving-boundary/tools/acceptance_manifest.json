@@ -28,7 +28,8 @@
     "C23",
     "C24",
     "C30",
-    "C31"
+    "C31",
+    "C33"
   ],
   "contracts": [
     "C25",
@@ -40,7 +41,8 @@
   "full_drift": [
     "F04",
     "F11",
-    "F12"
+    "F12",
+    "F33"
   ],
   "cached": [
     "O01",
@@ -318,7 +320,7 @@
     "numpy_seed": null
   },
   "package_baselines": {
-    "description": "Registered package-owned analytic regression cases (two-phase ternary solver against the similarity solution). Inactive until their activation: absent from quick/full_drift, expected_artifacts and approval_criteria, so their missing baselines affect no existing command or validation. Captured only by `acceptance.py baseline` (tools/acceptance_baseline.py); installed into reference/ by the documented exclusive, hash-checked copy; never by historical actions.",
+    "description": "Registered package-owned analytic regression cases (two-phase ternary solver against the similarity solution). Activated 2026-11-15 from capture 20261115T224052Z-a26d099-1 (package commit a26d099): C33 in quick, F33 in full_drift, package-captured expected_artifacts entries and approval_criteria equal to the capture's criteria preview (= frozen_proposed_limits). Captured only by `acceptance.py baseline` (tools/acceptance_baseline.py); installed into reference/ by the documented exclusive, hash-checked copy; never by historical actions.",
     "stage0": "configuration and proposed limits frozen 2026-11-15 with approved evidence-rule revisions R1 (setup eta estimate counted as discretization under test; 10% nuisance budget = physical-mesh initialization + nonlinear) and R2 (matched domain/grid change <= 10% of proposed headroom; F33 interface 9.2%); the original failed rules (eta budget 12.3%, 1% domain screen) stay on record. Qualifications: time convergence ~first order; spatial orders below one at the finest tested pair; cancellation/pre-asymptotic flags; profile orders interpolation-qualified; domain/grid study shows sensitivity only. The cases are regression gates against the analytic solution and do not detect every possible regression.",
     "cases": {
       "C33": {
@@ -410,7 +412,7 @@
     }
   },
   "expected_artifacts": {
-    "description": "sha256 of each existing reference/<case>.{json,npz}, hashed as-is on 2026-11-10 (M0) after a bit-identical research-role repeat; never refreshed. validate_expected() checks every pair on every normal run; reference selection is unchanged (every case reads reference/<case>).",
+    "description": "sha256 of each existing reference/<case>.{json,npz}, hashed as-is on 2026-11-10 (M0) after a bit-identical research-role repeat; never refreshed. validate_expected() checks every pair on every normal run; reference selection is unchanged (every case reads reference/<case>). Exception: C33/F33 are package-owned (captured_role \"package\"), hashed from capture 20261115T224052Z-a26d099-1 (acceptance.py baseline at a26d099) and installed into reference/ by the documented exclusive, hash-checked copy; see package_baselines.",
     "recorded_at_extraction": "518162b",
     "cases": {
       "C01": {
@@ -637,6 +639,39 @@
         "captured_by": "mb-ref-7af24f4",
         "verified": "research-role repeat at 7af24f4 bit-identical (M0)"
       },
+      "C33": {
+        "capture_id": "20261115T224052Z-a26d099-1",
+        "capture_record": {
+          "capture_json_sha256": "2a4b21154c87ffb6564f5ac1e92c63f11883ab3fed0156e8b164e0d662cb54d3",
+          "clean_tree": true,
+          "created_utc": "2026-11-15T22:40:52Z",
+          "environment": {
+            "kawin": "0.5.0",
+            "numpy": "2.4.3",
+            "python": "3.11.15",
+            "scipy": "1.17.1"
+          },
+          "fresh_targets": true,
+          "independent_checks_passed": true,
+          "manifest_sha256": "973e547457f57acb69e939666b782ca884d75dae975cad8643271e5ac073ad7b",
+          "package_commit": "a26d0991a3c378cb0cdb70149b577e0ba877529b",
+          "repeat": {
+            "arrays": 26,
+            "bit_identical": true
+          },
+          "target_tree_sha256": "b3ee36785de269e98642765685027346a97f4850190ba830243fcb2594c0553c",
+          "wheel": {
+            "name": "moving_boundary-0.0.1.dev0-py3-none-any.whl",
+            "sha256": "d9e6399a5d40872eb45f70a6c437270688d913805202ba88b26b735f0c86e019"
+          }
+        },
+        "captured_by": "a26d0991a3c378cb0cdb70149b577e0ba877529b",
+        "captured_role": "package",
+        "json": "ac1f4d9755c5c2b7ab4cfa0051285ad5a42719aa7e4226aca37726e02f46d17c",
+        "npz": "8a683f506546c1b491144368b16af19f49513f20f212506e29c24dd6940b2f74",
+        "scientific_sha256": "1ea975da300b814682da6988074624645aad52902f41ec4775964e1d8b0d9857",
+        "verified": "two unseeded fresh-install package runs bit-identical; independent source bounds passed; criteria preview equal to frozen_proposed_limits (Stage 2, CP2)"
+      },
       "F04": {
         "json": "8487d8fe40e0df32c18e9ea34850abb139d07a3b12b2c5ddb17efa5d3e0e773f",
         "npz": "59f99480959222f8ddf50d4f8661560a7f2cb8e5ad95d2055d6f0702dcc09721",
@@ -657,6 +692,39 @@
         "captured_role": "reference",
         "captured_by": "mb-ref-7af24f4",
         "verified": "research-role repeat at 7af24f4 bit-identical (M0)"
+      },
+      "F33": {
+        "capture_id": "20261115T224052Z-a26d099-1",
+        "capture_record": {
+          "capture_json_sha256": "2a4b21154c87ffb6564f5ac1e92c63f11883ab3fed0156e8b164e0d662cb54d3",
+          "clean_tree": true,
+          "created_utc": "2026-11-15T22:40:52Z",
+          "environment": {
+            "kawin": "0.5.0",
+            "numpy": "2.4.3",
+            "python": "3.11.15",
+            "scipy": "1.17.1"
+          },
+          "fresh_targets": true,
+          "independent_checks_passed": true,
+          "manifest_sha256": "973e547457f57acb69e939666b782ca884d75dae975cad8643271e5ac073ad7b",
+          "package_commit": "a26d0991a3c378cb0cdb70149b577e0ba877529b",
+          "repeat": {
+            "arrays": 26,
+            "bit_identical": true
+          },
+          "target_tree_sha256": "b3ee36785de269e98642765685027346a97f4850190ba830243fcb2594c0553c",
+          "wheel": {
+            "name": "moving_boundary-0.0.1.dev0-py3-none-any.whl",
+            "sha256": "d9e6399a5d40872eb45f70a6c437270688d913805202ba88b26b735f0c86e019"
+          }
+        },
+        "captured_by": "a26d0991a3c378cb0cdb70149b577e0ba877529b",
+        "captured_role": "package",
+        "json": "49ab84d95edbda5b9f39f4af42d1224558123dd13b5683bc1cec23ea81ceefe3",
+        "npz": "dcd21d8124e2ffb030aa75683b544a26a1fffb4c3d6ac0d84786f1e0a90603e4",
+        "scientific_sha256": "abd779dbce5bd728b10228950116835d5ff94d95c2291710cd8c54554769aa13",
+        "verified": "two unseeded fresh-install package runs bit-identical; independent source bounds passed; criteria preview equal to frozen_proposed_limits (Stage 2, CP2)"
       },
       "LEGACY": {
         "json": "cfc94c888b7ce8f6840cab76975209c4be7d9ae74975d33d13f65de048a1faad",
@@ -832,14 +900,14 @@
   },
   "approval_criteria": {
     "description": "Approval correctness gates (plan section 5): analytic error against exact solutions and conservation of the physically conserved quantity. Fixed limits set once from the frozen references at their expected_artifacts hashes; never recomputed from a previous output. Metric definitions and the measurement code: tools/acceptance_criteria.py. A criterion that cannot be measured (missing array, empty array or mask, non-finite value, fewer than two history points, zero reference magnitude, mesh mismatch) fails.",
-    "approved": "user, 2026-11-10 (M7 gate): analytic 2x; frozen binary profile mask; C31 added; conservation 10x with 1e-13 floor; composition inventory for implicit equal-volume three-phase cases",
+    "approved": "user, 2026-11-10 (M7 gate): analytic 2x; frozen binary profile mask; C31 added; conservation 10x with 1e-13 floor; composition inventory for implicit equal-volume three-phase cases; user, 2026-11-15 (CP2/Stage 3): C33/F33 two-phase analytic and inventory criteria from their package-captured baselines by the same rules, equal to the frozen Stage 0 preview",
     "rules": {
       "analytic": "limit = 2 x current, rounded up to two significant figures",
       "conservation": "limit = 10 x current relative drift, rounded up to two significant figures, at least 1e-13",
       "binary_profile_mask": "exclude nodes within (approved interface-error limit + 2h) of the reference's exact final interface; the excluded node range is stored and fixed for every candidate"
     },
     "not_covered": {
-      "ternary_analytic": "no ternary reference records an exact-solution error; ternary accuracy is not gated here (conservation only); the planned similarity-test port remains the accuracy evidence",
+      "ternary_analytic": "two-phase ternary analytic accuracy is gated only by the package-owned similarity cases C33 (quick) and F33 (full_drift): interface, eta, per-component profile and fitted-k errors against the constant-matrix similarity solution, as fixed regression gates subject to the package_baselines qualifications; the other ternary cases (C05-C08, C16-C19, C24, O01, O03a, O04-O06) record no exact-solution error and are gated by conservation only",
       "contracts": "C25-C29 are gated by their contract assertion groups",
       "O08": "default-phase sampling only; no solve",
       "single_step_evidence": "C22, C23 and C32 references hold one accepted step; their conservation limits rest on it"
@@ -961,6 +1029,48 @@
           "nodes": 401
         }
       },
+      "C33": {
+        "eta": {
+          "arrays": [
+            "exact/eta_error"
+          ],
+          "current": 0.00046186655433322343,
+          "limit": 0.00093,
+          "metric": "max_abs"
+        },
+        "interface": {
+          "arrays": [
+            "exact/interface_error"
+          ],
+          "current": 4.3089571394316906e-06,
+          "limit": 8.7e-06,
+          "metric": "max_abs"
+        },
+        "k": {
+          "arrays": [
+            "exact/k_rel_error"
+          ],
+          "current": 0.0007158226028420226,
+          "limit": 0.0015,
+          "metric": "max_abs"
+        },
+        "profile_X": {
+          "arrays": [
+            "exact/profile_error_X"
+          ],
+          "current": 0.00012455578543973944,
+          "limit": 0.00025,
+          "metric": "max_abs"
+        },
+        "profile_Y": {
+          "arrays": [
+            "exact/profile_error_Y"
+          ],
+          "current": 0.00010240833115097991,
+          "limit": 0.00021,
+          "metric": "max_abs"
+        }
+      },
       "F04": {
         "interface": {
           "arrays": [
@@ -1044,6 +1154,48 @@
           ],
           "current": 0.014037397089284198,
           "limit": 0.029,
+          "metric": "max_abs"
+        }
+      },
+      "F33": {
+        "eta": {
+          "arrays": [
+            "exact/eta_error"
+          ],
+          "current": 0.00046186655433322343,
+          "limit": 0.00093,
+          "metric": "max_abs"
+        },
+        "interface": {
+          "arrays": [
+            "exact/interface_error"
+          ],
+          "current": 7.425757183876502e-06,
+          "limit": 1.5e-05,
+          "metric": "max_abs"
+        },
+        "k": {
+          "arrays": [
+            "exact/k_rel_error"
+          ],
+          "current": 0.0008888277626929512,
+          "limit": 0.0018,
+          "metric": "max_abs"
+        },
+        "profile_X": {
+          "arrays": [
+            "exact/profile_error_X"
+          ],
+          "current": 0.0001252312221659002,
+          "limit": 0.00026,
+          "metric": "max_abs"
+        },
+        "profile_Y": {
+          "arrays": [
+            "exact/profile_error_Y"
+          ],
+          "current": 0.00010644139069030181,
+          "limit": 0.00022,
           "metric": "max_abs"
         }
       }
@@ -1488,6 +1640,17 @@
           "quantity": "total moles (explicit molar volumes)"
         }
       },
+      "C33": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 1.2360023358995764e-10,
+          "limit": 1.3e-09,
+          "metric": "relative_drift",
+          "quantity": "composition inventory, relative normalized drift: max over t and k of |I_k(t) - I_k(0)| / max_k |I_k(0)| (dimensionless); distinct from the absolute source bound |I_k(t_end) - I_k(0)| <= 1e-9 m checked at baseline capture"
+        }
+      },
       "F04": {
         "inventory": {
           "arrays": [
@@ -1519,6 +1682,17 @@
           "limit": 1.9e-09,
           "metric": "relative_drift",
           "quantity": "composition inventory (equal molar volumes)"
+        }
+      },
+      "F33": {
+        "composition_inventory": {
+          "arrays": [
+            "inventoryData/values"
+          ],
+          "current": 1.2359959552236137e-10,
+          "limit": 1.3e-09,
+          "metric": "relative_drift",
+          "quantity": "composition inventory, relative normalized drift: max over t and k of |I_k(t) - I_k(0)| / max_k |I_k(0)| (dimensionless); distinct from the absolute source bound |I_k(t_end) - I_k(0)| <= 1e-9 m checked at baseline capture"
         }
       },
       "LEGACY": {

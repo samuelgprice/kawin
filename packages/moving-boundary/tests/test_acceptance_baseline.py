@@ -374,6 +374,10 @@ def _fake_runs(tool, monkeypatch, tmp_path, *, scale=1.0, differ=False):
 def test_baseline_capture_writes_only_a_new_staging_folder(tmp_path, monkeypatch, capsys):
     tool, output, _ = _project(tmp_path, monkeypatch)
     calls = _fake_runs(tool, monkeypatch, tmp_path)
+    # The synthetic project's C33/F33 are entry-free (pending); the real registry activated them.
+    criteria = tool.criteria_tools()
+    monkeypatch.setattr(criteria, "PENDING_ANALYTIC", {"C33": "two_phase", "F33": "two_phase"})
+    monkeypatch.setattr(tool, "criteria_tools", lambda: criteria)
     before = _snapshot(output / "reference")
     assert tool.baseline(["C33", "F33"], now=NOW) == 0
     assert calls["setup"] == 1 and calls["repeat"] == ["C33", "F33"]

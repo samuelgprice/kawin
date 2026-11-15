@@ -70,7 +70,7 @@ def test_evaluate_reports_unmeasurable_and_exceeded_criteria_as_failures():
 def test_committed_criteria_follow_the_approved_rules():
     tool = _tool()
     criteria = _criteria()
-    assert set(criteria["analytic"]) == {"C04", "C31", "F04", "C11", "C12", "F11", "F12"}
+    assert set(criteria["analytic"]) == {"C04", "C31", "F04", "C11", "C12", "F11", "F12", "C33", "F33"}
     assert not set(criteria["conservation"]) & {"C25", "C26", "C27", "C28", "C29", "O08"}
     for case, specs in criteria["analytic"].items():
         for name, spec in specs.items():
