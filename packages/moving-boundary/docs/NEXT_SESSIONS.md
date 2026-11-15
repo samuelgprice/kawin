@@ -143,8 +143,11 @@ Two-phase ternary reset also reproduces fresh construction (initial profile thro
 constructor's conversion, and `initialEta` restored to NaN); binary needed no change (identical
 bits); no reference changed, exact full and E01-E10 bit-identical, full `tests/` 1506 passed. The
 approved artifacts are local (four approvals). R13 (ternary/three-phase residual normalization) is implemented;
-reference adoption is pending (LEDGERS R13: the listed runs, contracts and examples differ from their
-references by design until a separately authorized approval).
+reference adoption is pending. At `4ad05c4`, 19 runs (C09-C12, C16-C21, C32, F11, F12, O01, O02, O03b,
+O04, O05, O06), contract C27 and examples E03, E05-E10 differ from their references by design until a
+separately authorized approval; all approval criteria and contract assertions pass. C32 takes 15
+timestep halvings instead of 13, accepted by the user as intended (LEDGERS R13). Next step, only with
+authorization: `approve --tier full --verify-private-settings` for that set from a clean clone.
 
 ## Installed solving and research-owned generation
 

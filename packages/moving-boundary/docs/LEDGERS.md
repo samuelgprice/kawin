@@ -1299,9 +1299,9 @@ after setup (binary) or never terminates in fixed mode (two-phase ternary, by in
 
 ### R13: ternary and three-phase residual normalization (implemented; reference adoption pending)
 
-**Status:** implemented 2026-11-14; **reference adoption pending**. Recorded 2026-11-11 from the
+**Status:** implemented 2026-11-14, review follow-ups 2026-11-15; **reference adoption pending**. Recorded 2026-11-11 from the
 R08 survey. The solver change, its tests and the approval tooling are committed. No reference was
-approved: the runs listed under *Expected reference changes* differ from their selected references
+approved: the runs listed under *Affected references* differ from their selected references
 by design and are not passing acceptance results until a separately authorized approval.
 **Scope:** `ternary.py:_interface_residual_scale`, `three_phase.py:_residual_scale`, their
 validation, and the docstring and README descriptions of `interface_residual_composition_scale`.
@@ -1464,10 +1464,124 @@ unchanged; 488 runs, no step retry, no step failure, no forced-update fallback.
   eta estimate fails without `initial_eta_componentwise_scaling`, under both normalizations (16
   survey runs stopped at setup). Not an R13 effect.
 
-**Expected reference changes (pending approval).** Runs C05-C12, C16-C24, C32, F11, F12, O01, O02,
-O03b, O04, O05, O06; contracts C26, C27, C28, C29; examples E03-E10. Unchanged: all binary runs,
-C25, O03a, O07, O08. Acceptance limits, `approval_criteria` and contract assertions are not
-edited, regenerated or relaxed.
+**Affected references (measured; pending approval).** The planning estimate was every run that
+relied on the default (C05-C12, C16-C24, C32, F11, F12, O01, O02, O03b, O04, O05, O06; contracts
+C26-C29; examples E03-E10). The measured set is smaller. Exact full acceptance and example
+acceptance on clean clones of `b2b3021` and of `4ad05c4` (the final code; identical outcome)
+gave:
+
+- *Differ from their selected references:* runs C09, C10, C11, C12, C16, C17, C18, C19, C20, C21,
+  C32, F11, F12, O01, O02, O03b, O04, O05, O06 (19 of 40); contract C27 (one model, differences
+  at the 1e-16 level); examples E03, E05, E06, E07, E08, E09, E10 (through their mapped cases).
+- *Bit-identical although they run the new default:* C05-C08, C22-C24, contracts C26, C28, C29,
+  example E04. The Newton step does not depend on a row scaling of the residual beyond round-off
+  that the update absorbs, so results change only where a convergence decision changes.
+- *Unchanged, as expected:* all binary runs, C25, O03a, O07, O08, LEGACY, E01, E02.
+- These differences are reference-comparison failures until a separately authorized approval.
+  Acceptance limits, `approval_criteria` and contract assertions are not edited, regenerated or
+  relaxed. No difference appeared outside the planning estimate.
+
+**Candidate results on `4ad05c4`** (clean clone with LF line endings, fresh install; nothing
+promoted; the same checks on `b2b3021` gave the same results).
+
+- *Correctness (passing).* Every case covered by the unchanged `approval_criteria` passes on its
+  saved candidate output (39 cases, LEGACY and live O06 included, evaluated with the unchanged
+  `acceptance.criteria_results`). All five contracts pass their assertion groups
+  (`acceptance.contract_assertions`). The private-settings proof for O04 and O05, run without
+  promotion, reports both verified equal with no capture left. Unseeded repeatability: 34 cases
+  checked twice, no difference. Full `tests/`: 1720 passed, 5 skipped, 1 deselected.
+- *Size of the differences, public cases.* Largest absolute differences: C09/C10 eta 3.7e-8;
+  C11/F11 eta 6.0e-8; C12/F12 eta 7.0e-8; C16-C19 profiles 6.8e-8; C20/C21 eta 1.1e-13 (within
+  the public tolerance; all others are outside it); C32 profiles 1.9e-9 and its final time
+  (below). Conservation criteria, reference to candidate, all within their unchanged limits:
+  C09/C10 component moles 1.2e-9 to 2.0e-13; C11/F11 2.5e-10 to 4.4e-11; C12/F12 1.9e-10 to
+  1.4e-11; C16-C19 6.7e-9 to 2.0e-11; C32 1.3e-10 to 3.2e-11; C20/C21 unchanged. The analytic
+  errors of C11, C12, F11 and F12 are unchanged to four digits.
+- *Private cases (verdicts only).* O01, O02, O03b, O04, O05 and O06 each differ in interface,
+  profiles, eta and inventory, are outside the public tolerance and pass their conservation
+  criterion. Their numbers stay in ignored local output.
+- *Convergence.* Accepted times are bit-identical in every changed case except C32, so no other
+  case changed its retries. No case failed to converge.
+
+**C32 (accepted behavior change; user decision 2026-11-15).** C32 runs with `maxIterations = 1`,
+one normal retry and 25 terminal thin-phase retries. With one iteration a step can be accepted
+only when its unmodified start already meets `tol * scale` (through the existing forced-update
+fallback), so the timestep is halved until it does.
+
+- *Evidence.* The physical start residual is linear in the timestep and is the same under both
+  normalizations; only its divisor changed, from the length term 0.983 to the component
+  inventories 0.258 and 0.138. The scaled residual at each trial timestep is therefore larger by
+  that ratio, and the first timestep that passes `1e-10` is `2e-6 / 2^15 = 6.1e-11` where it
+  was `2e-6 / 2^13 = 2.44e-10`: 15 halvings where there were 13. Both runs accept at the start
+  with `_lastImplicitForcedUpdateSkipped` set, take the terminal thin-phase path (phase C below
+  the width 0.31) and stop there. All C32 criteria pass.
+- *Decision.* The change from 13 to 15 halvings is accepted as an intended consequence of the
+  stricter normalization. C32 stays on the new default; it is not pinned to 1.0 and its retry
+  settings are unchanged. This authorizes the behavior change, not the reference approval.
+- *Regression test* (`4ad05c4`,
+  `test_c32_terminal_thin_phase_run_halves_until_the_start_meets_the_tolerance`): the exact
+  attempt sequence and final timestep; that only the last attempt passes and one halving earlier
+  would not; the terminal thin-phase record and stop; one committed step with histories equal
+  to the live state, no pending candidate and moles conserved within `2 * tol * scale`; a
+  fresh model repeating the run bit for bit; and the earlier 13 halvings with an explicit scale
+  of 1.0. `reset` is not part of the case: `maxIterations = 1` is below the validated minimum
+  and can only be set after `setup`, which the test also checks.
+
+**Review follow-ups (2026-11-15).** Both defects were first reproduced on the committed code
+(`b2b3021`): the new tests failed there (6 capture tests, 16 scale tests) and pass after the fixes.
+
+- *Private captures left behind when the capture itself fails* (`5362b6a`).
+  `acceptance.check_case_settings` called `capture_example_settings` before its cleanup
+  `try/finally`, so an O04 capture stayed when the later O05 capture failed. The capture now
+  runs inside the cleanup, and the private capture files are removed by their known names
+  (`<directory>/<case>.settings.json`), complete or partial. The original exception propagates,
+  also an interruption, and an approval promotes nothing. Adopted settings, public captures and
+  unrelated files are not touched. Tests on synthetic temporary projects: a completed O04
+  capture followed by a failing or interrupted O05 capture, directly and through `approve` in
+  the private-settings and the layout mode.
+- *Valid explicit scales assigned after construction* (`8a9fef4`). A list or tuple assigned to
+  `interfaceResidualCompositionScale` passed validation and then raised `TypeError` in both
+  residual-scale calculations. Both now use a local validated `float64` pair
+  (`shared._explicit_residual_composition_scale`, also used by the validator). The attribute is
+  never replaced and no attribute is added, so captured settings are unchanged; the explicit
+  expression including `1e-300` is unchanged bit for bit. Tests: scalar, list, tuple, array,
+  NumPy scalar and subnormal assignments give the scale and the step of the same value passed
+  to the constructor, in both families; invalid values and shapes assigned later are refused
+  before `setup`.
+- *Validation after the last code change* (`4ad05c4`): the candidate results above; focused
+  approval, layout and normalization files 315 passed before the C32 test was added.
+
+**Benchmark (one periodic comparison; advisory).**
+
+- *First attempt* (`b2b3021`, run `20261115T054814Z-53c0ee79`): the tool refused the comparison
+  as incompatible (`case.workload_sha256`, `harness_sha256`). The clean clone had been checked
+  out with CRLF line endings, which changed the file hashes, and the result had not been
+  exported. Its raw measurements are kept locally; it is not counted as a comparison.
+- *Completed comparison* (`4ad05c4`, run `20261115T152212Z-0c6ddec8`): standard suite from a
+  clean clone with LF line endings, exported with `benchmarks/baselines/export_result.py` and
+  compared with `2026-11-13-windows-standard` by `tools/performance.py compare`. All nine cases
+  are comparable; the tool reports no environment and no protocol difference. Worker suite
+  366 s.
+- *Work counts (deterministic).* Newton iterations per trajectory: `ternary-constant-large-off`
+  3201 to 3213, `ternary-lagged-large-record` 3202 to 3214, `three-lagged-large-off` 3213 to
+  3218; the three binary cases and the other three ternary and three-phase cases are unchanged.
+  Step retries are 0 in every case. Inventory drift in the three changed cases fell from
+  6.0e-10, 6.0e-10 and 3.0e-10 to 1.8e-10, 1.8e-10 and 9.1e-11.
+- *Runtime (separate from the work counts).* Median solve-time ratios, candidate over baseline,
+  are 0.76 to 0.98 in every case; no case is flagged for solve time (one advisory flag on the
+  sub-millisecond `reset` of `binary-implicit-large-record`).
+- *Limitations.* The baseline was measured on another day from a dirty tree at `6beb341`. The
+  binary cases, whose solver code and work counts did not change, ran 7% to 24% faster, so
+  session-to-session variation is larger than any R13 effect, and the ratios are not evidence of
+  a speed-up. What the comparison supports is that no slowdown beyond the tool's thresholds was
+  observed and that the extra work is 5 to 12 iterations in about 3200. Acceptance cases at
+  tighter tolerances were not timed. The recorded dirty flag of the candidate comes from
+  untracked log files at the clone root; no tracked file was modified.
+
+**Proposed adoption set (requires separate authorization).** Runs C09, C10, C11, C12, C16, C17,
+C18, C19, C20, C21, C32, F11, F12, O01, O02, O03b, O04, O05, O06 and contract C27, with
+`approve --tier full --verify-private-settings` from a clean clone of the final code. Examples
+E03 and E05-E10 follow from their mapped cases.
 
 ## Example acceptance (pending tier approval)
 
