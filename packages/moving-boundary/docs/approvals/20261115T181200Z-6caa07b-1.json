@@ -1,0 +1,5091 @@
+{
+  "schema": 1,
+  "kind": "approval",
+  "created_utc": "2026-11-15T18:12:00Z",
+  "package_commit": "6caa07b24df6e80ab76d422e24e85eb95974c599",
+  "reason": "LEDGERS R13: ternary and three-phase interface residuals normalized by component inventory (default interface_residual_composition_scale; C32 takes 15 halvings instead of 13, user decision 2026-11-15)",
+  "tier": "full",
+  "tolerance": "public",
+  "cases": [
+    "C09",
+    "C10",
+    "C11",
+    "C12",
+    "C16",
+    "C17",
+    "C18",
+    "C19",
+    "C20",
+    "C21",
+    "C32",
+    "F11",
+    "F12",
+    "O01",
+    "O02",
+    "O03b",
+    "O04",
+    "O05",
+    "O06",
+    "C27"
+  ],
+  "skipped": {},
+  "gates": {
+    "pytest": {
+      "tests": 1738,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "repeatability": {
+      "C01": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C02": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C03": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C04": {
+        "bit_identical": true,
+        "arrays": 13
+      },
+      "C05": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C06": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C07": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C08": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C09": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C10": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C11": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "C12": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "C13": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C14": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C15": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "C16": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C17": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C18": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C19": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C20": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C21": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C22": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C23": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "C24": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "C30": {
+        "bit_identical": true,
+        "arrays": 16
+      },
+      "C31": {
+        "bit_identical": true,
+        "arrays": 13
+      },
+      "C32": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "LEGACY": {
+        "bit_identical": true,
+        "arrays": 45
+      },
+      "O05": {
+        "bit_identical": true,
+        "arrays": 42
+      },
+      "O08": {
+        "bit_identical": true,
+        "arrays": 7
+      },
+      "F04": {
+        "bit_identical": true,
+        "arrays": 13
+      },
+      "F11": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "F12": {
+        "bit_identical": true,
+        "arrays": 39
+      },
+      "O01": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "O02": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "O03a": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "O03b": {
+        "bit_identical": true,
+        "arrays": 34
+      },
+      "O04": {
+        "bit_identical": true,
+        "arrays": 21
+      },
+      "O07": {
+        "bit_identical": true,
+        "arrays": 15
+      },
+      "O06": {
+        "bit_identical": true,
+        "arrays": 56
+      }
+    },
+    "criteria": {
+      "C01": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.16087958848638e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C02": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 2.323951227191913e-13,
+          "limit": 8.8e-10,
+          "passed": true
+        }
+      ],
+      "C03": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 4.983222070331357e-14,
+          "limit": 4.6e-10,
+          "passed": true
+        }
+      ],
+      "C04": [
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0017016579983828474,
+          "limit": 0.0035,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.03803348826564909,
+          "limit": 0.077,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory",
+          "value": 3.7207515060239214e-16,
+          "limit": 4.6e-11,
+          "passed": true
+        }
+      ],
+      "C05": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.789433494973977e-14,
+          "limit": 1.8e-13,
+          "passed": true
+        }
+      ],
+      "C06": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 7.35235399804747e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C07": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.8333119097572857e-14,
+          "limit": 1.9e-13,
+          "passed": true
+        }
+      ],
+      "C08": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.7896616261916362e-14,
+          "limit": 1.8e-13,
+          "passed": true
+        }
+      ],
+      "C09": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 2.0219610500424675e-13,
+          "limit": 1.2e-08,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C10": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 2.0219610500424675e-13,
+          "limit": 1.2e-08,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C11": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.025635578860188524,
+          "limit": 0.052,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0007851679373110376,
+          "limit": 0.0016,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.02116897748346641,
+          "limit": 0.043,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 4.43995014138666e-11,
+          "limit": 2.6e-09,
+          "passed": true
+        }
+      ],
+      "C12": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.027303292723609762,
+          "limit": 0.055,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0007900191599326534,
+          "limit": 0.0016,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.021226258890111205,
+          "limit": 0.043,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.4218227595406577e-11,
+          "limit": 1.9e-09,
+          "passed": true
+        }
+      ],
+      "C13": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 3.869372991174674e-14,
+          "limit": 2e-11,
+          "passed": true
+        }
+      ],
+      "C14": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 4.1595759655127746e-14,
+          "limit": 2e-11,
+          "passed": true
+        }
+      ],
+      "C15": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 4.20103353327536e-14,
+          "limit": 2.1e-11,
+          "passed": true
+        }
+      ],
+      "C16": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 2.03767066831406e-11,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C17": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 2.0376345656463483e-11,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C18": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 2.03767066831406e-11,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C19": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 2.0376345656463483e-11,
+          "limit": 6.8e-08,
+          "passed": true
+        }
+      ],
+      "C20": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 3.3669444235049046e-11,
+          "limit": 3.4e-10,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C21": [
+        {
+          "criterion": "conservation/closure",
+          "value": 2.2580807280511657e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 3.3669444235049046e-11,
+          "limit": 3.4e-10,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C22": [
+        {
+          "criterion": "conservation/closure",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 1.017844131958004e-11,
+          "limit": 1.1e-10,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C23": [
+        {
+          "criterion": "conservation/closure",
+          "value": 1.0477378964424132e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C24": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "C30": [
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.8279576286028575e-14,
+          "limit": 1.1e-10,
+          "passed": true
+        }
+      ],
+      "C31": [
+        {
+          "criterion": "analytic/interface",
+          "value": 0.000414533072367591,
+          "limit": 0.00083,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.015217443059959868,
+          "limit": 0.031,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.1672329162125367e-14,
+          "limit": 2.5e-10,
+          "passed": true
+        }
+      ],
+      "C32": [
+        {
+          "criterion": "conservation/closure",
+          "value": 1.1290403640255829e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/component_moles",
+          "value": 3.2478364913937525e-11,
+          "limit": 1.3e-09,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/total_moles",
+          "value": 0.0,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "LEGACY": [
+        {
+          "criterion": "conservation/inventory_composition_dependent_implicit",
+          "value": 3.48263876545914e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory_composition_dependent_lagged",
+          "value": 5.804397942431901e-16,
+          "limit": 1e-13,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory_phase_uniform",
+          "value": 1.16087958848638e-16,
+          "limit": 1e-13,
+          "passed": true
+        }
+      ],
+      "O05": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 4.414942632422838e-15,
+          "limit": 1.6e-11,
+          "passed": true
+        }
+      ],
+      "F04": [
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0070354710016330285,
+          "limit": 0.015,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.002771260643791157,
+          "limit": 0.0056,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/inventory",
+          "value": 1.2520328817770494e-13,
+          "limit": 5.2e-09,
+          "passed": true
+        }
+      ],
+      "F11": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.025635578860188524,
+          "limit": 0.052,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.002188472902771854,
+          "limit": 0.0044,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.013733201730062261,
+          "limit": 0.028,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 4.4748206980119224e-11,
+          "limit": 2.6e-09,
+          "passed": true
+        }
+      ],
+      "F12": [
+        {
+          "criterion": "analytic/eta",
+          "value": 0.027303292723609762,
+          "limit": 0.055,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/interface",
+          "value": 0.0022445470391602163,
+          "limit": 0.0045,
+          "passed": true
+        },
+        {
+          "criterion": "analytic/profile",
+          "value": 0.01403740228826661,
+          "limit": 0.029,
+          "passed": true
+        },
+        {
+          "criterion": "conservation/composition_inventory",
+          "value": 1.4333714243694204e-11,
+          "limit": 1.9e-09,
+          "passed": true
+        }
+      ],
+      "O01": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O02": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O03a": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O03b": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O04": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O07": [
+        {
+          "criterion": "conservation/inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ],
+      "O06": [
+        {
+          "criterion": "conservation/composition_inventory",
+          "passed": true,
+          "private_metrics": true
+        }
+      ]
+    },
+    "contract_assertion_groups": "passed for C25, C26, C27, C28, C29",
+    "unlisted_cases_passed_public_tolerance": [
+      "C01",
+      "C02",
+      "C03",
+      "C04",
+      "C05",
+      "C06",
+      "C07",
+      "C08",
+      "C13",
+      "C14",
+      "C15",
+      "C22",
+      "C23",
+      "C24",
+      "C30",
+      "C31",
+      "LEGACY",
+      "O08",
+      "F04",
+      "O03a",
+      "O07",
+      "C25",
+      "C26",
+      "C28",
+      "C29"
+    ]
+  },
+  "listed_cases": {
+    "C09": "differs",
+    "C10": "differs",
+    "C11": "differs",
+    "C12": "differs",
+    "C16": "differs",
+    "C17": "differs",
+    "C18": "differs",
+    "C19": "differs",
+    "C20": "within public tolerance",
+    "C21": "within public tolerance",
+    "C32": "differs",
+    "O05": "differs",
+    "F11": "differs",
+    "F12": "differs",
+    "O01": "differs",
+    "O02": "differs",
+    "O03b": "differs",
+    "O04": "differs",
+    "O06": "differs",
+    "C27": "differs"
+  },
+  "settings_captured": [
+    "C11",
+    "C12",
+    "C16",
+    "F11",
+    "F12"
+  ],
+  "deviations_vs_previous": {
+    "C09": {
+      "reference": "reference",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.6280627108430394e-09,
+          "max_relative_deviation": 1.691152788461175e-08,
+          "max_tolerance_fraction": 161.8205062286507
+        },
+        "dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.6653345369377348e-16,
+          "max_relative_deviation": null,
+          "max_tolerance_fraction": 0.0002498001805406561
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126984075809e-08,
+          "max_relative_deviation": 8.082647205820317e-08,
+          "max_tolerance_fraction": 791.0680935087859
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.172228008578969e-09,
+          "max_relative_deviation": 9.100614002882605e-09,
+          "max_tolerance_fraction": 87.34672302681547
+        },
+        "molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.543319249121879e-10,
+          "max_relative_deviation": 3.131754907329468e-09,
+          "max_tolerance_fraction": 29.574901632493663
+        },
+        "profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.5688356169718531e-10,
+          "max_relative_deviation": 7.297136942718434e-10,
+          "max_tolerance_fraction": 6.9728101003922545
+        },
+        "profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126972973579e-09,
+          "max_relative_deviation": 1.3000382509586873e-08,
+          "max_tolerance_fraction": 125.61182403705952
+        },
+        "profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126972973579e-09,
+          "max_relative_deviation": 1.6451790848579785e-08,
+          "max_tolerance_fraction": 157.5468506015733
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.15765494149656e-09,
+          "max_relative_deviation": 1.6845699409822767e-08,
+          "max_tolerance_fraction": 161.1902358914412
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.4589302816124814e-11,
+          "max_relative_deviation": 1.1563103943332754e-10,
+          "max_tolerance_fraction": 1.1043771303199694
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.5733861142593923e-11,
+          "max_relative_deviation": 1.2978068907429606e-10,
+          "max_tolerance_fraction": 1.2619939411417676
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.983765096635892e-09,
+          "max_relative_deviation": 6.905214591118004e-09,
+          "max_tolerance_fraction": 66.72938733525211
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.9837651521470434e-09,
+          "max_relative_deviation": 8.728092322617815e-09,
+          "max_tolerance_fraction": 83.60260831474628
+        },
+        "profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.295868299448614e-09,
+          "max_relative_deviation": 5.352252417618166e-09,
+          "max_tolerance_fraction": 52.98701262194289
+        },
+        "state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.1102230246251565e-16,
+          "max_relative_deviation": 2.258080728051166e-16,
+          "max_tolerance_fraction": 2.227872290217706e-06
+        }
+      }
+    },
+    "C10": {
+      "reference": "reference",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.6280627108430394e-09,
+          "max_relative_deviation": 1.691152788461175e-08,
+          "max_tolerance_fraction": 161.8205062286507
+        },
+        "dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.6653345369377348e-16,
+          "max_relative_deviation": null,
+          "max_tolerance_fraction": 0.0002498001805406561
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126984075809e-08,
+          "max_relative_deviation": 8.082647205820317e-08,
+          "max_tolerance_fraction": 791.0680935087859
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.172228008578969e-09,
+          "max_relative_deviation": 9.100614002882605e-09,
+          "max_tolerance_fraction": 87.34672302681547
+        },
+        "molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.543319249121879e-10,
+          "max_relative_deviation": 3.131754907329468e-09,
+          "max_tolerance_fraction": 29.574901632493663
+        },
+        "profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.5688356169718531e-10,
+          "max_relative_deviation": 7.297136942718434e-10,
+          "max_tolerance_fraction": 6.9728101003922545
+        },
+        "profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126972973579e-09,
+          "max_relative_deviation": 1.3000382509586873e-08,
+          "max_tolerance_fraction": 125.61182403705952
+        },
+        "profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126972973579e-09,
+          "max_relative_deviation": 1.6451790848579785e-08,
+          "max_tolerance_fraction": 157.5468506015733
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.15765494149656e-09,
+          "max_relative_deviation": 1.6845699409822767e-08,
+          "max_tolerance_fraction": 161.1902358914412
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.4589302816124814e-11,
+          "max_relative_deviation": 1.1563103943332754e-10,
+          "max_tolerance_fraction": 1.1043771303199694
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.5733861142593923e-11,
+          "max_relative_deviation": 1.2978068907429606e-10,
+          "max_tolerance_fraction": 1.2619939411417676
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.983765096635892e-09,
+          "max_relative_deviation": 6.905214591118004e-09,
+          "max_tolerance_fraction": 66.72938733525211
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.9837651521470434e-09,
+          "max_relative_deviation": 8.728092322617815e-09,
+          "max_tolerance_fraction": 83.60260831474628
+        },
+        "profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.295868299448614e-09,
+          "max_relative_deviation": 5.352252417618166e-09,
+          "max_tolerance_fraction": 52.98701262194289
+        },
+        "state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.1102230246251565e-16,
+          "max_relative_deviation": 2.258080728051166e-16,
+          "max_tolerance_fraction": 2.227872290217706e-06
+        }
+      }
+    },
+    "C11": {
+      "reference": "reference",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.3058760739426134e-08,
+          "max_relative_deviation": 5.45580998126636e-08,
+          "max_tolerance_fraction": 472.7166769735679
+        },
+        "dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.9601120039332045e-08,
+          "max_relative_deviation": 9.596348663967583e-08,
+          "max_tolerance_fraction": 944.4286643235207
+        },
+        "exact/eta_error": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.9601120039332045e-08,
+          "max_relative_deviation": 2.581531660386848e-05,
+          "max_tolerance_fraction": 17281.022089163547
+        },
+        "exact/interface_error": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.875080339417082e-10,
+          "max_relative_deviation": 4.325049567021213e-05,
+          "max_tolerance_fraction": 718.4907926713911
+        },
+        "exact/profile_error0": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 7.456240139203096e-10,
+          "max_relative_deviation": null,
+          "max_tolerance_fraction": 653.6462573683355
+        },
+        "exact/profile_error1": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.225921445057736e-10,
+          "max_relative_deviation": 1.4736141586927803e-06,
+          "max_tolerance_fraction": 554.4984486581492
+        },
+        "exact/profile_error2": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.2292641127231718e-08,
+          "max_relative_deviation": null,
+          "max_tolerance_fraction": 3943.872070173863
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.875080339417082e-10,
+          "max_relative_deviation": 1.5618999590813082e-09,
+          "max_tolerance_fraction": 15.324417285721767
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.3362257401137185e-11,
+          "max_relative_deviation": 2.8256560703225817e-10,
+          "max_tolerance_fraction": 2.5900957359329575
+        },
+        "molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.520842034061445e-10,
+          "max_relative_deviation": 5.419743963761475e-09,
+          "max_tolerance_fraction": 47.86657577840325
+        },
+        "profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.576067220123491e-09,
+          "max_relative_deviation": 2.2739135177908192e-08,
+          "max_tolerance_fraction": 213.79666528876652
+        },
+        "profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.781280260601761e-09,
+          "max_relative_deviation": 3.676627625021887e-08,
+          "max_tolerance_fraction": 318.53839029745035
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.1723183257483782e-08,
+          "max_relative_deviation": 3.4801198626851813e-08,
+          "max_tolerance_fraction": 331.04425861539056
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.314004709016217e-11,
+          "max_relative_deviation": 3.7603651547693596e-10,
+          "max_tolerance_fraction": 3.3428513920430936
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.1093587160004859e-10,
+          "max_relative_deviation": 3.776607263222323e-10,
+          "max_tolerance_fraction": 3.6522710565751617
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 8.46670400456162e-10,
+          "max_relative_deviation": 2.6100662672615603e-09,
+          "max_tolerance_fraction": 24.534331176505
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.875080339417082e-10,
+          "max_relative_deviation": 1.5618999590813082e-09,
+          "max_tolerance_fraction": 15.134125728033352
+        },
+        "profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.944423924792886e-10,
+          "max_relative_deviation": 3.977365165893034e-09,
+          "max_tolerance_fraction": 34.47272164166069
+        },
+        "profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.875080339417082e-10,
+          "max_relative_deviation": 1.5618999590813082e-09,
+          "max_tolerance_fraction": 15.134125728033352
+        },
+        "rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "C12": {
+      "reference": "reference",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.7228002968661116e-08,
+          "max_relative_deviation": 7.023671846679936e-08,
+          "max_tolerance_fraction": 609.7191012069841
+        },
+        "dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.981642686199052e-08,
+          "max_relative_deviation": 1.0943365149433183e-07,
+          "max_tolerance_fraction": 1077.4480716251655
+        },
+        "exact/eta_error": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.981642686199052e-08,
+          "max_relative_deviation": 2.760705739485826e-06,
+          "max_tolerance_fraction": 19783.998880612813
+        },
+        "exact/interface_error": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.476465475024895e-10,
+          "max_relative_deviation": 6.02876264156352e-05,
+          "max_tolerance_fraction": 953.8214753474006
+        },
+        "exact/profile_error0": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.9726465733403984e-10,
+          "max_relative_deviation": 8.0,
+          "max_tolerance_fraction": 286.48657561997686
+        },
+        "exact/profile_error1": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 8.027826459144904e-10,
+          "max_relative_deviation": 7.429762822003619e-07,
+          "max_tolerance_fraction": 706.2210860182879
+        },
+        "exact/profile_error2": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.6275091774264894e-08,
+          "max_relative_deviation": null,
+          "max_tolerance_fraction": 5211.991713161409
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.476465475024895e-10,
+          "max_relative_deviation": 2.0753236520449565e-09,
+          "max_tolerance_fraction": 20.361752371056422
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.306332985175686e-11,
+          "max_relative_deviation": 3.4886023017707576e-10,
+          "max_tolerance_fraction": 3.0781391860755782
+        },
+        "molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.2932878646363406e-10,
+          "max_relative_deviation": 5.164776036869624e-09,
+          "max_tolerance_fraction": 44.64603999916221
+        },
+        "profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.188985602837647e-09,
+          "max_relative_deviation": 2.6465871538890367e-08,
+          "max_tolerance_fraction": 248.93131763856056
+        },
+        "profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.034365396256902e-09,
+          "max_relative_deviation": 4.262350436328194e-08,
+          "max_tolerance_fraction": 369.79440929354473
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.551377015740485e-08,
+          "max_relative_deviation": 4.607907987920874e-08,
+          "max_tolerance_fraction": 439.33751246832446
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.3838910279703214e-10,
+          "max_relative_deviation": 3.411832742632653e-09,
+          "max_tolerance_fraction": 29.52298115211907
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.7875812769195818e-11,
+          "max_relative_deviation": 9.238357330251816e-11,
+          "max_tolerance_fraction": 0.8941996548853922
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.5721878243724063e-09,
+          "max_relative_deviation": 4.490340793151755e-09,
+          "max_tolerance_fraction": 43.06095109857531
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.476465475024895e-10,
+          "max_relative_deviation": 2.0753236520449565e-09,
+          "max_tolerance_fraction": 20.10886643480791
+        },
+        "profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0628999902451142e-09,
+          "max_relative_deviation": 6.529878741051731e-09,
+          "max_tolerance_fraction": 56.66357731576298
+        },
+        "profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.476465475024895e-10,
+          "max_relative_deviation": 2.0753236520449565e-09,
+          "max_tolerance_fraction": 20.10886643480791
+        },
+        "rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "C16": {
+      "reference": "20261113T194742Z-1993bb9-1",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.5975725977985835e-08,
+          "max_relative_deviation": 3.4407654118282463e-06,
+          "max_tolerance_fraction": 21104.87870344556
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.112096567086219e-08,
+          "max_relative_deviation": 8.628643591484782e-08,
+          "max_tolerance_fraction": 828.9969711058882
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674237802371195e-09,
+          "max_relative_deviation": 2.216110672635342e-08,
+          "max_tolerance_fraction": 217.4865508241561
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.0224012055195546e-11,
+          "max_relative_deviation": 1.669907592200752e-08,
+          "max_tolerance_fraction": 62.76414216615455
+        },
+        "pData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "pData/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.2241931133557564e-10,
+          "max_relative_deviation": 2.835876438388935e-08,
+          "max_tolerance_fraction": 169.67665309203724
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.828639054212715e-08,
+          "max_relative_deviation": 2.783972810768707e-06,
+          "max_tolerance_fraction": 18403.606516769625
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.2157615939841797e-10,
+          "max_relative_deviation": 2.8358764409510374e-08,
+          "max_tolerance_fraction": 169.54045181866402
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674237802371195e-09,
+          "max_relative_deviation": 2.2161106894155832e-08,
+          "max_tolerance_fraction": 211.57982111165964
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.22108808912003e-10,
+          "max_relative_deviation": 2.337862686573897e-08,
+          "max_tolerance_fraction": 169.9279513879883
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674237802371195e-09,
+          "max_relative_deviation": 2.216110672635342e-08,
+          "max_tolerance_fraction": 211.57982111165964
+        },
+        "qData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "qData/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.364255112495387e-09,
+          "max_relative_deviation": 3.9548333860662645e-07,
+          "max_tolerance_fraction": 2439.127118625641
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_u_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_v_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "C17": {
+      "reference": "20261113T194742Z-1993bb9-1",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.597585522876258e-08,
+          "max_relative_deviation": 3.440773544107953e-06,
+          "max_tolerance_fraction": 21104.928584947193
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.1120967141907698e-08,
+          "max_relative_deviation": 8.628644192457605e-08,
+          "max_tolerance_fraction": 828.997028844355
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674248543778958e-09,
+          "max_relative_deviation": 2.2161157652621882e-08,
+          "max_tolerance_fraction": 217.48705060869332
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.022410399553977e-11,
+          "max_relative_deviation": 1.6699114091217527e-08,
+          "max_tolerance_fraction": 62.76428562665254
+        },
+        "pData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "pData/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.224193442953217e-10,
+          "max_relative_deviation": 2.8358766596614063e-08,
+          "max_tolerance_fraction": 169.6766663312504
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.828654808277435e-08,
+          "max_relative_deviation": 2.7839792391874883e-06,
+          "max_tolerance_fraction": 18403.649012147536
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.21576192358164e-10,
+          "max_relative_deviation": 2.8358766626660535e-08,
+          "max_tolerance_fraction": 169.54046507370708
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674248543778958e-09,
+          "max_relative_deviation": 2.2161157749390853e-08,
+          "max_tolerance_fraction": 211.58030732251964
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.221088574842604e-10,
+          "max_relative_deviation": 2.3378628691067018e-08,
+          "max_tolerance_fraction": 169.92796465541667
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674248543778958e-09,
+          "max_relative_deviation": 2.2161157652621882e-08,
+          "max_tolerance_fraction": 211.58030732251964
+        },
+        "qData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "qData/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.364256802116053e-09,
+          "max_relative_deviation": 3.954834436018765e-07,
+          "max_tolerance_fraction": 2439.127766179597
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_u_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_v_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "C18": {
+      "reference": "20261113T194742Z-1993bb9-1",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.597599914142215e-08,
+          "max_relative_deviation": 3.4407824721857324e-06,
+          "max_tolerance_fraction": 21104.983347689536
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.1120968557442055e-08,
+          "max_relative_deviation": 8.6286447707522e-08,
+          "max_tolerance_fraction": 828.9970844040109
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674260506432049e-09,
+          "max_relative_deviation": 2.2161214368957018e-08,
+          "max_tolerance_fraction": 217.48760721627846
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.022420330845877e-11,
+          "max_relative_deviation": 1.6699155321166034e-08,
+          "max_tolerance_fraction": 62.76444059105833
+        },
+        "pData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "pData/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.224193703161738e-10,
+          "max_relative_deviation": 2.8358768343501978e-08,
+          "max_tolerance_fraction": 169.6766767832608
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.828672349801224e-08,
+          "max_relative_deviation": 2.7839863969558082e-06,
+          "max_tolerance_fraction": 18403.696328927163
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.2157621837901615e-10,
+          "max_relative_deviation": 2.835876837704223e-08,
+          "max_tolerance_fraction": 169.54047553821474
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674260506432049e-09,
+          "max_relative_deviation": 2.2161214528253105e-08,
+          "max_tolerance_fraction": 211.58084881316714
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.221088991176238e-10,
+          "max_relative_deviation": 2.3378630255633903e-08,
+          "max_tolerance_fraction": 169.92797602749806
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674260506432049e-09,
+          "max_relative_deviation": 2.2161214368957018e-08,
+          "max_tolerance_fraction": 211.58084881316714
+        },
+        "qData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "qData/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.364288502452853e-09,
+          "max_relative_deviation": 3.9548541350249387e-07,
+          "max_tolerance_fraction": 2439.1399154619453
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_u_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_v_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "C19": {
+      "reference": "20261113T194742Z-1993bb9-1",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.5975852220752076e-08,
+          "max_relative_deviation": 3.4407733516645737e-06,
+          "max_tolerance_fraction": 21104.92740454361
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.112096675332964e-08,
+          "max_relative_deviation": 8.628644033710088e-08,
+          "max_tolerance_fraction": 828.9970135926865
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674248293978778e-09,
+          "max_relative_deviation": 2.2161156468290075e-08,
+          "max_tolerance_fraction": 217.48703898579728
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.022410182713543e-11,
+          "max_relative_deviation": 1.6699113191000294e-08,
+          "max_tolerance_fraction": 62.764282243150205
+        },
+        "pData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "pData/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.224193373564278e-10,
+          "max_relative_deviation": 2.8358766130777302e-08,
+          "max_tolerance_fraction": 169.67666354404773
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.828654453006067e-08,
+          "max_relative_deviation": 2.7839790895821003e-06,
+          "max_tolerance_fraction": 18403.648023173137
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.215761854192701e-10,
+          "max_relative_deviation": 2.83587661598921e-08,
+          "max_tolerance_fraction": 169.5404622831718
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674248293978778e-09,
+          "max_relative_deviation": 2.21611566056231e-08,
+          "max_tolerance_fraction": 211.58029601529051
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.221088401370256e-10,
+          "max_relative_deviation": 2.3378628039164154e-08,
+          "max_tolerance_fraction": 169.9279599170495
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.674248293978778e-09,
+          "max_relative_deviation": 2.2161156468290075e-08,
+          "max_tolerance_fraction": 211.58029601529051
+        },
+        "qData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "qData/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.364256802116053e-09,
+          "max_relative_deviation": 3.954834436018765e-07,
+          "max_tolerance_fraction": 2439.127766179597
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_u_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_v_grid": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "C20": {
+      "reference": "reference",
+      "passed_public_tolerance": true,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0602629885170245e-14,
+          "max_relative_deviation": 5.0239780689441994e-14,
+          "max_tolerance_fraction": 0.00047966904264715166
+        },
+        "dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.074140776324839e-13,
+          "max_relative_deviation": 3.449655109608619e-13,
+          "max_tolerance_fraction": 0.0033423150437375494
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.106226635438361e-16,
+          "max_relative_deviation": 2.5318807283004176e-15,
+          "max_tolerance_fraction": 2.4310786841436756e-05
+        },
+        "molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.0531133177191805e-16,
+          "max_relative_deviation": 2.7073888967250303e-15,
+          "max_tolerance_fraction": 2.5562685511988795e-05
+        },
+        "profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.220446049250313e-15,
+          "max_relative_deviation": 1.0560222555258566e-14,
+          "max_tolerance_fraction": 0.00010080790113444599
+        },
+        "profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.071365218763276e-14,
+          "max_relative_deviation": 3.951370477606182e-14,
+          "max_tolerance_fraction": 0.00038108211493179784
+        },
+        "profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.071365218763276e-14,
+          "max_relative_deviation": 5.074250519734119e-14,
+          "max_tolerance_fraction": 0.0004844789321070044
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.273559366969494e-16,
+          "max_relative_deviation": 3.1103204955115115e-15,
+          "max_tolerance_fraction": 2.9370921809712473e-05
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.3306690738754696e-16,
+          "max_relative_deviation": 1.9172829593168797e-15,
+          "max_tolerance_fraction": 1.8129229578702473e-05
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.718447854656915e-16,
+          "max_relative_deviation": 2.0723643387421156e-15,
+          "max_tolerance_fraction": 1.9851745453871144e-05
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.273559366969494e-16,
+          "max_relative_deviation": 3.1186109195256708e-15,
+          "max_tolerance_fraction": 2.9444837586626235e-05
+        },
+        "profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "C21": {
+      "reference": "reference",
+      "passed_public_tolerance": true,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0602629885170245e-14,
+          "max_relative_deviation": 5.0239780689441994e-14,
+          "max_tolerance_fraction": 0.00047966904264715166
+        },
+        "dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.074140776324839e-13,
+          "max_relative_deviation": 3.449655109608619e-13,
+          "max_tolerance_fraction": 0.0033423150437375494
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.106226635438361e-16,
+          "max_relative_deviation": 2.5318807283004176e-15,
+          "max_tolerance_fraction": 2.4310786841436756e-05
+        },
+        "molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.0531133177191805e-16,
+          "max_relative_deviation": 2.7073888967250303e-15,
+          "max_tolerance_fraction": 2.5562685511988795e-05
+        },
+        "profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.220446049250313e-15,
+          "max_relative_deviation": 1.0560222555258566e-14,
+          "max_tolerance_fraction": 0.00010080790113444599
+        },
+        "profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.071365218763276e-14,
+          "max_relative_deviation": 3.951370477606182e-14,
+          "max_tolerance_fraction": 0.00038108211493179784
+        },
+        "profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.071365218763276e-14,
+          "max_relative_deviation": 5.074250519734119e-14,
+          "max_tolerance_fraction": 0.0004844789321070044
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.273559366969494e-16,
+          "max_relative_deviation": 3.1103204955115115e-15,
+          "max_tolerance_fraction": 2.9370921809712473e-05
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.3306690738754696e-16,
+          "max_relative_deviation": 1.9172829593168797e-15,
+          "max_tolerance_fraction": 1.8129229578702473e-05
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.718447854656915e-16,
+          "max_relative_deviation": 2.0723643387421156e-15,
+          "max_tolerance_fraction": 1.9851745453871144e-05
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.273559366969494e-16,
+          "max_relative_deviation": 3.1186109195256708e-15,
+          "max_tolerance_fraction": 2.9444837586626235e-05
+        },
+        "profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "C32": {
+      "reference": "reference",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.6276034409123952e-09,
+          "max_relative_deviation": 1.0249632153622158e-08,
+          "max_tolerance_fraction": 89.68428149739904
+        },
+        "dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.551115123125783e-17,
+          "max_relative_deviation": null,
+          "max_tolerance_fraction": 8.326672684688675e-05
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.858258240147961e-11,
+          "max_relative_deviation": 3.5504932310704506e-10,
+          "max_tolerance_fraction": 3.3086889248613165
+        },
+        "molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.8606117474794246e-11,
+          "max_relative_deviation": 3.6070201704564975e-10,
+          "max_tolerance_fraction": 3.2895124350705203
+        },
+        "profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.1957904388903984e-09,
+          "max_relative_deviation": 1.0249632153622158e-08,
+          "max_tolerance_fraction": 89.68428149739904
+        },
+        "profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.5116947410808166e-10,
+          "max_relative_deviation": 7.785491028922198e-10,
+          "max_tolerance_fraction": 7.551419940424785
+        },
+        "profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.6276034409123952e-09,
+          "max_relative_deviation": 5.744482786594057e-09,
+          "max_tolerance_fraction": 54.253448563140765
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.913264768838019e-09,
+          "max_relative_deviation": 1.0249632153622158e-08,
+          "max_tolerance_fraction": 89.68428149739904
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.913264768838019e-09,
+          "max_relative_deviation": 1.0249632153622158e-08,
+          "max_tolerance_fraction": 89.68428149739904
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.9802493806130315e-10,
+          "max_relative_deviation": 7.785491028922198e-10,
+          "max_tolerance_fraction": 7.551419940424785
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.6276034409123952e-09,
+          "max_relative_deviation": 5.744482786594057e-09,
+          "max_tolerance_fraction": 54.253448563140765
+        },
+        "profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.8310546875e-10,
+          "max_relative_deviation": 0.75,
+          "max_tolerance_fraction": 183.10546875
+        },
+        "totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "F11": {
+      "reference": "reference",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.3058760739426134e-08,
+          "max_relative_deviation": 5.45580998126636e-08,
+          "max_tolerance_fraction": 472.7166769735679
+        },
+        "dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.9601120039332045e-08,
+          "max_relative_deviation": 9.596348663967583e-08,
+          "max_tolerance_fraction": 944.4286643235207
+        },
+        "exact/eta_error": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.9601120039332045e-08,
+          "max_relative_deviation": 2.581531660386848e-05,
+          "max_tolerance_fraction": 17281.022089163547
+        },
+        "exact/interface_error": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.155200793500626e-10,
+          "max_relative_deviation": 4.325049567021213e-05,
+          "max_tolerance_fraction": 765.2332835900542
+        },
+        "exact/profile_error0": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.4562440836529689e-10,
+          "max_relative_deviation": 1.759779799877787e-07,
+          "max_tolerance_fraction": 134.1860123133779
+        },
+        "exact/profile_error1": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.1934339627650559e-10,
+          "max_relative_deviation": 0.00017422031648835933,
+          "max_tolerance_fraction": 113.69463152353919
+        },
+        "exact/profile_error2": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.723490904494753e-09,
+          "max_relative_deviation": 5.501046078959831e-07,
+          "max_tolerance_fraction": 1568.8955628583117
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.155200793500626e-10,
+          "max_relative_deviation": 1.7736651508557604e-09,
+          "max_tolerance_fraction": 17.423924744164353
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.3362312912288417e-11,
+          "max_relative_deviation": 2.8256644845722435e-10,
+          "max_tolerance_fraction": 2.590103448730041
+        },
+        "molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.520842034061445e-10,
+          "max_relative_deviation": 5.419743963761475e-09,
+          "max_tolerance_fraction": 47.86657577840325
+        },
+        "profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.576067220123491e-09,
+          "max_relative_deviation": 2.2739135177908192e-08,
+          "max_tolerance_fraction": 213.79666528876652
+        },
+        "profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.781280260601761e-09,
+          "max_relative_deviation": 3.676627625021887e-08,
+          "max_tolerance_fraction": 318.53839029745035
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.99989646959753e-09,
+          "max_relative_deviation": 1.0753356690430546e-08,
+          "max_tolerance_fraction": 104.7183106714784
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.837008654197007e-11,
+          "max_relative_deviation": 5.092757749524057e-10,
+          "max_tolerance_fraction": 4.336110999339857
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 7.906036936233818e-11,
+          "max_relative_deviation": 2.9018466920963e-10,
+          "max_tolerance_fraction": 2.79910650902332
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.7903001303665178e-10,
+          "max_relative_deviation": 5.961106050074785e-10,
+          "max_tolerance_fraction": 5.712492269109714
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.155200793500626e-10,
+          "max_relative_deviation": 1.7441682898655495e-09,
+          "max_tolerance_fraction": 16.96106571057058
+        },
+        "profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.983535971727406e-11,
+          "max_relative_deviation": 5.986083646698492e-10,
+          "max_tolerance_fraction": 5.393515633594521
+        },
+        "profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.155200793500626e-10,
+          "max_relative_deviation": 1.7441682898655495e-09,
+          "max_tolerance_fraction": 16.96106571057058
+        },
+        "rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "F12": {
+      "reference": "reference",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.7228002968661116e-08,
+          "max_relative_deviation": 7.023671846679936e-08,
+          "max_tolerance_fraction": 609.7191012069841
+        },
+        "dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.981642686199052e-08,
+          "max_relative_deviation": 1.0943365149433183e-07,
+          "max_tolerance_fraction": 1077.4480716251655
+        },
+        "exact/eta_error": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.981642686199052e-08,
+          "max_relative_deviation": 2.760705739485826e-06,
+          "max_tolerance_fraction": 19783.998880612813
+        },
+        "exact/interface_error": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 8.650862248771318e-10,
+          "max_relative_deviation": 6.02876264156352e-05,
+          "max_tolerance_fraction": 1049.5773050351654
+        },
+        "exact/profile_error0": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.1858822257515556e-10,
+          "max_relative_deviation": 7.640371766891328e-06,
+          "max_tolerance_fraction": 114.61095793714593
+        },
+        "exact/profile_error1": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.7529824813955486e-10,
+          "max_relative_deviation": 5.623098467284517e-07,
+          "max_tolerance_fraction": 164.9136477391493
+        },
+        "exact/profile_error2": {
+          "quantity": "analytic_error",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.198982411247499e-09,
+          "max_relative_deviation": 8.265328320749559e-07,
+          "max_tolerance_fraction": 2162.872457419772
+        },
+        "interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 8.650862248771318e-10,
+          "max_relative_deviation": 2.4609957602858168e-09,
+          "max_tolerance_fraction": 24.187344151644677
+        },
+        "inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.306335760733248e-11,
+          "max_relative_deviation": 3.488606928203989e-10,
+          "max_tolerance_fraction": 3.0781432681702277
+        },
+        "molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.2932878646363406e-10,
+          "max_relative_deviation": 5.164776036869624e-09,
+          "max_tolerance_fraction": 44.64603999916221
+        },
+        "profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.188985602837647e-09,
+          "max_relative_deviation": 2.6465871538890367e-08,
+          "max_tolerance_fraction": 248.93131763856056
+        },
+        "profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.034365396256902e-09,
+          "max_relative_deviation": 4.262350436328194e-08,
+          "max_tolerance_fraction": 369.79440929354473
+        },
+        "profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.055178442514574e-09,
+          "max_relative_deviation": 1.3999037601889154e-08,
+          "max_tolerance_fraction": 135.44250838990607
+        },
+        "profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.6804913016699174e-10,
+          "max_relative_deviation": 1.3160892469270841e-09,
+          "max_tolerance_fraction": 11.323653656298909
+        },
+        "profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.520500723221744e-11,
+          "max_relative_deviation": 1.7933912044291774e-10,
+          "max_tolerance_fraction": 1.7369633953156614
+        },
+        "profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.6860270391514405e-10,
+          "max_relative_deviation": 1.151563007426922e-09,
+          "max_tolerance_fraction": 11.04843626973677
+        },
+        "profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 8.650862248771318e-10,
+          "max_relative_deviation": 2.4528177109794664e-09,
+          "max_tolerance_fraction": 23.85189368746502
+        },
+        "profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.201505561709837e-10,
+          "max_relative_deviation": 1.0653482324255769e-09,
+          "max_tolerance_fraction": 9.441991425628606
+        },
+        "profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 8.650862248771318e-10,
+          "max_relative_deviation": 2.4528177109794664e-09,
+          "max_tolerance_fraction": 23.85189368746502
+        },
+        "rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    },
+    "O01": {
+      "private_metrics": true,
+      "passed_public_tolerance": false,
+      "bit_identical": false
+    },
+    "O02": {
+      "private_metrics": true,
+      "passed_public_tolerance": false,
+      "bit_identical": false
+    },
+    "O03b": {
+      "private_metrics": true,
+      "passed_public_tolerance": false,
+      "bit_identical": false
+    },
+    "O04": {
+      "private_metrics": true,
+      "passed_public_tolerance": false,
+      "bit_identical": false
+    },
+    "O05": {
+      "private_metrics": true,
+      "passed_public_tolerance": false,
+      "bit_identical": false
+    },
+    "O06": {
+      "private_metrics": true,
+      "passed_public_tolerance": false,
+      "bit_identical": false
+    },
+    "C27": {
+      "reference": "20261113T232720Z-9595574-1",
+      "passed_public_tolerance": false,
+      "bit_identical": false,
+      "arrays": {
+        "contracts/assertion_groups": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/data/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/etaData/values": {
+          "quantity": "eta",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model0/totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.6280627108430394e-09,
+          "max_relative_deviation": 1.691152788461175e-08,
+          "max_tolerance_fraction": 161.8205062286507
+        },
+        "model1/dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.6653345369377348e-16,
+          "max_relative_deviation": null,
+          "max_tolerance_fraction": 0.0002498001805406561
+        },
+        "model1/etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126984075809e-08,
+          "max_relative_deviation": 8.082647205820317e-08,
+          "max_tolerance_fraction": 791.0680935087859
+        },
+        "model1/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "model1/inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.172228008578969e-09,
+          "max_relative_deviation": 9.100614002882605e-09,
+          "max_tolerance_fraction": 87.34672302681547
+        },
+        "model1/molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.543319249121879e-10,
+          "max_relative_deviation": 3.131754907329468e-09,
+          "max_tolerance_fraction": 29.574901632493663
+        },
+        "model1/profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.5688356169718531e-10,
+          "max_relative_deviation": 7.297136942718434e-10,
+          "max_tolerance_fraction": 6.9728101003922545
+        },
+        "model1/profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126972973579e-09,
+          "max_relative_deviation": 1.3000382509586873e-08,
+          "max_tolerance_fraction": 125.61182403705952
+        },
+        "model1/profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126972973579e-09,
+          "max_relative_deviation": 1.6451790848579785e-08,
+          "max_tolerance_fraction": 157.5468506015733
+        },
+        "model1/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.15765494149656e-09,
+          "max_relative_deviation": 1.6845699409822767e-08,
+          "max_tolerance_fraction": 161.1902358914412
+        },
+        "model1/profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.4589302816124814e-11,
+          "max_relative_deviation": 1.1563103943332754e-10,
+          "max_tolerance_fraction": 1.1043771303199694
+        },
+        "model1/profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.5733861142593923e-11,
+          "max_relative_deviation": 1.2978068907429606e-10,
+          "max_tolerance_fraction": 1.2619939411417676
+        },
+        "model1/profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.983765096635892e-09,
+          "max_relative_deviation": 6.905214591118004e-09,
+          "max_tolerance_fraction": 66.72938733525211
+        },
+        "model1/profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "model1/profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.9837651521470434e-09,
+          "max_relative_deviation": 8.728092322617815e-09,
+          "max_tolerance_fraction": 83.60260831474628
+        },
+        "model1/profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "model1/rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.295868299448614e-09,
+          "max_relative_deviation": 5.352252417618166e-09,
+          "max_tolerance_fraction": 52.98701262194289
+        },
+        "model1/state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model1/totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.1102230246251565e-16,
+          "max_relative_deviation": 2.258080728051166e-16,
+          "max_tolerance_fraction": 2.227872290217706e-06
+        },
+        "model2/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.6280627108430394e-09,
+          "max_relative_deviation": 1.691152788461175e-08,
+          "max_tolerance_fraction": 161.8205062286507
+        },
+        "model2/dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.6653345369377348e-16,
+          "max_relative_deviation": null,
+          "max_tolerance_fraction": 0.0002498001805406561
+        },
+        "model2/etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126984075809e-08,
+          "max_relative_deviation": 8.082647205820317e-08,
+          "max_tolerance_fraction": 791.0680935087859
+        },
+        "model2/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "model2/inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.172228008578969e-09,
+          "max_relative_deviation": 9.100614002882605e-09,
+          "max_tolerance_fraction": 87.34672302681547
+        },
+        "model2/molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.543319249121879e-10,
+          "max_relative_deviation": 3.131754907329468e-09,
+          "max_tolerance_fraction": 29.574901632493663
+        },
+        "model2/profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.5688356169718531e-10,
+          "max_relative_deviation": 7.297136942718434e-10,
+          "max_tolerance_fraction": 6.9728101003922545
+        },
+        "model2/profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126972973579e-09,
+          "max_relative_deviation": 1.3000382509586873e-08,
+          "max_tolerance_fraction": 125.61182403705952
+        },
+        "model2/profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126972973579e-09,
+          "max_relative_deviation": 1.6451790848579785e-08,
+          "max_tolerance_fraction": 157.5468506015733
+        },
+        "model2/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.15765494149656e-09,
+          "max_relative_deviation": 1.6845699409822767e-08,
+          "max_tolerance_fraction": 161.1902358914412
+        },
+        "model2/profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.4589302816124814e-11,
+          "max_relative_deviation": 1.1563103943332754e-10,
+          "max_tolerance_fraction": 1.1043771303199694
+        },
+        "model2/profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.5733861142593923e-11,
+          "max_relative_deviation": 1.2978068907429606e-10,
+          "max_tolerance_fraction": 1.2619939411417676
+        },
+        "model2/profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.983765096635892e-09,
+          "max_relative_deviation": 6.905214591118004e-09,
+          "max_tolerance_fraction": 66.72938733525211
+        },
+        "model2/profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "model2/profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.9837651521470434e-09,
+          "max_relative_deviation": 8.728092322617815e-09,
+          "max_tolerance_fraction": 83.60260831474628
+        },
+        "model2/profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "model2/rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.295868299448614e-09,
+          "max_relative_deviation": 5.352252417618166e-09,
+          "max_tolerance_fraction": 52.98701262194289
+        },
+        "model2/state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model2/totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.1102230246251565e-16,
+          "max_relative_deviation": 2.258080728051166e-16,
+          "max_tolerance_fraction": 2.227872290217706e-06
+        },
+        "model3/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/data/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.6280627108430394e-09,
+          "max_relative_deviation": 1.691152788461175e-08,
+          "max_tolerance_fraction": 161.8205062286507
+        },
+        "model3/dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.6653345369377348e-16,
+          "max_relative_deviation": null,
+          "max_tolerance_fraction": 0.0002498001805406561
+        },
+        "model3/etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/etaData/values": {
+          "quantity": "eta",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126984075809e-08,
+          "max_relative_deviation": 8.082647205820317e-08,
+          "max_tolerance_fraction": 791.0680935087859
+        },
+        "model3/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "model3/inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.172228008578969e-09,
+          "max_relative_deviation": 9.100614002882605e-09,
+          "max_tolerance_fraction": 87.34672302681547
+        },
+        "model3/molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.543319249121879e-10,
+          "max_relative_deviation": 3.131754907329468e-09,
+          "max_tolerance_fraction": 29.574901632493663
+        },
+        "model3/profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.5688356169718531e-10,
+          "max_relative_deviation": 7.297136942718434e-10,
+          "max_tolerance_fraction": 6.9728101003922545
+        },
+        "model3/profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126972973579e-09,
+          "max_relative_deviation": 1.3000382509586873e-08,
+          "max_tolerance_fraction": 125.61182403705952
+        },
+        "model3/profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 3.718126972973579e-09,
+          "max_relative_deviation": 1.6451790848579785e-08,
+          "max_tolerance_fraction": 157.5468506015733
+        },
+        "model3/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 6.15765494149656e-09,
+          "max_relative_deviation": 1.6845699409822767e-08,
+          "max_tolerance_fraction": 161.1902358914412
+        },
+        "model3/profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 2.4589302816124814e-11,
+          "max_relative_deviation": 1.1563103943332754e-10,
+          "max_tolerance_fraction": 1.1043771303199694
+        },
+        "model3/profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 4.5733861142593923e-11,
+          "max_relative_deviation": 1.2978068907429606e-10,
+          "max_tolerance_fraction": 1.2619939411417676
+        },
+        "model3/profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.983765096635892e-09,
+          "max_relative_deviation": 6.905214591118004e-09,
+          "max_tolerance_fraction": 66.72938733525211
+        },
+        "model3/profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "model3/profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.9837651521470434e-09,
+          "max_relative_deviation": 8.728092322617815e-09,
+          "max_tolerance_fraction": 83.60260831474628
+        },
+        "model3/profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.0568869557303628e-08,
+          "max_relative_deviation": 1.5539540912123718e-08,
+          "max_tolerance_fraction": 153.14371790961962
+        },
+        "model3/rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": false,
+          "max_absolute_deviation": 5.295868299448614e-09,
+          "max_relative_deviation": 5.352252417618166e-09,
+          "max_tolerance_fraction": 52.98701262194289
+        },
+        "model3/state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model3/totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": false,
+          "max_absolute_deviation": 1.1102230246251565e-16,
+          "max_relative_deviation": 2.258080728051166e-16,
+          "max_tolerance_fraction": 2.227872290217706e-06
+        },
+        "model4/accepted/final_time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/data/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/data/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/dependentMoleClosureErrorData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/dependentMoleClosureErrorData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/etaData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/etaData/values": {
+          "quantity": "eta",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/interfaceData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/interfaceData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/inventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/inventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/molarInventoryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/molarInventoryData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profileData0/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profileData0/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profileData1/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profileData1/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profileData2/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profileData2/values": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profiles/compositions": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profiles/phase0/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profiles/phase0/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profiles/phase1/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profiles/phase1/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profiles/phase2/x": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/profiles/phase2/z": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/rightBoundaryData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/rightBoundaryData/values": {
+          "quantity": "interface",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/state/_grids/0": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/state/_grids/1": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/state/_grids/2": {
+          "quantity": "profiles",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/state/_initialInventory": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/totalMolesData/time": {
+          "quantity": "accepted_times",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        },
+        "model4/totalMolesData/values": {
+          "quantity": "inventory",
+          "bit_identical": true,
+          "max_absolute_deviation": 0.0,
+          "max_relative_deviation": 0.0,
+          "max_tolerance_fraction": 0.0
+        }
+      }
+    }
+  },
+  "private_settings": "verified-equal",
+  "settings_carried_forward": [
+    "O04",
+    "O05"
+  ],
+  "approval_id": "20261115T181200Z-6caa07b-1",
+  "directory": "reference-approved/20261115T181200Z-6caa07b-1",
+  "artifacts": {
+    "C09": {
+      "json": "d416a5a4ec8b2ef641e0a7db43b135c1be9c5cf087b9f28229e4627e030e899e",
+      "npz": "3e2fddd1fa0afeb9c540152e404b89ccd3170c929888fc899bd39f3f7b6b97d1"
+    },
+    "C10": {
+      "json": "9942ffbce21b580fd86786a1e0718afda2de533a41e50945a98017daf55400f2",
+      "npz": "3e2fddd1fa0afeb9c540152e404b89ccd3170c929888fc899bd39f3f7b6b97d1"
+    },
+    "C11": {
+      "json": "e83d7a481b422cb2bbfc89a49081e24e3cf661f27c6eb8276eb29b037b65c3b3",
+      "npz": "4738398b61fe1180632d001c7c750f980d5d2fddd0d2779707165638bc011ace",
+      "settings": "28c5c1d9a82d2d560d3f7b8d60d18ec56506f301b8ac470641d7e86bbfddd159"
+    },
+    "C12": {
+      "json": "5ddb9e88db0ffbdb17cebfab60a42e626d8680613d85110e801ea53ce46c6dc6",
+      "npz": "49ebcc043c7200fedb01ffcde91eb753cc294fbaa9b18d61e402354cad30a801",
+      "settings": "07a86dda11cbb1a0f730d946cc5470034109c622ecc04e5591fed42354e54e96"
+    },
+    "C16": {
+      "json": "a9730f6f6f782506f8ae606f5b897e663f047941bb0786cc602801ea0f66a7e9",
+      "npz": "e5754a97285cc873ff2ce728e4eb7d3ed9432a2a1142faec079f8a5e7aaffe31",
+      "settings": "66b7271aa2a99c56ba7c4effaa7b95ec693ca3bc9a5b3d197df045d809b2f0d2"
+    },
+    "C17": {
+      "json": "e88f48f2ce96c7d52f48d35de80967389428e52dbccf289d468695ff153e79c8",
+      "npz": "0a88f4f46c5a6e81029d38ba3b659047b74b14a78e365b78cf935f7a41b705ce"
+    },
+    "C18": {
+      "json": "4b04299574e70ce5ac9247b9aaa3139037f1d454beb0be07f9231553cd930b3c",
+      "npz": "5d5b4c0785c75e6f7a17782af3da43a625aba516a20bedcd70b63c5afbc50274"
+    },
+    "C19": {
+      "json": "c0087d92fca2d2980e79d89e651d8ba075a6a4b6e30a94d409913e95c95fc730",
+      "npz": "808a2c1b2c12207e8198dfd984ec5becada79397dfd0bda974c72c69ffcb1a88"
+    },
+    "C20": {
+      "json": "08f5c57888e58f3b0387658d2c984442f75d29ab5d5323d8128af157f928d4dd",
+      "npz": "6365059e76a4e9d76123f028dd17757452704e7041b31a4c24203ca863ef4ad7"
+    },
+    "C21": {
+      "json": "4696b584dde128516a6e95c0e4a6e0425b1c4631cf9b55dbd6d544b7905b160e",
+      "npz": "6365059e76a4e9d76123f028dd17757452704e7041b31a4c24203ca863ef4ad7"
+    },
+    "C32": {
+      "json": "12202b46ccf941779f9190c56fe2be3b2d382ef971a10ddc53342789194d9012",
+      "npz": "b411dcbcb89826499590b88cf029b07a7861c80d0d4bb2b31abdaa0fe09e861e"
+    },
+    "F11": {
+      "json": "fdb83f6b6b82e4aec7b9d960a6f248613897c19be21c65837ecdeab5be88faa3",
+      "npz": "d05aefe0c2537b661321b39b4671aad781b8f3724fa374ebbd40cff6df1ad90f",
+      "settings": "c830e1669f74eec4e473628e3f83e5716fc3a3f2f223a760a66b689ad091b896"
+    },
+    "F12": {
+      "json": "92fc3c932a046a20cc91e627aec72174529a140ffac430ce0dc40de050b9e712",
+      "npz": "7a4b92c857ab34bb539259f3678b23f6cb5812047ac0d8762ce2a9cf8bfa5527",
+      "settings": "871c39b35fbfe877fe5506aa3542817b66a0e1ea65ebb5b2cbdce8be2ea9c129"
+    },
+    "O01": {
+      "json": "c682fd2098d442232efccc5622e4f46d829baaacf29f7587ee9b9e6a73203b24",
+      "npz": "5924867fba3563539061aa0f9249f8cddcc774ab4dc0e52d351cf9e729b0787b"
+    },
+    "O02": {
+      "json": "b763cead294c58ffa82a588765f20f82194889df0ad54167c943bfd8e6815cac",
+      "npz": "d2e49839c4e5707a342f5ebe78dc5b2185f51bd7b9779d54fd8845bd242e42f4"
+    },
+    "O03b": {
+      "json": "e465d4b743e67f7b3037c8371bab56ee114f895a2fd23370c973e5285efe2a23",
+      "npz": "b610cfa54102ede515e53534beb87f51934cc6ef9603f1be338015d023f16641"
+    },
+    "O04": {
+      "json": "a528912bcde3008c4b3db17636d6f0b29fc0ae3f801a115ae901dfc06918a112",
+      "npz": "dc74b5fce5e9577e3bd6a8a59e514b10a8c6e6f725022dd6d407aed36277bbe4",
+      "settings": "private-carried-forward"
+    },
+    "O05": {
+      "json": "c0956c9d976553c06e6ba5e7566026bca51aa21583e28910657f1de96a725738",
+      "npz": "2d12cb5a3afe4cb31235405a3043417b72250a551c9cab2c9809983e12bc3835",
+      "settings": "private-carried-forward"
+    },
+    "O06": {
+      "json": "64d279e386a6bb5b1429555d0d25d42797611c10fe7d6a8a19ba0d850ac82169",
+      "npz": "d7d6efc342e50905f4b4e6d616e7e74d7d74e84300f21db7bf90a79ec2ba545f"
+    },
+    "C27": {
+      "json": "e6b0213acade5f32fa6869573495367a1625f7250a0869c07aea021684c6aad8",
+      "npz": "34be6d7c056e6bdd7f256e15eb87397faadff5de73abab1732bc806e57468c83"
+    }
+  },
+  "previous": {
+    "C09": "reference",
+    "C10": "reference",
+    "C11": "reference",
+    "C12": "reference",
+    "C16": "20261113T194742Z-1993bb9-1",
+    "C17": "20261113T194742Z-1993bb9-1",
+    "C18": "20261113T194742Z-1993bb9-1",
+    "C19": "20261113T194742Z-1993bb9-1",
+    "C20": "reference",
+    "C21": "reference",
+    "C32": "reference",
+    "F11": "reference",
+    "F12": "reference",
+    "O01": "20261113T194742Z-1993bb9-1",
+    "O02": "reference",
+    "O03b": "reference",
+    "O04": "20261113T194742Z-1993bb9-1",
+    "O05": "20261113T194742Z-1993bb9-1",
+    "O06": "20261113T194742Z-1993bb9-1",
+    "C27": "20261113T232720Z-9595574-1"
+  }
+}
