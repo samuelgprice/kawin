@@ -982,7 +982,7 @@ def selected_case_settings(case, manifest):
 
 
 def check_case_settings(cases, state, directory, manifest):
-    """Case-versus-case settings proof for a layout correction (non-promoting; never relaxed).
+    """Case-versus-case settings proof for a layout correction or ``--verify-private-settings`` (never relaxed).
 
     For each mapped case of ``cases``: hash-validate the currently selected settings first
     (``selected_case_settings``), capture fresh package settings through the definitions-based
@@ -1030,10 +1030,12 @@ def check_case_settings(cases, state, directory, manifest):
 def public_deviations(case, record):
     """Committed per-array deviations of a listed case against its previous expected artifact.
 
-    TC-derived cases (``acceptance_metrics.PRIVATE_CASES``) keep their numbers in ignored output.
+    TC-derived cases (``acceptance_metrics.PRIVATE_CASES``) and the private-settings cases
+    (``PRIVATE_SETTINGS_CASES``: O04, and O05 with its private database) keep their numbers in
+    ignored output; the committed entry is verdicts only.
     """
     metrics = metric_tools()
-    if case in metrics.PRIVATE_CASES:
+    if case in metrics.PRIVATE_CASES or case in PRIVATE_SETTINGS_CASES:
         return dict(private_metrics=True, passed_public_tolerance=record["passed"], bit_identical=record["bit_identical"])
     arrays = {}
     for quantity, stats in record["quantities"].items():
@@ -1051,7 +1053,8 @@ def public_criteria(case, results):
     return [{key: item.get(key) for key in ("criterion", "value", "limit", "passed", "error") if key in item} for item in results]
 
 
-def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "three_phase"), layout_correction=None):
+def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "three_phase"), layout_correction=None,
+            verify_private_settings=False):
     """Approve the listed cases' package outputs as their new expected references (plan §5).
 
     From a clean package tree (``repository_checks``), run the whole ``tier`` gate at public
@@ -1068,8 +1071,20 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
     reused from ``state.json``, so every candidate comes from the ``package_commit`` recorded with
     the approval. Then re-check the tree and HEAD, capture package settings for listed cases an example maps to,
     and promote crash-safely (``acceptance_approval.promote``) with a committed report in
-    ``docs/approvals/``. O04/O05 cannot be listed: their example settings are hashed only in the
-    private record. Returns 0 on success, 1 on a failed gate.
+    ``docs/approvals/``. O04/O05 cannot be listed in a plain approval: their example settings are
+    hashed only in the private record. Returns 0 on success, 1 on a failed gate.
+
+    ``verify_private_settings`` (``--verify-private-settings``) lets an ordinary numerical approval
+    list O04/O05. Every gate above runs unchanged and no layout verdict is involved. In addition,
+    before promotion, the adopted settings of each listed O04/O05 are proven equal to a fresh
+    package capture (``check_case_settings``: the selected file must exist and match its digest in
+    the local ``private-inputs.json``; only the bookkeeping attributes are skipped; the private
+    capture is deleted again, also on failure). A missing, unhashed, changed or different setting
+    fails the approval with nothing promoted; changed private settings cannot be adopted here.
+    The cases then keep their adopted settings (``acceptance_approval.CARRIED_FORWARD``) and the
+    record states ``private_settings = "verified-equal"``. Manifest and report hold no settings
+    content, settings hash or private digest, and the per-array deviations of O04/O05 are
+    committed as verdicts only (``public_deviations``); O05's criteria keep value and limit.
 
     ``layout_correction`` (``--layout-correction RULE``, e.g. ``r09-data-tail``) adds a strict
     structural proof on top of every gate above (``layout_verdict``, ``acceptance_layout``): each
@@ -1089,7 +1104,10 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
     assert layout_correction is None or layout_correction in layout_tools().RULES, \
         "unknown layout correction: " + str(layout_correction)
     refused = sorted(set(listed) & PRIVATE_SETTINGS_CASES)
-    assert not refused or layout_correction is not None, \
+    assert not (verify_private_settings and layout_correction is not None), \
+        "--verify-private-settings is for a numerical approval, not a layout correction"
+    assert not verify_private_settings or refused, "--verify-private-settings needs O04 or O05 among the listed cases"
+    assert not refused or layout_correction is not None or verify_private_settings, \
         "approving " + ", ".join(refused) + " is not supported: their example settings are private"
     head = repository_checks()
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -1173,6 +1191,11 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
             settings_dir = tempfile.mkdtemp(prefix="approve-settings-", dir=OUTPUT)
             layout_settings, carried, settings_problems = check_case_settings(listed, state, settings_dir, manifest)
             assert not settings_problems, ("settings proof failed", settings_problems)
+        elif verify_private_settings:
+            settings_dir = tempfile.mkdtemp(prefix="approve-settings-", dir=OUTPUT)
+            _, carried, settings_problems = check_case_settings(refused, state, settings_dir, manifest)
+            assert not settings_problems, ("private settings proof failed", settings_problems)
+            assert sorted(carried) == refused, ("private settings proof did not cover", sorted(set(refused) - set(carried)))
         for case in listed:
             for suffix in ("json", "npz"):
                 path = OUTPUT / "package" / f"{case}.{suffix}"
@@ -1191,7 +1214,10 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
         print("APPROVE FAIL (nothing promoted):", failure, flush=True)
         return 1
     if layout_correction is None:
-        settings, carried = capture_example_settings(listed, state, tempfile.mkdtemp(prefix="approve-settings-", dir=OUTPUT)), []
+        if not verify_private_settings:
+            carried = []
+        settings = capture_example_settings([case for case in listed if case not in carried], state,
+                                            tempfile.mkdtemp(prefix="approve-settings-", dir=OUTPUT))
     else:
         settings = layout_settings
     files = {case: dict(json=OUTPUT / "package" / f"{case}.json", npz=OUTPUT / "package" / f"{case}.npz") for case in listed}
@@ -1210,6 +1236,8 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
                     settings_captured=sorted(settings))
     if layout_correction is None:
         document["deviations_vs_previous"] = {case: public_deviations(case, record) for case, record in deviations.items()}
+        if verify_private_settings:
+            document.update(private_settings=tools.VERIFIED_EQUAL, settings_carried_forward=sorted(carried))
     else:
         document["gates"]["unlisted_cases_bit_identical"] = sorted(
             case for case, verdict in gates["layout"].items() if verdict["verdict"] == "identical")
@@ -1220,6 +1248,8 @@ def approve(listed, *, reason, tier="quick", require=("binary", "ternary", "thre
     record = dict(created_utc=created, package_commit=head, reason=reason, tier=tier, cases=listed)
     if layout_correction is not None:
         record["layout_correction"] = layout_correction
+    if verify_private_settings:
+        record["private_settings"] = tools.VERIFIED_EQUAL
     tools.promote(project=PROJECT, output=OUTPUT, manifest_path=MANIFEST, approval_id=approval_id,
                   record=record, files=files, report=document, carried_forward=carried)
     validate_expected(checked)
@@ -1277,7 +1307,13 @@ def main(argv=None):
     parser.add_argument("--layout-correction", choices=("r09-data-tail",),
                         help="complete quick/full: non-promoting strict layout proof against the selected references; "
                              "approve --cases: adopt an exact layout correction (tools/acceptance_layout.py)")
+    parser.add_argument("--verify-private-settings", action="store_true",
+                        help="approve --cases only: allow O04/O05 in a numerical approval after proving their adopted "
+                             "private settings equal a fresh package capture; they are carried forward, never stored")
     args = parser.parse_args(argv)
+    if args.verify_private_settings and (args.action != "approve" or args.rollback is not None
+                                         or args.layout_correction is not None):
+        parser.error("--verify-private-settings belongs to approve --cases without --layout-correction")
     if args.record and (args.action not in {"quick","full"} or args.tolerance != "public" or args.cases is not None):
         parser.error("--record requires a complete public-tolerance quick or full run")
     if args.layout_correction is not None:
@@ -1322,7 +1358,7 @@ def main(argv=None):
         if args.rollback is not None:
             return rollback_approval(args.rollback, reason=args.reason)
         return approve(args.cases, reason=args.reason, tier=args.tier, require=args.require_family,
-                       layout_correction=args.layout_correction)
+                       layout_correction=args.layout_correction, verify_private_settings=args.verify_private_settings)
     layout = args.layout_correction
     manifest = validate_research_checkout(args.research) if historical else json.loads(MANIFEST.read_text(encoding="utf-8"))
     full = args.action == "full" or args.tier == "full"

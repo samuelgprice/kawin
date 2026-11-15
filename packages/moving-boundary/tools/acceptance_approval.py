@@ -7,7 +7,7 @@ effect per case::
       "description": "...",
       "in_effect": {"<case>": "<approval id>", ...},
       "approvals": {"<approval id>": {created_utc, package_commit, reason, tier, cases, directory,
-                                      [layout_correction,]
+                                      [layout_correction,] [private_settings,]
                                       artifacts: {case: {json, npz[, settings]}}, previous: {case: id | "reference"},
                                       report: {path, sha256}}},
       "history": [{"event": "approve" | "rollback", "approval_id", "utc", ...}, ...]
@@ -34,7 +34,14 @@ with the approval. The one exception is ``CARRIED_FORWARD``: for O04/O05 (``PRIV
 whose settings hashes exist only in the local ``private-inputs.json``) an approval made with a
 ``layout_correction`` (``LAYOUT_RULES``) may record ``"settings": "private-carried-forward"``
 instead of a hash. No settings file is copied and no settings hash is written; example acceptance
-keeps using the adopted, privately hashed file. ``validate`` refuses the marker anywhere else.
+keeps using the adopted, privately hashed file. An ordinary numerical approval may carry them
+forward too, but only with the record field ``"private_settings": "verified-equal"``
+(``VERIFIED_EQUAL``): ``acceptance.py approve --verify-private-settings`` sets it after proving
+that the adopted, privately hashed settings equal a fresh package capture
+(``acceptance.check_case_settings``). The field states that this proof ran; it holds no settings
+content, settings hash or private digest. ``validate`` refuses the marker anywhere else, refuses a
+listed O04/O05 without it, and refuses the field on a record that carries nothing forward or that
+is also a layout correction.
 
 Approved folders and reports are immutable: nothing here overwrites or deletes them, and nothing
 writes under ``reference/``. ``rollback`` is one more atomic manifest replace that points the
@@ -69,6 +76,7 @@ DESCRIPTION = ("Approved reference artifacts (plan section 5). in_effect maps a 
 CARRIED_FORWARD = "private-carried-forward"
 PRIVATE_SETTINGS_CASES = frozenset({"O04", "O05"})   # example settings hashed only in private-inputs.json
 LAYOUT_RULES = frozenset({"r09-data-tail"})          # acceptance_layout.RULES
+VERIFIED_EQUAL = "verified-equal"   # record["private_settings"]: adopted settings proven equal to a fresh capture
 REPLACE_ATTEMPTS = 20
 REPLACE_DELAY = 0.25
 _os_replace = os.replace
@@ -132,7 +140,10 @@ def validate(manifest, cases, *, project, output):
     approvals that list the case. For each of ``cases`` in effect, the approved files must exist
     with their recorded hashes. A ``layout_correction`` must name a known rule; the
     ``CARRIED_FORWARD`` settings marker is accepted only for O04/O05 of a layout-correction
-    approval. Absent section: nothing to check.
+    approval or of one whose record has ``private_settings == VERIFIED_EQUAL``, and a listed
+    O04/O05 must have it. ``private_settings`` may only be ``VERIFIED_EQUAL``, never beside a
+    ``layout_correction``, and only on a record that carries a case forward. Absent section:
+    nothing to check.
     """
     section = section_of(manifest)
     if section is None:
@@ -154,15 +165,23 @@ def validate(manifest, cases, *, project, output):
         assert record.get("directory") == f"{APPROVED}/{approval_id}", where + ": directory must be " + f"{APPROVED}/{approval_id}"
         layout = record.get("layout_correction")
         assert layout is None or layout in LAYOUT_RULES, where + ": unknown layout_correction " + repr(layout)
+        proof = record.get("private_settings")
+        assert proof is None or proof == VERIFIED_EQUAL, where + ": unknown private_settings " + repr(proof)
+        assert proof is None or layout is None, where + ": private_settings and layout_correction exclude each other"
         artifacts = record.get("artifacts")
         assert isinstance(artifacts, dict) and set(artifacts) == set(listed), where + ": artifact hashes must cover exactly its cases"
+        assert proof is None or any(isinstance(hashes, dict) and hashes.get("settings") == CARRIED_FORWARD
+                                    for hashes in artifacts.values()), where + ": private_settings without a carried-forward case"
         for case, hashes in artifacts.items():
             assert set(SUFFIXES) <= set(hashes) <= set(SUFFIXES) | {"settings"}, f"{where}: {case} artifact hashes malformed"
             if hashes.get("settings") == CARRIED_FORWARD:
-                assert case in PRIVATE_SETTINGS_CASES and layout is not None, \
-                    f"{where}: {case} settings marker {CARRIED_FORWARD} is only for O04/O05 of a layout correction"
+                assert case in PRIVATE_SETTINGS_CASES and (layout is not None or proof == VERIFIED_EQUAL), \
+                    f"{where}: {case} settings marker {CARRIED_FORWARD} is only for O04/O05 of a layout correction " \
+                    "or of an approval with verified-equal private settings"
             assert all(isinstance(value, str) and HEX64.fullmatch(value) for kind, value in hashes.items()
                        if not (kind == "settings" and value == CARRIED_FORWARD)), f"{where}: {case} artifact hashes malformed"
+            assert case not in PRIVATE_SETTINGS_CASES or hashes.get("settings") == CARRIED_FORWARD, \
+                f"{where}: {case} must carry its private settings forward ({CARRIED_FORWARD})"
         previous = record.get("previous")
         assert isinstance(previous, dict) and set(previous) == set(listed), where + ": previous must cover exactly its cases"
         assert all(value == "reference" or value in approvals for value in previous.values()), where + ": previous names an unknown approval"
@@ -310,11 +329,14 @@ def promote(*, project, output, manifest_path, approval_id, record, files, repor
     """Promote candidate files as approval ``approval_id`` (steps 1-4 in the module docstring).
 
     ``record`` carries ``created_utc, package_commit, reason, tier, cases`` (and, for a layout
-    correction, ``layout_correction``); ``files`` maps each case to ``{"json": path, "npz": path[,
-    "settings": path]}``; ``report`` is the gate evidence, written to ``docs/approvals/<id>.json``
-    with the artifact hashes and previous selection added. ``carried_forward`` lists O04/O05 cases
-    of a layout correction whose adopted private settings stay in place: they get the
-    ``CARRIED_FORWARD`` marker instead of a settings file and hash. ``fault(step)`` is a test hook
+    correction, ``layout_correction``; for a numerical approval whose private settings were proven
+    equal, ``private_settings = VERIFIED_EQUAL``); ``files`` maps each case to ``{"json": path,
+    "npz": path[, "settings": path]}``; ``report`` is the gate evidence, written to
+    ``docs/approvals/<id>.json`` with the artifact hashes and previous selection added.
+    ``carried_forward`` lists the O04/O05 cases whose adopted private settings stay in place: they
+    get the ``CARRIED_FORWARD`` marker instead of a settings file and hash. It is accepted only
+    with one of those two record fields, a listed O04/O05 must be in it, and ``private_settings``
+    without a carried case is refused. ``fault(step)`` is a test hook
     called after each step ("written", "validated", "renamed", "reported", "manifest-temp-written",
     "replaced"). Returns the new manifest.
     """
@@ -326,13 +348,21 @@ def promote(*, project, output, manifest_path, approval_id, record, files, repor
     if set(files) != set(cases):
         raise ApprovalError("candidate files must cover exactly the listed cases")
     carried_forward = sorted(set(carried_forward))
+    proof = record.get("private_settings")
+    if proof is not None and (proof != VERIFIED_EQUAL or record.get("layout_correction") is not None or not carried_forward):
+        raise ApprovalError("private_settings must be " + VERIFIED_EQUAL + ", without a layout correction, "
+                            "on an approval that carries private settings forward")
     if carried_forward:
-        if record.get("layout_correction") not in LAYOUT_RULES:
-            raise ApprovalError("settings can be carried forward only by a layout-correction approval")
+        if record.get("layout_correction") not in LAYOUT_RULES and proof != VERIFIED_EQUAL:
+            raise ApprovalError("settings can be carried forward only by a layout-correction approval "
+                                "or one with verified-equal private settings")
         bad = [case for case in carried_forward
                if case not in cases or case not in PRIVATE_SETTINGS_CASES or "settings" in files[case]]
         if bad:
             raise ApprovalError("settings can be carried forward only for listed O04/O05 without a settings file: " + ", ".join(bad))
+    uncarried = sorted((set(cases) & PRIVATE_SETTINGS_CASES) - set(carried_forward))
+    if uncarried:
+        raise ApprovalError("private settings must be carried forward for " + ", ".join(uncarried))
     manifest = json.loads(manifest_path.read_bytes().decode("utf-8"))
     if _taken(approval_id, manifest, project, output):
         raise ApprovalError("approval ID already used: " + approval_id)
