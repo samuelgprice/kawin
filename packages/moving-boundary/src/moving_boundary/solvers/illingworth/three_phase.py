@@ -252,7 +252,10 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
     the per-step interface residual (see ``_residual_scale``), and
     ``initial_eta_componentwise_scaling`` scales each row of the startup eta
     balance separately (see ``_estimate_initial_etas``). The defaults leave
-    results unchanged.
+    results unchanged. With the default scale every residual row is divided
+    by the normalized specimen length ``L``, so the tolerance bounds a change
+    of mean composition per step (at most twice the tolerance for a
+    component's total), not a relative solute loss (ledger R13).
 
     **Deviation form (ledger R06).** Each interval is solved for the deviation
     ``w = C - r`` from a reference profile ``r``: the interface composition for
@@ -2140,9 +2143,17 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
 
         The residual is a density-weighted inventory defect (composition times
         length), so it is scaled by the normalized specimen length ``L``
-        (``R0`` with equal molar volumes) times an O(1) composition scale,
-        which makes the tolerance a relative solute loss per step. By default
-        every row uses ``L``. With ``interface_residual_composition_scale``,
+        (``R0`` with equal molar volumes) times an O(1) composition scale.
+        The two rows of component ``k`` sum to the step's change of its
+        density-weighted inventory up to round-off, so each row is bounded by
+        ``residualTolerance * scale_k`` and the component's inventory change
+        by twice that. By default every row uses ``L``: the bound is then a
+        change of mean composition of at most ``2 * residualTolerance`` per
+        step, not a relative solute loss, and relative to a component's own
+        inventory it grows without limit as its mean composition falls. The
+        rows can cancel in the sum while each misplaces solute between the
+        interfaces, which is why both are tested.
+        With ``interface_residual_composition_scale``,
         component ``k`` at both interfaces uses
         ``max(|old density-weighted inventory_k|, L * scale_k)``, as in the
         two-phase model: a small ``scale_k`` tightens the balance of a dilute
@@ -2293,7 +2304,9 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         The residual scale (``_residual_scale``) does not depend on ``dt``, so the
         unmodified old state can meet the tolerance when ``flux * dt`` is tiny,
         which would accept a step with both interfaces frozen and leave the
-        untransferred solute as an inventory defect. A candidate is therefore
+        untransferred solute as an inventory defect (with the default scale
+        the tolerance is relative to the specimen length, not to a component's
+        inventory; see ``_residual_scale``). A candidate is therefore
         accepted only after at least one Newton update. While the start already
         meets the tolerance, a line-search trial is accepted if it improves the
         residual or also meets the tolerance. If that mandatory update cannot be

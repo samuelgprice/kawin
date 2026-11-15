@@ -64,7 +64,9 @@ not been established.
   absolute change of mean composition `residual_tolerance * c_floor` below that.
 - `interface_residual_composition_scale` (new) sets `c_floor`; when omitted it is
   `constraints.minComposition`. The ternary models use the same name but default
-  to a composition scale of 1 (see LEDGERS R13).
+  to a composition scale of 1, so their default tolerance bounds a change of mean
+  composition per step, not a relative solute loss, unless a component's
+  inventory exceeds the length term (see LEDGERS R13).
 - `bulk_picard_rtol=None` now means `1e-10` in implicit mode; it no longer
   follows `tolerance`. Pass it explicitly to keep an older effective value.
 

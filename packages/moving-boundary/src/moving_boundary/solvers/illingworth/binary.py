@@ -382,8 +382,8 @@ class MovingBoundaryIllingworthFD1DModel(DiffusionModel):
       ``interface_residual_composition_scale`` when given, otherwise
       ``constraints.minComposition`` read at the start of the step. (The
       ternary models use the same argument name, but there the default is a
-      composition scale of 1, so their default residual scale is ``R``; see
-      ledger R13.)
+      composition scale of 1, so their default residual scale is the length
+      term ``R`` unless a component's inventory exceeds it; see ledger R13.)
 
     The residual check bounds the change of the transformed inventory per step
     by ``residual_tolerance * max(|I_old|, R * c_floor)`` up to round-off, so

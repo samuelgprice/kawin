@@ -137,6 +137,12 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
     ``interface_residual_composition_scale`` (default ``None``, i.e. ``1.0``)
     sets the composition scale of the per-step interface residual; a smaller
     value per component tightens the balance of a dilute or slow component.
+    With the default the residual of component ``k`` is divided by
+    ``max(|I_k|, R, 1e-300)`` (``I_k`` the transformed inventory). This is
+    ``R`` whenever ``|I_k| <= R``, and the tolerance then bounds the change of
+    mean composition per step, not a relative solute loss; an interstitial
+    u-fraction inventory can exceed ``R`` and is then bounded relative to
+    itself (see ``_interface_residual_scale`` and ledger R13).
     ``initial_eta_componentwise_scaling`` scales each row of the startup eta
     balance separately (see ``estimate_initial_eta_from_instantaneous_balance``).
     ``interface_newton_start`` chooses where each step's interface Newton
@@ -1903,9 +1909,19 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         gives a dimensionless residual norm whose tolerance is independent of
         the chosen length units.
 
-        The scale is deliberately independent of ``dt``: the interface residual
-        is the per-step inventory defect, so the tolerance bounds relative
-        solute loss per step. Because ``flux * dt`` can fall below this bound
+        The scale is deliberately independent of ``dt``. The interface residual
+        of component ``k`` equals the step's change of its transformed
+        inventory ``I_k`` up to round-off, so the tolerance bounds
+        ``|dI_k| <= residualTolerance * scale_k`` per step, with
+        ``scale_k = max(|I_k|, R * s_k, 1e-300)`` and ``s_k`` the composition
+        scale. Where ``|I_k| <= R * s_k`` (and the ``1e-300`` floor is
+        inactive) this is a change of mean composition of at most
+        ``residualTolerance * s_k``, not a relative solute loss: relative to
+        the component's own inventory the permitted defect then grows without
+        limit as its mean composition falls. Where ``|I_k|`` is the larger term
+        (possible with the default ``s_k = 1`` only for interstitial
+        u-fractions, which can exceed one) the bound is relative to the
+        inventory. Because ``flux * dt`` can fall below this bound
         for tiny steps, ``_solve_interface_planar`` never accepts the
         unmodified starting iterate without first attempting a Newton update.
 
