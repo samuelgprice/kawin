@@ -142,12 +142,17 @@ three-phase reset reproduces fresh construction bit for bit (fix `9595574`; cont
 Two-phase ternary reset also reproduces fresh construction (initial profile through the
 constructor's conversion, and `initialEta` restored to NaN); binary needed no change (identical
 bits); no reference changed, exact full and E01-E10 bit-identical, full `tests/` 1506 passed. The
-approved artifacts are local (four approvals). R13 (ternary/three-phase residual normalization) is implemented;
-reference adoption is pending. At `4ad05c4`, 19 runs (C09-C12, C16-C21, C32, F11, F12, O01, O02, O03b,
-O04, O05, O06), contract C27 and examples E03, E05-E10 differ from their references by design until a
-separately authorized approval; all approval criteria and contract assertions pass. C32 takes 15
-timestep halvings instead of 13, accepted by the user as intended (LEDGERS R13). Next step, only with
-authorization: `approve --tier full --verify-private-settings` for that set from a clean clone.
+approved artifacts are local (four approvals). R13 (ternary/three-phase residual normalization) is
+resolved (2026-11-15): 19 runs (C09-C12, C16-C21, C32, F11, F12, O01, O02, O03b, O04, O05, O06) and
+contract C27 are approved as `20261115T181200Z-6caa07b-1` (commit `e1bb66d`; `approve --tier full
+--verify-private-settings` from a clean clone of `6caa07b`; O04/O05 private settings verified equal
+and carried forward; candidates bit-identical to the reviewed `4ad05c4` run). C32 takes 15 timestep
+halvings instead of 13, accepted by the user as intended. Gates from `e1bb66d` (fresh targets, no
+special flags): exact full 40/40 runs and 5 contracts bit-identical against the selected references
+(live O06, 34 repeat pairs), examples E01-E10 pass. The approved artifacts are local and ignored
+(`.verification/acceptance/reference-approved/`, five approvals, relative to `packages/moving-boundary`);
+copy them separately into any other checkout and verify them against the manifest hashes
+(LEDGERS R13 *Adoption*).
 
 ## Installed solving and research-owned generation
 

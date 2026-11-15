@@ -1297,12 +1297,13 @@ after setup (binary) or never terminates in fixed mode (two-phase ternary, by in
   tests (E11 a pending fixture), 160 s. No configuration was newly rejected and no reference
   approval was made.
 
-### R13: ternary and three-phase residual normalization (implemented; reference adoption pending)
+### R13: ternary and three-phase residual normalization (resolved)
 
-**Status:** implemented 2026-11-14, review follow-ups 2026-11-15; **reference adoption pending**. Recorded 2026-11-11 from the
-R08 survey. The solver change, its tests and the approval tooling are committed. No reference was
-approved: the runs listed under *Affected references* differ from their selected references
-by design and are not passing acceptance results until a separately authorized approval.
+**Status:** resolved 2026-11-15. Implemented 2026-11-14, review follow-ups 2026-11-15; references
+adopted as `20261115T181200Z-6caa07b-1` (approval commit `e1bb66d`; see *Adoption* at the end of
+this entry). Recorded 2026-11-11 from the R08 survey. The text up to *Adoption* is the
+pre-approval record: there, "pending" and "until a separately authorized approval" describe the
+state before `e1bb66d`.
 **Scope:** `ternary.py:_interface_residual_scale`, `three_phase.py:_residual_scale`, their
 validation, and the docstring and README descriptions of `interface_residual_composition_scale`.
 Binary numerics, the attempted Newton update and its fallback, clamping and floor projection,
@@ -1464,7 +1465,7 @@ unchanged; 488 runs, no step retry, no step failure, no forced-update fallback.
   eta estimate fails without `initial_eta_componentwise_scaling`, under both normalizations (16
   survey runs stopped at setup). Not an R13 effect.
 
-**Affected references (measured; pending approval).** The planning estimate was every run that
+**Affected references (measured; approved under *Adoption*).** The planning estimate was every run that
 relied on the default (C05-C12, C16-C24, C32, F11, F12, O01, O02, O03b, O04, O05, O06; contracts
 C26-C29; examples E03-E10). The measured set is smaller. Exact full acceptance and example
 acceptance on clean clones of `b2b3021` and of `4ad05c4` (the final code; identical outcome)
@@ -1595,10 +1596,45 @@ fallback), so the timestep is halved until it does.
   tighter tolerances were not timed. The recorded dirty flag of the candidate comes from
   untracked log files at the clone root; no tracked file was modified.
 
-**Proposed adoption set (requires separate authorization).** Runs C09, C10, C11, C12, C16, C17,
-C18, C19, C20, C21, C32, F11, F12, O01, O02, O03b, O04, O05, O06 and contract C27, with
-`approve --tier full --verify-private-settings` from a clean clone of the final code. Examples
-E03 and E05-E10 follow from their mapped cases.
+**Adoption (2026-11-15, user-authorized).** The proposed set was approved unchanged.
+
+- *Approval* `20261115T181200Z-6caa07b-1` (commit `e1bb66d`, manifest and force-added report
+  only): `approve --tier full --verify-private-settings` for exactly runs C09, C10, C11, C12,
+  C16, C17, C18, C19, C20, C21, C32, F11, F12, O01, O02, O03b, O04, O05, O06 and contract C27, in
+  a short-path clean clone of `6caa07b` (full history, LF line endings, fresh targets) with the
+  local inputs copied and hash-verified (318 files). Reason "LEDGERS R13: ternary and
+  three-phase interface residuals normalized by component inventory (default
+  interface_residual_composition_scale; C32 takes 15 halvings instead of 13, user decision
+  2026-11-15)", 1021 s. `6caa07b` changes no solver code after `4ad05c4` (acceptance tooling,
+  its tests and docs only).
+  - Gates, all unchanged: 40 run cases (live O06) each repeated bit-identically;
+    `approval_criteria` for every case; whole suite on the installed wheel 1738 passed, nothing
+    skipped, 1 deselected; contract assertion groups for C25-C29; all 25 unlisted cases and
+    contracts within public tolerance; nothing skipped. C20 and C21 are within public tolerance,
+    the other 18 listed cases differ, as recorded above.
+  - Private settings: O04 and O05 `verified-equal` against a fresh capture and carried forward
+    (`private-carried-forward`); both private capture files were removed. The committed report
+    holds verdicts only for O01, O02, O03b, O04, O05 and O06, plus O05's conservation value and
+    limit; no settings content, settings hash or private digest.
+  - Agreement with the reviewed results: every array of every candidate (40 runs, 5 contracts)
+    is bit-identical to the reviewed `4ad05c4` candidates. The only differences are per-run
+    paths (`adapter_origin`; the O06 cache directory, normalized by the comparison). C32 ends at
+    `2e-6 / 2^15 = 6.1e-11` (15 halvings) as documented; all C32 criteria pass.
+  - Artifacts: the 45 approved files (`.verification/acceptance/reference-approved/20261115T181200Z-6caa07b-1/`,
+    relative to `packages/moving-boundary`; no settings file for O04/O05) were copied back to the
+    original worktree and match the manifest hashes, as does the committed report. `reference/`,
+    the four earlier approval folders, `example_settings/`, `inputs/` (including
+    `private-inputs.json`) and `pilot/` are byte-identical to before the approval.
+- *Gates after the approval* (from `e1bb66d`, same clone, fresh targets, no special flags, not
+  `--record`ed): exact full 40/40 runs and 5 contracts bit-identical against the selected
+  references, live O06, 34 repeat pairs with no differences, 504 s; examples E01-E10 pass with 68
+  tests (E11 a pending fixture), 148 s. The 363 local input, reference and approval files were
+  byte-identical before and after these gates.
+- *Other checkouts.* `.verification/` is git-ignored, so the approved artifacts are not in Git.
+  Any other checkout or clone must copy in `.verification/acceptance/reference-approved/` with
+  all five approval folders (plus the other local inputs listed in R10_HANDOFF.md section 3) and
+  verify them against the manifest hashes; without them exact quick/full acceptance fails
+  for the R13 cases.
 
 ## Example acceptance (pending tier approval)
 
