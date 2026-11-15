@@ -761,3 +761,110 @@ def test_invalid_explicit_scale_forms_assigned_later_are_rejected_before_setup(b
     with pytest.raises(ValueError, match="interface_residual_composition_scale"):
         model.solve(duration, iterator=explicitEulerIterator)
     assert calls == [] and model.currentTime == 0.0
+
+
+# Acceptance case C32 on the new default (LEDGERS R13: accepted behavior change, user decision 2026-11-15)
+
+
+def _c32_run(scale=None):
+    """The C32 configuration (``tools/acceptance_cases.py``): one Newton iteration, one normal retry, terminal retries.
+
+    With ``maxIterations = 1`` a step is accepted only when its unmodified start already meets
+    ``residualTolerance * scale`` (through the forced-update fallback), so the timestep is halved until it does.
+    Returns the model and the ``(dt, accepted, scaled residual)`` record of every interface solve.
+    """
+    from test_illingworth_ternary_three_phase import _make_nonstationary_unequal_volume_model   # the ported research builder
+
+    model = _make_nonstationary_unequal_volume_model()
+    model.terminalThinPhasePolicy = "continue"   # what the materialized definition injects
+    model.interfaceResidualCompositionScale = scale
+    model.setup()
+    model.maxIterations = 1
+    model.maxStepRetries = 1
+    model.terminalThinPhaseWidth = .31
+    model.terminalThinPhaseExtraRetries = 25
+    attempts = []
+    solve = model._solve_interface_planar
+
+    def solve_spy(profiles, interfaces, etas, dt):
+        try:
+            out = solve(profiles, interfaces, etas, dt)
+        except RuntimeError:
+            attempts.append((float(dt), False, float(model._lastImplicitResidual)))
+            raise
+        attempts.append((float(dt), True, float(model._lastImplicitResidual)))
+        return out
+
+    model._solve_interface_planar = solve_spy
+    return model, attempts
+
+
+@pytest.mark.parametrize("scale, halvings", [(None, 15), (1.0, 13)], ids=["new-default", "earlier-default-explicit"])
+def test_c32_terminal_thin_phase_run_halves_until_the_start_meets_the_tolerance(scale, halvings):
+    """Characterization (new default: 15 halvings) and preservation (explicit 1.0: the earlier 13).
+
+    The inventory-based scale is smaller than the length term (0.26 and 0.14 against 0.98 here), so the
+    unmodified start meets ``tol * scale`` only two halvings later. The run still goes through the
+    terminal thin-phase path, stops there, and leaves a committed, consistent state.
+    """
+    model, attempts = _c32_run(scale)
+    with pytest.warns(RuntimeWarning, match="below terminal_thin_phase_width"):
+        model.solve(2e-6, minDtFrac=1e-14)
+
+    # Retry and timestep behavior: every attempt halves the previous one; only the last is accepted.
+    assert [dt for dt, _, _ in attempts] == [2e-6 * 0.5**k for k in range(halvings + 1)]
+    assert [ok for _, ok, _ in attempts] == [False] * halvings + [True]
+    assert all(residual > model.residualTolerance for _, _, residual in attempts[:-1])
+    assert attempts[-1][2] <= model.residualTolerance
+    assert attempts[-1][2] > 0.5 * model.residualTolerance   # one halving earlier would not have passed
+    final_dt = 2e-6 * 0.5**halvings
+    assert model.currentTime == final_dt and model._currdt == final_dt
+    assert model._lastStepRetries == halvings
+    assert model._lastImplicitIterations == 1 and model._lastImplicitConverged is True
+    assert model._lastImplicitForcedUpdateSkipped is True   # accepted at the start: the update could not be attempted
+
+    # The terminal thin-phase path was taken (one normal attempt, then the extra retries) and stopped the solve.
+    assert model.maxStepRetries == 1 and halvings > model.maxStepRetries
+    info = model._terminalThinPhaseInfo
+    assert info is not None and info["phase"] == "C" and info["phase_index"] == 2
+    assert info["threshold"] == .31 and info["width"] < .31 and info["time"] == 0.0 and info["dt"] == final_dt
+    assert model._terminalThinPhaseStop is False and model.finalTime == final_dt < 2e-6
+
+    # Lifecycle: one committed step, no pending candidate, histories and live state agree, moles conserved.
+    assert model._pendingCandidate is None
+    times = np.asarray(model.interfaceData._time[: int(model.interfaceData.N) + 1], dtype=np.float64)
+    assert times[0] == 0.0 and times[-1] == final_dt and np.all(np.diff(times) >= 0.0)
+    np.testing.assert_array_equal(_recorded(model.interfaceData)[-1], model._interfaces_curr)
+    np.testing.assert_array_equal(_recorded(model.etaData)[-1], model._etas_curr)
+    molar = _recorded(model.molarInventoryData)
+    scale_now = _scale(model, model._profiles_curr, model._interfaces_curr)
+    drift = np.abs(molar[-1, 1:] - molar[0, 1:]) / model._phaseMolarDensities[0]
+    assert np.all(drift <= 2 * model.residualTolerance * scale_now * (1 + 1e-6) + 32 * EPS * scale_now)
+
+    # A fresh model repeats the run bit for bit, including the retry count. (``reset`` is not part of this
+    # case: ``maxIterations = 1`` is below the validated minimum and can only be set after ``setup``, so a
+    # reset model is refused by the configuration validator, which is checked here too.)
+    repeat, repeat_attempts = _c32_run(scale)
+    with pytest.warns(RuntimeWarning, match="below terminal_thin_phase_width"):
+        repeat.solve(2e-6, minDtFrac=1e-14)
+    assert repeat_attempts == attempts and repeat.currentTime == model.currentTime
+    np.testing.assert_array_equal(repeat._interfaces_curr, model._interfaces_curr)
+    np.testing.assert_array_equal(repeat._etas_curr, model._etas_curr)
+    for profile, expected in zip(repeat._profiles_curr, model._profiles_curr):
+        np.testing.assert_array_equal(profile, expected)
+    model.reset()
+    with pytest.raises(ValueError, match="max_iterations must be at least 2"):
+        model.solve(2e-6, minDtFrac=1e-14)
+    assert len(attempts) == halvings + 1 and model._terminalThinPhaseInfo is None and model._pendingCandidate is None
+
+
+def test_c32_scales_explain_the_two_extra_halvings():
+    """The physical start residual is the same; only its divisor changed, by more than 2 and less than 8."""
+    default, _ = _c32_run(None)
+    earlier, _ = _c32_run(1.0)
+    state = (default._profiles_curr, default._interfaces_curr)
+    new_scale, old_scale = _scale(default, *state), _scale(earlier, *state)
+    np.testing.assert_array_equal(old_scale, np.full(2, _length(earlier)))
+    np.testing.assert_allclose(new_scale, np.abs(_inventory(default, *state)), rtol=4 * EPS, atol=0.0)
+    ratio = old_scale / new_scale
+    assert np.all(ratio > 2.0) and np.max(ratio) < 8.0   # two, not three, extra halvings of a residual linear in dt
