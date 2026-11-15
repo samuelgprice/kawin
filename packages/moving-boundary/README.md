@@ -66,7 +66,7 @@ not been established.
   `constraints.minComposition`.
 
 The two-phase ternary and three-phase models normalize their interface residual per
-component in the same way since LEDGERS R13 (implemented; reference adoption pending):
+component in the same way since LEDGERS R13 (adopted as approval `20261115T181200Z-6caa07b-1`):
 without `interface_residual_composition_scale` the scale of component `k` is
 `max(|I_k|, L * constraints.minComposition)`, so `residual_tolerance` bounds the
 per-step change of each component's inventory relative to that inventory, however
@@ -140,6 +140,10 @@ named after the commit or a timestamp:
     set "PYTHONPATH=<scratch>\mb-target-<rev>"
     python -m pytest tests --basetemp <scratch>\pytest-<rev>
 
+Run this way, the five C25-C29 contract tests skip (they need the state that acceptance quick
+configures, and the acceptance gates run those contracts) and the `slow` test is deselected.
+These pytest skips are separate from acceptance-case skips.
+
 Never reinstall into an existing target folder. `pip install --target` into a folder that
 already holds the package can exit successfully, with only warnings, while leaving the old
 module in place, and it never removes modules deleted since. The tests would then silently
@@ -155,22 +159,27 @@ The independence proof runs them from a `git archive` export with the opt-in gua
 `mb-ref-*` path fail) and `MB_FORBID_GIT=1` (any Git launch fails); see
 `tools/batch_safety.guard_independence` and docs/AUTHORITY_SWITCH_PLAN.md (M9).
 
-Quick: 30 run comparisons, 5 contracts and 145 pytest tests passed in 381.09 s. Full: 40 run comparisons, 5 contracts and 145 pytest tests passed in 491.61 s (public tolerance, `--record`, 2026-11-11, after the authority switch; every run bit-identical).
-Since then R08 changed binary results by design; approval `20261111T222849Z-5aedde7-1` (LEDGERS R08)
-selects new references for C02, C03, C04, C13, C14, C15, C30, C31, F04, O07 and C29. At that commit
-exact full gives 40 runs and 5 contracts bit-identical against the selected references (not `--record`ed).
+Quick: 31 run comparisons, 5 contracts and 145 pytest tests passed in 413.63 s. Full: 42 run comparisons, 5 contracts and 145 pytest tests passed in 521.06 s (public tolerance, `--record`, 2026-11-15, at `65ce32c` after the C33/F33 activation; every run bit-identical against the selected references, live O06 included, no case skipped).
+The selected references include the approvals of LEDGERS R08 (`20261111T222849Z-5aedde7-1`) and R13
+(`20261115T181200Z-6caa07b-1`) for the cases they changed by design.
 Approved artifacts are local under `.verification/acceptance/reference-approved/`; a new checkout needs
-them copied in, like the other local inputs.
+them copied in, like the other local inputs. The C33/F33 package-captured baselines are local too
+(`.verification/acceptance/reference/C33.*` and `F33.*`): Git holds their hashes and provenance in
+`tools/acceptance_manifest.json`, not the files (LEDGERS "Two-phase ternary analytic acceptance cases
+(C33/F33)").
 
-Quick includes C01-C24/C30-C32, the older binary fixture/bulk probes and freshly
+Quick includes C01-C24/C30-C33 (C33: the package-owned two-phase ternary analytic
+case against its similarity solution), the older binary fixture/bulk probes and freshly
 sampled O05 (4.94-second sampling pilot) and O08 (two valid default-phase tie lines
 and one FCC-only invalid probe). O08 was explicitly approved for quick/full after
 a 3.83-second worker pilot. C25-C29 are pytest lifecycle/failure
 contracts, with independent main/package workers. Full adds enabled cached
-O01/O02/O03a/O03b/O04/O07 and F04/F11/F12 drift checks. Full-only O06 samples
+O01/O02/O03a/O03b/O04/O07 and F04/F11/F12/F33 drift checks. Full-only O06 samples
 real TC data and completes six accepted steps with the approved suffixed phase
 names, fresh separate caches and an unseeded reference repeat pair. It skips
 with a clear reason if local inputs, TC-Python/runtime or licence are missing.
+Run exact full from a sufficiently short clone path: Thermo-Calc cannot open O06 cache files
+whose paths exceed the Windows 260-character limit, and the availability probe then fails.
 All available cached cases ran. Missing caches are
 the only cache skip; invalid or changed existing inputs fail. Reference-independent
 exact/similarity errors are recorded in both short and long variants.

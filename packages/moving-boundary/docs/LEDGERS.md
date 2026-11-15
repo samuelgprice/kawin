@@ -2,16 +2,16 @@
 
 ## Current capability inventory
 
-Quick: 30 run comparisons, 5 contracts and 145 pytest tests passed in 381.09 s. Full: 40 run comparisons, 5 contracts and 145 pytest tests passed in 491.61 s (public tolerance, `--record`, 2026-11-11, after the authority switch; every run bit-identical).
+Quick: 31 run comparisons, 5 contracts and 145 pytest tests passed in 413.63 s. Full: 42 run comparisons, 5 contracts and 145 pytest tests passed in 521.06 s (public tolerance, `--record`, 2026-11-15, at `65ce32c` after the C33/F33 activation; every run bit-identical against the selected references, live O06 included, no case skipped).
 These are regression claims for the approved frozen inputs, not a full release or
 physical convergence audit. See ACCEPTANCE_CANDIDATES.md for exact input variants.
 
 | Capability | Evidence and supported scope |
 |---|---|
 | Binary constant, lagged and implicit diffusivity | C01-C04, C13-C15, C30-C31 and legacy 33 histories/12 bulk probes |
-| Ternary two-phase and motion directions | C05-C08, interstitial x/u C16-C19, saved surrogate C24 |
+| Ternary two-phase and motion directions | C05-C08, interstitial x/u C16-C19, saved surrogate C24; analytic accuracy C33/F33 |
 | Three-phase, moving geometry and molar volume | C09-C12, C20-C23; equal/unequal explicit volumes; binary/two-phase unequal volumes unsupported |
-| Exact/similarity diagnostics and drift | C04/C11/C12 and full F04/F11/F12; analytic errors recorded independently of reference |
+| Exact/similarity diagnostics and drift | C04/C11/C12/C33 and full F04/F11/F12/F33; analytic errors recorded independently of reference; C33/F33 compare the two-phase ternary solver with its similarity solution against package-captured baselines (see "Two-phase ternary analytic acceptance cases (C33/F33)") |
 | Lifecycle, rollback, failures and terminal stop | C25-C29 package pytest main/package contracts; C32 configured continue stop using real retries; no topology transition |
 | Cached material/provider workflows | O01/O02/O03a/O03b/O04/O07 run whenever present; private TC-derived inputs/references remain ignored |
 | pycalphad generation (Stage 2B relocation complete within O05/O08) | Installed providers/pycalphad.py; real restricted O05 and default-phase O08 sampling, seed 0, package examples import/read guard; O08 has two valid tie lines and one invalid probe, bitwise fixture/metadata gate |
@@ -1635,6 +1635,180 @@ fallback), so the timestep is halved until it does.
   all five approval folders (plus the other local inputs listed in R10_HANDOFF.md section 3) and
   verify them against the manifest hashes; without them exact quick/full acceptance fails
   for the R13 cases.
+
+## Two-phase ternary analytic acceptance cases (C33/F33)
+
+**Status:** active since `65ce32c` (2026-11-15): C33 runs in quick, F33 in full (`full_drift`).
+Registered inactive in `a26d099`; baselines captured as `20261115T224052Z-a26d099-1`; validated
+and retrospectively compared with pre-R13 code on 2026-11-15. Paths below are relative to
+`packages/moving-boundary`.
+
+**Gap closed.** Before these cases the two-phase ternary Illingworth solver
+(`MovingBoundaryIllingworthTernaryFD1DModel`) was compared with the constant-matrix similarity
+solution only in pytest (`tests/test_illingworth_ternary_similarity.py`,
+`tests/test_analytic.py::test_two_phase_solver_meets_source_bounds`), which assert bounds but record
+no values. Acceptance gated two-phase ternary cases on reference parity and conservation only.
+C33/F33 add recorded analytic-error metrics with fixed `approval_criteria`, measured on the
+solver's own two-phase Landau grids, interface Stefan/tie-line solve and R13 residual scale. The
+other ternary cases (C05-C08, C16-C19, C24, O01, O03a, O04-O06) still record no exact-solution error
+(`approval_criteria.not_covered.ternary_analytic`).
+
+**Problem and frozen configuration** (`tools/two_phase_similarity_cases.py`; constants as in
+`tests/test_analytic.py`, source research `test_illingworth_ternary_similarity.py` at `06dc7b4`):
+constant 2x2 interdiffusivity matrices per phase, a linear tie-line closure, far fields
+`[0.38, 0.02]` / `[0.20, 0.15]`, elements `Z, X, Y`. Domain `L = 0.6`, `S0 = 0.3 + 1e-12`;
+`two_phase_landau_grids(31, 31, "linear", spacing_ratio=0.1)`; start from the exact similarity
+profile at similarity time `T0 = 0.1` on a 2401-node physical mesh; similarity end 0.4 (C33) and
+1.0 (F33); `semi_log`, `semiLog_dt = 0.05`, `semiLogT0 = 1e-4`; `tolerance = 1e-11`,
+`max_iterations = 50`, default (R13) residual scale; `initial_eta_guess` = analytic eta (a seed
+only: setup estimates eta itself and pins the interface nodes to that tie line, so the start is not
+exactly analytic). Metrics (`exact_arrays`): interface error at every recorded time (m), eta error,
+final-time per-component profile errors (each phase against its own formula, so the composition
+jump never enters a difference), and the relative error of `k` fitted over `t >= 2 T0`.
+
+**Stage 0 evidence and qualifications** (scratch evidence, not committed; configuration and limits
+frozen before any capture):
+
+- `T0` rule passed (interface-resolved start time 0.0747 <= 0.1); 2401 physical nodes met the
+  start-projection rule.
+- *Approved rule revisions (user, after reviewing the results; not an accuracy certification).*
+  R1: the setup's discrete eta estimate counts as discretization under test (it converges at about
+  second order with the transformed grid: -5.69e-5, -1.57e-5, -4.13e-6, -1.05e-6 at 31/61/121/241
+  nodes); the 10% nuisance budget covers physical-mesh initialization plus nonlinear sensitivity
+  only (measured <= 0.41% for every metric). R2: the matched-inner-cell domain/grid change must stay
+  within 10% of each proposed headroom (C33: interface 5.3%, k 4.3%, profiles 2.0%/1.2%, eta 0.4%;
+  F33: interface 9.2%, k 6.8%, profiles 3.2%/2.9%, eta 0.4%). Limits were not enlarged to pass.
+- *Failed original rules, kept on record:* the initialization budget as written fails for eta
+  (12.3%, setup-eta share 11.9%); the original 1% domain screen fails (unmatched 24-32%, matched
+  0.3-9.4%).
+- Time convergence is approximately first order (0.98-1.02). Spatial errors decrease with observed
+  orders trending toward, but below, one at the finest tested pair (k, s, eta 0.87-0.96; profiles
+  0.81-0.86). The coarse joint-sweep cancellation flags (k, s) and the pre-asymptotic space profile-X
+  flag (0.547) stay documented with their explanations (additive space/time reconstruction within
+  5.7%; finer-triple orders 0.75-0.87).
+- Profile convergence orders carry an interpolation qualification: the exact-profile reconstruction
+  term exceeds the 10% check except at the finest pairs, while linear and PCHIP interpolation agree
+  within about 7%.
+- The domain/grid study establishes a sensitivity, not negligible boundary effects or
+  grid-independent accuracy. The cases are fixed regression gates against the analytic solution;
+  their error interpretation carries these qualifications and they do not detect every regression.
+
+**Limits** (existing rules: analytic 2x current, conservation 10x current, floor 1e-13; all within
+the independent pytest source bounds: eta 5e-3, profile 1e-3, |k_rel| 1e-2, interface 1e-2 x
+displacement, final inventory drift 1e-9 m):
+
+| Criterion | C33 | F33 |
+|---|---|---|
+| interface (m) | 8.7e-6 | 1.5e-5 |
+| eta | 9.3e-4 | 9.3e-4 |
+| profile X / Y | 2.5e-4 / 2.1e-4 | 2.6e-4 / 2.2e-4 |
+| k (relative) | 1.5e-3 | 1.8e-3 |
+| composition inventory (relative normalized drift) | 1.3e-9 | 1.3e-9 |
+
+The inventory criterion is the maximum over time and components of `|I_k(t) - I_k(0)| / max_k |I_k(0)|`
+and is distinct from the absolute source bound checked at capture.
+
+**Baseline capture and provenance.** `acceptance.py baseline --cases C33 F33` in a fresh, clean LF
+clone of `a26d099` with fresh targets: two unseeded package runs per case bit-identical (26/26
+arrays), every independent source bound passed, criteria preview equal to the frozen limits. The
+capture record holds the commit, environment, the installed wheel's name and SHA-256, a digest of
+the installed `moving_boundary` tree, per-run timings, check values, the diagnostic
+residual-tolerance budget D (reported, never gated) and each case's `scientific_sha256`. The
+fixtures were installed into `.verification/acceptance/reference/` with the documented exclusive,
+hash-checked copy (`tools/acceptance_baseline.install_capture`). **The baseline files are stored
+locally, not committed:** Git holds their SHA-256 hashes and provenance in
+`tools/acceptance_manifest.json` (`expected_artifacts`, `captured_role: "package"`, `capture_id`,
+`scientific_sha256`, `capture_record`). Another checkout must copy in `reference/C33.*` and
+`reference/F33.*` (and, for provenance review, the capture folder
+`.verification/acceptance/baseline-staging/20261115T224052Z-a26d099-1/` with its original
+`capture.json`) and verify them against the manifest; `baseline --verify --cases C33 F33`
+regenerates and compares without writing.
+
+**Activation** (`65ce32c`): tiers, expected artifacts and `approval_criteria` equal to the preview;
+`propose` from the hash-validated baselines reproduces every adopted criterion exactly.
+
+**Validation of `65ce32c`** (fresh clean LF clones, fresh targets, local artifacts copied and
+hash-verified):
+
+- `baseline --verify --cases C33 F33`: both pass (same keys, no differing arrays or retained report
+  fields, `scientific_sha256` equal, npz bytes equal).
+- Full package test suite: 1772 passed, 5 skipped, 1 deselected. The 5 skips are the C25-C29
+  contract tests, which need the state that acceptance quick configures (the quick and full gates
+  ran those contracts); the deselection is the `slow` test `tests/test_examples.py:397`.
+- Exact quick: 31 runs (C33 included) and 5 contracts bit-identical, 34 repeat pairs, 145 gate
+  tests, 414 s. Exact full: 42 runs (C33, F33 and live O06 included) and 5 contracts bit-identical,
+  35 repeat pairs, 531 s. **No acceptance case was skipped** in either gate. C33/F33 meet every
+  criterion (6/6 each), with candidates byte-identical to the baselines.
+- **Exact full needs a sufficiently short clone path for O06.** A first exact full attempt from a
+  long scratch path failed at the live O06 availability probe after 22 s: Thermo-Calc reported
+  `ERROR IN MLOPEN : PERMISSION TO ACCESS FILE DENIED` for a 268-character cache path, beyond the
+  Windows 260-character limit. No case ran and the attempt was not counted. The same commit passed
+  from a clone directly under the user temporary directory (equivalent cache path 195 characters).
+- **F33's repeatability evidence** is its two bit-identical capture runs plus matching regeneration
+  (`baseline --verify`) and matching exact full acceptance; the full gate does not repeat
+  `full_drift` cases, as for F04/F11/F12.
+
+### C33/F33 retrospective comparison: pre- and post-R13
+
+**Protocol.** Clean LF clones of `9db54aa` (before R13) and `65ce32c`, each with its own fresh wheel
+target in the test environment. The only commits between them that touch `src/` are the R13
+commits `cdde760` (documentation), `b2b3021` and `8a9fef4`. One driver loaded the frozen
+`tools/two_phase_similarity_cases.py` and `acceptance_cases.collect` of `65ce32c` by path for both
+revisions and solved as the acceptance worker does. Six configurations: C33 and F33 at case level
+(31 nodes, `semiLog_dt` 0.05, 2401 physical nodes) and the joint levels (61, 0.025, 2401) and
+(121, 0.0125, 6001) for both windows. Materiality: |change| >= 1% of the pre-R13 value. Single run
+per configuration.
+
+**Checks.** `65ce32c` reproduces the committed C33/F33 baselines bit for bit (26/26 arrays).
+**Explicit-scale cross-check:** `65ce32c` with `interface_residual_composition_scale=1.0`
+reproduces `9db54aa` bit for bit in all six configurations (26/26 arrays).
+
+**Numerical identity.** In every configuration the accepted times are identical and 10 of 26 arrays
+are bit-identical (time histories, final time, grids, initial inventory). The state histories
+differ: the largest eta-history difference is about 3.51e-8 (C33 joint level 121; F33 joint level
+121 has the same value) and the largest interface-history difference about 4.26e-10 m (F33). These
+history differences are distinct from the changes in the scalar maximum-error metrics below.
+
+**Analytic accuracy** (scalar maximum-error metrics; reported separately from conservation):
+
+| Metric | C33 pre -> post | F33 pre -> post | All six configurations |
+|---|---|---|---|
+| interface max (m) | 4.30899e-6 -> 4.30896e-6 | 7.42618e-6 -> 7.42576e-6 | slightly smaller (relative -5.7e-5 to -5.6e-6) |
+| \|k_rel\| | 7.15824e-4 -> 7.15823e-4 | 8.88855e-4 -> 8.88828e-4 | slightly smaller (-3.1e-5 to -1.8e-6) |
+| profile X / Y max | relative -2.0e-8 / -1.5e-8 | relative -1.2e-8 / -1.4e-7 | slightly smaller (<= 2.5e-7) |
+| eta max | +1.2e-15 | +1.2e-15 | slightly larger (up to +5.1e-10, relative <= 3.2e-6) |
+| final eta error (signed) | -4.57440e-4 -> -4.57443e-4 | -3.95108e-4 -> -3.95123e-4 | magnitude slightly larger (<= 3.8e-5 relative) |
+
+Every change is immaterial. The largest relative change, 5.73e-5 (F33 interface maximum), is
+0.00573%, about 175 times smaller than the 1% materiality threshold. Interface, profile and k errors
+improve slightly while eta errors worsen slightly; there is no meaningful overall accuracy
+improvement, and none is inferred from the conservation change.
+
+**Conservation.** The relative normalized drift falls by about 21-91% across the six configurations
+(C33 1.565e-10 -> 1.236e-10, -21%; F33 6.14e-10 -> 1.24e-10, -80%; joint level 61 -64% / -31%;
+joint level 121 -91% / -74%, C33 / F33 windows). The final inventory drift falls for both
+components everywhere (F33 X 1.07e-10 -> 2.15e-11 m); in F33 joint level 121 the Y drift changes
+sign (-1.07e-12 -> +6.6e-14 m). The diagnostic allowance D tightens about 3.4x (X) and 11.8x (Y),
+because the per-component scale `max(|I_k|, L * minComposition)` replaces `L = 0.6` with the
+inventories (about 0.174 and 0.051). D is an approximate diagnostic, not a bound; smaller observed
+drift is not a guarantee.
+
+**Nonlinear work.** Accepted steps are identical. R13 needs slightly more nonlinear work: C33 +3
+Newton iterations (+0.9%), F33 +25 (+6.8%, with +75 candidate and +25 Jacobian evaluations), +1 at
+each joint level; no retries in either revision. Single-run wall times (0.5-2 s per run, the first
+solve per target including a one-time Numba compile) are not a performance benchmark or a
+reliable speed comparison.
+
+**Scope.** The conclusion is limited to these six configurations of one problem: R13 reduces the
+relative normalized conservation drift by about 21-91%, changes analytic accuracy negligibly under
+the 1% materiality rule, and requires slightly more nonlinear work. All Stage 0 qualifications
+above apply; this is not an accuracy certification.
+
+**Corrected reporting.** The first Stage 5 report quoted history differences from the C33
+case-level run only (eta about 3.9e-9, interface about 3.4e-11 m) and described the largest
+relative analytic change as "four or more orders of magnitude" below materiality. The figures above
+were recomputed from the saved run outputs without new simulations; the original outputs are kept
+with the scratch evidence.
 
 ## Example acceptance (pending tier approval)
 

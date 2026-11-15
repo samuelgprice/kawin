@@ -6,12 +6,13 @@ be frozen before comparison; changes are recorded before reference capture.
 
 ## Execution and time budget
 
-- Quick: C01–C24, C30, the irregular-grid binary C31, and the configured C32 stress variant. C25–C29 are package
+- Quick: C01–C24, C30, the irregular-grid binary C31, the configured C32 stress variant and the
+  package-owned two-phase ternary analytic case C33 (added 2026-11-15). C25–C29 are package
   pytest contracts with separate main/package workers, not comparison-table runs.
   The combined quick run plus contracts must remain below ten minutes and run
   after every numerical code move. Quick also includes LEGACY, enabled O05,
   and the explicitly approved real default-phase O08 sampling case.
-- Full: quick, enabled O-runs, and long drift F04/F11/F12. Estimate 8–11 minutes
+- Full: quick, enabled O-runs, and long drift F04/F11/F12/F33. Estimate 8–11 minutes
   for current full execution and report it before each materially changed
   full run. Use a 1200-second overall cap, well below 30 minutes. Longer jobs
   require a new explanation before execution, never an unnoticed timeout extension.
@@ -64,6 +65,7 @@ older committed fixture.
 | C30 | kawin/tests/test_illingworth_binary_variable_diffusivity.py::test_time_varying_temperature_re_evaluates_phase_uniform_diffusivities_each_step | Original FAST grid, dt=0.05, duration 0.2; TemperatureParameters times [0,1] hours and [1000,1360] K. Capture per-step temperatures, query counts and state, so the hours convention is explicit | 5–10 s |
 
 | C31 | examples/Illingworth2005/replicate_illingworth2005_fig4_5_6_planar.py::_clustered_v_grid and Fig. 4 irregular PlanarValidationCase | Retain the example's 3/10-node irregular transformed grid, analytic start at 1e-4; quick end 2e-4, dt=2e-5, physical mesh 401. This is the example's chosen irregular grid, not a claim that the paper specified its exact nodes | 5–15 s |
+| C33 | packages/moving-boundary/tools/two_phase_similarity_cases.py (package-owned; constants of tests/test_analytic.py, source research test_illingworth_ternary_similarity.py at 06dc7b4) | Two-phase ternary solver against the constant-matrix similarity solution: L=0.6, 31/31 linear Landau nodes (spacing ratio 0.1), exact start at similarity T0=0.1 on 2401 physical nodes, end 0.4, semiLog_dt=0.05, tolerance 1e-11, default (R13) residual scale. Package-captured baseline (capture 20261115T224052Z-a26d099-1; files local, hashes and provenance in the manifest); Stage 0 qualifications in LEDGERS.md "Two-phase ternary analytic acceptance cases (C33/F33)" | 3–10 s |
 
 ### Package pytest contracts (C25–C29)
 
@@ -115,10 +117,11 @@ original interactive scripts are not executed wholesale.
 |---|---|---|
 | F04 | C04 analytic case, 21/21 phase nodes, absolute end 1e-2 (start 1e-4), dt=2e-5 | Error in interface and physical phase profiles against the exact planar solution |
 | F11/F12 | C11/C12 opposite/drift similarity cases, absolute end 1.0, 21 nodes/phase and semiLog_dt=0.05 | Interface rates/positions, eta and phase-profile error against the exact similarity solution |
+| F33 | C33 two-phase ternary similarity case, similarity end 1.0 (start 0.1), same grid and controls | Interface position, eta, per-component phase-profile and fitted-k errors against the exact similarity solution, plus composition-inventory drift; not repeated by the full gate (repeatability: two bit-identical capture runs, regeneration and full acceptance) |
 | C32 configured stress | Small unequal-volume builder; explicit continue, terminal width .31, maxIterations=1, maxStepRetries=1, extraRetries=25 after setup; duration 2e-6 | Real numerical retries reach terminal stop; no fake callback. This is an additional configured retry stress variant, not evidence of natural phase disappearance. A small natural physical stop run remains unestablished |
 
-C04, C11/C12 and C31 also record their exact/similarity errors in quick runs,
-independently of main. Freeze values/acceptance limits before package comparisons.
+C04, C11/C12, C31 and C33 also record their exact/similarity errors in quick runs,
+independently of main (C33/F33 against a package-captured baseline, not a main reference). Freeze values/acceptance limits before package comparisons.
 Long variants protect against slow numerical drift at the public-kawin stage.
 
 Binary and ternary two-phase solvers assume equal constant substitutional molar
