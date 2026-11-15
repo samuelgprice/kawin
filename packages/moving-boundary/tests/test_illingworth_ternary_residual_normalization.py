@@ -711,3 +711,53 @@ def test_fine_grid_interstitial_run_drift_is_within_the_accumulated_bound():
     run = _fine_grid_run()
     inventory, steps = run["inventory"], len(run["log"]["iterations"])
     assert np.all(np.abs(inventory[-1] - inventory[0]) <= steps * (1.0e-13 + 32 * EPS) * np.abs(inventory[0]))
+
+
+# Explicit scales assigned after construction (LEDGERS R13 follow-up)
+
+
+def _one_step(model):
+    """One interface solve from the initial state; returns the scale used and the resulting state as arrays."""
+    model.setup()
+    state = _state(model)
+    scale = _scale(model, *state)
+    model.getdXdt(model.currentTime, model.getCurrentX())
+    return scale, float(model._lastImplicitResidual), int(model._lastImplicitIterations)
+
+
+@pytest.mark.parametrize("builder", [_two_phase, _two_phase_interstitial, _three_phase, _three_phase_volumes])
+@pytest.mark.parametrize("assigned", [1.0, 0.5, [1.0, 1.0e-3], (1.0, 1.0e-3), np.array([1.0, 1.0e-3]), np.float64(0.5), [1],
+                                      1.0e-310, (1.0e-310, 1.0)],
+                         ids=["float", "float-half", "list", "tuple", "array", "numpy-scalar", "one-item-list", "subnormal",
+                              "subnormal-tuple"])
+def test_valid_explicit_scale_assigned_after_construction_equals_the_constructor_argument(builder, assigned):
+    """Preservation of the explicit expression for every valid form: a scalar, list, tuple or array assigned to
+    ``interfaceResidualCompositionScale`` gives the scale and the step of the same value passed to the constructor."""
+    reference, _ = builder(interface_residual_composition_scale=assigned)
+    expected = _one_step(reference)
+    model, _ = builder()
+    model.interfaceResidualCompositionScale = assigned
+    got = _one_step(model)
+    np.testing.assert_array_equal(got[0], expected[0])
+    assert got[1:] == expected[1:]
+    values = np.broadcast_to(np.asarray(assigned, dtype=np.float64), (2,))
+    state = _state(model)
+    np.testing.assert_array_equal(_scale(model, *state), _legacy_scale(_inventory(model, *state), _length(model), values))
+    assert model.interfaceResidualCompositionScale is assigned   # validation and use never replace the attribute
+
+
+@pytest.mark.parametrize("builder", [_two_phase, _three_phase])
+@pytest.mark.parametrize("assigned", [[1.0, -1.0], (1.0, 0.0), [1.0, np.nan], (np.inf, 1.0), [1.0, 1.0, 1.0], (), [],
+                                      [[1.0, 1.0], [1.0, 1.0]], "large", [1.0, None], -0.5],
+                         ids=["negative-list", "zero-tuple", "nan-list", "inf-tuple", "three-values", "empty-tuple", "empty-list",
+                              "matrix", "string", "none-item", "negative-float"])
+def test_invalid_explicit_scale_forms_assigned_later_are_rejected_before_setup(builder, assigned):
+    """An invalid list, tuple, shape or value is refused by ``solve`` before ``setup`` and before any step."""
+    model, duration = builder()
+    calls = []
+    setup = model.setup
+    model.setup = lambda: calls.append("setup") or setup()
+    model.interfaceResidualCompositionScale = assigned
+    with pytest.raises(ValueError, match="interface_residual_composition_scale"):
+        model.solve(duration, iterator=explicitEulerIterator)
+    assert calls == [] and model.currentTime == 0.0

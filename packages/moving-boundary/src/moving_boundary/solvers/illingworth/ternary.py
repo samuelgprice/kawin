@@ -79,6 +79,7 @@ from moving_boundary.solvers.illingworth.shared import (
     _pending_step_mismatches,
     _validate_outer_dt_fractions,
     _componentwise_residual_scale,
+    _explicit_residual_composition_scale,
     _validate_default_residual_floor,
     _validate_ternary_numerical_controls,
 )
@@ -1934,7 +1935,10 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         ``residualTolerance * s_k``, not a relative solute loss; ``s_k = 1`` is
         the default used before R13. An inventory above ``R * s_k`` (for
         ``s_k = 1`` possible only for interstitial u-fractions, which can
-        exceed one) is bounded relative to itself.
+        exceed one) is bounded relative to itself. The attribute may hold a
+        scalar, list, tuple or array (also when assigned after construction);
+        the arithmetic uses a local validated ``float64`` pair
+        (``_explicit_residual_composition_scale``) and never changes it.
 
         The scale is deliberately independent of ``dt``. Because ``flux * dt``
         can fall below the bound for tiny steps, ``_solve_interface_planar``
@@ -1945,7 +1949,8 @@ class MovingBoundaryIllingworthTernaryFD1DModel(DiffusionModel):
         if self.interfaceResidualCompositionScale is None:
             return _componentwise_residual_scale(old_inventory, self._R, self.constraints.minComposition)
         floor = 1e-300
-        return np.maximum(np.maximum(np.abs(old_inventory), self._R * self.interfaceResidualCompositionScale), floor)
+        composition_scale = _explicit_residual_composition_scale(self.interfaceResidualCompositionScale)
+        return np.maximum(np.maximum(np.abs(old_inventory), self._R * composition_scale), floor)
 
     def _scaled_interface_variables_in_bounds(self, x_hat, lower, upper):
         """Returns whether scaled interface variables satisfy the solver bounds."""

@@ -387,6 +387,26 @@ def _componentwise_residual_scale(inventory, domain_length, composition_floor):
     return scale
 
 
+def _explicit_residual_composition_scale(value):
+    """
+    Returns an explicit ``interface_residual_composition_scale`` as two validated ``float64`` values.
+
+    ``value`` may be a scalar or anything that broadcasts to two values (a
+    list, tuple or array), all positive and finite; anything else raises
+    ``ValueError`` naming the argument. The result is a local read-only view
+    for the caller's arithmetic: the model attribute is neither replaced nor
+    converted, so a value assigned after construction is used exactly as the
+    same value passed to the constructor, and captured settings are unchanged.
+    """
+    try:
+        scale = np.broadcast_to(np.asarray(value, dtype=np.float64), (2,))
+    except (TypeError, ValueError):
+        raise ValueError("interface_residual_composition_scale must be a scalar or two values.") from None
+    if not (np.all(np.isfinite(scale)) and np.all(scale > 0.0)):
+        raise ValueError("interface_residual_composition_scale must be positive and finite.")
+    return scale
+
+
 def _validate_default_residual_floor(model):
     """
     Rejects a ``constraints.minComposition`` the default residual normalization cannot use (ledger R13).
@@ -446,12 +466,7 @@ def _validate_ternary_numerical_controls(model):
         if not np.isfinite(model.semiLogT0) or model.semiLogT0 <= 0.0:
             raise ValueError("semiLogT0 must be a positive finite value.")
     if model.interfaceResidualCompositionScale is not None:
-        try:
-            scale = np.broadcast_to(np.asarray(model.interfaceResidualCompositionScale, dtype=np.float64), (2,))
-        except (TypeError, ValueError):
-            raise ValueError("interface_residual_composition_scale must be a scalar or two values.") from None
-        if not (np.all(np.isfinite(scale)) and np.all(scale > 0.0)):
-            raise ValueError("interface_residual_composition_scale must be positive and finite.")
+        _explicit_residual_composition_scale(model.interfaceResidualCompositionScale)
 
 
 def _outer_timestep_limits(min_dt_frac, max_dt_frac, initial_time, final_time):

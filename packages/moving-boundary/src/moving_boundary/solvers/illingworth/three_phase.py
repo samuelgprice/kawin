@@ -37,6 +37,7 @@ from moving_boundary.solvers.illingworth.shared import (
     _project_shift_roundoff_to_floor,
     _validate_eta_bounds,
     _componentwise_residual_scale,
+    _explicit_residual_composition_scale,
     _validate_default_residual_floor,
     _validate_ternary_numerical_controls,
     _validate_ternary_diffusivity_matrix,
@@ -2172,7 +2173,10 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
         ``scale_k = max(|I~_k|, L * s_k, 1e-300)``. ``s_k = 1`` reproduces the
         default used before R13 (every row divided by ``L``, a bound on the
         change of mean composition of ``2 * residualTolerance``) while
-        ``|I~_k| <= L``. The scale does not depend on ``dt``.
+        ``|I~_k| <= L``. The attribute may hold a scalar, list, tuple or array
+        (also when assigned after construction); the arithmetic uses a local
+        validated ``float64`` pair (``_explicit_residual_composition_scale``)
+        and never changes it. The scale does not depend on ``dt``.
         """
         normalized_total = float(self._R0) if self._equalPhaseMolarVolumes else float(self._initialTotalAmount / self._phaseMolarDensities[0])
         widths = self._phase_widths(interfaces, right_boundary=self._right_boundary_from_interfaces(interfaces))
@@ -2181,7 +2185,8 @@ class MovingBoundaryIllingworthTernaryThreePhaseFD1DModel(DiffusionModel):
             inventory += density * width * np.trapezoid(np.asarray(profile, dtype=np.float64), grid, axis=0)
         if self.interfaceResidualCompositionScale is None:
             return np.tile(_componentwise_residual_scale(inventory, normalized_total, self.constraints.minComposition), 2)
-        component = np.maximum(np.maximum(np.abs(inventory), normalized_total * self.interfaceResidualCompositionScale), 1e-300)
+        composition_scale = _explicit_residual_composition_scale(self.interfaceResidualCompositionScale)
+        component = np.maximum(np.maximum(np.abs(inventory), normalized_total * composition_scale), 1e-300)
         return np.tile(component, 2)
 
     def _scaled_bounds(self):
