@@ -997,6 +997,14 @@ def check_case_settings(cases, state, directory, manifest):
     nothing behind, and the original exception propagates unchanged. Only those capture files
     are removed; adopted settings, public captures and other files are never touched.
 
+    A capture the filesystem will not let go (``_remove_private_captures``) is never passed
+    over. Removal is attempted for every private capture even when one fails. If the proof
+    otherwise completed, each file that remains is added to the returned failures
+    (``<case>: private settings capture not removed: <name> (<error>)``), so the proof fails and
+    an approval promotes nothing. If an exception is already propagating (a failed or
+    interrupted capture or comparison), that exception is re-raised unchanged and what remains
+    is reported on the console and attached to it as a note; it is never replaced.
+
     Returns ``(public, private, problems)``: ``{case: captured path}`` for public cases, the
     private cases that passed, and the failures (empty when every mapped case matches).
     """
@@ -1016,7 +1024,7 @@ def check_case_settings(cases, state, directory, manifest):
             selections[case] = (path, is_private)
     if problems:
         return public, private, problems
-    captured = {}
+    captured, propagating = {}, None
     try:
         captured = capture_example_settings(mapped, state, directory)
         for case in mapped:
@@ -1026,16 +1034,50 @@ def check_case_settings(cases, state, directory, manifest):
             problems.extend(f"{case}: setting differs: {name}" for name in found)
             if not found:
                 (private.append(case) if is_private else public.__setitem__(case, captured[case]))
+    except BaseException as exc:
+        propagating = exc
+        raise
     finally:
-        # ``captured`` is empty when the capture step itself raised, so the files are also named directly.
-        for case in mapped:
-            if selections[case][1]:
-                for path in {Path(directory) / f"{case}.settings.json", *([Path(captured[case])] if case in captured else [])}:
-                    try:
-                        path.unlink(missing_ok=True)
-                    except OSError as exc:   # never mask the exception being propagated
-                        print(f"WARNING: private settings capture not removed: {path.name}: {exc}", flush=True)
+        remaining = _remove_private_captures([case for case in mapped if selections[case][1]], directory, captured)
+        if remaining and propagating is not None:
+            # The original failure (or interruption) stays the outcome; the leftover files are reported with it.
+            for message in remaining:
+                print("WARNING: " + message, flush=True)
+                if hasattr(propagating, "add_note"):
+                    propagating.add_note(message)
+        elif remaining:
+            problems.extend(remaining)
+            private[:] = [case for case in private if not any(message.startswith(case + ":") for message in remaining)]
     return public, private, problems
+
+
+def _remove_private_captures(cases, directory, captured):
+    """Delete the private settings captures of ``cases`` and return a message for each file that remains.
+
+    Only the capture files owned by ``check_case_settings`` are touched: ``<directory>/<case>.settings.json``
+    (named directly, because ``captured`` is empty when the capture step itself raised) and the path the
+    capture returned. Every file is attempted even when an earlier deletion fails. A file counts as
+    remaining when it still exists after the attempt, or when its absence cannot be confirmed; nothing is
+    reported as removed on the strength of the call alone. Raises nothing.
+    """
+    remaining = []
+    for case in cases:
+        paths = {Path(directory) / f"{case}.settings.json"}
+        if case in captured:
+            paths.add(Path(captured[case]))
+        for path in sorted(paths):
+            error = None
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                error = exc
+            try:
+                left = path.exists()
+            except OSError as exc:
+                left, error = True, error or exc
+            if left:
+                remaining.append(f"{case}: private settings capture not removed: {path.name} ({error or 'still present'})")
+    return remaining
 
 
 def public_deviations(case, record):

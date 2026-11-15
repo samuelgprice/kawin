@@ -896,3 +896,128 @@ def test_an_interrupted_capture_promotes_nothing_and_leaves_no_private_capture(t
     _nothing_promoted(tmp_path, output, path, before)
     _no_private_capture_left(output)
     assert len(calls) == 1
+
+
+# A private capture that cannot be removed fails the proof and never masks another failure (LEDGERS R13)
+
+
+def _deny_unlink(monkeypatch, names, attempts):
+    """``Path.unlink`` raises ``PermissionError`` for capture files called ``names`` (never for adopted settings)."""
+    original = Path.unlink
+
+    def unlink(self, *args, **kwargs):
+        if self.parent.name != "example_settings" and self.name.endswith(".settings.json"):
+            attempts.append(self.name)
+            if self.name in names:
+                raise PermissionError(13, "file is locked", str(self))
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "unlink", unlink)
+
+
+def _private_captures(output):
+    return sorted(path.name for case in ("O04", "O05") for path in output.rglob(f"{case}.settings.json")
+                  if path.parent.name != "example_settings")
+
+
+def _mode(mode):
+    """Variants and ``approve`` arguments of the numerical private-settings path or the layout-correction path."""
+    if mode == "private-settings":
+        return NUMERICAL, dict(verify_private_settings=True)
+    return dict(C01="tail", C02="identical", O05="tail", O04="tail"), dict(layout_correction=RULE)
+
+
+@pytest.mark.parametrize("mode", ["private-settings", "layout"])
+@pytest.mark.parametrize("denied", [("O04.settings.json", "O05.settings.json"), ("O05.settings.json",)], ids=["both", "one"])
+def test_a_private_capture_that_cannot_be_removed_fails_the_proof_and_promotes_nothing(tmp_path, monkeypatch, mode, denied):
+    """The settings are equal, but a private capture stays on disk: the proof fails and names what remains."""
+    variants, kwargs = _mode(mode)
+    tool, _, output, path, calls = _approve_project(tmp_path, monkeypatch, variants=variants, with_o04=True)
+    attempts = []
+    _deny_unlink(monkeypatch, denied, attempts)
+    adopted = {case: (output / "example_settings" / f"{case}.settings.json").read_bytes() for case in ("C01", "O04", "O05")}
+    before = path.read_bytes()
+    assert tool.approve(["C01", "O04", "O05"], reason="LEDGERS R13", **kwargs) == 1
+    _nothing_promoted(tmp_path, output, path, before)
+    failure = json.loads((output / "approve-summary.json").read_text(encoding="utf-8"))["failure"]
+    for name in denied:
+        assert f"{name[:3]}: private settings capture not removed: {name}" in failure
+    assert "file is locked" in failure
+    # Cleanup was attempted for every private capture; only the locked ones remain, and they are reported.
+    assert {"O04.settings.json", "O05.settings.json"} <= set(attempts)
+    assert _private_captures(output) == sorted(denied)
+    for case, data in adopted.items():
+        assert (output / "example_settings" / f"{case}.settings.json").read_bytes() == data
+    assert len(calls) == 1   # the capture ran once; no later public capture, because the gate failed
+
+
+@pytest.mark.parametrize("error", [RuntimeError("worker timed out"), KeyboardInterrupt()], ids=["failure", "interruption"])
+def test_a_cleanup_failure_never_replaces_the_exception_already_propagating(tmp_path, monkeypatch, capsys, error):
+    """O05's capture fails or is interrupted and O04's capture cannot be removed: the original exception
+    propagates unchanged, the cleanup failure is reported, and the other private capture is still removed."""
+    tool, _, output, path, calls = _approve_project(tmp_path, monkeypatch, variants=NUMERICAL, with_o04=True)
+    _failing_capture(tool, monkeypatch, error, calls)
+    attempts = []
+    _deny_unlink(monkeypatch, ("O04.settings.json",), attempts)
+    directory = tmp_path / "captures"
+    directory.mkdir()
+    (directory / "notes.txt").write_text("unrelated", encoding="utf-8")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    with pytest.raises(type(error)) as raised:
+        tool.check_case_settings(["C01", "O04", "O05"], dict(target="t", host="h"), directory, manifest)
+    assert raised.value is error
+    report = "private settings capture not removed: O04.settings.json"
+    assert report in capsys.readouterr().out
+    assert any(report in note for note in getattr(error, "__notes__", []))
+    assert {"O04.settings.json", "O05.settings.json"} <= set(attempts)
+    assert _captures_in(directory) == ["C01.settings.json", "O04.settings.json", "notes.txt"]   # partial O05 removed
+
+
+@pytest.mark.parametrize("mode", ["private-settings", "layout"])
+@pytest.mark.parametrize("error", [RuntimeError("worker timed out"), KeyboardInterrupt()], ids=["failure", "interruption"])
+def test_approval_keeps_the_original_failure_when_cleanup_also_fails(tmp_path, monkeypatch, mode, error):
+    variants, kwargs = _mode(mode)
+    tool, _, output, path, calls = _approve_project(tmp_path, monkeypatch, variants=variants, with_o04=True)
+    _failing_capture(tool, monkeypatch, error, calls)
+    _deny_unlink(monkeypatch, ("O04.settings.json", "O05.settings.json"), [])
+    before = path.read_bytes()
+    if isinstance(error, KeyboardInterrupt):
+        with pytest.raises(KeyboardInterrupt) as raised:
+            tool.approve(["C01", "O04", "O05"], reason="LEDGERS R13", **kwargs)
+        assert raised.value is error
+    else:
+        assert tool.approve(["C01", "O04", "O05"], reason="LEDGERS R13", **kwargs) == 1
+        assert "worker timed out" in json.loads((output / "approve-summary.json").read_text(encoding="utf-8"))["failure"]
+    _nothing_promoted(tmp_path, output, path, before)
+    assert _private_captures(output) == ["O04.settings.json", "O05.settings.json"]   # reported above, not hidden
+
+
+def test_a_setting_difference_and_a_cleanup_failure_are_both_reported(tmp_path, monkeypatch):
+    tool, _, output, path, _ = _approve_project(
+        tmp_path, monkeypatch, variants=NUMERICAL, with_o04=True,
+        captured=dict(O05=_settings_record(attributes={"tolerance": {"value": "1e-10"}})))
+    _deny_unlink(monkeypatch, ("O04.settings.json",), [])
+    before = path.read_bytes()
+    assert tool.approve(["C01", "O04", "O05"], reason="LEDGERS R13", verify_private_settings=True) == 1
+    _nothing_promoted(tmp_path, output, path, before)
+    failure = json.loads((output / "approve-summary.json").read_text(encoding="utf-8"))["failure"]
+    assert "O05: setting differs: attributes.tolerance" in failure
+    assert "O04: private settings capture not removed: O04.settings.json" in failure
+    assert _private_captures(output) == ["O04.settings.json"]
+
+
+@pytest.mark.parametrize("mode", ["private-settings", "layout"])
+def test_the_normal_path_removes_private_captures_and_promotes(tmp_path, monkeypatch, mode):
+    variants, kwargs = _mode(mode)
+    tool, approval, output, path, _ = _approve_project(tmp_path, monkeypatch, variants=variants, with_o04=True)
+    attempts = []
+    _deny_unlink(monkeypatch, (), attempts)   # records the deletions; denies none
+    assert tool.approve(["C01", "O04", "O05"], reason="LEDGERS R13", **kwargs) == 0
+    assert {"O04.settings.json", "O05.settings.json"} <= set(attempts) and "C01.settings.json" not in attempts
+    assert _private_captures(output) == []
+    section = json.loads(path.read_text(encoding="utf-8"))["approved_references"]
+    (approval_id,) = section["approvals"]
+    record = section["approvals"][approval_id]
+    assert section["in_effect"] == {case: approval_id for case in ("C01", "O04", "O05")}
+    assert record["artifacts"]["O04"]["settings"] == record["artifacts"]["O05"]["settings"] == approval.CARRIED_FORWARD
+    assert (output / record["directory"] / "C01.settings.json").is_file()   # the public capture is stored, not deleted
+    tool.validate_expected(["C01", "C02", "O04", "O05"])

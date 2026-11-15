@@ -1539,6 +1539,23 @@ fallback), so the timestep is halved until it does.
   unrelated files are not touched. Tests on synthetic temporary projects: a completed O04
   capture followed by a failing or interrupted O05 capture, directly and through `approve` in
   the private-settings and the layout mode.
+- *A private capture that cannot be removed* (second review round, 2026-11-15). The cleanup
+  added in `5362b6a` caught `OSError`, printed a warning and continued, so a synthetic approval
+  succeeded and promoted while both private capture files remained after a `PermissionError`.
+  Reproduced on `d7bddce`: seven new tests failed there (the approval returned success in the
+  private-settings and the layout mode with one or both files locked; the leftover file was
+  neither attached to a propagating exception nor reported beside a setting difference). Now
+  (`acceptance._remove_private_captures`): removal is attempted for every private capture even
+  when one fails, and a file counts as removed only when it is gone. If the proof otherwise
+  completed, each remaining file is a proof failure that names it, so the approval promotes
+  nothing. If an exception is already propagating, including an interruption, it is re-raised
+  unchanged, and what remains is printed and attached to it as a note. Only the capture files
+  of this operation are touched. Tests on synthetic temporary projects, in both modes where
+  relevant: equal settings with a deletion failure; a capture failure or an interruption with
+  a deletion failure; one locked file not preventing removal of the other; a setting
+  difference and a deletion failure both reported; the normal path still removing the
+  private captures and promoting. Focused approval and layout files: 157 passed. No numerical
+  code, reference, criterion or assertion changed, so the numerical gates were not rerun.
 - *Valid explicit scales assigned after construction* (`8a9fef4`). A list or tuple assigned to
   `interfaceResidualCompositionScale` passed validation and then raised `TypeError` in both
   residual-scale calculations. Both now use a local validated `float64` pair
