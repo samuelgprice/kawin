@@ -14,6 +14,9 @@ identically to the recorded research AST so the materializer's equivalence proof
 - ``keyword``: in a call to ``call``, replace the value of keyword ``arg`` (source text ``old``)
   with ``new``;
 - ``insert_keyword``: in a call to ``call``, insert ``arg=new`` directly after keyword ``after``;
+- ``append_keyword``: in a call to ``call`` that has positional arguments and no keyword arguments,
+  append ``arg=new`` after the last positional argument (calls that already pass any keyword are
+  not candidates, so a keyword-free call can be told apart from its keyword-passing neighbours);
 - ``dict_value``: in a dict literal, replace the value of string key ``key`` (``old``) with ``new``;
 - ``kwargs_default``: in a call to ``call``, turn ``**X`` into ``**{"arg": new, **X}``, a default
   that an entry of ``X`` still overrides.
@@ -29,6 +32,9 @@ match the research text, otherwise ``MigrationError`` is raised; nothing is skip
 module-level assignments to the same name in the research source are ambiguous and also raise
 (``check_source``). The materializer also fails when a listed ``module_dict_value`` edit for a
 materialized source is never applied (``unapplied``).
+
+An edit may carry its own ``reason`` (the ledger entry that required it); without one the reason is
+``REASON``. Each provenance record states the reason of its edit.
 """
 import ast
 
@@ -77,6 +83,15 @@ EDITS = {
 }
 
 
+def reasons(transforms):
+    """The distinct reasons of the ``api_migration`` records in ``transforms``, in order of first use."""
+    found = []
+    for item in transforms:
+        if item.get("kind") == "api_migration" and item["reason"] not in found:
+            found.append(item["reason"])
+    return found
+
+
 def edits_for(path):
     """The recorded edits for one research path (an empty list when it has none)."""
     return list(EDITS.get(str(path).replace("\\", "/"), ()))
@@ -111,6 +126,10 @@ def _targets(function, edit):
                 for key, value in zip(node.keys, node.values):
                     if isinstance(key, ast.Constant) and key.value == edit["key"] and _same(value, edit["old"]):
                         found.append((node, value))
+    elif op == "append_keyword":
+        for call in _calls(function, edit["call"]):
+            if call.args and not call.keywords and not isinstance(call.args[-1], ast.Starred):
+                found.append((call, call.args[-1]))
     elif op == "kwargs_default":
         for call in _calls(function, edit["call"]):
             found.extend((call, keyword) for keyword in call.keywords if keyword.arg is None)
@@ -180,13 +199,16 @@ def text_edit(edit, target, start, end, source_text):
     if op == "insert_keyword":
         position = end(node.value)
         return position, position, f", {edit['arg']}={edit['new']}"
+    if op == "append_keyword":
+        position = end(node)
+        return position, position, f", {edit['arg']}={edit['new']}"
     value = node.value  # kwargs_default
     return start(value), end(value), f'{{"{edit["arg"]}": {edit["new"]}, **{source_text[start(value):end(value)]}}}'
 
 
 def record(edit, line):
-    """The provenance record of one applied edit."""
-    data = dict(kind="api_migration", reason=REASON, line=line)
+    """The provenance record of one applied edit (its own ``reason``, else ``REASON``)."""
+    data = dict(kind="api_migration", reason=edit.get("reason", REASON), line=line)
     if "function" in edit:
         data["function"] = edit["function"]
     else:
@@ -239,6 +261,8 @@ def apply_to_ast(tree, path):
         elif op == "insert_keyword":
             index = container.keywords.index(node)
             container.keywords.insert(index + 1, ast.keyword(arg=edit["arg"], value=new))
+        elif op == "append_keyword":
+            container.keywords.append(ast.keyword(arg=edit["arg"], value=new))
         else:  # kwargs_default: parse the same template the text edit writes, then keep the original X
             merged = ast.parse(f'{{"{edit["arg"]}": {edit["new"]}, **_}}', mode="eval").body
             merged.values[1] = node.value

@@ -3,6 +3,7 @@
 The port itself is historical (it reads the frozen research checkout by path); these tests need no
 research checkout. ``test_ported_files_match_their_record`` keeps hand edits out of ported files.
 """
+import ast
 import hashlib
 import importlib.util
 import json
@@ -174,8 +175,13 @@ def test_ported_files_match_their_record():
         if entry["counts"] is not None:
             counts = entry["counts"]
             deferred = [item for item in entry["transforms"] if item["kind"] == "deferred test"]
-            assert counts["ported"] + counts["deferred"] == counts["total"] and len(deferred) == counts["deferred"], target
-            assert not any(f"def {item['name']}(" in text for item in deferred), target
+            superseded = [item for item in entry["transforms"] if item["kind"] == "superseded test"]
+            assert counts["ported"] + counts["deferred"] + len(superseded) == counts["total"], target
+            assert len(deferred) == counts["deferred"] and len(superseded) == counts.get("superseded", 0), target
+            assert not any(f"def {item['name']}(" in text for item in deferred + superseded), target
+            for item in superseded:   # the replacement is a real package test
+                path, _, test = item["replaced_by"].partition("::")
+                assert item["reason"] and f"def {test}(" in (PROJECT / path).read_text(encoding="utf-8"), item
 
 
 MIGRATION_SOURCE = '''def build(R, options):
@@ -208,3 +214,84 @@ def test_api_migration_edits_are_applied_and_recorded(monkeypatch):
     monkeypatch.setattr(tool.API, "EDITS", {"kawin/tests/test_x.py": stale})
     with pytest.raises(tool.API.MigrationError, match="matched 0 places"):
         tool.port_text(MIGRATION_SOURCE, "kawin/tests/test_x.py", header=HEADER)
+
+
+SUPERSEDED_SOURCE = '''import os
+import numpy as np
+
+
+def test_kept():
+    assert np
+
+
+def test_old_premise():
+    assert os
+
+
+def test_waiting():
+    assert np
+'''
+
+
+def test_superseded_tests_are_removed_and_recorded_apart_from_deferred_ones():
+    """A superseded test is removed like a deferred one but recorded with its reason and replacement."""
+    tool = _tool()
+    entry = dict(reason="LEDGERS R99: the default changed", replaced_by="tests/test_new.py::test_new_premise")
+    text, transforms, _, counts = tool.port_text(SUPERSEDED_SOURCE, "kawin/tests/test_x.py", header=HEADER,
+                                                 deferred={"test_waiting": "needs X"}, superseded={"test_old_premise": entry})
+    assert "def test_kept" in text and "test_old_premise" not in text and "test_waiting" not in text
+    assert "import os" not in text
+    assert counts == dict(total=3, deferred=1, ported=1, superseded=1)
+    assert dict(kind="superseded test", name="test_old_premise", **entry) in transforms
+    assert [item["name"] for item in transforms if item["kind"] == "deferred test"] == ["test_waiting"]
+    # Without superseded tests the counts keep their old shape, so existing records are unchanged.
+    _, _, _, plain = tool.port_text(SUPERSEDED_SOURCE, "kawin/tests/test_x.py", header=HEADER)
+    assert plain == dict(total=3, deferred=0, ported=3)
+
+
+@pytest.mark.parametrize(("deferred", "superseded", "match"), [
+    ({}, {"test_absent": dict(reason="r", replaced_by="tests/t.py::test_t")}, "superseded tests not found"),
+    ({"test_kept": "x"}, {"test_kept": dict(reason="r", replaced_by="tests/t.py::test_t")}, "both deferred and superseded"),
+    ({}, {"test_kept": dict(reason="r")}, "needs a non-empty reason and replaced_by"),
+    ({}, {"test_kept": dict(reason="", replaced_by="tests/t.py::test_t")}, "needs a non-empty reason and replaced_by"),
+])
+def test_superseded_entries_are_validated(deferred, superseded, match):
+    tool = _tool()
+    with pytest.raises(tool.PortError, match=match):
+        tool.port_text(SUPERSEDED_SOURCE, "kawin/tests/test_x.py", header=HEADER, deferred=deferred, superseded=superseded)
+
+
+APPEND_SOURCE = '''def test_rows():
+    default = build(solution, 21)
+    scaled = build(solution, 21, scale=(1.0, 1.0e-3))
+    return default, scaled
+
+
+def test_other():
+    return build(solution, 21)
+'''
+
+
+def test_append_keyword_edits_only_the_keyword_free_call_and_records_its_own_reason(monkeypatch):
+    """``append_keyword`` pins one keyword-free call in one function; the record carries the edit's reason."""
+    tool = _tool()
+    edit = dict(function="test_rows", op="append_keyword", call="build", arg="scale", new="1.0", reason="LEDGERS R99")
+    monkeypatch.setattr(tool.API, "EDITS", {"kawin/tests/test_x.py": [edit]})
+    text, transforms, _, _ = tool.port_text(APPEND_SOURCE, "kawin/tests/test_x.py", header=HEADER)
+    assert "default = build(solution, 21, scale=1.0)\n" in text
+    assert "scaled = build(solution, 21, scale=(1.0, 1.0e-3))\n" in text
+    assert text.rstrip().endswith("return build(solution, 21)")
+    (record,) = [item for item in transforms if item["kind"] == "api_migration"]
+    assert record == dict(kind="api_migration", reason="LEDGERS R99", line=2, function="test_rows",
+                          op="append_keyword", call="build", arg="scale", new="1.0")
+    assert tool.API.reasons(transforms) == ["LEDGERS R99"]
+    # The AST form used by the materializer's equivalence proof gives the same tree as the text edit.
+    tree = tool.API.apply_to_ast(ast.parse(APPEND_SOURCE), "kawin/tests/test_x.py")
+    assert ast.dump(tree) == ast.dump(ast.parse(text[text.index("def test_rows"):]))
+
+    for source, count in ((APPEND_SOURCE.replace("scale=(1.0, 1.0e-3)", ""), 2),
+                          (APPEND_SOURCE.replace("default = build(solution, 21)", "default = build(solution, 21, a=1)"), 0),
+                          ("def test_rows():\n    return build()\n", 0),
+                          ("def test_rows():\n    return build(*args)\n", 0)):
+        with pytest.raises(tool.API.MigrationError, match=f"matched {count} places"):
+            tool.port_text(source, "kawin/tests/test_x.py", header=HEADER)

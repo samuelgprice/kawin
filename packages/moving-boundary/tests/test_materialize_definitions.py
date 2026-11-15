@@ -134,6 +134,29 @@ def test_api_migration_edits_keep_the_ast_proof(research, monkeypatch):
         tool.materialize(research, calls, "test-commit", {})
 
 
+def test_append_keyword_and_per_edit_reasons_keep_the_ast_proof(research, monkeypatch):
+    """``append_keyword`` holds the AST proof, and the header names the reasons of the edits applied."""
+    tool = _tool()
+    (research / "examples/app.py").write_text(
+        "def build(R):\n    first = dict(R)\n    return first, dict(tolerance=1e-10)\n", encoding="utf-8")
+    edits = [
+        dict(function="build", op="append_keyword", call="dict", arg="scale", new="1.0", reason="LEDGERS R99 first"),
+        dict(function="build", op="keyword", call="dict", arg="tolerance", old="1e-10", new="1e-10 / R"),
+        dict(function="absent", op="append_keyword", call="dict", arg="scale", new="1.0", reason="never applied"),
+    ]
+    monkeypatch.setattr(tool.API, "EDITS", {"examples/app.py": edits})
+    entries = {"app": ("examples/app.py", ["build"], {}, [], [], "raise", ["X04"])}
+    calls, _ = tool.record_bindinputs(research, entries)
+    files, provenance = tool.materialize(research, calls, "test-commit", {})
+    text = files["app"].decode("utf-8")
+    assert "first = dict(R, scale=1.0)" in text and "dict(tolerance=1e-10 / R)" in text
+    assert f"edits applied (LEDGERS R99 first; {tool.API.REASON})." in text and "never applied" not in text
+    records = [item for item in provenance["app"]["transforms"] if item["kind"] == "api_migration"]
+    assert [(item["op"], item["reason"]) for item in records] == [
+        ("append_keyword", "LEDGERS R99 first"), ("keyword", tool.API.REASON)]
+    assert provenance["app"]["ast_equal"]
+
+
 MODULE_DICT = '''VALIDATION_PARAMS = {"c_a": 0.4, "tolerance": 1.0e-8}
 OTHER_PARAMS = {"tolerance": 1.0e-8}
 TOLERANCE = 1.0e-8

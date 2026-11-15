@@ -30,6 +30,9 @@ each recorded in ``docs/test-port-provenance.json``:
 - *deferred tests*: tests needing unported functionality (``DEFERRED``, each listed in
   FUTURE_PORTS.md § Deferred tests) are removed with their decorators, and so are the
   module-level imports only they used;
+- *superseded tests*: tests whose premise a deliberate package change removed (``SUPERSEDED``, each
+  with its reason and the package test that replaces it) are removed in the same way and recorded
+  as ``superseded test``. Unlike a deferred test, a superseded one is not waiting for a port;
 - *API migrations*: call sites listed for the source in ``tools/api_migrations.py`` are migrated
   to a changed package API by small recorded text edits (kind ``api_migration``, e.g. LEDGERS R08's
   dimensionless binary tolerance);
@@ -89,6 +92,10 @@ DEFERRED = {
             "(FUTURE_PORTS entry 6, decision per script)",
     },
 }
+# Tests superseded by a deliberate package change: removed here like deferred tests, but recorded
+# with the reason and the package test that replaces them (``replaced_by``, a pytest node id under
+# ``tests/``). Not listed in FUTURE_PORTS.md: nothing remains to be ported.
+SUPERSEDED = {}
 # Research example modules whose helpers were relocated into the package (plan §6, FUTURE_PORTS.md
 # "Deferred tests": the similarity helpers exist in moving_boundary.analytic). Each name must exist.
 EXAMPLE_MODULES = {
@@ -289,14 +296,24 @@ def top_level_definitions(source):
     return names
 
 
-def port_text(source, name, *, deferred=None, header, research_defines=None):
+def port_text(source, name, *, deferred=None, superseded=None, header, research_defines=None):
     """Port one research module's text; returns ``(text, transforms, helpers, counts)``.
 
-    ``deferred`` maps top-level test names to reasons. ``header`` is the provenance paragraph.
+    ``deferred`` maps top-level test names to reasons. ``superseded`` maps top-level test names to
+    ``dict(reason=..., replaced_by=...)``; both kinds are removed, and a name may not be in both.
+    ``counts`` gains a ``superseded`` entry only when there are any, so records of files without
+    superseded tests are unchanged. ``header`` is the provenance paragraph.
     ``research_defines(module)`` returns the top-level names a research module defines (read by
     path); it decides whether a patch on that module's alias follows the package re-import chain.
     """
     deferred = dict(deferred or {})
+    superseded = dict(superseded or {})
+    both = sorted(set(deferred) & set(superseded))
+    if both:
+        raise PortError(f"{name}: tests listed as both deferred and superseded: {both}")
+    for test, entry in superseded.items():
+        if set(entry) != {"reason", "replaced_by"} or not all(isinstance(v, str) and v for v in entry.values()):
+            raise PortError(f"{name}: superseded test {test} needs a non-empty reason and replaced_by")
     tree = ast.parse(source)
     offset = _offsets(source)
     lines = source.splitlines(keepends=True)
@@ -304,7 +321,11 @@ def port_text(source, name, *, deferred=None, header, research_defines=None):
     missing = sorted(set(deferred) - set(tests))
     if missing:
         raise PortError(f"{name}: deferred tests not found: {missing}")
-    removed = [_span(node) for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in deferred]
+    missing = sorted(set(superseded) - set(tests))
+    if missing:
+        raise PortError(f"{name}: superseded tests not found: {missing}")
+    removed = [_span(node) for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and (node.name in deferred or node.name in superseded)]
     used_before = _names_used(tree, [])
     used_after = _names_used(tree, removed)
     edits, transforms, helpers = [], [], set()
@@ -434,6 +455,8 @@ def port_text(source, name, *, deferred=None, header, research_defines=None):
         edits.append((start, end, ""))
     for test, reason in deferred.items():
         transforms.append(dict(kind="deferred test", name=test, reason=reason))
+    for test, entry in superseded.items():
+        transforms.append(dict(kind="superseded test", name=test, reason=entry["reason"], replaced_by=entry["replaced_by"]))
     doc = tree.body[0] if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(getattr(tree.body[0], "value", None), ast.Constant) and isinstance(tree.body[0].value.value, str) else None
     if doc is not None:
         start, end = offset(doc.lineno, doc.col_offset), offset(doc.end_lineno, doc.end_col_offset)
@@ -457,7 +480,9 @@ def port_text(source, name, *, deferred=None, header, research_defines=None):
     leftovers = sorted({match for match in re.findall(r"[A-Za-z_.]*(?:kawin\.diffusion\.(?:mesh\.)?(?:MovingBoundary|TransformedGrids|_illingworth|SurrogateArtifacts)\w*|kawin\.tests\.\w+|examples\.\w+(?:\.\w+)*)", text)})
     if leftovers:
         raise PortError(f"{name}: research module paths left after porting: {leftovers}")
-    counts = dict(total=len(tests), deferred=len(deferred), ported=len(tests) - len(deferred))
+    counts = dict(total=len(tests), deferred=len(deferred), ported=len(tests) - len(deferred) - len(superseded))
+    if superseded:
+        counts["superseded"] = len(superseded)
     return text, transforms, sorted(helpers), counts
 
 
@@ -496,15 +521,17 @@ def port_batch(research, batch):
             selected = HELPER_SUBSETS[name][1]
             source = extract_subset(full, selected, relative)
         deferred = DEFERRED.get(name, {})
-        excluded = "; ".join(f"{test} (deferred: see FUTURE_PORTS.md § Deferred tests)" for test in deferred) or "none"
+        superseded = SUPERSEDED.get(name, {})
+        excluded = "; ".join([f"{test} (deferred: see FUTURE_PORTS.md § Deferred tests)" for test in deferred]
+                             + [f"{test} (superseded by {entry['replaced_by']})" for test, entry in superseded.items()]) or "none"
         scope = f" Selected names (with what they need): {', '.join(selected)}." if selected else ""
         header = (f"Ported from research ``{relative}`` at ``{commit[:7]}`` (LF-normalized sha256\n"
                   f"``{_sha(full)}``) by\n"
                   f"``tools/port_tests.py``{'' if helper else f' (batch {batch})'}; do not edit by hand. Imports resolve to the package as\n"
                   f"``tools/definitions/_bindings.py`` does; the full transform list is in\n"
                   f"``docs/test-port-provenance.json``. Excluded tests: {excluded}.{scope}")
-        text, transforms, helpers, counts = port_text(source, relative, deferred=deferred, header=header,
-                                                      research_defines=research_defines)
+        text, transforms, helpers, counts = port_text(source, relative, deferred=deferred, superseded=superseded,
+                                                      header=header, research_defines=research_defines)
         if selected:
             target = f"tests/{HELPERS}/{HELPER_SUBSETS[name][0]}.py"
         else:
@@ -568,7 +595,8 @@ def main(argv=None):
         (PROJECT / target).write_text(text, encoding="utf-8", newline="\n")
         record["files"][target] = entry
         counts = entry["counts"]
-        print(target, f"ported {counts['ported']} / deferred {counts['deferred']} / total {counts['total']}" if counts else "(helper)")
+        print(target, (f"ported {counts['ported']} / deferred {counts['deferred']} / "
+                       f"superseded {counts.get('superseded', 0)} / total {counts['total']}") if counts else "(helper)")
     for name, entry in whole.items():
         record["deferred_files"][name] = entry
         print(name, f"ported 0 / deferred {entry['counts']['deferred']} / total {entry['counts']['total']} (deferred whole)")
