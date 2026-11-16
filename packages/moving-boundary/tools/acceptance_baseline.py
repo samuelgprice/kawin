@@ -183,6 +183,7 @@ def new_capture_id(root, head, now):
 
 
 def _write_new(path, data):
+    """Write ``data`` to a path that must not exist (``"xb"``), flushed and fsynced (also used by ``acceptance_transfer``)."""
     with open(path, "xb") as handle:
         handle.write(data)
         handle.flush()
@@ -258,6 +259,7 @@ def _publish(temporary, target):
     A hard link fails with ``FileExistsError`` when ``target`` exists (no replace on any
     platform). Where hard links are unavailable, Windows ``os.rename`` is used, which also refuses
     an existing destination; elsewhere the error is raised rather than risking a replace.
+    ``acceptance_transfer`` publishes restored files with this function too.
     """
     try:
         os.link(temporary, target)

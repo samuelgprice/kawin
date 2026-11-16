@@ -51,6 +51,9 @@ from functools import lru_cache
 PROJECT = Path(__file__).resolve().parents[1]
 OUTPUT = PROJECT / ".verification/acceptance"
 MANIFEST = PROJECT / "tools/acceptance_manifest.json"
+# sha256 of the cached unmodified kawin 0.5.0 wheel (``.verification/kawin-0.5.0-py3-none-any.whl``);
+# ``tools/setup_public_environment.py`` pins the same value, and ``acceptance_transfer`` selects the wheel by it.
+STOCK_WHEEL_SHA256 = "9f7a1497c5dff4314536860ac6fd0b96a68243dd681db8eb106dbe33fe25cbaf"
 
 
 @lru_cache(maxsize=1)
@@ -222,18 +225,19 @@ def load_private_inputs():
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
-def private_input_problems(name, recorded):
+def private_input_problems(name, recorded, inputs=None):
     """Hash problems for one *available* private input (file or directory) under ``inputs/``.
 
-    ``recorded`` is ``load_private_inputs()``. An input that is present on disk must be fully
-    and correctly recorded, so this never passes silently: a missing ``private-inputs.json``, a
+    ``recorded`` is ``load_private_inputs()``; ``inputs`` is the folder to check (default this
+    checkout's ``inputs/``; ``acceptance_transfer`` passes another root). An input that is present
+    on disk must be fully and correctly recorded, so this never passes silently: a missing ``private-inputs.json``, a
     missing entry, an empty or malformed ``sha256`` map, a digest that is not 64 lowercase hex
     characters, a record that does not name exactly the file (or every file of the directory),
     and a missing or changed member are each reported. Absent optional inputs are the caller's
     documented skip and are not checked here. Returns a list of messages (empty when valid).
     """
     import re
-    location = OUTPUT / "inputs" / name
+    location = (OUTPUT / "inputs" if inputs is None else Path(inputs)) / name
     assert location.exists(), "private_input_problems checks available inputs only: " + name
     if recorded is None:
         return ["private-inputs.json missing; cannot verify available input: " + name]
@@ -457,7 +461,7 @@ def setup_targets():
     assert version("kawin") == "0.5.0"
     host = Path(site.getsitepackages()[-1])
     stock = PROJECT / ".verification/kawin-0.5.0-py3-none-any.whl"
-    assert hashlib.sha256(stock.read_bytes()).hexdigest() == "9f7a1497c5dff4314536860ac6fd0b96a68243dd681db8eb106dbe33fe25cbaf"
+    assert hashlib.sha256(stock.read_bytes()).hexdigest() == STOCK_WHEEL_SHA256
     with zipfile.ZipFile(stock) as archive:
         for member in archive.namelist():
             if member.startswith("kawin/") and not member.endswith("/"):

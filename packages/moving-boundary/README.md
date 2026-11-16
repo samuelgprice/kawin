@@ -160,13 +160,69 @@ The independence proof runs them from a `git archive` export with the opt-in gua
 `tools/batch_safety.guard_independence` and docs/AUTHORITY_SWITCH_PLAN.md (M9).
 
 Quick: 31 run comparisons, 5 contracts and 145 pytest tests passed in 413.63 s. Full: 42 run comparisons, 5 contracts and 145 pytest tests passed in 521.06 s (public tolerance, `--record`, 2026-11-15, at `65ce32c` after the C33/F33 activation; every run bit-identical against the selected references, live O06 included, no case skipped).
-The selected references include the approvals of LEDGERS R08 (`20261111T222849Z-5aedde7-1`) and R13
-(`20261115T181200Z-6caa07b-1`) for the cases they changed by design.
-Approved artifacts are local under `.verification/acceptance/reference-approved/`; a new checkout needs
-them copied in, like the other local inputs. The C33/F33 package-captured baselines are local too
+The selected references include the five approvals of LEDGERS R08 (`20261111T222849Z-5aedde7-1`), R09a
+(`20261113T174227Z-3047510-1`), R09c (`20261113T194742Z-1993bb9-1`), the R10 three-phase reset parity
+(`20261113T232720Z-9595574-1`) and R13 (`20261115T181200Z-6caa07b-1`) for the cases they changed by design.
+Approved artifacts are local under `.verification/acceptance/reference-approved/`; a new checkout gets
+them, with the other local inputs, from a transfer bundle (below). The C33/F33 package-captured baselines are local too
 (`.verification/acceptance/reference/C33.*` and `F33.*`): Git holds their hashes and provenance in
 `tools/acceptance_manifest.json`, not the files (LEDGERS "Two-phase ternary analytic acceptance cases
 (C33/F33)").
+
+### Transferring local artifacts to another checkout
+
+`tools/acceptance_transfer.py` moves the ignored files that exact acceptance needs to another
+checkout, such as a clean clone for `approve`. It checks every file against the hash records that
+already exist. Run it through the same activation wrapper. It uses no Git and no `mb-public-050`,
+and it always acts on the checkout it belongs to:
+
+    python packages/moving-boundary/tools/acceptance_transfer.py export --dest <dir>      # in the source checkout
+    python packages/moving-boundary/tools/acceptance_transfer.py check <dir>/<bundle_id>
+    python packages/moving-boundary/tools/acceptance_transfer.py restore <dir>/<bundle_id> --dry-run   # in the destination
+    python packages/moving-boundary/tools/acceptance_transfer.py restore <dir>/<bundle_id>
+
+- **Exported:**
+  - *required* (missing or changed refuses the export):
+    - every `reference/` pair in `expected_artifacts`;
+    - all approval folders, superseded ones included;
+    - publicly hashed `example_settings/` and adopted inputs;
+    - the stock wheel;
+    - the referenced `baseline-staging/<capture_id>/` folders, with `capture.json` checked first
+      against the committed `capture_record.capture_json_sha256`.
+  - *private*, exported when present:
+    - `private-inputs.json` and the inputs it records;
+    - the O04/O05 settings;
+    - the O06 input.
+
+    An available private input or settings file without a valid record refuses the export.
+  - *optional*: `pilot/O05-sampling.json`, which decides whether O05 runs in quick.
+- **Never exported:** run and install folders, logs, unrecorded inputs, evidence, caches, and the
+  machine-specific `.verification/public-environment.json`. The export prints these by name and count.
+- **Export order:** the export writes `<bundle_id>.partial/`, records `bundle.json`, validates
+  the staged copy, and only then renames it. `check` never accepts a `.partial` folder. A
+  destination inside a Git work tree is refused, unless it is under this package's ignored
+  `.verification/`.
+- **Restore:** the restore recomputes the selection from the destination's committed records and
+  checks every target before writing anything. Present and matching files are left untouched.
+  A differing file, an extra file in a recorded directory, a differing `private-inputs.json`,
+  or a required file missing from the bundle refuses the whole restore. Files are written to
+  `.verification/acceptance/.transfer-tmp/<bundle_id>/` and published without overwriting
+  anything, with `private-inputs.json` last. An interrupted restore is completed by running the
+  same command again. The strict checks then run on the result, and the command line also runs
+  `validate_expected` and the private-input checks.
+- **Privacy:** bundles contain private and TC-derived files and private digests. Keep them local
+  and outside any repository, for example under a short path in your temporary folder. Never
+  commit them.
+- **Supply separately:**
+  - a checkout at the commit whose records the bundle satisfies;
+  - the `kawin` and `mb-public-050` environments (a restore never creates, changes or installs into
+    an environment);
+  - TC-Python and its licence for live O06;
+  - `.verification/public-environment.json`. Copy it from a checkout on the same machine that uses
+    the same `mb-public-050`, or write it by hand with the fields `python`, `host`, `version`,
+    `stock_files_verified` and `wheel_sha256` for an existing environment. Don't run
+    `setup_public_environment.py` against an existing environment: it reinstalls the stock wheel
+    into it.
 
 Quick includes C01-C24/C30-C33 (C33: the package-owned two-phase ternary analytic
 case against its similarity solution), the older binary fixture/bulk probes and freshly
