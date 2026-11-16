@@ -37,6 +37,9 @@ missing-Plotly message names ``moving-boundary[diagnostics]`` instead of
 ``kawin[diagnostics]``. Code, defaults, tolerances, arithmetic, tqdm progress
 output and the renderer side effect are otherwise unchanged. See NOTICE and
 docs/relocation-map.json.
+
+Package extension: plot_selected_diffusivity_calculations accepts either backend's
+matching records, or no records, to plot only stored samples with optional metadata.
 """
 
 from __future__ import annotations
@@ -2919,15 +2922,20 @@ def plot_surrogate_construction_diagnostics(report, *, hover_format=".6g", rende
 
 def plot_selected_diffusivity_calculations(
     surrogate,
-    kinetics_diagnostics,
+    kinetics_diagnostics=None,
     *,
     hover_format=".6g",
     renderer="browser",
 ):
     """Plot only source calculations stored in a diffusivity surrogate.
 
+    Works with saved samples alone or optional Thermo-Calc/pycalphad records.
+    No backend or surrogate evaluation is performed. Missing optional fields
+    are shown as unavailable; supplied records must still match every stored
+    row. No calculation records are fabricated when records are absent.
+
     The four phase/context tabs are built from the exact composition and matrix
-    rows stored under ``interface`` and ``general``. Each row is matched to a
+    rows stored under ``interface`` and ``general``. When records are supplied, each row is matched to a
     selected-result kinetics record by phase, composition, and full matrix, so
     scouts, failed attempts, rejected local candidates, and surrogate
     predictions are never displayed. ``general`` follows the stored fit data;
@@ -2941,8 +2949,8 @@ def plot_selected_diffusivity_calculations(
     """
     if not isinstance(surrogate, TernaryMovingBoundaryThermodynamicsSurrogate):
         raise TypeError("Selected diffusivity plotting requires TernaryMovingBoundaryThermodynamicsSurrogate.")
-    records = _selected_kinetics_records(kinetics_diagnostics)
-    if not records:
+    records = None if kinetics_diagnostics is None else _selected_kinetics_records(kinetics_diagnostics)
+    if records is not None and not records:
         raise ValueError("Kinetics diagnostics contain no selected-result records.")
     go, _ = _require_plotly(renderer)
     phases = tuple(surrogate.tieline_phases)
@@ -2954,14 +2962,11 @@ def plot_selected_diffusivity_calculations(
         for context in ("interface", "general"):
             points = _diffusivity_training_compositions(surrogate, context, phase)
             matrices = _diffusivity_training_matrices(surrogate, context, phase)
-            matches, failures = _match_kinetics_site_fractions(
-                records,
-                phase,
-                points,
-                matrices,
-                set(),
-                1e-12,
-            )
+            if records is None:
+                matches, failures = [None] * len(points), []
+            else:
+                matches, failures = _match_kinetics_site_fractions(
+                    records, phase, points, matrices, set(), 1e-12)
             missing = [
                 failure for failure in failures
                 if failure["reason"] == "no_matching_kinetics_record"
@@ -3010,7 +3015,7 @@ def plot_selected_diffusivity_calculations(
         for row_index, (point, matrix, match, sample_type) in enumerate(zip(
             tab["points"], tab["matrices"], tab["matches"], tab["sample_types"]
         )):
-            record = match[1]
+            record = {} if match is None else match[1]
             phase_composition = record.get("phase_composition")
             mobilities = record.get("mobilities")
             if (
@@ -3048,7 +3053,9 @@ def plot_selected_diffusivity_calculations(
             lines = [
                 f"<b>{escape(tab['phase'])} · {escape(tab['context'])} row {row_index}</b>",
                 f"Source calculation type: {escape(str(sample_type))}",
-                f"Selected kinetics query: {escape(str(record.get('query_index')))}",
+                "Calculation diagnostics: " + ("unavailable" if match is None else "matched"),
+                f"Backend: {escape(str(record.get('backend') or 'unavailable'))}",
+                f"Selected kinetics query: {format_value(record.get('query_index'))}",
                 "Input: " + ", ".join(
                     f"{escape(str(element))}={format_value(value)}"
                     for element, value in zip(elements, (1.0 - np.sum(point), *point))
@@ -3063,16 +3070,16 @@ def plot_selected_diffusivity_calculations(
                 f"[{format_value(matrix[0, 0])}, {format_value(matrix[0, 1])}]",
                 f"[{format_value(matrix[1, 0])}, {format_value(matrix[1, 1])}]",
                 f"Frobenius norm: {format_value(tab['norms'][row_index])} m²/s",
-                "Tracer diffusivities (m²/s): " + ", ".join(
+                "Tracer diffusivities (m²/s): " + (", ".join(
                     format_value(value) for value in (record.get("tracer_diffusivities") or [])
-                ),
+                ) or "unavailable"),
                 "Mobilities (m²/(J·s)): " + mobility_text,
                 "Thermodynamic factors "
                 f"(rows/columns {', '.join(map(str, independent))}; reference {elements[0]}):",
                 *(factor_lines or ["unavailable"]),
-                f"Strategy: {escape(str(record.get('kinetics_strategy')))}",
-                f"Selected seed: {escape(str(record.get('selected_seed_index')))}; "
-                f"source set: {escape(str(record.get('selected_source_composition_set')))}",
+                f"Strategy: {format_value(record.get('kinetics_strategy'))}",
+                f"Selected seed: {format_value(record.get('selected_seed_index'))}; "
+                f"source set: {format_value(record.get('selected_source_composition_set'))}",
                 f"Selected Gibbs energy: {format_value(record.get('selected_gibbs_energy'))} J",
                 "Stable sets: " + escape(", ".join(record.get("stable_composition_sets") or [])),
             ]
@@ -3126,7 +3133,7 @@ def plot_selected_diffusivity_calculations(
             "args": [
                 {"visible": [index == tab_index for index in range(len(tabs))]},
                 {"title": (
-                    f"Selected TC diffusivity calculations: {tab['phase']} · "
+                    f"Sampled diffusivity calculations: {tab['phase']} · "
                     f"{tab['context']} at {surrogate.temperature:g} K"
                 )},
             ],
@@ -3134,7 +3141,7 @@ def plot_selected_diffusivity_calculations(
     first = tabs[0]
     fig.update_layout(
         title=(
-            f"Selected TC diffusivity calculations: {first['phase']} · "
+            f"Sampled diffusivity calculations: {first['phase']} · "
             f"{first['context']} at {surrogate.temperature:g} K"
         ),
         template="plotly_white",
@@ -3150,7 +3157,7 @@ def plot_selected_diffusivity_calculations(
             "yanchor": "top",
         }],
         annotations=[{
-            "text": "Diamond: interface calculation · Circle: bulk calculation · Selected TC results only",
+            "text": "Diamond: interface calculation · Circle: bulk calculation · Stored source samples only; no surrogate predictions",
             "showarrow": False,
             "x": 0.5,
             "xanchor": "center",
@@ -3166,7 +3173,7 @@ def plot_selected_diffusivity_calculations(
             "baxis": {"title": elements[0]},
             "caxis": {"title": elements[1]},
         },
-        uirevision="selected-tc-diffusivity-calculations",
+        uirevision="sampled-diffusivity-calculations",
     )
     _leave_room_above_ternary(fig)
     return fig

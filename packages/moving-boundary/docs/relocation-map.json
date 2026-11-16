@@ -144,7 +144,8 @@
     "source_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
     "source_sha256": "8d497422301b0135cc35bcf5bbf8bf32d29933ec4904848d4906e438c05bc7a3",
     "changes": "FUTURE_PORTS entry 1. Whole module (identical at 06dc7b4): provenance docstring; the surrogate import binds moving_boundary.surrogates; the missing-Plotly message names moving-boundary[diagnostics] instead of kawin[diagnostics]",
-    "numerical_ast": "identical apart from that message constant"
+    "numerical_ast": "identical apart from that message constant as ported in fa22e73",
+    "package_extensions": "Optional backend-neutral plot_selected_diffusivity_calculations records; absent records plot stored samples only. Capture support in compatibility/thermo.py follows the existing research 7af24f4 metadata extraction, with stock kawin 0.5.0 matrix arithmetic and no extra equilibrium."
   },
   "surrogate_comparison.py": {
     "source_path": "kawin/diffusion/SurrogateComparison.py",

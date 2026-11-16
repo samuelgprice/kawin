@@ -160,6 +160,15 @@ labels the rest `reference only`, `candidate only` or `neither`. Neither bundle 
 `tolerances` give a verdict only for the limits supplied. The bundles must share the element
 order, phases and temperature.
 
+`plot_selected_diffusivity_calculations(surrogate, renderer=None)` plots the stored
+diffusivity samples for each phase and context, with matrix norm as color and the full
+matrix in the hover text. It performs no backend queries or surrogate evaluation.
+Pass a kinetics JSONL file or record iterable as the second argument to add matching
+Thermo-Calc or pycalphad calculation details. Missing optional fields are unavailable;
+supplied records must match the samples. Package pycalphad sources now support
+`with source.captureKineticsDiagnostics(records.append):` around sampling: records use
+the existing local equilibrium, without an extra equilibrium solve.
+
 Bundles whose phase labels differ, such as pycalphad `BCC_A2` and Thermo-Calc composition-set
 `BCC_A2#1`, need an explicit `phase_mapping` from reference to candidate labels, for example
 `phase_mapping={"BCC_A2": "BCC_A2#1", "FCC_A1": "FCC_A1#1"}`. It must cover exactly the

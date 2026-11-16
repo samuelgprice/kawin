@@ -75,7 +75,7 @@
 
 # %%
 
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 import argparse
@@ -253,17 +253,21 @@ def simplex_bulk_points(spacing, floor=1.0e-5):
     return np.round(floor + scale * z, 10)[:, :2]
 
 
-def sample_surrogate(source, phases, config):
+def sample_surrogate(source, phases, config, *, kinetics_records=None):
     """Sample tie lines from the probe point and forced-phase bulk diffusivities (the slow step).
 
     ``phases`` are the backend's own labels for BCC_A2 and FCC_A1, in that order.
+    New builds may capture genuine selected-calculation records into ``kinetics_records``.
+    Capture uses the same calculations; it never evaluates the fitted surrogate.
     """
-    return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
-        thermodynamics=source, elements=ELEMENTS, phases=list(phases), tieline_phases=list(phases),
-        temperature=TEMPERATURE, probe_point=PROBE_POINT, probe_samples_per_side=config.samples_per_side,
-        precipitate_phase=phases[1], diffusivity_bulk_points=simplex_bulk_points(config.bulk_spacing),
-        diffusivity_interpolation=config.interpolation, skip_failed_bulk_calculations=True,
-        drop_invalid_bulk_matrices=True, validity_policy=config.validity_policy, min_composition=1.0e-10)
+    capture = nullcontext() if kinetics_records is None else source.captureKineticsDiagnostics(kinetics_records.append)
+    with capture:
+        return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(
+            thermodynamics=source, elements=ELEMENTS, phases=list(phases), tieline_phases=list(phases),
+            temperature=TEMPERATURE, probe_point=PROBE_POINT, probe_samples_per_side=config.samples_per_side,
+            precipitate_phase=phases[1], diffusivity_bulk_points=simplex_bulk_points(config.bulk_spacing),
+            diffusivity_interpolation=config.interpolation, skip_failed_bulk_calculations=True,
+            drop_invalid_bulk_matrices=True, validity_policy=config.validity_policy, min_composition=1.0e-10)
 
 
 def shared_spec(config, tdb, phases):
@@ -299,7 +303,11 @@ ROLES = ("failed_bulk_points", "invalid_bulk_points")
 
 
 def _publish_or_reload(bundle_path, spec, build, rebuild):
-    """Strictly reload a compatible bundle, or build into a missing or empty folder (or on rebuild)."""
+    """Reload strictly, or build/publish samples plus hash-checked calculation records.
+
+    Existing bundles without a diagnostics sidecar remain usable; only new builds capture
+    records. ``build(records)`` appends records from the actual source calculations.
+    """
     bundle_path = Path(bundle_path)
     if not rebuild:
         hint = f"Use --rebuild (REBUILD = True) to replace {bundle_path}."
@@ -313,12 +321,20 @@ def _publish_or_reload(bundle_path, spec, build, rebuild):
     bundle_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as directory:
         def builder():
-            surrogate = build()
+            records = []
+            surrogate = build(records)
             members = {}
             for role in ROLES:
                 report = Path(directory) / f"{role}.json"
                 report.write_text(json.dumps(surrogate.metadata[role], indent=2) + "\n", encoding="utf-8")
                 members[role] = {"path": report, "schema_version": 1}
+            record_path = Path(directory) / "kinetics_diagnostics.jsonl"
+            with record_path.open("w", encoding="utf-8") as stream:
+                stream.write(json.dumps({"record_type": "metadata", "schema_version": 1,
+                                         "backend": spec["source"]["engine"], "elements": ELEMENTS}) + "\n")
+                for record in records:
+                    stream.write(json.dumps({**record, "backend": spec["source"]["engine"]}) + "\n")
+            members["kinetics_diagnostics"] = {"path": record_path, "schema_version": 1}
             return surrogate, members
         return prepare_surrogate_artifact(bundle_path, spec, builder, required_members=ROLES), "built"
 
@@ -332,7 +348,7 @@ def prepare_pycalphad_bundle(config, tdb, *, output_dir=DEFAULT_OUTPUT, rebuild=
     """Build or strictly reload the pycalphad bundle in ``output_dir/pycalphad``; ``(bundle, action)``."""
     tdb = resolve_database(tdb)
     return _publish_or_reload(Path(output_dir) / "pycalphad", pycalphad_spec(config, tdb),
-                              lambda: sample_surrogate(build_source(tdb), PHASES, config), rebuild)
+                              lambda records: sample_surrogate(build_source(tdb), PHASES, config, kinetics_records=records), rebuild)
 
 
 def require_thermocalc():
@@ -377,7 +393,7 @@ def prepare_thermocalc_bundle(config, tdb, therm, *, output_dir=DEFAULT_OUTPUT, 
     """Build or strictly reload (after a live spec check) the bundle in ``output_dir/thermocalc``."""
     tdb = resolve_database(tdb)
     return _publish_or_reload(Path(output_dir) / "thermocalc", thermocalc_spec(config, tdb, therm),
-                              lambda: sample_surrogate(therm, TC_PHASES, config), rebuild)
+                              lambda records: sample_surrogate(therm, TC_PHASES, config, kinetics_records=records), rebuild)
 
 
 def load_saved_thermocalc_bundle(path, config, tdb):
@@ -597,10 +613,14 @@ def _timed(timings, key, function):
 def _backend_steps(label, bundle, action, config, fresh_source, metrics, reports, models, timings):
     """Saved-bundle diagnostics, optional fresh queries and the simulation for one bundle."""
     surrogate = bundle.surrogate
+    record_path = (bundle.member_path("kinetics_diagnostics")
+                   if "kinetics_diagnostics" in bundle.manifest["members"] else None)
     entry = metrics[label] = {"bundle": str(bundle.path), "action": action,
                               "build_fingerprint": bundle.manifest["build_fingerprint"]}
     entry["saved_bundle"], reports[f"{label}_saved"] = _timed(
         timings, f"{label}_saved_diagnostics", lambda: saved_bundle_diagnostics(surrogate, config))
+    reports[f"{label}_saved"]["sampled_diffusivities"] = {
+        "surrogate": surrogate, "kinetics_diagnostics": record_path}
     if fresh_source is not None:
         entry["fresh_queries"], reports[f"{label}_fresh"] = _timed(
             timings, f"{label}_fresh_queries", lambda: fresh_query_diagnostics(surrogate, fresh_source, config))
@@ -655,7 +675,7 @@ def report(result):
 
 
 def figures(result, *, renderer=None):
-    """Plotly figures for the leave-one-out, fresh-query and comparison reports.
+    """Plotly figures for sampled values, leave-one-out, fresh queries and comparison.
 
     Needs the optional ``moving-boundary[diagnostics]`` extra; without it the diagnostics
     plotting functions raise an ImportError naming it. Returns ``{name: figure}``.
@@ -666,6 +686,9 @@ def figures(result, *, renderer=None):
     for label in ("pycalphad", "thermocalc"):
         if f"{label}_saved" not in result.reports:
             continue
+        sampled = result.reports[f"{label}_saved"]["sampled_diffusivities"]
+        output[f"{label} sampled diffusivities"] = diagnostics.plot_selected_diffusivity_calculations(
+            sampled["surrogate"], sampled["kinetics_diagnostics"], renderer=renderer)
         loo = result.reports[f"{label}_saved"]["leave_one_out"]
         for phase in loo["phases"]:
             output[f"{label} leave-one-out {phase}"] = diagnostics.plot_diffusivity_leave_one_out(loo, phase, renderer=renderer)

@@ -139,6 +139,14 @@ only shows the stored data are reproduced) and held-out ones; none of the result
 claim for the Fe-Cr-Ni physics, and similar interface motion from both backends doesn't show
 that either surrogate or profile is accurate.
 
+The open Fe-Cr-Ni example also plots sampled diffusivity values, separately from
+surrogate predictions. New bundles store genuine calculation records for either backend
+in an optional, hash-checked `kinetics_diagnostics` JSONL member. The plot shows the stored
+matrices and adds mobilities, thermodynamic factors and sublattice details when available.
+Older bundles without this member remain usable and show sample values without those
+details. Reloading never regenerates records; use `--rebuild` explicitly to capture them.
+Thermo-Calc-derived records remain local in the output bundle.
+
 Surrogate bundles are written to `~/moving_boundary_example_outputs/<example>/`, wherever you run
 from, unless you set `OUTPUT_DIR` (or pass `--output-dir`). They never go into the source tree. Existing compatible bundles are reloaded, incompatible
 or damaged ones stop with an error, as does a bundle folder with files but no `manifest.json`,

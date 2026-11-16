@@ -525,6 +525,15 @@ def test_open_fecrni_workflow_runs_on_the_bundled_database(open_workflow):
     assert all(figure.data for figure in figures.values())
     bundle, action = example.prepare_pycalphad_bundle(example.WORKFLOW, None, output_dir=output)
     assert action == "reloaded" and bundle.manifest["build_fingerprint"] == metrics["build_fingerprint"]
+    assert "pycalphad sampled diffusivities" in figures
+    records_path = bundle.member_path("kinetics_diagnostics")
+    records = [json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines()]
+    assert records[0]["schema_version"] == 1 and records[0]["backend"] == "pycalphad"
+    calculations = [record for record in records if record["record_type"] == "kinetics"]
+    assert calculations and all(record["backend"] == "pycalphad" for record in calculations)
+    assert all(record["mobilities"] is not None and record["site_fractions"] for record in calculations)
+    assert all("Calculation diagnostics: matched" in text
+               for trace in figures["pycalphad sampled diffusivities"].data for text in trace.text)
 
 
 def test_open_fecrni_saved_thermocalc_bundle_is_reused_without_tc_python(open_workflow):
@@ -536,6 +545,11 @@ def test_open_fecrni_saved_thermocalc_bundle_is_reused_without_tc_python(open_wo
     """
     example, output, result = open_workflow
     _relabelled_thermocalc_bundle(example, _pycalphad_surrogate(example, output), output)
+    legacy = example.load_saved_thermocalc_bundle(output / "thermocalc", example.WORKFLOW, None)
+    assert "kinetics_diagnostics" not in legacy.manifest["members"]
+    from moving_boundary.surrogate_diagnostics import plot_selected_diffusivity_calculations
+    raw = plot_selected_diffusivity_calculations(legacy.surrogate, renderer=None)
+    assert all("Calculation diagnostics: unavailable" in text for trace in raw.data for text in trace.text)
     completed = _run_blocked(["--output-dir", output, "--thermocalc", "saved"], output)
     assert completed.returncode == 0, completed.stderr[-4000:]
     seen = json.loads(completed.stdout.split("RESULT", 1)[1])
