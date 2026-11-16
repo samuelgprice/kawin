@@ -19,6 +19,58 @@ needs no research checkout and no Git.
 
 ## Current checkpoint
 
+### Current (2026-11-15)
+
+Paths below are relative to `packages/moving-boundary`. The last pushed revision is `522c695` on
+`origin/refactor/package-extraction`, pushed 2026-11-15. It is the pre-transfer checkpoint. Two local
+commits follow it; as of writing they are not pushed:
+
+- `9e9464b` adds the hash-checked transfer of local acceptance artifacts (`tools/acceptance_transfer.py`;
+  [README "Transferring local artifacts to another checkout"](../README.md#transferring-local-artifacts-to-another-checkout)).
+  Its validation:
+  - full `tests/` on a fresh installed target: 1847 passed, 5 skipped (the C25-C29 contracts outside an
+    acceptance run), 1 deselected (`slow`);
+  - a real-artifact smoke check: export (262 files: 246 required, 15 private, 1 optional), `check`, a dry
+    run in the original worktree (all 262 present and matching, nothing written), a restore into a fresh
+    short-path clean clone of `9e9464b` with LF line endings and passing post-install verification, and a
+    repeat restore that changed nothing;
+  - exact quick in that restored clone: 31 runs and 5 contracts bit-identical, 34 repeat pairs, 145 gate
+    tests, 398 s.
+  The environment pointer was supplied separately, as documented.
+- `b2528a6` keeps digests and private contents out of transfer refusals: bundle entries are named by
+  index with a fixed description of the invalid field, and refused values are never echoed. It also
+  tightens one check: a boolean or negative `size` in a bundle entry is now refused as malformed (a
+  boolean previously passed the integer check). Validation: 196 focused tests passed, including all 90
+  transfer tests. The full suite and the numerical gates were not repeated after this commit.
+
+State at `522c695`, unchanged by the two local commits (they touch only acceptance tooling, its tests
+and the README):
+
+- C33 (quick) and F33 (full_drift), the package-owned two-phase ternary analytic cases, are active since
+  `65ce32c` (capture `20261115T224052Z-a26d099-1`); their docs and the R13 retrospective are in `522c695`
+  ([LEDGERS "Two-phase ternary analytic acceptance cases (C33/F33)"](LEDGERS.md#two-phase-ternary-analytic-acceptance-cases-c33f33)).
+- Latest recorded gates (`--record`, at `65ce32c`): quick 31 runs and 5 contracts, 145 tests, 413.63 s;
+  full 42 runs and 5 contracts, 521.06 s; every run bit-identical, live O06 included, no case skipped.
+- Validation of `65ce32c` (fresh clean LF clones):
+  - full `tests/` 1772 passed, 5 skipped, 1 deselected;
+  - exact quick 31 runs and 5 contracts bit-identical, 34 repeat pairs;
+  - exact full 42 runs and 5 contracts bit-identical with live O06, 35 repeat pairs. Exact full needs a
+    sufficiently short clone path for O06 (Windows 260-character limit).
+- Five approvals are selected: R08 `20261111T222849Z-5aedde7-1`, R09a `20261113T174227Z-3047510-1`, R09c
+  `20261113T194742Z-1993bb9-1`, R10 reset parity `20261113T232720Z-9595574-1` and R13
+  `20261115T181200Z-6caa07b-1`. Their artifacts, the C33/F33 baselines and the other local inputs are
+  git-ignored under `.verification/`. Another checkout gets them with `tools/acceptance_transfer.py`
+  (`export` in the source, `check`, then `restore --dry-run` and `restore` in the destination).
+  - Bundles contain private and TC-derived files and private digests. Keep them local, outside any
+    repository, and never commit them.
+  - Each destination supplies its own `.verification/public-environment.json`, either copied from a
+    checkout on the same machine that uses the same `mb-public-050` or written by hand.
+  - A restore never creates, changes or installs into an environment.
+
+### Historical checkpoints
+
+The entries below keep their original results and wording as of their dates.
+
 Authority switch complete (2026-11-11): the package is the numerical authority; normal acceptance
 needs no research checkout and no Git (LEDGERS.md "Authority switch"). Final recorded gates: exact
 quick 30/30 and full 40/40 runs plus 5 contracts bit-identical; Quick: 30 run comparisons, 5 contracts and 145 pytest tests passed in 381.09 s. Full: 40 run comparisons, 5 contracts and 145 pytest tests passed in 491.61 s (public tolerance, `--record`, 2026-11-11, after the authority switch; every run bit-identical).
@@ -151,8 +203,8 @@ halvings instead of 13, accepted by the user as intended. Gates from `e1bb66d` (
 special flags): exact full 40/40 runs and 5 contracts bit-identical against the selected references
 (live O06, 34 repeat pairs), examples E01-E10 pass. The approved artifacts are local and ignored
 (`.verification/acceptance/reference-approved/`, five approvals, relative to `packages/moving-boundary`);
-copy them separately into any other checkout and verify them against the manifest hashes
-(LEDGERS R13 *Adoption*).
+another checkout gets them, hash-checked, through the transfer workflow
+([README](../README.md#transferring-local-artifacts-to-another-checkout); LEDGERS R13 *Adoption*).
 
 ## Installed solving and research-owned generation
 
@@ -304,6 +356,19 @@ See [LEDGERS.md R03](LEDGERS.md#research-dependency-issue-r03-tc-debugger-import
   package. Solver changes (R07, R08, ...) are made here only. A deliberate numerical change
   is adopted with `acceptance.py approve --cases ... --reason "LEDGERS Rxx"` after its
   correctness gates; the frozen `reference/` files are never rewritten.
+- R13 follow-ups, open and not part of R13
+  ([LEDGERS R13 *Follow-up*](LEDGERS.md#r13-ternary-and-three-phase-residual-normalization-resolved)):
+  - a tighter default ternary/three-phase tolerance, which was promising on the survey fixtures but is not
+    established for TC-derived cases or very fine grids;
+  - `bulk_picard_atol=1e-12` is an absolute composition, so the implicit-mode inner tolerance is also
+    dilution-sensitive (not examined);
+  - the two-phase startup eta estimate fails when one component is diluted by 1e-4 or more unless
+    `initial_eta_componentwise_scaling` is set.
+
+  Defaults are unchanged; any change needs its own plan, correctness gates and approval.
+- Example acceptance decisions are pending ([ACCEPTANCE_CANDIDATES.md](ACCEPTANCE_CANDIDATES.md)): E-case
+  tiers and limits, the E11 lagged fixture (freeze its configuration first), and whether the Ni-P bonding
+  example gets an E case.
 
 ## Open decisions reserved for the user
 

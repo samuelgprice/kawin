@@ -1,6 +1,24 @@
 # Extraction handoff
 
-## Current state
+## Current checkpoint
+
+- **Last pushed revision:** `522c695` on `origin/refactor/package-extraction` (pushed 2026-11-15), the
+  pre-transfer checkpoint. C33 (quick) and F33 (full_drift) are active, and five approvals are selected.
+- **Local commits after it** (not pushed as of writing):
+  - `9e9464b` adds `tools/acceptance_transfer.py`, a hash-checked export/check/restore of the git-ignored
+    local acceptance artifacts. Validated with full `tests/` (1847 passed, 5 skipped, 1 deselected), a
+    real export/check/restore smoke check, and exact quick in the restored clone (31 runs and 5 contracts
+    bit-identical).
+  - `b2528a6` keeps digests and private contents out of transfer refusals, and refuses a boolean or
+    negative bundle-entry `size`. Validated with 196 focused tests; the full suite and numerical gates
+    were not repeated.
+- **Details, current gate counts and open follow-ups:** [NEXT_SESSIONS.md](NEXT_SESSIONS.md) "Current
+  checkpoint" and "Next scoped work", and [LEDGERS.md](LEDGERS.md).
+
+## State at the public-kawin milestone (historical, last edited 2026-11-10)
+
+This section and the ones after it record that time. Their acceptance figures, the skipped O06 and
+"No push" no longer describe the current state.
 
 The extraction branch is refactor/package-extraction. Whole binary, two-phase
 ternary and three-phase modules are package-owned, committed separately as
