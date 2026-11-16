@@ -97,6 +97,19 @@ conditional remains with a no-op body; diagnostic prints, exception types,
 messages, cause chaining, retry logic, arithmetic, iteration and TC options
 remain unchanged. The three private kawin.thermo.utils helpers are byte-identical
 in stock kawin 0.5.0, so they remain host imports and are not copied.
+
+Package adaptation (user databases only): ``_TCPythonBackend._build_system``
+rebuilds a user-database system with ``VA`` appended to Thermo-Calc's element
+selection when Thermo-Calc reports VA in the database but not in the system
+(a TDB lacking ``DEFAULT_COMMAND DEF_SYS_ELEMENT VA``, where FCC_A1/BCC_A2
+would otherwise be dropped). Added for this: ``_VACANCY_TC_ELEMENT``,
+``_user_system_lacks_declared_vacancy``, ``_TCPythonBackend._select_phases``
+(the frozen phase-selection lines, factored out unchanged),
+``_TCPythonBackend.system_selection`` and
+``TCPythonThermodynamics.getSystemSelection``. Commercial-database
+selection, physical elements, conditions, arithmetic and
+``ThermoCalcConfig.to_metadata()`` are unchanged; ``select_species("VA")``
+was tested on TC 2026a and does not restore the phases.
 TC-Python is imported lazily by the original start/version methods. It requires
 a separately installed Thermo-Calc runtime, databases and licence; it is not a
 pip dependency. All inputs, caches and calculated outputs must stay local.
@@ -134,6 +147,23 @@ def _is_missing_diffusion_quantity_error(exc: Exception) -> bool:
         "ERROR IN DCHEMD" in message
         and (("NO SUCH GRADIENT ELEMENT" in message) or ("NO SUCH DIFFUSING ELEMENT" in message))
     )
+
+
+_VACANCY_TC_ELEMENT = "VA"
+
+
+def _user_system_lacks_declared_vacancy(system: Any, config: ThermoCalcConfig) -> bool:
+    """Return True when Thermo-Calc read VA from the user database but left it out of the system.
+
+    Uses Thermo-Calc's own database/system inventories (no TDB parsing). False
+    when VA is already entered (for example via ``DEF_SYS_ELEMENT VA``), when
+    the database declares no VA, or when the caller listed VA explicitly.
+    """
+    if any(str(element).upper() == _VACANCY_TC_ELEMENT for element in config.elements):
+        return False
+    in_database = {str(element).upper() for element in system.get_all_elements_in_databases()}
+    in_system = {str(element).upper() for element in system.get_elements_in_system()}
+    return _VACANCY_TC_ELEMENT in in_database and _VACANCY_TC_ELEMENT not in in_system
 
 class ThermoCalcError(RuntimeError):
     """Base class for example-local TC-Python adapter failures."""
@@ -406,6 +436,7 @@ class _TCPythonBackend:
         self._setup = None
         self._system = None
         self._systems: dict[bool, Any] = {}
+        self._system_selections: dict[bool, dict[str, Any]] = {}
         self._config: ThermoCalcConfig | None = None
         self._calculations: dict[tuple[Any, ...], Any] = {}
         self._last_calculation_kind: str | None = None
@@ -480,6 +511,7 @@ class _TCPythonBackend:
                 self._setup = None
                 self._system = None
                 self._systems = {}
+                self._system_selections = {}
                 self._calculations = {}
                 self._last_calculation_kind = None
                 self._retry_calculation = None
@@ -1127,7 +1159,20 @@ class _TCPythonBackend:
         }
 
     def _build_system(self, config: ThermoCalcConfig, include_default_phases: bool):
-        """Build a TC-Python system with either default or phase-restricted selection."""
+        """Build a TC-Python system with either default or phase-restricted selection.
+
+        Commercial-database systems are built exactly as in the frozen source.
+        For a ``user_database_path`` the system is first built from the
+        physical elements alone; if Thermo-Calc then reports that the database
+        declares the vacancy element VA but did not enter it into the system
+        (a TDB without ``DEFAULT_COMMAND DEF_SYS_ELEMENT VA``), the system is
+        rebuilt with ``VA`` appended to Thermo-Calc's element selection only.
+        Without VA, phases with vacancy sublattices such as FCC_A1/BCC_A2 are
+        silently dropped. VA never becomes a physical component:
+        ``config.elements``, composition conditions, returned compositions and
+        matrix dimensions are unchanged. The effective selection is recorded in
+        ``self._system_selections`` (see :meth:`system_selection`).
+        """
         elements = [tc_element_name(element) for element in config.elements]
         if config.user_database_path is None and config.kinetic_database is None:
             builder = self._setup.select_database_and_elements(config.thermodynamic_database, elements)
@@ -1138,13 +1183,52 @@ class _TCPythonBackend:
                 elements,
             )
         else:
-            builder = self._setup.select_user_database_and_elements(str(config.user_database_path), elements)
+            system = self._select_phases(
+                self._setup.select_user_database_and_elements(str(config.user_database_path), elements),
+                config,
+                include_default_phases,
+            ).get_system()
+            vacancy_added = _user_system_lacks_declared_vacancy(system, config)
+            if vacancy_added:
+                elements = elements + [_VACANCY_TC_ELEMENT]
+                system = self._select_phases(
+                    self._setup.select_user_database_and_elements(str(config.user_database_path), elements),
+                    config,
+                    include_default_phases,
+                ).get_system()
+            self._system_selections[bool(include_default_phases)] = {
+                "tc_selected_elements": list(elements),
+                "user_database_vacancy_added": bool(vacancy_added),
+            }
+            return system
 
+        return self._select_phases(builder, config, include_default_phases).get_system()
+
+    @staticmethod
+    def _select_phases(builder: Any, config: ThermoCalcConfig, include_default_phases: bool):
+        """Apply the frozen phase-selection rule to a system builder."""
         if not include_default_phases:
             builder = builder.without_default_phases()
             for phase in config.phases:
                 builder = builder.select_phase(phase)
-        return builder.get_system()
+        return builder
+
+    def system_selection(self) -> dict[str, dict[str, Any]]:
+        """Return the effective user-database element selection per system.
+
+        Builds (or reuses) every system this configuration uses: the
+        equilibrium system for ``use_default_phases`` and the phase-restricted
+        kinetics system. Keys are ``"default_phases"`` and/or
+        ``"selected_phases"``. Empty for commercial databases, whose selection
+        is the physical element list unchanged.
+        """
+        config = self._require_config()
+        if config.user_database_path is None:
+            return {}
+        for include_default_phases in sorted({bool(config.use_default_phases), False}):
+            self._get_system(include_default_phases)
+        labels = {True: "default_phases", False: "selected_phases"}
+        return {labels[key]: dict(value) for key, value in sorted(self._system_selections.items())}
 
     def _get_calculation(self, kind: str, phase: str | None):
         config = self._require_config()
@@ -1722,6 +1806,21 @@ class TCPythonThermodynamics:
         """Return the TC-Python package version when it can be determined."""
 
         return self._backend.get_runtime_version()
+
+    def getSystemSelection(self) -> dict[str, dict[str, Any]]:
+        """Return the effective Thermo-Calc element selection for provenance records.
+
+        Starts the session if needed. For a user database the result maps each
+        built system (``"default_phases"``/``"selected_phases"``) to the element
+        list given to Thermo-Calc and whether VA was added internally; it is
+        empty for commercial databases. Physical ``elements`` never include VA.
+        Callers that fingerprint generated bundles should include this record
+        so bundles built under a different selection are not reused;
+        ``ThermoCalcConfig.to_metadata()`` is deliberately unchanged.
+        """
+        self._ensure_started()
+        selection = getattr(self._backend, "system_selection", None)
+        return {} if selection is None else selection()
 
     def preflight(self, x=(0.38, 0.001), T=1373.0) -> dict[str, Any]:
         """Run a lightweight one-point database/license compatibility check."""

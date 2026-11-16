@@ -101,6 +101,14 @@ checkout is needed. Sketch (`...` and `sampling_arguments` are system-specific):
     with TCPythonThermodynamics(...) as source:
         surrogate = Surrogate.from_database(thermodynamics=source, **sampling_arguments)
 
+With `ThermoCalcConfig(user_database_path=...)`, a TDB that declares `ELEMENT VA`
+without `DEFAULT_COMMAND DEF_SYS_ELEMENT VA` would leave VA out of the Thermo-Calc
+system and silently drop vacancy-sublattice phases such as FCC_A1/BCC_A2; the
+adapter then selects VA for Thermo-Calc internally (the physical elements, inputs
+and matrix sizes are unchanged). `source.getSystemSelection()` reports the effective
+selection; include it in a bundle's build specification. Commercial databases are
+unaffected.
+
 For pycalphad, pass a source from
 `moving_boundary.providers.pycalphad.create_pycalphad_thermodynamics_source(...)`
 instead. Optionally put the build in a callback for
