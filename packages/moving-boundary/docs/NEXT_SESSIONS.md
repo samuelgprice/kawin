@@ -19,12 +19,12 @@ needs no research checkout and no Git.
 
 ## Current checkpoint
 
-### Current (2026-11-15)
+### Current (2026-11-16)
 
 Paths below are relative to `packages/moving-boundary`. The last pushed revision is `522c695` on
-`origin/refactor/package-extraction`, pushed 2026-11-15. It is the pre-transfer checkpoint. Four local
-commits follow it, besides the docs commits that record them (`f9855d5` and the entries 1-2 docs
-commit); as of writing none is pushed:
+`origin/refactor/package-extraction`, pushed 2026-11-15. It is the pre-transfer checkpoint. Eight local
+commits follow it, besides the docs commits that record them (`f9855d5`, `45004c1`, `6f48208` and
+this checkpoint update); as of writing none is pushed:
 
 - `9e9464b` adds the hash-checked transfer of local acceptance artifacts (`tools/acceptance_transfer.py`;
   [README "Transferring local artifacts to another checkout"](../README.md#transferring-local-artifacts-to-another-checkout)).
@@ -55,10 +55,49 @@ commit); as of writing none is pushed:
   fresh-target full `tests/` 1918 passed, 5 skipped, 1 deselected; exact quick (424 s) and exact
   full (42 runs and 5 contracts, 558 s) bit-identical. Usage:
   [README "Diagnosing and comparing surrogates"](../README.md#diagnosing-and-comparing-surrogates).
+- `583c39f` makes the Thermo-Calc provider select VA as a system element for a **user** database
+  that declares VA but leaves it out of the system (no `DEFAULT_COMMAND DEF_SYS_ELEMENT VA`), as
+  the open MatCalc excerpt does; physical components stay `[FE, CR, NI]`. Commercial databases and
+  `to_metadata()` are unchanged; `getSystemSelection()` records the effective selection.
+  Validation: 13 licence-free tests; fresh-target full `tests/` 1931 passed, 5 skipped,
+  1 deselected; exact full 42 runs (live O06 included) and 5 contracts bit-identical.
+- `7d39389` adds an optional explicit `phase_mapping` to the saved-bundle comparison (for
+  example pycalphad `BCC_A2` to Thermo-Calc `BCC_A2#1`): one-to-one, exact labels, no suffix
+  stripping; each surrogate is queried through its own labels and the report records the
+  mapping. It is a package extension beyond the frozen port; without a mapping the comparison is
+  unchanged (oracle parity rerun, 0 differing cases).
+- `f19af65` and `b65cd57` complete the open Fe-Cr-Ni example
+  (`examples/surrogate_workflow_fecrni_open.py`, FUTURE_PORTS entries 1-2 follow-on). It vendors
+  the MatCalc excerpt unchanged as `examples/FeCrNi_MatCalc_open.tdb` (sdist only, `-text`,
+  ODbL/DbCL attribution in NOTICE and `examples/README.md`), builds a pycalphad bundle (Thermo-Calc
+  optional: `saved` reuses a bundle without `tc_python`, `build` needs a licence and a short
+  cache folder), runs the saved-bundle and fresh-query diagnostics with training and held-out
+  queries reported separately, compares the bundles and solves a 1 h lagged couple from each.
+  `b65cd57` corrects its inventory metric to the maximum absolute and relative drift over the
+  whole recorded history (it had compared only the final row). Validation: fresh-target full
+  `tests/` 1962 passed, 5 skipped, 1 deselected; the example tests from the extracted sdist,
+  89 passed; example acceptance 0 failing cases; exact quick (31 runs) and exact full (42 runs,
+  live O06) bit-identical, each with 5 contracts; focused example tests after `b65cd57`, 12
+  passed. Measured (one Windows workstation, imports included): pycalphad build run 13.6 s,
+  reuse 6.8 s; live Thermo-Calc build 48.5 s; saved Thermo-Calc reuse with `tc_python` blocked
+  10.2 s. Remaining limitations:
+  - the identical-composition interface comparison of the pycalphad and Thermo-Calc bundles is
+    unavailable: with `validity_policy="raise"` each surrogate answers interface queries only
+    within 1e-8 of its own path, and the paths differ by up to 2.1e-6; matrices are compared at
+    identical compositions in the bulk only;
+  - at these settings leave-one-out errors reach 0.28 (mean 0.05-0.06) and held-out bulk
+    matrices differ from fresh queries by up to 0.14; the simulations are workflow checks only;
+  - cross-process training-query differences (up to 9e-12 for tie-line endpoints, 1.6e-9
+    relative for interface matrices) are observed values, not certified bounds;
+  - the 150-character Thermo-Calc cache limit is a conservative bound derived from observed
+    paths, not a documented Thermo-Calc limit.
 
-State at `522c695`, unchanged by these local commits. They add the transfer tool, the new
-surrogate diagnostics/comparison modules, tests, test-port tooling and docs, and change no solver,
-surrogate or provider code, numerical behavior, references or approval criteria. Acceptance tooling
+State at `522c695`, unchanged by these local commits except where stated above. They add the
+transfer tool, the new surrogate diagnostics/comparison modules (with the comparator's
+`phase_mapping` extension), the open Fe-Cr-Ni example and database, tests, test-port tooling and
+docs, and change no solver or surrogate code, numerical behavior, references or approval criteria.
+The provider changed only in `583c39f`, for user databases that declare VA without entering it;
+exact acceptance stayed bit-identical. Acceptance tooling
 did change in `9e9464b`, for the transfer only: `tools/acceptance.py` gained the
 `STOCK_WHEEL_SHA256` constant (the value it already asserted) and an optional input-folder argument
 to `private_input_problems`, and `tools/acceptance_baseline.py` documents its reuse by the transfer.
@@ -125,7 +164,8 @@ the new ignored O06 fixture pair was captured; all 89 older files are unchanged.
 
 ## Real-usage examples (implemented; tiers pending approval)
 
-`examples/` has six installed-API teaching examples plus the minimal `binary_constant.py`, and
+`examples/` has seven installed-API teaching examples plus the minimal `binary_constant.py` (the
+seventh, the open Fe-Cr-Ni surrogate workflow of 2026-11-16, has tests but no E case), and
 `moving_boundary.analytic` provides exact solutions. `tools/acceptance_examples.py` compares their
 quick-check settings with existing frozen fixtures; it isn't part of `acceptance.py`, whose inputs
 and fixtures are unchanged. After adding `analytic`, an unchanged full gate gave 40 runs and 5
@@ -384,12 +424,9 @@ See [LEDGERS.md R03](LEDGERS.md#research-dependency-issue-r03-tc-debugger-import
     `initial_eta_componentwise_scaling` is set.
 
   Defaults are unchanged; any change needs its own plan, correctness gates and approval.
-- FUTURE_PORTS entries 1-2 are ported. The planned follow-on is an open-data Fe-Cr-Ni example that
-  builds pycalphad (and optionally Thermo-Calc) bundles, diagnoses and compares them and runs a small
-  simulation from each. It starts with a database provenance and licence check of the
-  MatCalc-derived `examples/FeCrNi.tdb` at the repository root (it is vendored only if that check
-  passes) and a bounded feasibility study, each followed by a user checkpoint. Entries 3-6 are
-  prioritized at the backlog review ([FUTURE_PORTS.md](FUTURE_PORTS.md)).
+- FUTURE_PORTS entries 1-2 and their open-data Fe-Cr-Ni follow-on example are complete (see
+  Current checkpoint). Entries 3-6 are prioritized at the backlog review
+  ([FUTURE_PORTS.md](FUTURE_PORTS.md)).
 - Example acceptance decisions are pending ([ACCEPTANCE_CANDIDATES.md](ACCEPTANCE_CANDIDATES.md)): E-case
   tiers and limits, the E11 lagged fixture (freeze its configuration first), and whether the Ni-P bonding
   example gets an E case.

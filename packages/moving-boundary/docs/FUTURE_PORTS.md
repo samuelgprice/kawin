@@ -1,7 +1,10 @@
 # Future ports: research functionality deferred after the authority switch
 
 Status: **backlog. Entries 1 and 2 are ported (2026-11-15, local commits `fa22e73` and
-`f78a13a`); entries 3-6 are deferred and not implemented.** Recorded 2026-11-10 at
+`f78a13a`), with the comparator's `phase_mapping` extension (`7d39389`) and the open-data
+Fe-Cr-Ni follow-on example complete (2026-11-16, `f19af65`, `b65cd57`; see
+[NEXT_SESSIONS](NEXT_SESSIONS.md#current-2026-11-16)); entries 3-6 are deferred and not
+implemented.** Recorded 2026-11-10 at
 extraction `518162b`. Nothing here is part of the authority-switch work
 ([AUTHORITY_SWITCH_PLAN.md](AUTHORITY_SWITCH_PLAN.md), batches M0-M10), and no entry may expand it.
 
