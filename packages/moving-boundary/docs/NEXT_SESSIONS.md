@@ -56,8 +56,13 @@ commit); as of writing none is pushed:
   full (42 runs and 5 contracts, 558 s) bit-identical. Usage:
   [README "Diagnosing and comparing surrogates"](../README.md#diagnosing-and-comparing-surrogates).
 
-State at `522c695`, unchanged by these local commits (they touch tooling, tests, the README and new
-surrogate diagnostics/comparison modules, but no solver, surrogate, provider or acceptance code):
+State at `522c695`, unchanged by these local commits. They add the transfer tool, the new
+surrogate diagnostics/comparison modules, tests, test-port tooling and docs, and change no solver,
+surrogate or provider code, numerical behavior, references or approval criteria. Acceptance tooling
+did change in `9e9464b`, for the transfer only: `tools/acceptance.py` gained the
+`STOCK_WHEEL_SHA256` constant (the value it already asserted) and an optional input-folder argument
+to `private_input_problems`, and `tools/acceptance_baseline.py` documents its reuse by the transfer.
+The state:
 
 - C33 (quick) and F33 (full_drift), the package-owned two-phase ternary analytic cases, are active since
   `65ce32c` (capture `20261115T224052Z-a26d099-1`); their docs and the R13 retrospective are in `522c695`

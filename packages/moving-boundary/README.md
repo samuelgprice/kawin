@@ -114,8 +114,11 @@ phase's diffusivity samples from two surrogates. See
 
 `moving_boundary.surrogate_diagnostics` evaluates a surrogate and
 `moving_boundary.surrogate_comparison` compares two saved bundles. The evaluation functions
-need only NumPy and SciPy. The `plot_*` functions and `compare_saved_surrogates` return Plotly
-figures and need the optional extra; without it they raise an `ImportError` that names it:
+need only NumPy and SciPy. The plotting functions need the optional extra; without it they raise an
+`ImportError` that names it. Most `plot_*` functions return one Plotly figure; the two
+conveniences return dictionaries: `plot_surrogate_diagnostics(...)` returns
+`{"reports": ..., "figures": ...}` and `compare_saved_surrogates(...)` returns
+`{"report": ..., "figure": ...}`. Install the extra with:
 
     python -m pip install "moving-boundary[diagnostics]"   # adds plotly>=6.0
 
