@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+diagnostics = ["plotly>=6.0"]
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers -m 'not slow'"

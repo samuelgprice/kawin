@@ -9,8 +9,9 @@ each recorded in ``docs/test-port-provenance.json``:
 
 - *imports*: a research import is resolved name by name exactly as
   ``tools/definitions/_bindings.Context.symbol`` resolves it in the package role: solver classes
-  from ``moving_boundary.solvers``; research-only modules (``_bindings.MODULES``) to their package
-  modules, never back to research; ``kawin.diffusion``/``kawin.diffusion.mesh`` names to the
+  from ``moving_boundary.solvers``; research-only modules (``_bindings.MODULES``, plus the
+  port-only ``PORT_MODULES``) to their package modules, never back to research;
+  ``kawin.diffusion``/``kawin.diffusion.mesh`` names to the
   first of ``moving_boundary``, ``moving_boundary.mesh`` and
   ``moving_boundary.solvers.illingworth.shared`` that has them, else stock kawin 0.5.0. A name
   with no counterpart is an error;
@@ -70,6 +71,7 @@ BATCHES = {
         "test_illingworth_ternary_physical_scale.py", "test_similarity_comparison_basis.py",
         "test_illingworth_ternary_similarity.py"],
     4: ["test_illingworth_ternary.py"],
+    5: ["test_surrogate_diagnostics.py"],
 }
 # Tests needing unported functionality: removed here, listed in FUTURE_PORTS.md § Deferred tests.
 DEFERRED = {
@@ -80,15 +82,15 @@ DEFERRED = {
             "so it can be ported as an opt-in check outside the gate",
     },
     "test_illingworth_ternary.py": {
-        "test_surrogate_construction_provenance_records_line_and_bulk_samples":
-            "needs evaluate_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)",
-        "test_surrogate_construction_dashboard_has_phase_tabs":
-            "needs evaluate_/plot_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)",
-        "test_surrogate_construction_report_includes_thermocalc_metadata":
-            "needs evaluate_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)",
         "test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case":
             "builds its binary reference with build_fig3_present_work_model/build_fig6_illingworth_case_params from "
             "the research example examples/Illingworth2005/compare_illingworth2005_planar.py, which is not ported "
+            "(FUTURE_PORTS entry 6, decision per script)",
+    },
+    "test_surrogate_diagnostics.py": {
+        "test_three_phase_example_helper_routes_interfaces_truth_and_merged":
+            "tests plot_surrogate_diagnostics_for_run of the research script "
+            "examples/ternaryExamples/IllingworthTernaryThreePhaseStable.py, which is not ported "
             "(FUTURE_PORTS entry 6, decision per script)",
     },
 }
@@ -111,6 +113,24 @@ SUPERSEDED = {
             replaced_by="tests/test_illingworth_ternary_residual_normalization.py::"
                         "test_unit_scale_reproduces_the_pre_r13_default_run"),
     },
+    "test_surrogate_diagnostics.py": {
+        "test_plotly_optional_dependency_is_declared": dict(
+            reason="FUTURE_PORTS entry 1: it reads the research pyproject.toml and environment.yml; the package "
+                   "declares the same diagnostics extra in its own pyproject.toml and pins the tested Plotly in "
+                   "examples/requirements-tested.txt",
+            replaced_by="tests/test_surrogate_diagnostics_imports.py::"
+                        "test_plotly_optional_dependency_is_declared_by_the_package"),
+        "test_plotly_import_error_keeps_evaluation_available": dict(
+            reason="FUTURE_PORTS entry 1: the missing-Plotly message names the package extra "
+                   "moving-boundary[diagnostics]; the research test matches the research text kawin[diagnostics]",
+            replaced_by="tests/test_surrogate_diagnostics_imports.py::"
+                        "test_plotly_import_error_keeps_evaluation_available_and_names_the_package_extra"),
+    },
+}
+# Research-only modules relocated for the port that acceptance definitions never use, so they are
+# not in ``_bindings.MODULES`` (which must equal ``acceptance_inputs.MODULES``). Resolved the same way.
+PORT_MODULES = {
+    "kawin.diffusion.SurrogateDiagnostics": "moving_boundary.surrogate_diagnostics",
 }
 # Research example modules whose helpers were relocated into the package (plan §6, FUTURE_PORTS.md
 # "Deferred tests": the similarity helpers exist in moving_boundary.analytic). Each name must exist.
@@ -132,7 +152,8 @@ HELPER_SUBSETS = {
 }
 RESEARCH_PREFIXES = ("kawin.diffusion.MovingBoundary", "kawin.diffusion.mesh.MovingBoundary",
                      "kawin.diffusion.mesh.TransformedGrids", "kawin.diffusion._illingworth",
-                     "kawin.diffusion.SurrogateArtifacts", "kawin.tests", "examples.")
+                     "kawin.diffusion.SurrogateArtifacts", "kawin.diffusion.SurrogateDiagnostics",
+                     "kawin.tests", "examples.")
 
 
 class PortError(RuntimeError):
@@ -147,6 +168,7 @@ def _bindings():
 
 
 BINDINGS = _bindings()
+MODULES = {**BINDINGS.MODULES, **PORT_MODULES}
 
 
 def _relocation():
@@ -176,15 +198,15 @@ def resolve(module, name):
     choices = []
     if module == "kawin.thermo" and name == "MulticomponentThermodynamics":
         choices.append("moving_boundary.compatibility.thermo")
-    if module in BINDINGS.MODULES:
-        choices.append(BINDINGS.MODULES[module])
+    if module in MODULES:
+        choices.append(MODULES[module])
     if module in {"kawin.diffusion", "kawin.diffusion.mesh"}:
         choices.extend(["moving_boundary", "moving_boundary.mesh", "moving_boundary.solvers.illingworth.shared"])
     for choice in choices:
         if hasattr(importlib.import_module(choice), name):
             return choice
-    if module in BINDINGS.MODULES:
-        raise PortError(f"{module}.{name} has no package counterpart in {BINDINGS.MODULES[module]}")
+    if module in MODULES:
+        raise PortError(f"{module}.{name} has no package counterpart in {MODULES[module]}")
     if hasattr(importlib.import_module(module), name):
         return module
     raise PortError(f"{module}.{name} exists neither in the package nor in stock kawin")
@@ -192,7 +214,7 @@ def resolve(module, name):
 
 def rename_module(text):
     """A research module path (or a dotted name below one) renamed to its package module, else ``None``."""
-    for research, package in sorted(BINDINGS.MODULES.items(), key=lambda item: -len(item[0])):
+    for research, package in sorted(MODULES.items(), key=lambda item: -len(item[0])):
         if text == research or text.startswith(research + "."):
             return package + text[len(research):]
     for helper, (target, _) in HELPER_SUBSETS.items():
@@ -412,7 +434,7 @@ def port_text(source, name, *, deferred=None, superseded=None, header, research_
                     if module.startswith("kawin.tests"):
                         target = rename_module(module)
                         helpers.add(module.split(".", 2)[2])
-                    elif module.startswith(("kawin.diffusion", "kawin.thermo")) or module in BINDINGS.MODULES:
+                    elif module.startswith(("kawin.diffusion", "kawin.thermo")) or module in MODULES:
                         target = resolve(module, alias.name)
                     elif module in EXAMPLE_MODULES:
                         target = EXAMPLE_MODULES[module]
@@ -493,7 +515,7 @@ def port_text(source, name, *, deferred=None, superseded=None, header, research_
     if removed:
         text = text.rstrip("\n") + "\n"   # a removed final test leaves no trailing blank lines
     ast.parse(text)
-    leftovers = sorted({match for match in re.findall(r"[A-Za-z_.]*(?:kawin\.diffusion\.(?:mesh\.)?(?:MovingBoundary|TransformedGrids|_illingworth|SurrogateArtifacts)\w*|kawin\.tests\.\w+|examples\.\w+(?:\.\w+)*)", text)})
+    leftovers = sorted({match for match in re.findall(r"[A-Za-z_.]*(?:kawin\.diffusion\.(?:mesh\.)?(?:MovingBoundary|TransformedGrids|_illingworth|SurrogateArtifacts|SurrogateDiagnostics)\w*|kawin\.tests\.\w+|examples\.\w+(?:\.\w+)*)", text)})
     if leftovers:
         raise PortError(f"{name}: research module paths left after porting: {leftovers}")
     counts = dict(total=len(tests), deferred=len(deferred), ported=len(tests) - len(deferred) - len(superseded))

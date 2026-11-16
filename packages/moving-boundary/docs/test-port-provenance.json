@@ -509,11 +509,11 @@
    "source": "kawin/tests/test_illingworth_ternary.py",
    "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
    "source_sha256": "abd346b716ce0c79a118606b9b4bee9dabb0d33863c0bcc2aead886224127025",
-   "output_sha256": "362230d0668a3a55eb90fc78dd99e6a4f15404ff56ef01453ba061eeebb68308",
+   "output_sha256": "0fa54a04808181fcbfd85ceaeff5db3b84814ae91b019a85b135a5621d8708c9",
    "counts": {
     "total": 155,
-    "deferred": 4,
-    "ported": 150,
+    "deferred": 1,
+    "ported": 153,
     "superseded": 1
    },
    "transforms": [
@@ -610,12 +610,14 @@
      "package": "moving_boundary.estimate_initial_eta_from_instantaneous_balance"
     },
     {
-     "kind": "dropped import (only used by deferred tests)",
-     "name": "kawin.diffusion.evaluate_surrogate_construction_diagnostics"
+     "kind": "import",
+     "research": "kawin.diffusion.evaluate_surrogate_construction_diagnostics",
+     "package": "moving_boundary.evaluate_surrogate_construction_diagnostics"
     },
     {
-     "kind": "dropped import (only used by deferred tests)",
-     "name": "kawin.diffusion.plot_surrogate_construction_diagnostics"
+     "kind": "import",
+     "research": "kawin.diffusion.plot_surrogate_construction_diagnostics",
+     "package": "moving_boundary.plot_surrogate_construction_diagnostics"
     },
     {
      "kind": "import",
@@ -716,21 +718,6 @@
      "kind": "import",
      "research": "kawin.tests.illingworth_baseline_cases._ternary_model",
      "package": "ported_helpers.illingworth_baseline_cases._ternary_model"
-    },
-    {
-     "kind": "deferred test",
-     "name": "test_surrogate_construction_provenance_records_line_and_bulk_samples",
-     "reason": "needs evaluate_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)"
-    },
-    {
-     "kind": "deferred test",
-     "name": "test_surrogate_construction_dashboard_has_phase_tabs",
-     "reason": "needs evaluate_/plot_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)"
-    },
-    {
-     "kind": "deferred test",
-     "name": "test_surrogate_construction_report_includes_thermocalc_metadata",
-     "reason": "needs evaluate_surrogate_construction_diagnostics (FUTURE_PORTS entry 1)"
     },
     {
      "kind": "deferred test",
@@ -1158,6 +1145,121 @@
      "kind": "deferred test",
      "name": "test_cuniti_tc_python_bundle_smoke",
      "reason": "opt-in licence smoke test (KAWIN_RUN_TC_PYTHON_SMOKE=1, TC-Python with TCHEA5/MOBHEA4): in every normal run it skips, and approve's whole-suite gate allows no skips; the adapter it uses is already ported (moving_boundary.providers.thermocalc), so it can be ported as an opt-in check outside the gate"
+    }
+   ]
+  },
+  "tests/test_surrogate_diagnostics.py": {
+   "batch": 5,
+   "source": "kawin/tests/test_surrogate_diagnostics.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "543085049d99582984efd6b7a7ac64deeb5a31677fc8af2f5334f79e7064e9ed",
+   "output_sha256": "4a47eb86e553fb0652c6c4fc44eacab01bbc123e2d5a548f39c7a028a8ae5fef",
+   "counts": {
+    "total": 36,
+    "deferred": 1,
+    "ported": 33,
+    "superseded": 2
+   },
+   "transforms": [
+    {
+     "kind": "dropped import (only used by deferred tests)",
+     "name": "builtins"
+    },
+    {
+     "kind": "dropped import (only used by deferred tests)",
+     "name": "tomllib"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.MergedPhaseDiffusivitySurrogate",
+     "package": "moving_boundary.MergedPhaseDiffusivitySurrogate"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.TernaryMovingBoundaryThermodynamicsSurrogate",
+     "package": "moving_boundary.TernaryMovingBoundaryThermodynamicsSurrogate"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.evaluate_diffusivity_diagnostics",
+     "package": "moving_boundary.evaluate_diffusivity_diagnostics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.evaluate_diffusivity_leave_one_out",
+     "package": "moving_boundary.evaluate_diffusivity_leave_one_out"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.evaluate_interface_bulk_diffusivity_consistency",
+     "package": "moving_boundary.evaluate_interface_bulk_diffusivity_consistency"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.evaluate_tieline_diagnostics",
+     "package": "moving_boundary.evaluate_tieline_diagnostics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.load_calculation_site_fractions",
+     "package": "moving_boundary.load_calculation_site_fractions"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.plot_bulk_diffusivity_diagnostics",
+     "package": "moving_boundary.plot_bulk_diffusivity_diagnostics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.plot_calculation_site_fractions",
+     "package": "moving_boundary.plot_calculation_site_fractions"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.plot_diffusivity_leave_one_out",
+     "package": "moving_boundary.plot_diffusivity_leave_one_out"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.plot_interface_diffusivity_diagnostics",
+     "package": "moving_boundary.plot_interface_diffusivity_diagnostics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.plot_selected_diffusivity_calculations",
+     "package": "moving_boundary.plot_selected_diffusivity_calculations"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.plot_surrogate_diagnostics",
+     "package": "moving_boundary.plot_surrogate_diagnostics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.plot_tieline_diagnostics",
+     "package": "moving_boundary.plot_tieline_diagnostics"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.SurrogateDiagnostics",
+     "package": "moving_boundary.surrogate_diagnostics"
+    },
+    {
+     "kind": "deferred test",
+     "name": "test_three_phase_example_helper_routes_interfaces_truth_and_merged",
+     "reason": "tests plot_surrogate_diagnostics_for_run of the research script examples/ternaryExamples/IllingworthTernaryThreePhaseStable.py, which is not ported (FUTURE_PORTS entry 6, decision per script)"
+    },
+    {
+     "kind": "superseded test",
+     "name": "test_plotly_optional_dependency_is_declared",
+     "reason": "FUTURE_PORTS entry 1: it reads the research pyproject.toml and environment.yml; the package declares the same diagnostics extra in its own pyproject.toml and pins the tested Plotly in examples/requirements-tested.txt",
+     "replaced_by": "tests/test_surrogate_diagnostics_imports.py::test_plotly_optional_dependency_is_declared_by_the_package"
+    },
+    {
+     "kind": "superseded test",
+     "name": "test_plotly_import_error_keeps_evaluation_available",
+     "reason": "FUTURE_PORTS entry 1: the missing-Plotly message names the package extra moving-boundary[diagnostics]; the research test matches the research text kawin[diagnostics]",
+     "replaced_by": "tests/test_surrogate_diagnostics_imports.py::test_plotly_import_error_keeps_evaluation_available_and_names_the_package_extra"
     }
    ]
   },

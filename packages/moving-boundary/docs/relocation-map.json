@@ -138,5 +138,12 @@
     "source_path": "kawin/diffusion/_diffusivity_domain.py",
     "source_commit": "06dc7b4ab56f67226ceabfde41ebf2690c088841",
     "changes": "Whole local provider/helper module; imports only"
+  },
+  "surrogate_diagnostics.py": {
+    "source_path": "kawin/diffusion/SurrogateDiagnostics.py",
+    "source_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+    "source_sha256": "8d497422301b0135cc35bcf5bbf8bf32d29933ec4904848d4906e438c05bc7a3",
+    "changes": "FUTURE_PORTS entry 1. Whole module (identical at 06dc7b4): provenance docstring; the surrogate import binds moving_boundary.surrogates; the missing-Plotly message names moving-boundary[diagnostics] instead of kawin[diagnostics]",
+    "numerical_ast": "identical apart from that message constant"
   }
 }

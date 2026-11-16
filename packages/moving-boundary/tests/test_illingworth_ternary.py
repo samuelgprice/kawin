@@ -2,7 +2,7 @@
 ``abd346b716ce0c79a118606b9b4bee9dabb0d33863c0bcc2aead886224127025``) by
 ``tools/port_tests.py`` (batch 4); do not edit by hand. Imports resolve to the package as
 ``tools/definitions/_bindings.py`` does; the full transform list is in
-``docs/test-port-provenance.json``. Excluded tests: test_surrogate_construction_provenance_records_line_and_bulk_samples (deferred: see FUTURE_PORTS.md § Deferred tests); test_surrogate_construction_dashboard_has_phase_tabs (deferred: see FUTURE_PORTS.md § Deferred tests); test_surrogate_construction_report_includes_thermocalc_metadata (deferred: see FUTURE_PORTS.md § Deferred tests); test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case (deferred: see FUTURE_PORTS.md § Deferred tests); test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work (superseded by tests/test_illingworth_ternary_residual_normalization.py::test_superseded_research_diagnostics_test_holds_with_the_unit_scale).
+``docs/test-port-provenance.json``. Excluded tests: test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case (deferred: see FUTURE_PORTS.md § Deferred tests); test_ternary_interface_success_diagnostics_count_candidate_and_jacobian_work (superseded by tests/test_illingworth_ternary_residual_normalization.py::test_superseded_research_diagnostics_test_holds_with_the_unit_scale).
 """
 from pathlib import Path
 
@@ -14,7 +14,7 @@ import moving_boundary.solvers.illingworth.ternary as ternary_fdm
 import moving_boundary.solvers.illingworth.three_phase as ternary_three_phase_fdm
 import moving_boundary.solvers.illingworth.numerics.ternary as ternary_mesh
 from moving_boundary.solvers import MovingBoundaryIllingworthTernaryFD1DModel, MovingBoundaryIllingworthTernaryThreePhaseFD1DModel
-from moving_boundary import TernaryMovingBoundaryThermodynamicsSurrogate, estimate_initial_eta_from_instantaneous_balance
+from moving_boundary import TernaryMovingBoundaryThermodynamicsSurrogate, estimate_initial_eta_from_instantaneous_balance, evaluate_surrogate_construction_diagnostics, plot_surrogate_construction_diagnostics
 from kawin.diffusion.DiffusionParameters import TemperatureParameters
 from moving_boundary.mesh import CartesianFD1D, MixedBoundary1D, PeriodicBoundary1D, ProfileBuilder, StepProfile1D
 from moving_boundary.solvers.illingworth.ternary import _get_stefan_interdiffusivity, _select_interface_motion_branch, _validate_ternary_diffusivity_matrix
@@ -3335,6 +3335,49 @@ def _build_seed_surrogate(**kwargs):
     }
     params.update(kwargs)
     return TernaryMovingBoundaryThermodynamicsSurrogate.from_database(**params)
+
+
+def test_surrogate_construction_provenance_records_line_and_bulk_samples():
+    surrogate = _build_surrogate(diffusivity_bulk_points=np.asarray([[0.45, 0.05]], dtype=np.float64))
+    report = evaluate_surrogate_construction_diagnostics(surrogate)
+
+    assert report["settings"]["build_mode"] == "line"
+    assert report["counts"][("equilibrium", "", "success")] == 3
+    for phase in ("ALPHA", "BETA"):
+        assert report["counts"][("kinetics", phase, "success")] == 4
+    path = Path.cwd() / "ternary_surrogate_construction_metadata_roundtrip.npz"
+    surrogate.save(path)
+    try:
+        loaded = TernaryMovingBoundaryThermodynamicsSurrogate.load(path)
+    finally:
+        path.unlink(missing_ok=True)
+    assert evaluate_surrogate_construction_diagnostics(loaded)["records"] == report["records"]
+
+
+def test_surrogate_construction_dashboard_has_phase_tabs():
+    report = evaluate_surrogate_construction_diagnostics(_build_seed_surrogate())
+    assert any(record["outcome"] == "invalid" for record in report["records"] if record["kind"] == "equilibrium")
+    figure = plot_surrogate_construction_diagnostics(report)
+    labels = [button["label"] for button in figure.layout.updatemenus[0].buttons]
+    assert labels == ["Overview", "Equilibrium", "Kinetics: ALPHA", "Kinetics: BETA"]
+
+
+def test_surrogate_construction_report_includes_thermocalc_metadata():
+    surrogate = _build_surrogate()
+    surrogate.metadata["thermocalc_config"] = {
+        "kinetics_disable_global_minimization": True,
+        "global_minimization_max_grid_points": 2000,
+        "default_remove_cache": False,
+    }
+    surrogate.metadata["kinetics_diagnostics_sidecar"] = "kinetics.jsonl"
+    surrogate.metadata["site_fractions_sidecar"] = "sites.jsonl"
+
+    settings = evaluate_surrogate_construction_diagnostics(surrogate)["settings"]
+    assert settings["thermocalc.kinetics_disable_global_minimization"] is True
+    assert settings["thermocalc.global_minimization_max_grid_points"] == 2000
+    assert settings["thermocalc.default_remove_cache"] is False
+    assert settings["thermocalc.capture_diffusivity_diagnostics"] is True
+    assert settings["thermocalc.capture_site_fractions"] is True
 
 
 def _continuous_bulk_grids():
