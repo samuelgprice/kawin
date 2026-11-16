@@ -25,11 +25,15 @@ _SAFETY["guard_independence"]()   # opt-in research/Git guards (MB_FORBID_RESEAR
 
 
 def module(name, path):
-    """Load a module by file without adding its directory to sys.path."""
+    """Load a shipped example and resolve its adjacent advanced companions."""
     spec = importlib.util.spec_from_file_location(name, path)
     result = importlib.util.module_from_spec(spec)
     sys.modules[name] = result
-    spec.loader.exec_module(result)
+    sys.path.insert(0, str(Path(path).parent))
+    try:
+        spec.loader.exec_module(result)
+    finally:
+        sys.path.remove(str(Path(path).parent))
     return result
 
 

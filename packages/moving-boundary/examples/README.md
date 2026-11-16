@@ -1,7 +1,8 @@
 # Examples
 
 These examples show how to set up realistic moving-boundary problems with the installed
-package. Each script runs on its own and is meant to be copied and adapted.
+package. Each script can be run directly and adapted. Keep the adjacent `advanced/`
+directory when copying scripts; it holds detailed validation and compatibility workflows.
 
 | Script | Question | Needs | Time* |
 |---|---|---|---|
@@ -27,8 +28,52 @@ the cells in order in an Interactive window: edit the Settings cell first, then 
 below it. Run cells only execute when the file is run directly, so tests and other code can
 import its functions without starting a solve.
 
-**From a terminal.** `python <example>.py`, adding `--fast` for shorter settings, or `--help`
-for other options.
+**Notebook working directory:** start the kernel at the **extraction repository
+root** (the directory containing `packages/`). Check it with `Path.cwd()`. Each
+example's first import cell adds `packages/moving-boundary/examples` to `sys.path`
+using that working directory; it does not search for the repository or change directories.
+If your kernel starts elsewhere, change its working directory to the extraction root
+before running the cells. Keep `advanced/` beside copied scripts and adjust the setup
+path when using a different layout. The open Fe-Cr-Ni example locates its bundled
+database through its loaded companion, so notebook cells do not need `__file__`.
+
+**From a terminal at the extraction repository root.** Run
+`python packages/moving-boundary/examples/<example>.py`, adding `--fast` for shorter
+settings, or `--help` for other options.
+
+## A shorter introductory path
+
+The seven structured examples expose `run_core(...)`: prepare inputs, build the model,
+solve once and inspect basic results. Physical inputs and model construction remain in
+the main file. Existing `run(...)` calls and terminal commands retain the full validation
+workflow; detailed checks and orchestration live in `advanced/<example>.py`.
+
+Starting at the **extraction repository root**, in an interactive Python session with
+the package installed and the repository's `kawin` environment activated:
+
+```python
+from pathlib import Path
+import sys
+
+sys.path.append(str(Path("packages/moving-boundary/examples").resolve()))
+
+from binary_planar_growth import FAST, run_core
+from moving_boundary.plotting import plot_interface_history, plot_composition_profiles
+
+result = run_core(FAST)
+print(result.metrics)
+plot_interface_history(result.model)
+plot_composition_profiles(result.model)
+```
+
+For a real database-backed case, import `WORKFLOW` and `run_core` from
+`surrogate_workflow_fecrni_open`. This uses the bundled open database and pycalphad,
+without starting Thermo-Calc or running the advanced surrogate comparisons.
+Use the package plotting helpers for core results; the example-specific `plot`/`figures`
+functions can require the exact solutions, metrics and reports returned by the full `run`.
+
+See [Reusable workflows](../docs/example-workflows.md) for the package APIs, strict
+bundle reuse, inventory normalization, plotting options and advanced entry points.
 
 ## Conventions worth knowing
 
@@ -85,7 +130,7 @@ In particular:
 - `semi_infinite_validity_time` is a screening estimate of a wall-tail amplitude, not an error
   bound. When it matters, repeat the run on a larger domain and compare directly.
 
-Numerical limits appear in each example with the exact settings, normalization and time window
+Numerical limits are documented beside the advanced checks with their exact settings, normalization and time window
 they apply to. They don't carry over to other settings.
 
 ## Fe-Cr-Ni database

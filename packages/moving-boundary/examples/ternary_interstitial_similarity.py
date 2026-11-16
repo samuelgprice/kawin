@@ -37,9 +37,15 @@
 """How do a fast interstitial and a slow substitutional solute move an interface? See the notes above."""
 
 # %%
+from pathlib import Path
+import sys
+
+# Run notebook cells with the extraction repository root as the working directory.
+sys.path.append(str(Path("packages/moving-boundary/examples").resolve()))
+
+from advanced import ternary_interstitial_similarity as _advanced
 from dataclasses import dataclass
 import argparse
-import sys
 
 import numpy as np
 
@@ -53,6 +59,7 @@ from moving_boundary.analytic import (
 from moving_boundary.equilibrium import CallableTernaryInterfaceEquilibrium
 from moving_boundary.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 from moving_boundary.mesh.TransformedGrids import two_phase_landau_grids
+from moving_boundary.run_diagnostics import inventory_drift
 from moving_boundary.solvers import MovingBoundaryIllingworthTernaryFD1DModel
 
 ELEMENTS = ["FE", "C", "MN"]
@@ -103,12 +110,9 @@ FAST = Config(left_width=0.2, right_width=0.2, left_nodes=21, right_nodes=21, le
 # A wider ALPHA than BETA, because carbon's fast mode in ALPHA reaches farther.
 DEMO = Config()
 
-# Numerical accuracy limits for DEMO only: 81/81 nodes, width 0.8 + 0.4, t to 1, window t >= 0.1.
-# k_rel: |k - k_exact| / |k_exact|. interface_rel: max|s - s_exact| / max|s_exact - s0|.
-# eta_abs: max|eta - eta_exact|. carbon_profile_linf: max|u_C - u_C,exact| over five recorded
-# times. inventory_abs: largest component |final - initial| in u x length.
-DEMO_LIMITS = {"k_rel": 1.0e-2, "interface_rel": 1.0e-2, "eta_abs": 1.0e-3,
-               "carbon_profile_linf": 1.0e-3, "inventory_abs": 5.0e-9 * 1.2}
+
+# Configuration-specific checks are documented in the advanced companion.
+DEMO_LIMITS = _advanced.DEMO_LIMITS
 
 # %% [markdown]
 # ## Settings
@@ -187,6 +191,22 @@ def build_model(config=DEMO, *, grids=None):
 
 
 # %% [markdown]
+# ## Short workflow
+#
+# Solve once with basic checks. Use the original `run` below for full validation.
+
+# %%
+def run_core(config=DEMO):
+    """Solve once and measure final inventory drift; detailed accuracy checks use ``run``."""
+    model = build_model(config)
+    model.solve(config.duration, minDtFrac=1e-14)
+    absolute, relative = inventory_drift(
+        np.asarray([model.getTotalInventory(0.0), model.getTotalInventory()]), reduction="final")
+    return ExampleResult(config, model, None, {"final_time": float(model.currentTime),
+                                               "inventory_abs": absolute, "inventory_rel": relative})
+
+
+# %% [markdown]
 # ## Exact solution, evaluation and plots
 
 # %%
@@ -201,28 +221,6 @@ def exact_solution(config):
     return roots[0]
 
 
-def evaluate(model, config, exact):
-    """Return accuracy metrics in the u basis, or only validity estimates for a short run."""
-    d = diffusivities(config.ratio)
-    final_s = float(model.getInterfacePosition())
-    metrics = {
-        "validity_time_alpha": semi_infinite_validity_time(d["ALPHA"], config.s0),
-        "validity_time_beta": semi_infinite_validity_time(d["BETA"], config.left_width + config.right_width - final_s),
-    }
-    if config.duration <= config.compare_from:
-        return metrics
-    comparison = compare_model_to_similarity(model, exact, t_min=config.compare_from)
-    metrics.update(
-        k_rel=comparison["k_rel_error"],
-        interface_rel=comparison["interface_rel_error"],
-        eta_abs=comparison["eta_max_abs_error"],
-        carbon_profile_linf=float(np.max(comparison["profile_linf"][:, 0])),
-        manganese_profile_linf=float(np.max(comparison["profile_linf"][:, 1])),
-        inventory_abs=float(np.max(np.abs(comparison["inventory_drift"]))),
-    )
-    return metrics
-
-
 def run(config=DEMO):
     """Build, solve and evaluate one configuration."""
     model = build_model(config)
@@ -231,57 +229,50 @@ def run(config=DEMO):
     return ExampleResult(config, model, exact, evaluate(model, config, exact))
 
 
+# %% [markdown]
+# ## Advanced checks and compatibility entry points
+#
+# The introductory path above needs only `run_core`. These wrappers retain
+# the original detailed workflow and command-line behavior.
+
+# %%
+def _advanced_case():
+    """Supply current case inputs to the optional detailed workflow. See the advanced companion."""
+    return _advanced.Case(
+        DEMO=DEMO,
+        DEMO_LIMITS=DEMO_LIMITS,
+        FAST=FAST,
+        description=__doc__,
+        diffusivities=diffusivities,
+    )
+
+
+def evaluate(model, config, exact):
+    """Return accuracy metrics in the u basis, or only validity estimates for a short run. See the advanced companion."""
+    return _advanced.evaluate(model, config, exact, case=_advanced_case())
+
+
 def report(result):
-    """Print the final state and the metrics, with limits where they apply."""
-    print(f"final interface {result.model.getInterfacePosition():.6f}, eta {result.model.getInterfaceEta():.6f}; "
-          f"exact k {result.exact.k:.6f}, eta {result.exact.eta:.6f}")
-    limits = DEMO_LIMITS if result.config == DEMO else {}
-    if not limits:
-        print("These settings have no accuracy limits; DEMO is the configuration to judge accuracy by.")
-    for name, value in result.metrics.items():
-        print(f"{name}: {value:.4g}" + (f"  (limit {limits[name]:g})" if name in limits else ""))
+    """Print the final state and the metrics, with limits where they apply. See the advanced companion."""
+    return _advanced.report(result, case=_advanced_case())
 
 
 def plot(result):
-    """Plot the interface and the final carbon profile in u and x against the exact u; returns the figure."""
-    import matplotlib.pyplot as plt
-
-    model, exact = result.model, result.exact
-    times, interface = recorded_history(model.interfaceData)
-    figure, (left, right) = plt.subplots(1, 2, figsize=(10, 4))
-    left.plot(times, np.ravel(interface) - result.config.s0, label="model")
-    left.plot(times, exact.interface_position(times) - result.config.s0, "--", label="exact")
-    left.set(xlabel="time", ylabel="s - s0", title="Interface displacement")
-    left.legend()
-    time = float(times[-1])
-    (x_left, c_left), (x_right, c_right) = model.getPhysicalPhaseProfiles(time)
-    u_left, u_right = model.getTransformedState(time)
-    for x, u, c, side, label in ((x_left, u_left, c_left, "left", "ALPHA"), (x_right, u_right, c_right, "right", "BETA")):
-        right.plot(x, u[:, 0], label=f"u_C, model ({label})")
-        right.plot(x, c[:, 1], ":", label=f"x_C, model ({label})")
-        right.plot(x, exact.profile(x, time, phase=side)[:, 0], "--", label=f"u_C, exact ({label})")
-    right.set(xlabel="position", ylabel="carbon", title=f"Carbon at t = {time:.3g}")
-    right.legend(fontsize="small")
-    figure.tight_layout()
-    return figure
+    """Plot the interface and the final carbon profile in u and x against the exact u; returns the figure. See the advanced companion."""
+    return _advanced.plot(result, case=_advanced_case())
 
 
 def settings_from_command_line(config, plot_figures):
-    """Apply ``--fast`` and ``--plot`` from a terminal; inside a notebook kernel, change nothing.
-
-    A Jupyter kernel's ``sys.argv`` holds the kernel's own arguments, so they are not parsed.
-    """
-    if "ipykernel" in sys.modules:
-        return config, plot_figures
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], allow_abbrev=False)
-    parser.add_argument("--fast", action="store_true", help="use quick check settings")
-    parser.add_argument("--plot", action="store_true", help="show plots")
-    args = parser.parse_args()
-    return (FAST if args.fast else config), args.plot
+    """Apply ``--fast`` and ``--plot`` from a terminal; inside a notebook kernel, change nothing. See the advanced companion."""
+    return _advanced.settings_from_command_line(config, plot_figures, case=_advanced_case())
 
 
 # %% [markdown]
 # ## Run
+#
+# For the introductory path use `result = run_core(CONFIG)` after the Settings
+# and model cells. The compatibility entry point below also runs the detailed
+# checks in `advanced/ternary_interstitial_similarity.py`.
 
 # %%
 if __name__ == "__main__":

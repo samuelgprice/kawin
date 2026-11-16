@@ -91,6 +91,16 @@ TC-Python and a valid licence; no TC pip dependency is added. See
 [NEXT_SESSIONS.md](docs/NEXT_SESSIONS.md#stage-2c-complete-within-o06) for
 the accepted scope, remaining research script orchestration and uncovered workflows.
 
+## Streamlined examples and reusable workflows
+
+The [examples](examples/README.md) keep physical inputs and solver construction visible.
+Their `run_core` entry points solve once with basic checks; existing `run` functions
+and command-line options retain the detailed validation workflows in adjacent advanced
+companions. The wheel also provides constant scalar diffusivities, ternary sampling
+grids, public retained-sample access, strict build-or-reload helpers, inventory and
+coverage diagnostics, and optional plotting helpers. See
+[Reusable workflows](docs/example-workflows.md) for API contracts and usage.
+
 ## Building surrogates
 
 Build Thermo-Calc or pycalphad surrogates with the installed APIs; no research

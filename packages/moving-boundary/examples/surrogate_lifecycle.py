@@ -34,12 +34,17 @@
 """How do I save, verify, reload and solve with a surrogate? See the notes above."""
 
 # %%
-from dataclasses import dataclass
 from pathlib import Path
+import sys
+
+# Run notebook cells with the extraction repository root as the working directory.
+sys.path.append(str(Path("packages/moving-boundary/examples").resolve()))
+
+from advanced import surrogate_lifecycle as _advanced
+from dataclasses import dataclass
 import argparse
 import json
 import shutil
-import sys
 import tempfile
 
 import numpy as np
@@ -52,6 +57,7 @@ from moving_boundary.surrogate_artifacts import (
     SurrogateArtifactCompatibilityError,
     SurrogateArtifactIntegrityError,
     prepare_surrogate_artifact,
+    load_or_build_surrogate_artifact,
 )
 from moving_boundary.surrogates import TernaryMovingBoundaryThermodynamicsSurrogate
 
@@ -113,53 +119,12 @@ def build_surrogate():
 
 
 def prepare_bundle(bundle_path, *, rebuild=False):
-    """Build or strictly reload the bundle, as described in the notes above.
+    """Build or strictly reuse a verified bundle; return ``(bundle, action)``.
 
-    Builds only into a missing or empty folder, or when ``rebuild``. An incompatible or
-    damaged bundle, or a folder with files but no manifest, raises instead. Returns
-    ``(bundle, action)`` with ``action`` either ``"built"`` or ``"reloaded"``.
+    Only explicit ``rebuild`` replaces incompatible, damaged or incomplete data.
     """
-    bundle_path = Path(bundle_path)
-    hint = f"Set REBUILD = True (or use --rebuild) to replace {bundle_path}."
-
-    def builder():
-        return build_surrogate(), {}  # the second item lists extra member files to store
-
-    if not rebuild and (bundle_path / "manifest.json").exists():
-        try:
-            return prepare_surrogate_artifact(bundle_path, BUILD_SPEC, builder, reload=True), "reloaded"
-        except (SurrogateArtifactCompatibilityError, SurrogateArtifactIntegrityError) as exc:
-            raise type(exc)(f"{exc}\n{hint}") from exc
-    if not rebuild and bundle_path.is_dir() and any(bundle_path.iterdir()):
-        # Publishing writes the manifest last, so this is usually an interrupted build, but it
-        # may be a bundle whose manifest was lost; replacing either is the user's call.
-        raise SurrogateArtifactIntegrityError(f"{bundle_path} has files but no manifest.json.\n{hint}")
-    return prepare_surrogate_artifact(bundle_path, BUILD_SPEC, builder), "built"
-
-
-def integrity_demo(bundle_path):
-    """Show that damage and a changed specification are both refused, using a temporary copy."""
-    with tempfile.TemporaryDirectory() as directory:
-        copy = Path(directory) / "copy"
-        shutil.copytree(bundle_path, copy)
-        changed = dict(BUILD_SPEC, revision=BUILD_SPEC["revision"] + 1)
-        try:
-            SurrogateArtifactBundle.load(copy, changed)
-        except SurrogateArtifactCompatibilityError:
-            specification_refused = True
-        else:
-            specification_refused = False
-        model_file = copy / SurrogateArtifactBundle.load(copy, BUILD_SPEC).manifest["members"]["model"]["path"]
-        data = bytearray(model_file.read_bytes())
-        data[len(data) // 2] ^= 0xFF
-        model_file.write_bytes(bytes(data))
-        try:
-            SurrogateArtifactBundle.load(copy, BUILD_SPEC)
-        except SurrogateArtifactIntegrityError:
-            damage_refused = True
-        else:
-            damage_refused = False
-    return {"changed_specification_refused": specification_refused, "damaged_member_refused": damage_refused}
+    return load_or_build_surrogate_artifact(
+        bundle_path, BUILD_SPEC, lambda: (build_surrogate(), {}), rebuild=rebuild)
 
 
 # %% [markdown]
@@ -186,6 +151,13 @@ def build_model(config=DEMO, surrogate=None):
     )
 
 
+def run_core(config=DEMO, *, output_dir=DEFAULT_OUTPUT, rebuild=False):
+    """Build or reload one bundle and solve once, without corruption or twin-run checks."""
+    bundle, action = prepare_bundle(Path(output_dir) / "bundle", rebuild=rebuild)
+    model = solve(config, bundle.surrogate)
+    return ExampleResult(config, model, None, {"action": action, "bundle": str(bundle.path)})
+
+
 def solve(config, surrogate):
     """Solve with one surrogate and return the model."""
     model = build_model(config, surrogate)
@@ -193,58 +165,45 @@ def solve(config, surrogate):
     return model
 
 
-def run_differences(model, other):
-    """Largest absolute differences between two two-phase runs, by quantity; all 0.0 if identical.
+# %% [markdown]
+# ## Advanced checks and compatibility entry points
+#
+# The introductory path above needs only `run_core`. These wrappers retain
+# the original detailed workflow and command-line behavior.
 
-    Compares the recorded times, interface position, eta and solute inventory, and both
-    phases' transformed states at every recorded time. Raises ``ValueError`` if the runs
-    recorded different numbers of steps, since they can't then be compared pointwise.
-    """
-    times, other_times = recorded_history(model.interfaceData)[0], recorded_history(other.interfaceData)[0]
-    if times.shape != other_times.shape:
-        raise ValueError(f"The runs recorded {len(times)} and {len(other_times)} steps.")
-    differences = {"times": float(np.max(np.abs(times - other_times)))}
-    for name, history in (("interface", "interfaceData"), ("eta", "etaData"), ("inventory", "inventoryData")):
-        values = np.asarray(recorded_history(getattr(model, history))[1], dtype=np.float64)
-        other_values = np.asarray(recorded_history(getattr(other, history))[1], dtype=np.float64)
-        differences[name] = float(np.max(np.abs(values - other_values)))
-    differences["profiles"] = max(
-        float(np.max(np.abs(np.asarray(state) - np.asarray(other_state))))
-        for time, other_time in zip(times, other_times)
-        for state, other_state in zip(model.getTransformedState(float(time)), other.getTransformedState(float(other_time)))
+# %%
+def integrity_demo(bundle_path):
+    """Show that damage and a changed specification are both refused, using a temporary copy. See the advanced companion."""
+    return _advanced.integrity_demo(bundle_path, case=_advanced_case())
+
+
+def _advanced_case():
+    """Supply current case inputs to the optional detailed workflow. See the advanced companion."""
+    return _advanced.Case(
+        BUILD_SPEC=BUILD_SPEC,
+        ExampleResult=ExampleResult,
+        description=__doc__,
+        build_surrogate=build_surrogate,
+        integrity_demo=integrity_demo,
+        prepare_bundle=prepare_bundle,
+        run_differences=run_differences,
+        solve=solve,
     )
-    return differences
+
+
+def run_differences(model, other):
+    """Largest absolute differences between two two-phase runs, by quantity; all 0.0 if identical. See the advanced companion."""
+    return _advanced.run_differences(model, other, case=_advanced_case())
 
 
 def run(config=DEMO, *, output_dir=DEFAULT_OUTPUT, rebuild=False):
-    """Run the whole lifecycle in one call: prepare, solve, compare with a fresh surrogate, inspect."""
-    bundle_path = Path(output_dir) / "bundle"
-    bundle, action = prepare_bundle(bundle_path, rebuild=rebuild)
-    reloaded = SurrogateArtifactBundle.load(bundle_path, BUILD_SPEC)
-    model = solve(config, reloaded.surrogate)
-    fresh = solve(config, build_surrogate())
-    metrics = {
-        "action": action,
-        "bundle": str(bundle.path),
-        "build_fingerprint": bundle.manifest["build_fingerprint"],
-        "fresh_vs_reloaded_max_abs": run_differences(model, fresh),
-        **integrity_demo(bundle_path),
-    }
-    return ExampleResult(config, model, None, metrics)
+    """Run the whole lifecycle in one call: prepare, solve, compare with a fresh surrogate, inspect. See the advanced companion."""
+    return _advanced.run(config, output_dir=output_dir, rebuild=rebuild, case=_advanced_case())
 
 
 def settings_from_command_line(output_dir, rebuild):
-    """Apply ``--output-dir`` and ``--rebuild`` from a terminal; inside a notebook kernel, change nothing.
-
-    A Jupyter kernel's ``sys.argv`` holds the kernel's own arguments, so they are not parsed.
-    """
-    if "ipykernel" in sys.modules:
-        return output_dir, rebuild
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], allow_abbrev=False)
-    parser.add_argument("--output-dir", type=Path, default=output_dir, help="where the bundle is kept")
-    parser.add_argument("--rebuild", action="store_true", help="rebuild and replace an existing bundle")
-    args = parser.parse_args()
-    return args.output_dir, args.rebuild
+    """Apply ``--output-dir`` and ``--rebuild`` from a terminal; inside a notebook kernel, change nothing. See the advanced companion."""
+    return _advanced.settings_from_command_line(output_dir, rebuild, case=_advanced_case())
 
 
 # %% [markdown]

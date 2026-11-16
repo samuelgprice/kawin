@@ -33,9 +33,15 @@
 """How do two independent interfaces move as a middle layer grows? See the notes above."""
 
 # %%
+from pathlib import Path
+import sys
+
+# Run notebook cells with the extraction repository root as the working directory.
+sys.path.append(str(Path("packages/moving-boundary/examples").resolve()))
+
+from advanced import three_phase_similarity as _advanced
 from dataclasses import dataclass
 import argparse
-import sys
 
 import numpy as np
 
@@ -50,6 +56,7 @@ from moving_boundary.analytic import (
 from moving_boundary.equilibrium import CallableTernaryInterfaceEquilibrium
 from moving_boundary.mesh import CartesianFD1D, ProfileBuilder
 from moving_boundary.mesh.TransformedGrids import landau_grid
+from moving_boundary.run_diagnostics import inventory_drift
 from moving_boundary.solvers import MovingBoundaryIllingworthTernaryThreePhaseFD1DModel
 
 PHASES = ["A", "B", "C"]
@@ -117,11 +124,9 @@ COARSE_LONG_DRIFT = Config(case="drift", nodes=21, semi_log_dt=0.05, mesh_nodes=
 DEMO = Config()
 DEMO_DRIFT = Config(case="drift")
 
-# Numerical accuracy limits at DEMO settings only: 81 nodes/phase, semi_log_dt=0.025, mesh
-# 6001, t to 1, window t >= 4*T0. Each applies to both interfaces. k_rel: |k-k_exact|/|k_exact|.
-# eta_abs: max|eta-eta_exact|. profile_linf: max over phases of |c-c_exact| at four recorded
-# times. inventory_abs: largest component |final-initial| in composition x length.
-DEMO_LIMITS = {"k_rel": 2.5e-2, "eta_abs": 1.5e-2, "profile_linf": 1.0e-2, "inventory_abs": 1.0e-9}
+
+# Configuration-specific checks are documented in the advanced companion.
+DEMO_LIMITS = _advanced.DEMO_LIMITS
 
 # %% [markdown]
 # ## Settings
@@ -176,26 +181,26 @@ def build_model(config=DEMO, exact=None):
 
 
 # %% [markdown]
+# ## Short workflow
+#
+# Solve once with basic checks. Use the original `run` below for full validation.
+
+# %%
+def run_core(config=DEMO):
+    """Solve once and measure final inventory drift; detailed accuracy checks use ``run``."""
+    exact = exact_solution(config)
+    model = build_model(config, exact)
+    model.solve(config.duration, minDtFrac=1e-14)
+    absolute, relative = inventory_drift(
+        np.asarray([model.getTotalInventory(0.0), model.getTotalInventory()]), reduction="final")
+    return ExampleResult(config, model, exact, {"final_time": float(model.currentTime),
+                                               "inventory_abs": absolute, "inventory_rel": relative})
+
+
+# %% [markdown]
 # ## Evaluation and plots
 
 # %%
-def evaluate(model, config, exact):
-    """Return per-interface accuracy metrics; a short run has too few points in the window."""
-    s_ab, s_bc = exact.interface_positions(config.t_end)
-    metrics = {
-        "validity_time_a": semi_infinite_validity_time(DIFFUSIVITIES["A"], s_ab),
-        "validity_time_c": semi_infinite_validity_time(DIFFUSIVITIES["C"], DOMAIN_LENGTH - s_bc),
-    }
-    if config.t_end < T_FINAL:
-        return metrics
-    comparison = compare_three_phase_model_to_similarity(model, exact, T0)
-    metrics.update(
-        k_rel=np.asarray(comparison["k_rel_error"]).tolist(),
-        eta_abs=np.asarray(comparison["eta_max_abs_error"]).tolist(),
-        profile_linf=float(np.max(comparison["profile_linf"])),
-        inventory_abs=float(np.max(np.abs(comparison["inventory_drift"]))),
-    )
-    return metrics
 
 
 def run(config=DEMO):
@@ -206,56 +211,57 @@ def run(config=DEMO):
     return ExampleResult(config, model, exact, evaluate(model, config, exact))
 
 
+# %% [markdown]
+# ## Advanced checks and compatibility entry points
+#
+# The introductory path above needs only `run_core`. These wrappers retain
+# the original detailed workflow and command-line behavior.
+
+# %%
+def _advanced_case():
+    """Supply current case inputs to the optional detailed workflow. See the advanced companion."""
+    return _advanced.Case(
+        DEMO=DEMO,
+        DEMO_DRIFT=DEMO_DRIFT,
+        DEMO_LIMITS=DEMO_LIMITS,
+        DIFFUSIVITIES=DIFFUSIVITIES,
+        DOMAIN_LENGTH=DOMAIN_LENGTH,
+        FAR_FIELDS=FAR_FIELDS,
+        FAST=FAST,
+        FAST_DRIFT=FAST_DRIFT,
+        PHASES=PHASES,
+        T0=T0,
+        T_FINAL=T_FINAL,
+        description=__doc__,
+    )
+
+
+def evaluate(model, config, exact):
+    """Return per-interface accuracy metrics; a short run has too few points in the window. See the advanced companion."""
+    return _advanced.evaluate(model, config, exact, case=_advanced_case())
+
+
 def report(result):
-    """Print the final state and the metrics, with limits where they apply."""
-    print(f"interfaces {result.model.getInterfacePositions()}, etas {result.model.getInterfaceEtas()}; exact rates {result.exact.ks}")
-    limits = DEMO_LIMITS if result.config in (DEMO, DEMO_DRIFT) else {}
-    if not limits:
-        print("These settings have no accuracy limits; DEMO and DEMO_DRIFT are the configurations to judge accuracy by.")
-    for name, value in result.metrics.items():
-        print(f"{name}: {value}" + (f"  (limit {limits[name]:g})" if name in limits else ""))
+    """Print the final state and the metrics, with limits where they apply. See the advanced companion."""
+    return _advanced.report(result, case=_advanced_case())
 
 
 def plot(result):
-    """Plot both interfaces against the exact solution, and the final profiles; returns the figure."""
-    import matplotlib.pyplot as plt
-
-    model, exact = result.model, result.exact
-    times, interfaces = recorded_history(model.interfaceData)
-    similarity_time = times + T0
-    figure, (left, right) = plt.subplots(1, 2, figsize=(10, 4))
-    left.plot(similarity_time, interfaces, label=["s_AB, model", "s_BC, model"])
-    left.plot(similarity_time, exact.interface_positions(similarity_time), "--", label=["s_AB, exact", "s_BC, exact"])
-    left.set(xlabel="similarity time", ylabel="interface position", title="Interfaces")
-    left.legend(fontsize="small")
-    time = float(times[-1])
-    for phase, (x, c) in enumerate(model.getPhysicalPhaseProfiles(time)):
-        right.plot(x, c[:, 1], color=f"C{phase}", label=f"x(X), {PHASES[phase]}")
-        right.plot(x, exact.profile(x, time + T0, phase=phase)[:, 0], "--", color=f"C{phase}")
-    right.set(xlabel="position", ylabel="x(X)", title="Final profiles (dashed: exact)")
-    right.legend(fontsize="small")
-    figure.tight_layout()
-    return figure
+    """Plot both interfaces against the exact solution, and the final profiles; returns the figure. See the advanced companion."""
+    return _advanced.plot(result, case=_advanced_case())
 
 
 def settings_from_command_line(config, plot_figures):
-    """Apply ``--fast``, ``--case`` and ``--plot`` from a terminal; inside a notebook kernel, change nothing.
-
-    A Jupyter kernel's ``sys.argv`` holds the kernel's own arguments, so they are not parsed.
-    """
-    if "ipykernel" in sys.modules:
-        return config, plot_figures
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], allow_abbrev=False)
-    parser.add_argument("--fast", action="store_true", help="use quick check settings")
-    parser.add_argument("--case", choices=sorted(FAR_FIELDS), default="opposite")
-    parser.add_argument("--plot", action="store_true", help="show plots")
-    args = parser.parse_args()
-    choices = {("opposite", False): DEMO, ("drift", False): DEMO_DRIFT, ("opposite", True): FAST, ("drift", True): FAST_DRIFT}
-    return choices[(args.case, args.fast)], args.plot
+    """Apply ``--fast``, ``--case`` and ``--plot`` from a terminal; inside a notebook kernel, change nothing. See the advanced companion."""
+    return _advanced.settings_from_command_line(config, plot_figures, case=_advanced_case())
 
 
 # %% [markdown]
 # ## Run
+#
+# For the introductory path use `result = run_core(CONFIG)` after the Settings
+# and model cells. The compatibility entry point below also runs the detailed
+# checks in `advanced/three_phase_similarity.py`.
 
 # %%
 if __name__ == "__main__":

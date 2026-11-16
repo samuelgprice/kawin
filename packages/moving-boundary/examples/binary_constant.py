@@ -1,24 +1,19 @@
 """Small analytic, closed planar binary example; no database is needed."""
 
 import numpy as np
+from moving_boundary.providers.constant import ConstantDiffusivity as _ConstantDiffusivity
 from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel
 from kawin.diffusion.DiffusionParameters import TemperatureParameters
 from moving_boundary.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 
 
-class ConstantDiffusivity:
-    """Supply positive phase-uniform scalar diffusivities in solver units."""
 
-    def clearCache(self):
-        """No cache is retained by this analytic provider."""
 
-    def getInterdiffusivity(self, x, T, removeCache=True, phase=None,
-                           query_context=None):
-        """Return a scalar or temperature-shaped array for the requested phase."""
-        return np.squeeze(
-            np.ones(np.atleast_1d(T).shape) *
-            {"ALPHA": 1.0e-7, "BETA": 1.0e-5}[phase]
-        )
+class ConstantDiffusivity(_ConstantDiffusivity):
+    """The original no-argument provider, using the package's scalar adapter."""
+
+    def __init__(self):
+        super().__init__({"ALPHA": 1.0e-7, "BETA": 1.0e-5})
 
 
 def build_model(model_class=MovingBoundaryIllingworthFD1DModel):

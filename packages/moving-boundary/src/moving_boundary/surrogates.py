@@ -2392,6 +2392,22 @@ class TernaryMovingBoundaryThermodynamicsSurrogate:
                 seen.add(exact)
         return points[mask], self.diffusivities[context][phase][mask]
 
+    def get_diffusivity_samples(self, phase, *, query_context="general"):
+        """Return copies of retained usable ``(compositions, matrices)`` samples.
+
+        Arrays have shapes ``(n, 2)`` and ``(n, 2, 2)`` in this surrogate's
+        independent-component order and state basis. ``query_context`` is
+        ``"general"`` (bulk) or ``"interface"``. Source ordering is retained;
+        unusable and repeated rows are excluded exactly as during fitting.
+        This exposes fitted evidence, not predictions or all requested points.
+        """
+        if phase not in self.tieline_phases:
+            raise ValueError(f"Unknown tie-line phase {phase!r}; expected {list(self.tieline_phases)}.")
+        if query_context not in ("general", "interface"):
+            raise ValueError("query_context must be 'general' or 'interface'.")
+        points, matrices = self._fit_diffusivity_samples(query_context, phase)
+        return points.copy(), matrices.copy()
+
     def _has_general_fit_support_scalar_reference(self, phase, point):
         """Reference one-point fit-support check retained for batch equivalence."""
         support = self._fitSupport[phase]

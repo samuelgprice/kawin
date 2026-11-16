@@ -75,16 +75,21 @@
 
 # %%
 
+from pathlib import Path
+import sys
+
+# Run notebook cells with the extraction repository root as the working directory.
+sys.path.append(str(Path("packages/moving-boundary/examples").resolve()))
+
+from advanced import surrogate_workflow_fecrni_open as _advanced
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field
-from pathlib import Path
 import argparse
 import hashlib
 import importlib.metadata
 import importlib.util
 import json
 import os
-import sys
 import tempfile
 import time
 
@@ -93,6 +98,7 @@ from scipy.spatial import Delaunay
 
 from moving_boundary import surrogate_diagnostics as diagnostics
 from moving_boundary.analytic import recorded_history
+from moving_boundary.run_diagnostics import inventory_drift as measure_inventory_drift, evaluate_bulk_coverage
 from moving_boundary.mesh import CartesianFD1D, ProfileBuilder, StepProfile1D
 from moving_boundary.mesh.TransformedGrids import two_phase_landau_grids
 from moving_boundary.providers.pycalphad import create_pycalphad_thermodynamics_source
@@ -103,6 +109,9 @@ from moving_boundary.surrogate_artifacts import (
     SurrogateArtifactIntegrityError,
     canonicalize_build_spec,
     prepare_surrogate_artifact,
+    load_or_build_surrogate_artifact,
+    write_surrogate_diagnostic_members,
+    load_or_build_diagnostic_surrogate,
 )
 from moving_boundary.surrogate_comparison import evaluate_saved_surrogate_comparison
 from moving_boundary.surrogates import TernaryMovingBoundaryThermodynamicsSurrogate
@@ -120,7 +129,7 @@ A_BULK = np.array([0.39696, 0.0001])  # far-field [X_CR, X_NI] in BCC_A2
 B_BULK = np.array([0.139297, 0.142387])  # far-field [X_CR, X_NI] in FCC_A1
 HALF_LENGTH = 2000.0e-6 + 124.1e-6 / 2.0  # half of the symmetric couple [2, Table 3]
 B_PHASE_LENGTH = 2000.0e-6
-DATABASE = Path(__file__).resolve().parent / "FeCrNi_MatCalc_open.tdb"
+DATABASE = Path(_advanced.__file__).resolve().parent.parent / "FeCrNi_MatCalc_open.tdb"
 DATABASE_SHA256 = "f713f965a83292eaa91399a28720d13efb0298d6ef107dd5e6062bbe88d99061"  # bundled bytes
 DATABASE_ENV = "MB_OPEN_FECRNI_TDB"
 TC_CACHE_ENV = "MB_TC_CACHE_DIR"
@@ -229,28 +238,12 @@ def build_source(tdb):
     return create_pycalphad_thermodynamics_source(tdb, ELEMENTS, PHASES, use_default_phases=False, g_offset=0.0)
 
 
-def _project_to_simplex(z):
-    """Row-wise Euclidean projection onto ``{z >= 0, sum(z) = 1}`` (sort-based)."""
-    ordered = -np.sort(-z, axis=1)
-    cumulative = np.cumsum(ordered, axis=1) - 1.0
-    active = np.count_nonzero(ordered - cumulative / np.arange(1, z.shape[1] + 1) > 0, axis=1)
-    shift = cumulative[np.arange(len(z)), active - 1] / active
-    return np.maximum(z - shift[:, None], 0.0)
+from moving_boundary.sampling import ternary_simplex_points
 
 
 def simplex_bulk_points(spacing, floor=1.0e-5):
-    """Regular ``[X_CR, X_NI]`` grid over the ternary simplex, every component >= ``floor``.
-
-    The same grid as ``ternary_fecrni_lee1996.simplex_bulk_points``: grid points are projected
-    onto the buffered simplex so all three components are treated alike, kept in grid order
-    and rounded to 10 decimals.
-    """
-    count = int(round(1.0 / spacing))
-    grid = np.array([[i, j, count - i - j] for i in range(count + 1) for j in range(count + 1 - i)], dtype=np.float64) / count
-    scale = 1.0 - 3.0 * floor
-    z = np.maximum((grid - floor) / scale, 0.0)
-    z = np.where(z.sum(axis=1, keepdims=True) > 1.0, _project_to_simplex(z), z)
-    return np.round(floor + scale * z, 10)[:, :2]
+    """Return the package's ordered, buffered ternary composition grid."""
+    return ternary_simplex_points(spacing, floor)
 
 
 def sample_surrogate(source, phases, config, *, kinetics_records=None):
@@ -303,40 +296,10 @@ ROLES = ("failed_bulk_points", "invalid_bulk_points")
 
 
 def _publish_or_reload(bundle_path, spec, build, rebuild):
-    """Reload strictly, or build/publish samples plus hash-checked calculation records.
-
-    Existing bundles without a diagnostics sidecar remain usable; only new builds capture
-    records. ``build(records)`` appends records from the actual source calculations.
-    """
-    bundle_path = Path(bundle_path)
-    if not rebuild:
-        hint = f"Use --rebuild (REBUILD = True) to replace {bundle_path}."
-        if (bundle_path / "manifest.json").exists():
-            try:
-                return prepare_surrogate_artifact(bundle_path, spec, _no_builder, reload=True, required_members=ROLES), "reloaded"
-            except (SurrogateArtifactCompatibilityError, SurrogateArtifactIntegrityError) as exc:
-                raise type(exc)(f"{exc}\n{hint}") from exc
-        if bundle_path.is_dir() and any(bundle_path.iterdir()):
-            raise SurrogateArtifactIntegrityError(f"{bundle_path} has files but no manifest.json.\n{hint}")
-    bundle_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as directory:
-        def builder():
-            records = []
-            surrogate = build(records)
-            members = {}
-            for role in ROLES:
-                report = Path(directory) / f"{role}.json"
-                report.write_text(json.dumps(surrogate.metadata[role], indent=2) + "\n", encoding="utf-8")
-                members[role] = {"path": report, "schema_version": 1}
-            record_path = Path(directory) / "kinetics_diagnostics.jsonl"
-            with record_path.open("w", encoding="utf-8") as stream:
-                stream.write(json.dumps({"record_type": "metadata", "schema_version": 1,
-                                         "backend": spec["source"]["engine"], "elements": ELEMENTS}) + "\n")
-                for record in records:
-                    stream.write(json.dumps({**record, "backend": spec["source"]["engine"]}) + "\n")
-            members["kinetics_diagnostics"] = {"path": record_path, "schema_version": 1}
-            return surrogate, members
-        return prepare_surrogate_artifact(bundle_path, spec, builder, required_members=ROLES), "built"
+    """Strictly reuse or publish samples and genuine captured calculation records."""
+    return load_or_build_diagnostic_surrogate(
+        bundle_path, spec, build, rebuild=rebuild, report_roles=ROLES,
+        capture_kinetics=True, backend=spec["source"]["engine"], elements=ELEMENTS)
 
 
 def _no_builder():
@@ -351,44 +314,6 @@ def prepare_pycalphad_bundle(config, tdb, *, output_dir=DEFAULT_OUTPUT, rebuild=
                               lambda records: sample_surrogate(build_source(tdb), PHASES, config, kinetics_records=records), rebuild)
 
 
-def require_thermocalc():
-    """Stop before any work if TC-Python cannot be imported; never imports it here."""
-    try:
-        available = importlib.util.find_spec("tc_python") is not None
-    except (ImportError, ValueError):
-        available = False
-    if not available:
-        raise ThermoCalcUnavailableError(
-            "Live Thermo-Calc work (--thermocalc build or --tc-fresh-queries) needs TC-Python (tc_python) and a "
-            "Thermo-Calc licence. Without them, use --thermocalc saved with an existing bundle, or --thermocalc off.")
-
-
-def resolve_tc_cache(path=None, output_dir=DEFAULT_OUTPUT):
-    """Short Thermo-Calc cache folder, separate from the bundles; never changes machine settings."""
-    cache = Path(path or os.environ.get(TC_CACHE_ENV) or DEFAULT_TC_CACHE).resolve()
-    if cache.is_relative_to(Path(output_dir).resolve()):
-        raise ValueError(f"Keep the Thermo-Calc cache ({cache}) outside the bundle folder {output_dir}.")
-    if len(str(cache)) > TC_CACHE_MAX_CHARS:
-        raise ValueError(f"Thermo-Calc cache path is {len(str(cache))} characters ({cache}); Thermo-Calc truncates "
-                         f"long workspace paths, so use --tc-cache-dir or {TC_CACHE_ENV} with at most "
-                         f"{TC_CACHE_MAX_CHARS} characters.")
-    return cache
-
-
-def open_thermocalc(tdb, cache_dir):
-    """Start a Thermo-Calc session for the open database (needs TC-Python and a licence).
-
-    Uses the suffixed composition-set labels, which the adapter matches exactly. For a user
-    database that declares VA without entering it, the adapter selects VA as a system element
-    itself (physical components stay FE, CR, NI).
-    """
-    from moving_boundary.providers.thermocalc import TCPythonThermodynamics, ThermoCalcConfig
-
-    config = ThermoCalcConfig(user_database_path=Path(tdb), elements=tuple(ELEMENTS), phases=tuple(TC_PHASES),
-                              reference_element="FE", use_default_phases=False, cache_dir=Path(cache_dir))
-    return TCPythonThermodynamics(config)
-
-
 def prepare_thermocalc_bundle(config, tdb, therm, *, output_dir=DEFAULT_OUTPUT, rebuild=False):
     """Build or strictly reload (after a live spec check) the bundle in ``output_dir/thermocalc``."""
     tdb = resolve_database(tdb)
@@ -396,126 +321,10 @@ def prepare_thermocalc_bundle(config, tdb, therm, *, output_dir=DEFAULT_OUTPUT, 
                               lambda records: sample_surrogate(therm, TC_PHASES, config, kinetics_records=records), rebuild)
 
 
-def load_saved_thermocalc_bundle(path, config, tdb):
-    """Load a saved Thermo-Calc bundle without Thermo-Calc and check its backend-free settings.
-
-    The bundle is verified against its own manifest; its database digest, system, tie-line and
-    bulk settings must equal this configuration's, and its source engine must be thermocalc.
-    """
-    path = Path(path)
-    hint = ("Build one with --thermocalc build on a machine with TC-Python and a licence, "
-            "or point --thermocalc-bundle at an existing compatible bundle.")
-    if not (path / "manifest.json").is_file():
-        raise FileNotFoundError(f"No saved Thermo-Calc bundle at {path}. {hint}")
-    bundle = SurrogateArtifactBundle.load_published(path)
-    recorded = bundle.manifest["build_spec"]
-    expected = canonicalize_build_spec(shared_spec(config, resolve_database(tdb), TC_PHASES))
-    differences = [key for key, value in expected.items() if recorded.get(key) != value]
-    if recorded.get("source", {}).get("engine") != "thermocalc":
-        differences.append("source.engine")
-    if differences:
-        raise SurrogateArtifactCompatibilityError(
-            f"Saved Thermo-Calc bundle {path} does not match these settings ({', '.join(differences)}). {hint}")
-    return bundle
-
-
 # %% [markdown]
 # ## Diagnostics and comparison
 
 # %%
-
-def _stats(values):
-    finite = np.asarray(values, dtype=np.float64)
-    finite = finite[np.isfinite(finite)]
-    return {"count": int(finite.size), "max": float(finite.max()) if finite.size else None,
-            "mean": float(finite.mean()) if finite.size else None}
-
-
-def _split(values, training):
-    """Summaries of ``values`` at training and at held-out queries, reported separately."""
-    values, training = np.asarray(values, dtype=np.float64), np.asarray(training, dtype=bool)
-    return {"training": _stats(values[training]), "held_out": _stats(values[~training])}
-
-
-def loo_indices(surrogate, config):
-    """At most ``loo_max_per_phase`` evenly spread rows of each phase's fitted bulk samples."""
-    counts = {phase: len(surrogate._fitSupport[phase]["points"]) for phase in surrogate.tieline_phases}
-    return {phase: np.unique(np.linspace(0, n - 1, min(config.loo_max_per_phase, n)).round().astype(np.int64))
-            for phase, n in counts.items()}
-
-
-def saved_bundle_diagnostics(surrogate, config):
-    """Diagnostics from the saved bundle alone: no backend is queried.
-
-    Returns ``(summary, reports)``: construction provenance counts, leave-one-out (internal
-    cross-validation on at most ``loo_max_per_phase`` samples per phase) and the heuristic
-    interface/bulk consistency flags.
-    """
-    construction = diagnostics.evaluate_surrogate_construction_diagnostics(surrogate)
-    loo = diagnostics.evaluate_diffusivity_leave_one_out(surrogate, sample_indices=loo_indices(surrogate, config))
-    consistency = diagnostics.evaluate_interface_bulk_diffusivity_consistency(surrogate)
-    summary = {
-        "tie_lines": int(len(surrogate.eta_samples)),
-        "fit_points": {phase: int(len(surrogate._fitSupport[phase]["points"])) for phase in surrogate.tieline_phases},
-        "construction_records": len(construction["records"]),
-        "leave_one_out": {phase: dict(report["summary"]) for phase, report in loo["phase_reports"].items()},
-        "consistency": dict(consistency["summary"]),
-    }
-    return summary, {"construction": construction, "leave_one_out": loo, "consistency": consistency}
-
-
-def fresh_query_diagnostics(surrogate, source, config):
-    """Fresh queries of the backend that built ``surrogate``: approximation discrepancy.
-
-    Tie-line endpoint errors, interface matrix errors and bulk matrix errors are each split
-    into queries that coincide with training samples (training eta, or a bulk composition
-    within ``TRAINING_DISTANCE`` of a stored sample) and held-out ones. Backend failures are
-    recorded, not raised.
-    """
-    tielines = diagnostics.evaluate_tieline_diagnostics(
-        surrogate, thermodynamics=source, eta_count=config.fresh_tieline_eta_count, on_truth_error="record")
-    matrices = diagnostics.evaluate_diffusivity_diagnostics(
-        surrogate, thermodynamics=source, interface_eta_count=config.fresh_interface_eta_count,
-        bulk_axes=config.fresh_bulk_axes, on_truth_error="record")
-    training_eta = np.asarray(tielines["training_mask"], dtype=bool)
-    summary = {"tie_lines": {"queries": int(training_eta.size), "training": int(training_eta.sum()),
-                             "failures": len(tielines["failures"]),
-                             "endpoint_error": {phase: _split(values, training_eta) for phase, values in
-                                                tielines["truth"]["endpoint_error_norm"].items()}},
-               "interface_matrices": {}, "bulk_matrices": {}, "failures": len(matrices["failures"])}
-    for phase, report in matrices["interface"]["phases"].items():
-        summary["interface_matrices"][phase] = _split(report["truth"]["matrix_relative_error"], report["training_mask"])
-    for phase, report in matrices["bulk"]["phases"].items():
-        training = np.asarray(report["nearest_training_distance"]) <= TRAINING_DISTANCE
-        summary["bulk_matrices"][phase] = {**_split(report["truth"]["matrix_relative_error"], training),
-                                           "invalid_predictions": int(np.count_nonzero(~report["valid"]))}
-    return summary, {"tielines": tielines, "diffusivity": matrices}
-
-
-def compare_bundles(reference, candidate, config):
-    """Compare the pycalphad (reference) and Thermo-Calc (candidate) saved bundles.
-
-    Uses ``PHASE_MAPPING`` because the backends label the same phases differently. A summary
-    of own-path geometry, matrices on own paths and at identical compositions, and bulk
-    coverage is returned with the full report. Identical-composition interface maxima are NaN
-    when ``interface_cross_shared_fraction`` is 0 (no cross query had support).
-    """
-    report = evaluate_saved_surrogate_comparison(
-        reference, candidate, interface_eta_count=config.comparison_interface_eta_count,
-        bulk_grid_counts=config.comparison_bulk_grid_counts, phase_mapping=PHASE_MAPPING)
-    error = "symmetric_relative_frobenius_error"
-    summary = {
-        "phase_labels": report["phase_labels"]["mapping"],
-        "max_endpoint_displacement": report["tieline"]["summary"]["maximum_endpoint_displacement"],
-        "interface_own_paths_max": {p: r["own_paths"]["summary"][error]["maximum"] for p, r in report["interface"]["phases"].items()},
-        "interface_cross_shared_fraction": report["interface"]["summary"]["cross_shared_fraction"],
-        "interface_at_reference_compositions_max": {
-            p: r["at_reference_compositions"]["summary"][error]["maximum"] for p, r in report["interface"]["phases"].items()},
-        "bulk_shared_max": {p: r["comparison"]["summary"][error]["maximum"] for p, r in report["bulk"]["phases"].items()},
-        "bulk_coverage": dict(report["bulk"]["summary"]["coverage_counts"]),
-        "build_spec_differences": [item["path"] for item in report["build_spec_differences"]],
-    }
-    return summary, report
 
 
 # %% [markdown]
@@ -547,18 +356,20 @@ def build_model(config=WORKFLOW, surrogate=None, *, tdb=None, output_dir=DEFAULT
         semiLog_dt=config.semi_log_dt, semiLogT0=1.0e-6)
 
 
-def inventory_drift(inventory):
-    """Largest solute-inventory drift over every recorded time and component.
+def run_core(config=WORKFLOW, *, tdb=None, output_dir=DEFAULT_OUTPUT, rebuild=False):
+    """Prepare one pycalphad bundle, solve once and inspect conservation/coverage.
 
-    ``inventory`` has one row per recorded time and one column per independent component;
-    row 0 is the initial inventory. Returns ``(absolute, relative)``: the maximum of
-    ``|I(t, k) - I(0, k)|`` (inventory units, here mole fraction times m) and the maximum of
-    that difference divided by ``|I(0, k)|``. An excursion that later returns to the initial
-    value is still counted.
+    No fresh-query, cross-validation or Thermo-Calc workflow runs here.
     """
-    inventory = np.atleast_2d(np.asarray(inventory, dtype=np.float64))
-    change = np.abs(inventory - inventory[0])
-    return float(np.max(change)), float(np.max(change / np.abs(inventory[0])))
+    bundle, action = prepare_pycalphad_bundle(config, tdb, output_dir=output_dir, rebuild=rebuild)
+    model, metrics = simulate(config, bundle.surrogate)
+    metrics["action"] = action
+    return ExampleResult(config, model, None, metrics)
+
+
+def inventory_drift(inventory):
+    """Largest absolute and component-relative drift over the whole history."""
+    return measure_inventory_drift(inventory, reduction="max")
 
 
 def simulate(config, surrogate):
@@ -574,10 +385,9 @@ def simulate(config, surrogate):
     times, positions = recorded_history(model.interfaceData)
     _, inventory = recorded_history(model.inventoryData)
     absolute_drift, relative_drift = inventory_drift(inventory)
-    outside = {}
-    for phase, state in zip(surrogate.tieline_phases, model.getTransformedState(float(times[-1]))):
-        points = np.asarray(surrogate._fitSupport[phase]["points"], dtype=np.float64)
-        outside[phase] = int(np.count_nonzero(Delaunay(points).find_simplex(np.asarray(state)) < 0))
+    coverage = evaluate_bulk_coverage(surrogate, dict(zip(
+        surrogate.tieline_phases, model.getTransformedState(float(times[-1])))))
+    outside = {phase: report["outside"] for phase, report in coverage.items()}
     positions = np.ravel(positions)
     return model, {"final_time": float(times[-1]), "recorded_steps": int(len(times)),
                    "initial_interface_m": float(positions[0]), "final_interface_m": float(positions[-1]),
@@ -587,152 +397,147 @@ def simulate(config, surrogate):
 
 
 # %% [markdown]
-# ## Running
+# ## Advanced checks and compatibility entry points
+#
+# The introductory path above needs only `run_core`. These wrappers retain
+# the original detailed workflow and command-line behavior.
 
 # %%
+def require_thermocalc():
+    """Stop before any work if TC-Python cannot be imported; never imports it here. See the advanced companion."""
+    return _advanced.require_thermocalc(case=_advanced_case())
+
+
+def resolve_tc_cache(path=None, output_dir=DEFAULT_OUTPUT):
+    """Short Thermo-Calc cache folder, separate from the bundles; never changes machine settings. See the advanced companion."""
+    return _advanced.resolve_tc_cache(path, output_dir, case=_advanced_case())
+
+
+def open_thermocalc(tdb, cache_dir):
+    """Start a Thermo-Calc session for the open database (needs TC-Python and a licence). See the advanced companion."""
+    return _advanced.open_thermocalc(tdb, cache_dir, case=_advanced_case())
+
+
+def load_saved_thermocalc_bundle(path, config, tdb):
+    """Load a saved Thermo-Calc bundle without Thermo-Calc and check its backend-free settings. See the advanced companion."""
+    return _advanced.load_saved_thermocalc_bundle(path, config, tdb, case=_advanced_case())
+
+
+def _stats(values):
+    """Run this step of the detailed workflow. See the advanced companion."""
+    return _advanced._stats(values, case=_advanced_case())
+
+
+def _split(values, training):
+    """Summaries of ``values`` at training and at held-out queries, reported separately. See the advanced companion."""
+    return _advanced._split(values, training, case=_advanced_case())
+
+
+def loo_indices(surrogate, config):
+    """At most ``loo_max_per_phase`` evenly spread rows of each phase's fitted bulk samples. See the advanced companion."""
+    return _advanced.loo_indices(surrogate, config, case=_advanced_case())
+
+
+def saved_bundle_diagnostics(surrogate, config):
+    """Diagnostics from the saved bundle alone: no backend is queried. See the advanced companion."""
+    return _advanced.saved_bundle_diagnostics(surrogate, config, case=_advanced_case())
+
+
+def fresh_query_diagnostics(surrogate, source, config):
+    """Fresh queries of the backend that built ``surrogate``: approximation discrepancy. See the advanced companion."""
+    return _advanced.fresh_query_diagnostics(surrogate, source, config, case=_advanced_case())
+
+
+def compare_bundles(reference, candidate, config):
+    """Compare the pycalphad (reference) and Thermo-Calc (candidate) saved bundles. See the advanced companion."""
+    return _advanced.compare_bundles(reference, candidate, config, case=_advanced_case())
+
+
+def _advanced_case():
+    """Supply current case inputs to the optional detailed workflow. See the advanced companion."""
+    return _advanced.Case(
+        DATABASE_ENV=DATABASE_ENV,
+        DEFAULT_TC_CACHE=DEFAULT_TC_CACHE,
+        ELEMENTS=ELEMENTS,
+        ExampleResult=ExampleResult,
+        PHASE_MAPPING=PHASE_MAPPING,
+        TC_CACHE_ENV=TC_CACHE_ENV,
+        TC_CACHE_MAX_CHARS=TC_CACHE_MAX_CHARS,
+        TC_PHASES=TC_PHASES,
+        TRAINING_DISTANCE=TRAINING_DISTANCE,
+        ThermoCalcUnavailableError=ThermoCalcUnavailableError,
+        description=__doc__,
+        _backend_steps=_backend_steps,
+        _split=_split,
+        _stats=_stats,
+        _timed=_timed,
+        build_source=build_source,
+        check_options=check_options,
+        compare_bundles=compare_bundles,
+        database_digest=database_digest,
+        fresh_query_diagnostics=fresh_query_diagnostics,
+        load_saved_thermocalc_bundle=load_saved_thermocalc_bundle,
+        loo_indices=loo_indices,
+        open_thermocalc=open_thermocalc,
+        prepare_pycalphad_bundle=prepare_pycalphad_bundle,
+        prepare_thermocalc_bundle=prepare_thermocalc_bundle,
+        require_thermocalc=require_thermocalc,
+        resolve_database=resolve_database,
+        resolve_tc_cache=resolve_tc_cache,
+        saved_bundle_diagnostics=saved_bundle_diagnostics,
+        shared_spec=shared_spec,
+        simulate=simulate,
+    )
+
 
 def check_options(thermocalc="off", *, tc_fresh_queries=False):
-    """Refuse inconsistent or unavailable live Thermo-Calc requests before any work starts."""
-    if thermocalc not in {"off", "saved", "build"}:
-        raise ValueError("thermocalc must be 'off', 'saved' or 'build'.")
-    if tc_fresh_queries and thermocalc != "build":
-        raise ThermoCalcUnavailableError(
-            "--tc-fresh-queries queries Thermo-Calc live, so it needs --thermocalc build with TC-Python and a "
-            "licence; saved bundles are checked offline with the saved-bundle diagnostics and the comparison.")
-    if thermocalc == "build":
-        require_thermocalc()
+    """Refuse inconsistent or unavailable live Thermo-Calc requests before any work starts. See the advanced companion."""
+    return _advanced.check_options(thermocalc, tc_fresh_queries=tc_fresh_queries, case=_advanced_case())
 
 
 def _timed(timings, key, function):
-    start = time.perf_counter()
-    value = function()
-    timings[key] = round(time.perf_counter() - start, 3)
-    return value
+    """Run this step of the detailed workflow. See the advanced companion."""
+    return _advanced._timed(timings, key, function, case=_advanced_case())
 
 
 def _backend_steps(label, bundle, action, config, fresh_source, metrics, reports, models, timings):
-    """Saved-bundle diagnostics, optional fresh queries and the simulation for one bundle."""
-    surrogate = bundle.surrogate
-    record_path = (bundle.member_path("kinetics_diagnostics")
-                   if "kinetics_diagnostics" in bundle.manifest["members"] else None)
-    entry = metrics[label] = {"bundle": str(bundle.path), "action": action,
-                              "build_fingerprint": bundle.manifest["build_fingerprint"]}
-    entry["saved_bundle"], reports[f"{label}_saved"] = _timed(
-        timings, f"{label}_saved_diagnostics", lambda: saved_bundle_diagnostics(surrogate, config))
-    reports[f"{label}_saved"]["sampled_diffusivities"] = {
-        "surrogate": surrogate, "kinetics_diagnostics": record_path}
-    if fresh_source is not None:
-        entry["fresh_queries"], reports[f"{label}_fresh"] = _timed(
-            timings, f"{label}_fresh_queries", lambda: fresh_query_diagnostics(surrogate, fresh_source, config))
-    models[label], entry["simulation"] = _timed(timings, f"{label}_simulation", lambda: simulate(config, surrogate))
+    """Saved-bundle diagnostics, optional fresh queries and the simulation for one bundle. See the advanced companion."""
+    return _advanced._backend_steps(label, bundle, action, config, fresh_source, metrics, reports, models, timings, case=_advanced_case())
 
 
 def run(config=WORKFLOW, *, tdb=None, output_dir=DEFAULT_OUTPUT, rebuild=False, thermocalc="off",
         thermocalc_bundle=None, tc_cache_dir=None, pycalphad_fresh_queries=True, tc_fresh_queries=False):
-    """Run the whole workflow; returns an :class:`ExampleResult`.
-
-    Options are checked first (``check_options``), so an unavailable live Thermo-Calc request
-    stops before any bundle folder is created. In ``build`` mode the Thermo-Calc session is
-    started before anything else for the same reason. ``saved`` never imports ``tc_python``.
-    """
-    check_options(thermocalc, tc_fresh_queries=tc_fresh_queries)
-    tdb = resolve_database(tdb)
-    metrics, reports, models, timings = {"database_sha256": database_digest(tdb)}, {}, {}, {}
-    metrics["timings_s"] = timings
-    with ExitStack() as stack:
-        tc_bundle = None
-        if thermocalc == "build":
-            cache = resolve_tc_cache(tc_cache_dir, output_dir)
-            therm = _timed(timings, "thermocalc_session_start", lambda: stack.enter_context(open_thermocalc(tdb, cache)))
-            tc_bundle, tc_action = _timed(timings, "thermocalc_bundle", lambda: prepare_thermocalc_bundle(
-                config, tdb, therm, output_dir=output_dir, rebuild=rebuild))
-            _backend_steps("thermocalc", tc_bundle, tc_action, config, therm if tc_fresh_queries else None,
-                           metrics, reports, models, timings)
-            metrics["thermocalc"]["tc_cache_dir"] = str(cache)
-        elif thermocalc == "saved":
-            path = Path(thermocalc_bundle) if thermocalc_bundle else Path(output_dir) / "thermocalc"
-            tc_bundle = _timed(timings, "thermocalc_bundle", lambda: load_saved_thermocalc_bundle(path, config, tdb))
-            _backend_steps("thermocalc", tc_bundle, "loaded saved", config, None, metrics, reports, models, timings)
-    pyc_bundle, pyc_action = _timed(timings, "pycalphad_bundle", lambda: prepare_pycalphad_bundle(
-        config, tdb, output_dir=output_dir, rebuild=rebuild))
-    fresh = _timed(timings, "pycalphad_fresh_source", lambda: build_source(tdb)) if pycalphad_fresh_queries else None
-    _backend_steps("pycalphad", pyc_bundle, pyc_action, config, fresh, metrics, reports, models, timings)
-    if tc_bundle is not None:
-        metrics["comparison"], reports["comparison"] = _timed(
-            timings, "comparison", lambda: compare_bundles(pyc_bundle, tc_bundle, config))
-    timings["total"] = round(sum(timings.values()), 3)
-    return ExampleResult(config, models["pycalphad"], None, metrics, reports, models)
+    """Run the whole workflow; returns an :class:`ExampleResult`. See the advanced companion."""
+    return _advanced.run(config, tdb=tdb, output_dir=output_dir, rebuild=rebuild, thermocalc=thermocalc, thermocalc_bundle=thermocalc_bundle, tc_cache_dir=tc_cache_dir, pycalphad_fresh_queries=pycalphad_fresh_queries, tc_fresh_queries=tc_fresh_queries, case=_advanced_case())
 
 
 def report(result):
-    """Print the summaries, saying what each kind of result can show."""
-    print("Saved-bundle diagnostics (no backend): provenance, leave-one-out cross-validation, consistency heuristic.")
-    print("Fresh queries (same backend): approximation discrepancy; training and held-out queries are separate.")
-    print("Comparison: differences between the two surrogates; neither backend is ground truth.")
-    print("Simulation: inventory drift over the history, final-state coverage and interface position; "
-          "not an accuracy check.")
-    print(json.dumps(result.metrics, indent=2, default=float))
+    """Print the summaries, saying what each kind of result can show. See the advanced companion."""
+    return _advanced.report(result, case=_advanced_case())
 
 
 def figures(result, *, renderer=None):
-    """Plotly figures for sampled values, leave-one-out, fresh queries and comparison.
-
-    Needs the optional ``moving-boundary[diagnostics]`` extra; without it the diagnostics
-    plotting functions raise an ImportError naming it. Returns ``{name: figure}``.
-    """
-    from moving_boundary.surrogate_comparison import plot_saved_surrogate_comparison
-
-    output = {}
-    for label in ("pycalphad", "thermocalc"):
-        if f"{label}_saved" not in result.reports:
-            continue
-        sampled = result.reports[f"{label}_saved"]["sampled_diffusivities"]
-        output[f"{label} sampled diffusivities"] = diagnostics.plot_selected_diffusivity_calculations(
-            sampled["surrogate"], sampled["kinetics_diagnostics"], renderer=renderer)
-        loo = result.reports[f"{label}_saved"]["leave_one_out"]
-        for phase in loo["phases"]:
-            output[f"{label} leave-one-out {phase}"] = diagnostics.plot_diffusivity_leave_one_out(loo, phase, renderer=renderer)
-        if f"{label}_fresh" in result.reports:
-            output[f"{label} tie lines"] = diagnostics.plot_tieline_diagnostics(
-                result.reports[f"{label}_fresh"]["tielines"], renderer=renderer)
-    if "comparison" in result.reports:
-        output["comparison"] = plot_saved_surrogate_comparison(result.reports["comparison"], renderer=renderer)
-    return output
+    """Plotly figures for sampled values, leave-one-out, fresh queries and comparison. See the advanced companion."""
+    return _advanced.figures(result, renderer=renderer, case=_advanced_case())
 
 
 def settings_from_command_line(settings):
-    """Apply command-line options from a terminal; inside a notebook kernel, change nothing.
+    """Apply command-line options from a terminal; inside a notebook kernel, change nothing. See the advanced companion."""
+    return _advanced.settings_from_command_line(settings, case=_advanced_case())
 
-    ``settings`` is a dict with the Settings-cell names in lower case; a modified copy is returned.
-    """
-    if "ipykernel" in sys.modules:
-        return dict(settings)
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], allow_abbrev=False)
-    parser.add_argument("--tdb", default=settings["tdb"], help=f"database (default: bundled; or set {DATABASE_ENV})")
-    parser.add_argument("--output-dir", type=Path, default=settings["output_dir"], help="where bundles are kept")
-    parser.add_argument("--rebuild", action="store_true", help="rebuild and replace existing bundles")
-    parser.add_argument("--thermocalc", choices=("off", "saved", "build"), default=settings["thermocalc"])
-    parser.add_argument("--thermocalc-bundle", type=Path, default=settings["thermocalc_bundle"],
-                        help="saved Thermo-Calc bundle (default: <output-dir>/thermocalc)")
-    parser.add_argument("--tc-cache-dir", type=Path, default=settings["tc_cache_dir"],
-                        help=f"short Thermo-Calc cache folder (or set {TC_CACHE_ENV})")
-    parser.add_argument("--no-pycalphad-fresh-queries", action="store_true", help="skip fresh pycalphad queries")
-    parser.add_argument("--tc-fresh-queries", action="store_true", help="fresh Thermo-Calc queries (live, build mode)")
-    parser.add_argument("--plot", action="store_true", help="show Plotly figures (needs the diagnostics extra)")
-    args = parser.parse_args()
-    try:
-        resolve_database(args.tdb)
-        check_options(args.thermocalc, tc_fresh_queries=args.tc_fresh_queries)
-    except (FileNotFoundError, ThermoCalcUnavailableError) as exc:
-        parser.error(str(exc))
-    return {**settings, "tdb": args.tdb, "output_dir": args.output_dir, "rebuild": args.rebuild,
-            "thermocalc": args.thermocalc, "thermocalc_bundle": args.thermocalc_bundle,
-            "tc_cache_dir": args.tc_cache_dir, "pycalphad_fresh_queries": not args.no_pycalphad_fresh_queries,
-            "tc_fresh_queries": args.tc_fresh_queries, "plot": args.plot}
+
+# %% [markdown]
+# ## Running
+
+# %%
 
 
 # %% [markdown]
 # ## Run
+#
+# For the introductory path use `result = run_core(CONFIG)` after the Settings
+# and model cells. The compatibility entry point below also runs the detailed
+# checks in `advanced/surrogate_workflow_fecrni_open.py`.
 #
 # Builds or reloads each bundle, runs its diagnostics and simulation, compares the bundles when
 # there are two, and prints the summaries with step timings.

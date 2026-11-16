@@ -472,3 +472,111 @@ def prepare_surrogate_artifact(
         return SurrogateArtifactBundle.load(bundle_path, build_spec, required_members=required_members)
     surrogate, members = builder()
     return SurrogateArtifactBundle.publish(bundle_path, surrogate, build_spec, members)
+
+
+def load_or_build_surrogate_artifact(
+    bundle_path: str | Path,
+    build_spec: Mapping[str, Any],
+    builder: Callable[[], tuple[TernaryMovingBoundaryThermodynamicsSurrogate, Mapping[str, Any]]],
+    *,
+    rebuild: bool = False,
+    required_members: Sequence[str] = (),
+) -> tuple[SurrogateArtifactBundle, str]:
+    """Strictly reuse an existing bundle, or build into a missing/empty folder.
+
+    Return ``(bundle, "built" | "reloaded")``. A damaged/incompatible bundle
+    or a nonempty directory without a manifest raises without invoking the
+    builder. Only explicit ``rebuild=True`` replaces existing data. Builders
+    follow :func:`prepare_surrogate_artifact`'s contract. Required member roles
+    are enforced on builds as well as reloads, before publication.
+    """
+    bundle_path = Path(bundle_path)
+    hint = f"Set rebuild=True (REBUILD = True or --rebuild) to replace {bundle_path}."
+    if not rebuild:
+        if (bundle_path / "manifest.json").exists():
+            try:
+                return SurrogateArtifactBundle.load(bundle_path, build_spec, required_members), "reloaded"
+            except (SurrogateArtifactCompatibilityError, SurrogateArtifactIntegrityError) as exc:
+                raise type(exc)(f"{exc}\n{hint}") from exc
+        if bundle_path.is_dir() and any(bundle_path.iterdir()):
+            raise SurrogateArtifactIntegrityError(f"{bundle_path} has files but no manifest.json.\n{hint}")
+        if bundle_path.exists() and not bundle_path.is_dir():
+            raise SurrogateArtifactIntegrityError(f"Bundle destination is not a directory: {bundle_path}.")
+    surrogate, members = builder()
+    missing = sorted(set(required_members) - set(members))
+    if missing:
+        raise SurrogateArtifactIntegrityError(f"Builder omitted required members: {missing}.")
+    return SurrogateArtifactBundle.publish(bundle_path, surrogate, build_spec, members), "built"
+
+
+def write_surrogate_diagnostic_members(
+    directory: str | Path,
+    surrogate: TernaryMovingBoundaryThermodynamicsSurrogate,
+    *,
+    report_roles: Sequence[str] = (),
+    kinetics_records=None,
+    backend: str | None = None,
+    elements: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Write diagnostic sidecars and return descriptors for bundle publication.
+
+    ``directory`` is a caller-owned staging directory, which must remain alive
+    until publication copies the members. Reports come from surrogate metadata;
+    supported roles are ``failed_bulk_points`` and ``invalid_bulk_points``.
+    Optional kinetics records must be genuine captured backend calculations.
+    ``None`` omits that sidecar; an empty iterable writes its metadata only.
+    This helper never queries a backend or evaluates surrogate predictions.
+    Existing sidecar schemas and JSON encoding are preserved.
+    """
+    if any(role not in ("failed_bulk_points", "invalid_bulk_points") for role in report_roles):
+        raise ValueError("Unsupported diagnostic report role.")
+    if kinetics_records is not None and (not backend or elements is None):
+        raise ValueError("backend and elements are required with kinetics_records.")
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    members = {}
+    for role in report_roles:
+        report = directory / f"{role}.json"
+        report.write_text(json.dumps(surrogate.metadata[role], indent=2) + "\n", encoding="utf-8")
+        members[role] = {"path": report, "schema_version": 1}
+    if kinetics_records is not None:
+        record_path = directory / "kinetics_diagnostics.jsonl"
+        with record_path.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps({"record_type": "metadata", "schema_version": 1,
+                                     "backend": backend, "elements": list(elements)}) + "\n")
+            for record in kinetics_records:
+                stream.write(json.dumps({**record, "backend": backend}) + "\n")
+        members["kinetics_diagnostics"] = {"path": record_path, "schema_version": 1}
+    return members
+
+
+def load_or_build_diagnostic_surrogate(
+    bundle_path, build_spec, builder, *, rebuild=False, report_roles=(),
+    capture_kinetics=False, backend=None, elements=None,
+):
+    """Build/reuse a surrogate bundle with standard diagnostic sidecars.
+
+    ``builder(records)`` returns a surrogate and may append genuine backend
+    calculations to ``records`` (a list when ``capture_kinetics``, otherwise
+    ``None``). Failed/invalid point reports come from surrogate metadata.
+    Temporary sidecars live through publication and are then cleaned up.
+    Return ``(bundle, action)`` with the strict reuse/rebuild rules of
+    :func:`load_or_build_surrogate_artifact`. Optional kinetics members are
+    never required on reload, so older bundles remain usable.
+    """
+    if capture_kinetics and (not backend or elements is None):
+        raise ValueError("backend and elements are required to capture kinetics.")
+    if any(role not in ("failed_bulk_points", "invalid_bulk_points") for role in report_roles):
+        raise ValueError("Unsupported diagnostic report role.")
+
+    def staged_builder():
+        records = [] if capture_kinetics else None
+        surrogate = builder(records)
+        members = write_surrogate_diagnostic_members(
+            directory, surrogate, report_roles=report_roles, kinetics_records=records,
+            backend=backend, elements=elements)
+        return surrogate, members
+
+    with tempfile.TemporaryDirectory() as directory:
+        return load_or_build_surrogate_artifact(
+            bundle_path, build_spec, staged_builder, rebuild=rebuild, required_members=report_roles)

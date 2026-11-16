@@ -28,9 +28,15 @@
 """How fast does a planar interface grow under diffusion control? See the notes above."""
 
 # %%
+from pathlib import Path
+import sys
+
+# Run notebook cells with the extraction repository root as the working directory.
+sys.path.append(str(Path("packages/moving-boundary/examples").resolve()))
+
+from advanced import binary_planar_growth as _advanced
 from dataclasses import dataclass
 import argparse
-import sys
 
 import numpy as np
 
@@ -43,6 +49,8 @@ from moving_boundary.analytic import (
     recorded_history,
 )
 from moving_boundary.mesh import CartesianFD1D, ProfileBuilder
+from moving_boundary.providers.constant import ConstantDiffusivity
+from moving_boundary.run_diagnostics import inventory_drift
 from moving_boundary.solvers import MovingBoundaryIllingworthFD1DModel
 
 
@@ -81,11 +89,9 @@ FAST = Config(nodes=21, time_step=2.0e-5, t_end=2.0e-4)      # quick check setti
 COARSE_LONG = Config(nodes=21, time_step=2.0e-5)             # shows a coarse grid's error
 DEMO = Config()
 
-# Numerical accuracy limits for DEMO only: 41/41 nodes, dt=1e-5, t from 1e-4 to 1e-2.
-# interface_rel: max|s - s_exact| / max|s_exact - s(t_start)| over the whole run.
-# profile_linf_away: max|c - c_exact| on the mesh, excluding 3 cells around the interface.
-# inventory_abs: |final - initial| solute inventory, in composition x length.
-DEMO_LIMITS = {"interface_rel": 1.0e-2, "profile_linf_away": 5.0e-3, "inventory_abs": 1.0e-8}
+
+# Configuration-specific checks are documented in the advanced companion.
+DEMO_LIMITS = _advanced.DEMO_LIMITS
 
 # %% [markdown]
 # ## Settings
@@ -102,18 +108,6 @@ PLOT = True
 # ## Model, solve and evaluation
 
 # %%
-class ConstantDiffusivity:
-    """Supplies one constant diffusivity per phase, in place of a thermodynamic database."""
-
-    def __init__(self, diffusivities):
-        self.diffusivities = dict(diffusivities)
-
-    def clearCache(self):
-        """No cache is retained."""
-
-    def getInterdiffusivity(self, x, T, removeCache=True, phase=None, query_context=None):
-        """Return a scalar or temperature-shaped array for the requested phase."""
-        return np.squeeze(np.ones(np.atleast_1d(T).astype(np.float64).shape) * self.diffusivities[phase])
 
 
 def build_model(config=DEMO):
@@ -137,30 +131,26 @@ def build_model(config=DEMO):
     )
 
 
+# %% [markdown]
+# ## Short workflow
+#
+# Solve once with basic checks. Use the original `run` below for full validation.
+
+# %%
+def run_core(config=DEMO):
+    """Solve once and measure final inventory drift; detailed accuracy checks use ``run``."""
+    model = build_model(config)
+    model.solve(config.duration, minDtFrac=1e-14)
+    absolute, relative = inventory_drift(
+        np.asarray([model.getTotalInventory(0.0), model.getTotalInventory()]), reduction="final")
+    return ExampleResult(config, model, planar_exact_interface, {"final_time": float(model.currentTime),
+                                               "inventory_abs": absolute, "inventory_rel": relative})
+
+
 def solve_model(model, config):
     """Advance to ``t_end``; ``minDtFrac`` lets the final partial step complete."""
     model.solve(config.duration, minDtFrac=1e-14)
     return model
-
-
-def evaluate(model, config):
-    """Return accuracy metrics against the exact solution, defined at ``DEMO_LIMITS``."""
-    times, interface = recorded_history(model.interfaceData)
-    exact = planar_exact_interface(times + config.t_start)
-    z = np.ravel(model.mesh.z)
-    error = np.ravel(model.data.currentY) - np.ravel(planar_exact_profile(z, model.currentTime + config.t_start))
-    away = np.abs(z - float(model.getInterfacePosition())) > 3.0 * (z[1] - z[0])
-    initial_inventory = float(np.ravel(recorded_history(model.concData)[1])[0]) * VALIDATION_PARAMS["R"]
-    # A screening estimate of when BETA stops looking semi-infinite, as in
-    # semi_infinite_validity_time: a wall-tail amplitude, not an error bound.
-    wall_distance = VALIDATION_PARAMS["R"] - float(exact[-1])
-    return {
-        "interface_rel": float(np.max(np.abs(np.ravel(interface) - exact)) / np.max(np.abs(exact - exact[0]))),
-        "profile_linf_away": float(np.max(np.abs(error[away]))),
-        "inventory_abs": abs(float(np.ravel(model.getTotalInventory())[0]) - initial_inventory),
-        "validity_time_estimate": (wall_distance / 4.0) ** 2 / VALIDATION_PARAMS["D_b"],
-        "steps": int(model.interfaceData.N),
-    }
 
 
 def run(config=DEMO):
@@ -169,51 +159,49 @@ def run(config=DEMO):
     return ExampleResult(config, model, planar_exact_interface, evaluate(model, config))
 
 
+# %% [markdown]
+# ## Advanced checks and compatibility entry points
+#
+# The introductory path above needs only `run_core`. These wrappers retain
+# the original detailed workflow and command-line behavior.
+
+# %%
+def _advanced_case():
+    """Supply current case inputs to the optional detailed workflow. See the advanced companion."""
+    return _advanced.Case(
+        DEMO=DEMO,
+        DEMO_LIMITS=DEMO_LIMITS,
+        FAST=FAST,
+        description=__doc__,
+    )
+
+
+def evaluate(model, config):
+    """Return accuracy metrics against the exact solution, defined at ``DEMO_LIMITS``. See the advanced companion."""
+    return _advanced.evaluate(model, config, case=_advanced_case())
+
+
 def report(result):
-    """Print the metrics, with limits where they apply."""
-    limits = DEMO_LIMITS if result.config == DEMO else {}
-    if not limits:
-        print("These settings have no accuracy limits; DEMO is the configuration to judge accuracy by.")
-    for name, value in result.metrics.items():
-        print(f"{name}: {value:.4g}" + (f"  (limit {limits[name]:g})" if name in limits else ""))
+    """Print the metrics, with limits where they apply. See the advanced companion."""
+    return _advanced.report(result, case=_advanced_case())
 
 
 def plot(result):
-    """Plot the interface against the exact solution, and the final profile; returns the figure."""
-    import matplotlib.pyplot as plt
-
-    times, interface = recorded_history(result.model.interfaceData)
-    absolute = times + result.config.t_start
-    z = np.ravel(result.model.mesh.z)
-    figure, (left, right) = plt.subplots(1, 2, figsize=(10, 4))
-    left.plot(absolute, np.ravel(interface), label="model")
-    left.plot(absolute, planar_exact_interface(absolute), "--", label="exact")
-    left.set(xlabel="time (nondimensional)", ylabel="interface position", title="Interface")
-    left.legend()
-    right.plot(z, np.ravel(result.model.data.currentY), label="model")
-    right.plot(z, planar_exact_profile(z, result.model.currentTime + result.config.t_start), "--", label="exact")
-    right.set(xlabel="position", ylabel="x(CR)", title="Final profile")
-    right.legend()
-    figure.tight_layout()
-    return figure
+    """Plot the interface against the exact solution, and the final profile; returns the figure. See the advanced companion."""
+    return _advanced.plot(result, case=_advanced_case())
 
 
 def settings_from_command_line(config, plot_figures):
-    """Apply ``--fast`` and ``--plot`` from a terminal; inside a notebook kernel, change nothing.
-
-    A Jupyter kernel's ``sys.argv`` holds the kernel's own arguments, so they are not parsed.
-    """
-    if "ipykernel" in sys.modules:
-        return config, plot_figures
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], allow_abbrev=False)
-    parser.add_argument("--fast", action="store_true", help="use quick check settings")
-    parser.add_argument("--plot", action="store_true", help="show plots")
-    args = parser.parse_args()
-    return (FAST if args.fast else config), args.plot
+    """Apply ``--fast`` and ``--plot`` from a terminal; inside a notebook kernel, change nothing. See the advanced companion."""
+    return _advanced.settings_from_command_line(config, plot_figures, case=_advanced_case())
 
 
 # %% [markdown]
 # ## Run
+#
+# For the introductory path use `result = run_core(CONFIG)` after the Settings
+# and model cells. The compatibility entry point below also runs the detailed
+# checks in `advanced/binary_planar_growth.py`.
 
 # %%
 if __name__ == "__main__":

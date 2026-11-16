@@ -33,7 +33,11 @@ def load(name):
     spec = importlib.util.spec_from_file_location(module_name, EXAMPLES / (name + ".py"))
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module  # dataclasses need the module registered
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(EXAMPLES))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(EXAMPLES))
     return module
 
 
@@ -41,7 +45,7 @@ def load(name):
 def test_example_uses_only_the_installed_api_and_is_batch_safe(name):
     tree = ast.parse((EXAMPLES / (name + ".py")).read_text(encoding="utf-8"))
     allowed = {"moving_boundary", "kawin", "numpy", "scipy", "matplotlib", "argparse", "contextlib", "dataclasses",
-               "hashlib", "importlib", "json", "os", "pathlib", "shutil", "sys", "tempfile", "time"}
+               "hashlib", "importlib", "json", "os", "pathlib", "shutil", "sys", "tempfile", "time", "advanced"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             roots = [alias.name.split(".")[0] for alias in node.names]
@@ -422,6 +426,7 @@ class Block(importlib.abc.MetaPathFinder):
             raise ModuleNotFoundError("tc_python blocked for this test", name=name)
         return None
 sys.meta_path.insert(0, Block())
+sys.path.insert(0, str(__import__("pathlib").Path(sys.argv[1]).parent))
 sys.argv = [sys.argv[1]] + sys.argv[2:]
 namespace = runpy.run_path(sys.argv[0], run_name="__main__")
 metrics = namespace["result"].metrics
@@ -448,7 +453,10 @@ def open_workflow(tmp_path_factory):
     """One real pycalphad run of the open workflow on the bundled database, shared by the tests below."""
     example = load(OPEN)
     output = tmp_path_factory.mktemp("open_fecrni")
-    return example, output, example.run(example.WORKFLOW, output_dir=output)
+    # The asserted 20-sample limits belong to this reviewed configuration,
+    # independently of a user changing the Settings defaults.
+    config = dataclasses.replace(example.WORKFLOW, loo_max_per_phase=20)
+    return example, output, example.run(config, output_dir=output)
 
 
 def _pycalphad_surrogate(example, output):
@@ -691,6 +699,7 @@ def test_example_runs_as_a_notebook_kernel_would(name, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setitem(sys.modules, "ipykernel", types.ModuleType("ipykernel"))
     monkeypatch.setattr(sys, "argv", ["ipykernel_launcher.py", f"--f={tmp_path / 'kernel.json'}"])
+    monkeypatch.chdir(EXAMPLES.parents[2])  # documented notebook working directory
     namespace = runpy.run_path(str(EXAMPLES / (name + ".py")), run_name="__main__")
     if name == "surrogate_lifecycle":
         assert Path(namespace["bundle"].path).is_relative_to(tmp_path)
