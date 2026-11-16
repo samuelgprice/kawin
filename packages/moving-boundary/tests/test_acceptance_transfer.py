@@ -669,6 +669,71 @@ def test_cli_export_prints_no_digest(tmp_path, monkeypatch, capsys):
     assert not re.search("[0-9a-f]{64}", capsys.readouterr().err)
 
 
+SENTINEL = "SENTINEL-PRIVATE-CONTENT-7f3a"
+
+
+def _sentinel_bundle(tmp_path):
+    """A bundle whose private exb5.json holds a sentinel; returns (source, bundle, exb5 rel path)."""
+    src = _source(tmp_path)
+    digest = _put(src, f"{ACC}/inputs/exb5.json", SENTINEL.encode())
+    _edit_private(lambda r: r.update({"exb5.json": {"sha256": {"exb5.json": digest}}}))(src)
+    folder, _ = _export(src, tmp_path)
+    return src, folder, f"{ACC}/inputs/exb5.json"
+
+
+def _tamper_entry(folder, rel, change):
+    """Edit one bundle.json entry in place (no digest or size recomputation)."""
+    record = json.loads((folder / T.RECORD).read_text(encoding="utf-8"))
+    index = next(i for i, item in enumerate(record["files"]) if item["path"] == rel)
+    record["files"][index] = change(dict(record["files"][index]))
+    (folder / T.RECORD).write_bytes(_json(record))
+
+
+def _assert_nothing_private(text):
+    assert not re.search("[0-9a-f]{64}", text), text
+    assert SENTINEL not in text, text
+
+
+TAMPERED_ENTRIES = {
+    "invalid class": lambda item: dict(item, **{"class": "bogus"}),
+    "digest as path": lambda item: dict(item, path=item["sha256"]),
+    "sentinel as path": lambda item: dict(item, path=SENTINEL),
+    "sentinel as size": lambda item: dict(item, size=SENTINEL),
+    "sentinel as digest": lambda item: dict(item, sha256=SENTINEL),
+    "missing field": lambda item: {key: value for key, value in item.items() if key != "class"},
+    "not an object": lambda item: [item["path"], item["sha256"], SENTINEL],
+}
+
+
+@pytest.mark.parametrize("name", sorted(TAMPERED_ENTRIES))
+def test_cli_check_refuses_a_malformed_entry_without_revealing_it(tmp_path, capsys, name):
+    _, folder, rel = _sentinel_bundle(tmp_path)
+    _tamper_entry(folder, rel, TAMPERED_ENTRIES[name])
+    before = _tree(folder)
+    assert T.main(["check", str(folder)]) == 1
+    output = capsys.readouterr()
+    assert "bundle.json entry" in output.err
+    _assert_nothing_private(output.out + output.err)
+    assert _tree(folder) == before
+
+
+@pytest.mark.parametrize("name", sorted(TAMPERED_ENTRIES) + ["destination conflict"])
+def test_cli_restore_refusals_write_nothing_and_reveal_nothing(tmp_path, monkeypatch, capsys, name):
+    src, folder, rel = _sentinel_bundle(tmp_path)
+    dst = _destination(tmp_path, src)
+    if name == "destination conflict":
+        _put(dst, rel, (SENTINEL + "-other").encode())                 # differing private file at the destination
+    else:
+        _tamper_entry(folder, rel, TAMPERED_ENTRIES[name])
+    monkeypatch.setattr(T, "PROJECT", dst)
+    before = _tree(dst)
+    assert T.main(["restore", str(folder)]) == 1
+    output = capsys.readouterr()
+    assert "refused" in output.err
+    _assert_nothing_private(output.out + output.err)
+    assert _tree(dst) == before
+
+
 def test_wheel_digest_is_shared_and_the_tool_never_runs_git():
     pinned = re.search(r"'([0-9a-f]{64})'", (PROJECT / "tools/setup_public_environment.py").read_text(encoding="utf-8")).group(1)
     acceptance = _load("acceptance_transfer_wheel_check", PROJECT / "tools/acceptance.py")

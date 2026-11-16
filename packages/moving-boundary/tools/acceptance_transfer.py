@@ -132,13 +132,16 @@ def _key(rel):
     return os.path.normcase(rel).casefold()
 
 
-def check_path(rel, *, temporary=False):
+def check_path(rel, *, temporary=False, label=None):
     """Refuse a package-relative path outside the transfer policy; returns ``rel``.
 
     Accepted: a relative POSIX path that is the stock wheel or lies under one of ``PREFIXES``
     (``temporary=True`` also allows ``TMP_AREA``), with no empty, ``.`` or ``..`` segment, no
     backslash, ``:`` (drives, alternate data streams), NUL or leading slash, and no segment ending
     in a dot or space (Windows would silently strip it).
+
+    The refusal never echoes the refused value (it may come from a bundle or a private record and
+    hold a digest or private text): it names the reason and the caller's ``label``.
     """
     problem = None
     if not isinstance(rel, str) or not rel:
@@ -150,7 +153,7 @@ def check_path(rel, *, temporary=False):
     elif not (rel == WHEEL or rel.startswith(PREFIXES) or (temporary and rel.startswith(TMP_AREA + "/"))):
         problem = "outside the transferable locations"
     if problem:
-        raise TransferError([f"path refused ({problem}): {rel!r}"])
+        raise TransferError([f"path refused ({problem})" + (f": {label}" if label else "")])
     return rel
 
 
@@ -162,14 +165,16 @@ def is_redirecting(status):
     return stat.S_ISLNK(status.st_mode) or getattr(status, "st_reparse_tag", 0) in REDIRECTING_TAGS
 
 
-def confined(root, rel, *, temporary=False):
+def confined(root, rel, *, temporary=False, label=None):
     """``root / rel`` after the path policy, the link policy and canonical containment.
 
     Every existing component from ``root`` down to the file (the file included) is ``lstat``-ed and
     must not redirect (``is_redirecting``); ``root``'s own ancestors are not inspected. The
-    canonical path must stay under the canonical ``root``.
+    canonical path must stay under the canonical ``root``. Refusals name ``label`` when given (a
+    bundle entry is named by its index, never by its contents), otherwise the well-formed ``rel``.
     """
-    check_path(rel, temporary=temporary)
+    check_path(rel, temporary=temporary, label=label)
+    name = label or rel
     root = Path(root)
     current = root
     for part in rel.split("/"):
@@ -179,11 +184,12 @@ def confined(root, rel, *, temporary=False):
         except FileNotFoundError:
             break
         if is_redirecting(status):
-            raise TransferError([f"path refused (link or junction at {current.relative_to(root).as_posix()}): {rel}"])
+            where = "" if label else f" at {current.relative_to(root).as_posix()}"
+            raise TransferError([f"path refused (link or junction{where}): {name}"])
     real_root = os.path.realpath(root)
     real = os.path.realpath(root / rel)
     if os.path.normcase(os.path.commonpath([real_root, real])) != os.path.normcase(real_root):
-        raise TransferError([f"path refused (resolves outside its root): {rel}"])
+        raise TransferError([f"path refused (resolves outside its root): {name}"])
     return root / rel
 
 
@@ -287,10 +293,10 @@ def _digest_map(record, name):
     digests = entry.get("sha256") if isinstance(entry, dict) else None
     if not isinstance(digests, dict) or not digests:
         return None, [f"private record entry empty or malformed: {name}"]
-    bad = sorted(str(key) for key, value in digests.items()
-                 if not (isinstance(key, str) and isinstance(value, str) and HEX64.fullmatch(value)))
-    if bad:
-        return None, [f"private record entry malformed: {name}/{key}" for key in bad]
+    bad = sum(1 for key, value in digests.items()
+              if not (isinstance(key, str) and isinstance(value, str) and HEX64.fullmatch(value)))
+    if bad:   # values (and arbitrary keys) are never echoed
+        return None, [f"private record entry malformed: {name} ({bad} invalid digest value(s))"]
     return digests, []
 
 
@@ -307,15 +313,16 @@ def private_input_entries(name, record):
     base = f"{ACCEPTANCE}/inputs/{name}"
     directory = set(digests) != {name}
     entries = []
-    for key, digest in sorted(digests.items()):
+    for index, (key, digest) in enumerate(sorted(digests.items())):
         rel = f"{base}/{key}" if directory else base
+        label = f"private record entry {name}, member key #{index}"
         try:
-            check_path(rel)
+            check_path(rel, label=label)
         except TransferError as exc:
             problems.extend(exc.problems)
             continue
         if directory and not rel.startswith(base + "/"):
-            problems.append(f"private record key escapes its directory: {name}/{key}")
+            problems.append(f"path refused (escapes its directory): {label}")
             continue
         entries.append(_entry(rel, digest, "private", f"private-input:{name}"))
     return entries, directory, problems
@@ -385,7 +392,7 @@ def select_entries(project, views, private_bytes, read_capture):
     for name in private_input_candidates(manifest, examples, record):
         rel = f"{ACCEPTANCE}/inputs/{name}"
         try:
-            check_path(rel)
+            check_path(rel, label="a private input name in private-inputs.json")
         except TransferError as exc:
             problems += exc.problems
             continue
@@ -413,7 +420,7 @@ def select_entries(project, views, private_bytes, read_capture):
     for name in _settings_candidates(examples, record, views):
         rel = f"{ACCEPTANCE}/example_settings/{name}"
         try:
-            check_path(rel)
+            check_path(rel, label="an example_settings file name")
         except TransferError as exc:
             problems += exc.problems
             continue
@@ -442,7 +449,7 @@ def select_entries(project, views, private_bytes, read_capture):
         absent.append(PILOT)
     for entry in entries:
         try:
-            check_path(entry["path"])
+            check_path(entry["path"], label=f"a {entry['group']} record path")
         except TransferError as exc:
             problems += exc.problems
         if entry["group"] != "pilot" and not (isinstance(entry["sha256"], str) and HEX64.fullmatch(entry["sha256"])):
@@ -569,26 +576,27 @@ def verify_contents(folder, expected=None):
     except (OSError, ValueError, KeyError, TypeError, AssertionError, TransferError):
         raise TransferError([f"{folder.name}: bundle.json missing or malformed"]) from None
     listed, keys = {}, {}
-    for item in files:
-        try:
-            rel, digest, size, cls = item["path"], item["sha256"], item["size"], item["class"]
-            assert cls in CLASSES and isinstance(size, int) and isinstance(digest, str) and HEX64.fullmatch(digest)
-            path = confined(folder, rel)
-        except (KeyError, TypeError, AssertionError):
-            problems.append(f"bundle.json entry malformed: {item!r}"[:200])
+    for index, item in enumerate(files):
+        label = f"bundle.json entry {index}"      # entries are named by index, never by their contents
+        invalid = _entry_problem(item)
+        if invalid:
+            problems.append(f"{label}: {invalid}")
             continue
+        rel, digest, size = item["path"], item["sha256"], item["size"]
+        try:
+            path = confined(folder, rel, label=label)
         except TransferError as exc:
             problems += exc.problems
             continue
         if _key(rel) in keys:
-            problems.append(f"duplicate path in bundle (case alias): {rel}")
+            problems.append(f"{label}: duplicate path (case alias of another entry)")
             continue
         keys[_key(rel)] = rel
         listed[rel] = item
         if not path.is_file():
-            problems.append(f"bundle file missing: {rel}")
+            problems.append(f"{label}: bundle file missing")
         elif path.stat().st_size != size or _sha(path) != digest:
-            problems.append(f"bundle file changed: {rel}")
+            problems.append(f"{label}: bundle file changed")
     on_disk = {path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file()} - {RECORD}
     problems += [f"unlisted file in bundle: {rel}" for rel in sorted(on_disk - set(listed))]
     if expected is not None:
@@ -598,6 +606,27 @@ def verify_contents(folder, expected=None):
     if problems:
         raise TransferError(problems)
     return record
+
+
+def _entry_problem(item):
+    """A safe description of the first invalid field of one ``bundle.json`` entry, or ``None``.
+
+    Only fixed field names and expectations are reported, never the entry's values.
+    """
+    if not isinstance(item, dict):
+        return "malformed (not an object)"
+    missing = [field for field in ("path", "sha256", "size", "class") if field not in item]
+    if missing:
+        return "malformed (missing field: " + ", ".join(missing) + ")"
+    if not isinstance(item["path"], str) or not item["path"]:
+        return "malformed (path is not text)"
+    if not isinstance(item["sha256"], str) or not HEX64.fullmatch(item["sha256"]):
+        return "malformed (sha256 is not 64 lowercase hex digits)"
+    if isinstance(item["size"], bool) or not isinstance(item["size"], int) or item["size"] < 0:
+        return "malformed (size is not a non-negative integer)"
+    if item["class"] not in CLASSES:
+        return "malformed (class is not one of " + ", ".join(CLASSES) + ")"
+    return None
 
 
 def confined_bundle(folder, rel):
