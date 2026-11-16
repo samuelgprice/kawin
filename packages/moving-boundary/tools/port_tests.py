@@ -71,7 +71,7 @@ BATCHES = {
         "test_illingworth_ternary_physical_scale.py", "test_similarity_comparison_basis.py",
         "test_illingworth_ternary_similarity.py"],
     4: ["test_illingworth_ternary.py"],
-    5: ["test_surrogate_diagnostics.py"],
+    5: ["test_surrogate_diagnostics.py", "test_surrogate_comparison.py"],
 }
 # Tests needing unported functionality: removed here, listed in FUTURE_PORTS.md § Deferred tests.
 DEFERRED = {
@@ -131,6 +131,7 @@ SUPERSEDED = {
 # not in ``_bindings.MODULES`` (which must equal ``acceptance_inputs.MODULES``). Resolved the same way.
 PORT_MODULES = {
     "kawin.diffusion.SurrogateDiagnostics": "moving_boundary.surrogate_diagnostics",
+    "kawin.diffusion.SurrogateComparison": "moving_boundary.surrogate_comparison",
 }
 # Research example modules whose helpers were relocated into the package (plan §6, FUTURE_PORTS.md
 # "Deferred tests": the similarity helpers exist in moving_boundary.analytic). Each name must exist.
@@ -153,7 +154,7 @@ HELPER_SUBSETS = {
 RESEARCH_PREFIXES = ("kawin.diffusion.MovingBoundary", "kawin.diffusion.mesh.MovingBoundary",
                      "kawin.diffusion.mesh.TransformedGrids", "kawin.diffusion._illingworth",
                      "kawin.diffusion.SurrogateArtifacts", "kawin.diffusion.SurrogateDiagnostics",
-                     "kawin.tests", "examples.")
+                     "kawin.diffusion.SurrogateComparison", "kawin.tests", "examples.")
 
 
 class PortError(RuntimeError):
@@ -515,7 +516,7 @@ def port_text(source, name, *, deferred=None, superseded=None, header, research_
     if removed:
         text = text.rstrip("\n") + "\n"   # a removed final test leaves no trailing blank lines
     ast.parse(text)
-    leftovers = sorted({match for match in re.findall(r"[A-Za-z_.]*(?:kawin\.diffusion\.(?:mesh\.)?(?:MovingBoundary|TransformedGrids|_illingworth|SurrogateArtifacts|SurrogateDiagnostics)\w*|kawin\.tests\.\w+|examples\.\w+(?:\.\w+)*)", text)})
+    leftovers = sorted({match for match in re.findall(r"[A-Za-z_.]*(?:kawin\.diffusion\.(?:mesh\.)?(?:MovingBoundary|TransformedGrids|_illingworth|SurrogateArtifacts|SurrogateDiagnostics|SurrogateComparison)\w*|kawin\.tests\.\w+|examples\.\w+(?:\.\w+)*)", text)})
     if leftovers:
         raise PortError(f"{name}: research module paths left after porting: {leftovers}")
     counts = dict(total=len(tests), deferred=len(deferred), ported=len(tests) - len(deferred) - len(superseded))

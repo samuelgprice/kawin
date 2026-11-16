@@ -1148,6 +1148,50 @@
     }
    ]
   },
+  "tests/test_surrogate_comparison.py": {
+   "batch": 5,
+   "source": "kawin/tests/test_surrogate_comparison.py",
+   "research_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
+   "source_sha256": "15f38b08cfc236fee49c9469a3b79b30580b79d4521c39b412edf59455280e4e",
+   "output_sha256": "fa6c0471d0c94fc108a7a0d1d6b55750936a485bcbd476ed61586b76fdefbf58",
+   "counts": {
+    "total": 10,
+    "deferred": 0,
+    "ported": 10
+   },
+   "transforms": [
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.SurrogateArtifactBundle",
+     "package": "moving_boundary.SurrogateArtifactBundle"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.SurrogateArtifactIntegrityError",
+     "package": "moving_boundary.SurrogateArtifactIntegrityError"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.TernaryMovingBoundaryThermodynamicsSurrogate",
+     "package": "moving_boundary.TernaryMovingBoundaryThermodynamicsSurrogate"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.compare_saved_surrogates",
+     "package": "moving_boundary.compare_saved_surrogates"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.evaluate_saved_surrogate_comparison",
+     "package": "moving_boundary.evaluate_saved_surrogate_comparison"
+    },
+    {
+     "kind": "import",
+     "research": "kawin.diffusion.plot_saved_surrogate_comparison",
+     "package": "moving_boundary.plot_saved_surrogate_comparison"
+    }
+   ]
+  },
   "tests/test_surrogate_diagnostics.py": {
    "batch": 5,
    "source": "kawin/tests/test_surrogate_diagnostics.py",
