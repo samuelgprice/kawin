@@ -1,5 +1,6 @@
 # The wheel holds only the moving_boundary package. The source distribution adds what's
-# needed to run the examples and tests. No database, private input or generated output.
+# needed to run the examples and tests: no private input or generated output, and one
+# database, the open Fe-Cr-Ni excerpt (ODbL; see NOTICE), re-included after the exclude.
 include LICENSE NOTICE README.md pyproject.toml
 graft docs
 graft examples
@@ -7,6 +8,7 @@ graft tests
 graft tools
 exclude .gitignore
 global-exclude *.tdb *.npz *.surrogate __pycache__/* *.py[cod]
+include examples/FeCrNi_MatCalc_open.tdb
 prune .verification
 prune build
 prune dist

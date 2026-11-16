@@ -1,12 +1,18 @@
 """Run the shipped examples through their installed-API code paths and check behaviour.
 
 No private fixtures are used. Tests needing a database read ``MB_EXAMPLE_TDB`` and skip
-with a reason without one; the local acceptance gate always supplies it. Limits come from
-each example, which documents the configuration, normalization and window they apply to.
+with a reason without one; the local acceptance gate always supplies it. The open Fe-Cr-Ni
+workflow uses its bundled open database and needs neither ``MB_EXAMPLE_TDB`` nor Thermo-Calc:
+its Thermo-Calc paths are tested with a relabelled synthetic bundle and ``tc_python`` blocked.
+Limits come from each example, which documents the configuration, normalization and window
+they apply to.
 """
 import ast
+import dataclasses
+import hashlib
 import importlib.metadata
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -16,7 +22,7 @@ import pytest
 
 EXAMPLES = Path(__file__).parents[1] / "examples"
 NEW_EXAMPLES = ["binary_planar_growth", "binary_tlp_bonding", "ternary_interstitial_similarity", "surrogate_lifecycle",
-                "ternary_fecrni_lee1996", "three_phase_similarity"]
+                "ternary_fecrni_lee1996", "three_phase_similarity", "surrogate_workflow_fecrni_open"]
 TERNARY_MODELS = {"MovingBoundaryIllingworthTernaryFD1DModel", "MovingBoundaryIllingworthTernaryThreePhaseFD1DModel"}
 requires_database = pytest.mark.skipif(not os.environ.get("MB_EXAMPLE_TDB"), reason="set MB_EXAMPLE_TDB to a Fe-Cr-Ni TDB; none is distributed yet")
 
@@ -35,7 +41,7 @@ def load(name):
 def test_example_uses_only_the_installed_api_and_is_batch_safe(name):
     tree = ast.parse((EXAMPLES / (name + ".py")).read_text(encoding="utf-8"))
     allowed = {"moving_boundary", "kawin", "numpy", "scipy", "matplotlib", "argparse", "contextlib", "dataclasses",
-               "hashlib", "importlib", "json", "os", "pathlib", "shutil", "sys", "tempfile"}
+               "hashlib", "importlib", "json", "os", "pathlib", "shutil", "sys", "tempfile", "time"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             roots = [alias.name.split(".")[0] for alias in node.names]
@@ -402,6 +408,178 @@ def test_three_phase_errors_converge_with_refinement():
     assert np.all(errors[1] < errors[0]) and np.all(errors[2] < errors[1])
     orders = np.log2(errors[0] / errors[1]), np.log2(errors[1] / errors[2])
     assert all(np.all((order > 0.6) & (order < 1.5)) for order in orders)
+
+
+# ---- 6. open Fe-Cr-Ni surrogate workflow ---------------------------------------
+
+OPEN = "surrogate_workflow_fecrni_open"
+# Runs the example in a child that refuses tc_python, then reports what it saw as JSON.
+BLOCKED_TC_DRIVER = r"""
+import importlib.abc, json, runpy, sys
+class Block(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name == "tc_python" or name.startswith("tc_python."):
+            raise ModuleNotFoundError("tc_python blocked for this test", name=name)
+        return None
+sys.meta_path.insert(0, Block())
+sys.argv = [sys.argv[1]] + sys.argv[2:]
+namespace = runpy.run_path(sys.argv[0], run_name="__main__")
+metrics = namespace["result"].metrics
+print("RESULT" + json.dumps({"tc_python": "tc_python" in sys.modules,
+                             "tc_provider": "moving_boundary.providers.thermocalc" in sys.modules,
+                             "keys": sorted(metrics), "pycalphad": sorted(metrics["pycalphad"]),
+                             "thermocalc": sorted(metrics["thermocalc"]), "comparison": metrics["comparison"],
+                             "thermocalc_action": metrics["thermocalc"]["action"],
+                             "simulations": [metrics[k]["simulation"]["final_time"] for k in ("pycalphad", "thermocalc")]},
+                            default=float))
+"""
+
+
+def _run_blocked(arguments, cwd):
+    """Run the example's command line in a child with tc_python blocked and this process's import path."""
+    import subprocess
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(str(Path(p).resolve()) for p in sys.path if p))
+    return subprocess.run([sys.executable, "-c", BLOCKED_TC_DRIVER, str(EXAMPLES / (OPEN + ".py")), *map(str, arguments)],
+                          capture_output=True, text=True, timeout=600, cwd=cwd, env=env)
+
+
+@pytest.fixture(scope="module")
+def open_workflow(tmp_path_factory):
+    """One real pycalphad run of the open workflow on the bundled database, shared by the tests below."""
+    example = load(OPEN)
+    output = tmp_path_factory.mktemp("open_fecrni")
+    return example, output, example.run(example.WORKFLOW, output_dir=output)
+
+
+def _pycalphad_surrogate(example, output):
+    """The pycalphad surrogate of the shared run, strictly reloaded from its bundle."""
+    return example.prepare_pycalphad_bundle(example.WORKFLOW, None, output_dir=output)[0].surrogate
+
+
+def _relabelled_thermocalc_bundle(example, surrogate, folder, **spec_changes):
+    """Publish pycalphad data relabelled with Thermo-Calc composition-set names.
+
+    Synthetic: the data are not Thermo-Calc-derived. The spec carries the fields a saved
+    Thermo-Calc bundle is checked against offline.
+    """
+    saved = folder / "relabel.npz"
+    surrogate.save(saved)
+    with np.load(saved, allow_pickle=False) as data:
+        arrays = {key: data[key] for key in data.files}
+    labels = dict(zip(example.PHASES, example.TC_PHASES))
+    arrays["phases"] = np.asarray([labels[p] for p in arrays["phases"].tolist()])
+    arrays["tieline_phases"] = np.asarray([labels[p] for p in arrays["tieline_phases"].tolist()])
+    metadata = json.loads(str(arrays["metadata_json"].tolist()))
+    if metadata.get("precipitate_phase") in labels:
+        metadata["precipitate_phase"] = labels[metadata["precipitate_phase"]]
+    arrays["metadata_json"] = np.asarray(json.dumps(metadata, sort_keys=True))
+    np.savez_compressed(saved, **arrays)
+    relabelled = type(surrogate).load(saved)
+    saved.unlink()
+    config = dataclasses.replace(example.WORKFLOW, **spec_changes)
+    spec = {**example.shared_spec(config, example.DATABASE, example.TC_PHASES),
+            "source": {"engine": "thermocalc", "synthetic_test_bundle": "relabelled pycalphad data"}}
+    return example.SurrogateArtifactBundle.publish(folder / "thermocalc", relabelled, spec)
+
+
+def test_open_fecrni_bundled_database_is_the_approved_excerpt():
+    example = load(OPEN)
+    assert hashlib.sha256(example.DATABASE.read_bytes()).hexdigest() == example.DATABASE_SHA256
+    assert example.resolve_database() == example.DATABASE
+
+
+def test_open_fecrni_nonexistent_database_is_actionable(tmp_path):
+    example = load(OPEN)
+    with pytest.raises(FileNotFoundError, match="--tdb PATH or set MB_OPEN_FECRNI_TDB"):
+        example.resolve_database(tmp_path / "missing.tdb")
+
+
+def test_open_fecrni_workflow_runs_on_the_bundled_database(open_workflow):
+    """The real pycalphad path at the reviewed settings. These are workflow properties, not accuracy.
+
+    Training queries must reproduce the stored data; held-out queries are only required to
+    exist and be evaluated, since no accuracy limit has been validated for them.
+    """
+    example, output, result = open_workflow
+    metrics = result.metrics["pycalphad"]
+    assert metrics["action"] == "built" and metrics["saved_bundle"]["tie_lines"] == 17
+    for phase in example.PHASES:
+        loo = metrics["saved_bundle"]["leave_one_out"][phase]
+        assert loo["sample_count"] == 20 and loo["failure_count"] == 0 and np.isfinite(loo["max_matrix_relative_error"])
+        tie = metrics["fresh_queries"]["tie_lines"]["endpoint_error"][phase]
+        assert (tie["training"]["count"], tie["held_out"]["count"]) == (2, 6)
+        assert tie["training"]["max"] <= 1.0e-12 and tie["held_out"]["max"] > 0.0
+        interface = metrics["fresh_queries"]["interface_matrices"][phase]
+        assert (interface["training"]["count"], interface["held_out"]["count"]) == (2, 4)
+        assert interface["training"]["max"] <= 1.0e-12 and interface["held_out"]["max"] > 0.0
+        bulk = metrics["fresh_queries"]["bulk_matrices"][phase]
+        assert (bulk["training"]["count"], bulk["held_out"]["count"], bulk["invalid_predictions"]) == (0, 9, 0)
+    assert metrics["fresh_queries"]["failures"] == 0 and metrics["fresh_queries"]["tie_lines"]["failures"] == 0
+    simulation = metrics["simulation"]
+    assert simulation["final_time"] == pytest.approx(example.WORKFLOW.duration)
+    assert simulation["inventory_rel_max"] < 1.0e-8
+    assert simulation["final_state_outside_hull"] == {phase: 0 for phase in example.PHASES}
+    assert "comparison" not in result.metrics and "thermocalc" not in result.metrics
+    figures = example.figures(result)
+    assert {"pycalphad leave-one-out BCC_A2", "pycalphad leave-one-out FCC_A1", "pycalphad tie lines"} <= set(figures)
+    assert all(figure.data for figure in figures.values())
+    bundle, action = example.prepare_pycalphad_bundle(example.WORKFLOW, None, output_dir=output)
+    assert action == "reloaded" and bundle.manifest["build_fingerprint"] == metrics["build_fingerprint"]
+
+
+def test_open_fecrni_saved_thermocalc_bundle_is_reused_without_tc_python(open_workflow):
+    """Saved-bundle reuse with tc_python blocked: diagnostics, mapped comparison and simulation.
+
+    The default fresh pycalphad queries run; Thermo-Calc is never imported or queried. The
+    'Thermo-Calc' bundle is relabelled pycalphad data, so the mapped comparison must find no
+    difference at all.
+    """
+    example, output, result = open_workflow
+    _relabelled_thermocalc_bundle(example, _pycalphad_surrogate(example, output), output)
+    completed = _run_blocked(["--output-dir", output, "--thermocalc", "saved"], output)
+    assert completed.returncode == 0, completed.stderr[-4000:]
+    seen = json.loads(completed.stdout.split("RESULT", 1)[1])
+    assert seen["tc_python"] is False and seen["tc_provider"] is False
+    assert "fresh_queries" in seen["pycalphad"] and "fresh_queries" not in seen["thermocalc"]
+    assert seen["thermocalc_action"] == "loaded saved" and seen["simulations"] == [3600.0, 3600.0]
+    comparison = seen["comparison"]
+    assert comparison["phase_labels"] == {"BCC_A2": "BCC_A2#1", "FCC_A1": "FCC_A1#1"}
+    assert comparison["max_endpoint_displacement"] == 0.0 and comparison["interface_cross_shared_fraction"] == 1.0
+    for values in ("interface_own_paths_max", "interface_at_reference_compositions_max", "bulk_shared_max"):
+        assert all(value == 0.0 for value in comparison[values].values()), comparison
+    assert comparison["bulk_coverage"]["reference only"] == comparison["bulk_coverage"]["candidate only"] == 0
+
+
+@pytest.mark.parametrize("arguments", [["--thermocalc", "build"], ["--thermocalc", "saved", "--tc-fresh-queries"],
+                                       ["--tc-fresh-queries"]])
+def test_open_fecrni_live_thermocalc_requests_stop_before_any_work(tmp_path, arguments):
+    output = tmp_path / "out"
+    completed = _run_blocked(["--output-dir", output, *arguments], tmp_path)
+    assert completed.returncode == 2
+    assert "TC-Python" in completed.stderr and "licence" in completed.stderr
+    assert not output.exists()
+
+
+def test_open_fecrni_missing_or_incompatible_saved_thermocalc_bundle(open_workflow, tmp_path):
+    example, output, _ = open_workflow
+    with pytest.raises(FileNotFoundError, match="--thermocalc build"):
+        example.load_saved_thermocalc_bundle(tmp_path / "none", example.WORKFLOW, None)
+    _relabelled_thermocalc_bundle(example, _pycalphad_surrogate(example, output), tmp_path, samples_per_side=4)
+    with pytest.raises(example.SurrogateArtifactCompatibilityError, match="tie_lines.*--thermocalc build"):
+        example.load_saved_thermocalc_bundle(tmp_path / "thermocalc", example.WORKFLOW, None)
+
+
+def test_open_fecrni_thermocalc_cache_must_be_short_and_separate():
+    """Only paths are resolved here; nothing is created."""
+    import tempfile
+
+    example = load(OPEN)
+    base = Path(tempfile.gettempdir())
+    assert example.resolve_tc_cache(base / "mbtc", base / "mbout") == (base / "mbtc").resolve()
+    with pytest.raises(ValueError, match="at most 150 characters"):
+        example.resolve_tc_cache(base / ("x" * 160), base / "mbout")
+    with pytest.raises(ValueError, match="outside the bundle folder"):
+        example.resolve_tc_cache(base / "mbout" / "tc", base / "mbout")
 
 
 # ---- acceptance tooling ------------------------------------------------------

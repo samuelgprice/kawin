@@ -11,6 +11,7 @@ package. Each script runs on its own and is meant to be copied and adapted.
 | `surrogate_lifecycle.py` | How do I save, verify, reload and solve with a surrogate? | Nothing | Under 1 s |
 | `three_phase_similarity.py` | How do two independent interfaces move as a middle layer grows? | Nothing | About 5 s |
 | `ternary_fecrni_lee1996.py` | How does a Fe-Cr-Ni couple evolve with composition-dependent diffusivity? | A Fe-Cr-Ni TDB | About 40 s |
+| `surrogate_workflow_fecrni_open.py` | How do I check, compare and use Fe-Cr-Ni surrogates built from an open database? | Nothing (bundled open TDB); Thermo-Calc optional | About 15 s |
 | `binary_constant.py` | The smallest possible solve | Nothing | Under 1 s |
 
 *Solve and sampling time on one Windows workstation, excluding Python start-up.
@@ -90,10 +91,53 @@ they apply to. They don't carry over to other settings.
 ## Fe-Cr-Ni database
 
 `ternary_fecrni_lee1996.py` needs a TDB with FE, CR and NI, BCC_A2 and FCC_A1, and mobilities.
-Pass it with `--tdb PATH` or set `MB_EXAMPLE_TDB`. **No database is included yet**, because
+Pass it with `--tdb PATH` or set `MB_EXAMPLE_TDB`. **Its database is not included**, because
 redistribution of the one used in development hasn't been cleared. It was assembled from
 Lee (1993) with mobilities from Lee & Oh (1996). The sampled probe point and compositions in the
-example suit that database at 1373 K, and may need changing for another.
+example suit that database at 1373 K, and may need changing for another. The open database
+below is a different database.
+
+## Open Fe-Cr-Ni database and surrogate workflow
+
+`FeCrNi_MatCalc_open.tdb`, used by `surrogate_workflow_fecrni_open.py`, is an existing adapted
+excerpt of the MatCalc open steel databases, copied unchanged from the kawin repository's
+`examples/FeCrNi.tdb` (upstream kawin, added 2022; sha256 `f713f965…`). Its header notices
+are kept as they are. It ships in the source distribution, not in the wheel.
+
+- **Thermodynamic parameters:** MatCalc thermodynamic steel database mc_fe, release 2.060
+  (`mc_fe_v2.060.tdb`), by Erwin Povoden-Karadeniz, TU Wien.
+- **Mobility parameters:** MatCalc diffusion mobility database for steel (mc_fe), by Erwin
+  Povoden-Karadeniz, TU Wien. They match releases 2.012, 2.015 and 2.016 alike, so no single
+  release is identified; 2.012 is only a possible historical source.
+- **Licence:** both are made available under the
+  [Open Database License 1.0](http://opendatacommons.org/licenses/odbl/1.0/); any rights in
+  individual contents are licensed under the
+  [Database Contents License 1.0](http://opendatacommons.org/licenses/dbcl/1.0/). This excerpt,
+  a derived database, is redistributed under the same terms. Source:
+  [MatCalc open databases](https://www.matcalc.at/index.php/databases/open-databases).
+- **Adaptations already in the excerpt** (not made by this package): one upper temperature
+  limit written `6000.00.00` in the releases is corrected to `6000.00` (`G(SIGMA,FE:CR:FE;0)`);
+  twelve BCC mobility entries spell out the releases' "any solvent" entries
+  `MQ/MF(BCC_A2&X,*)` as explicit Fe and Ni entries with the same values; and
+  `MQ(FCC_A1&FE,FE:*)` writes out the release's helper functions (QFE_FCC = 286000,
+  D0FE_FCC = 7.0E-5) as `-286000+R*T*LN(7.0E-5)`.
+- **Header notes:** the header names release 2.060 for the parameters and 2.059 in its licence
+  sentence; the official 2.060 file carries the same 2.059 sentence. The header credits only the
+  thermodynamic database; the mobility source is credited here and in `NOTICE`. The reference
+  key `jac17` is undefined in the MatCalc reference lists; it may refer to Aurélie Jacob, but
+  that is unconfirmed.
+
+The workflow builds a pycalphad bundle (and, optionally, a Thermo-Calc one), runs the
+saved-bundle and fresh-query diagnostics, compares the two bundles and solves a 1 h lagged
+couple from each. With `--thermocalc saved` a Thermo-Calc bundle made elsewhere is reused
+without `tc_python`; only `--thermocalc build` and `--tc-fresh-queries` need TC-Python and a
+licence. The Thermo-Calc cache goes to a short folder of its own (`--tc-cache-dir` or
+`MB_TC_CACHE_DIR`), because Thermo-Calc truncates long workspace paths. Thermo-Calc labels the
+phases `BCC_A2#1` and `FCC_A1#1`, so the comparison uses an explicit `phase_mapping`. Fresh-query
+discrepancies are reported separately for queries that coincide with training samples (which
+only shows the stored data are reproduced) and held-out ones; none of the results is an accuracy
+claim for the Fe-Cr-Ni physics, and similar interface motion from both backends doesn't show
+that either surrogate or profile is accurate.
 
 Surrogate bundles are written to `~/moving_boundary_example_outputs/<example>/`, wherever you run
 from, unless you set `OUTPUT_DIR` (or pass `--output-dir`). They never go into the source tree. Existing compatible bundles are reloaded, incompatible
@@ -111,4 +155,5 @@ directory, using the tested dependency versions:
     python -m pytest tests/test_analytic.py tests/test_examples.py
 
 Without a database, tests that need one skip with a reason. To include them, set `MB_EXAMPLE_TDB`.
+The open Fe-Cr-Ni workflow tests use the bundled database and need no Thermo-Calc licence.
 Slower refinement studies are deselected by default; run them with `-m slow`.

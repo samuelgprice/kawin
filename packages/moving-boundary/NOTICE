@@ -59,3 +59,32 @@ subsequent changes and docs/BINARY_SLICE.md records the extraction provenance.
 This acknowledgment does not imply that MAP or the originators endorse these changes.
 MAP's conditions do not settle ownership or licensing of separately authored additions;
 see LICENSE for the remaining package-wide licensing decision.
+
+Open Fe-Cr-Ni database (examples/FeCrNi_MatCalc_open.tdb; source distribution only)
+This file is an existing adapted excerpt of the MatCalc open steel databases, copied
+unchanged into this package from the kawin repository's examples/FeCrNi.tdb (upstream
+kawin, added 2022; sha256
+f713f965a83292eaa91399a28720d13efb0298d6ef107dd5e6062bbe88d99061). Its own header
+notices are preserved as they are.
+- Thermodynamic parameters: MatCalc thermodynamic steel database mc_fe, release 2.060
+  (mc_fe_v2.060.tdb), by Erwin Povoden-Karadeniz, TU Wien.
+- Mobility parameters: MatCalc diffusion mobility database for steel (mc_fe), by Erwin
+  Povoden-Karadeniz, TU Wien. They match releases 2.012, 2.015 and 2.016 alike; no single
+  release is identified, and 2.012 is only a possible historical source.
+- Both are made available under the Open Database License 1.0
+  (http://opendatacommons.org/licenses/odbl/1.0/); any rights in individual contents are
+  licensed under the Database Contents License 1.0
+  (http://opendatacommons.org/licenses/dbcl/1.0/). This excerpt, a derived database, is
+  redistributed under the same terms. Source: MatCalc open databases,
+  https://www.matcalc.at/index.php/databases/open-databases
+Adaptations already present in the excerpt (not made by this package): one upper
+temperature limit written 6000.00.00 in the releases is corrected to 6000.00
+(G(SIGMA,FE:CR:FE;0)); twelve BCC mobility entries spell out the releases' "any solvent"
+entries MQ/MF(BCC_A2&X,*) as explicit Fe and Ni entries with the same values; and
+MQ(FCC_A1&FE,FE:*) writes out the release's helper functions (QFE_FCC = 286000,
+D0FE_FCC = 7.0E-5) as -286000+R*T*LN(7.0E-5).
+Header notes: the header names release 2.060 for the parameters and 2.059 in its licence
+sentence; the official 2.060 file carries the same 2.059 licence sentence. The header
+credits only the thermodynamic database; the mobility source is credited here. The
+reference key jac17 is undefined in the MatCalc reference lists; it may refer to Aurelie
+Jacob, but that is unconfirmed. The package licence does not cover this database.
