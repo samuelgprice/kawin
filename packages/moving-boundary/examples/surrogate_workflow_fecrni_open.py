@@ -37,8 +37,9 @@
 #   path (within its interface query tolerance, 1e-8), so when the two paths differ by more than
 #   that, the identical-composition interface view is empty (`interface_cross_shared_fraction`
 #   0) and identical-composition matrices are compared in the bulk only.
-# - *Simulation*: a short lagged ternary run from each bundle, with solute conservation,
-#   coverage of the sampled data and interface position. Similar interface motion or good
+# - *Simulation*: a short lagged ternary run from each bundle, with the largest absolute and
+#   relative solute-inventory drift over the recorded history, whether the final state lies
+#   inside the sampled data, and the interface position. Similar interface motion or good
 #   conservation does not establish surrogate accuracy or profile accuracy; there is no exact
 #   solution here.
 #
@@ -530,18 +531,33 @@ def build_model(config=WORKFLOW, surrogate=None, *, tdb=None, output_dir=DEFAULT
         semiLog_dt=config.semi_log_dt, semiLogT0=1.0e-6)
 
 
+def inventory_drift(inventory):
+    """Largest solute-inventory drift over every recorded time and component.
+
+    ``inventory`` has one row per recorded time and one column per independent component;
+    row 0 is the initial inventory. Returns ``(absolute, relative)``: the maximum of
+    ``|I(t, k) - I(0, k)|`` (inventory units, here mole fraction times m) and the maximum of
+    that difference divided by ``|I(0, k)|``. An excursion that later returns to the initial
+    value is still counted.
+    """
+    inventory = np.atleast_2d(np.asarray(inventory, dtype=np.float64))
+    change = np.abs(inventory - inventory[0])
+    return float(np.max(change)), float(np.max(change / np.abs(inventory[0])))
+
+
 def simulate(config, surrogate):
     """Solve the lagged model; returns ``(model, summary)``.
 
-    The summary holds the interface position and eta, the largest relative solute-inventory
-    drift, and per phase the number of accepted compositions outside the hull of the fitted
-    bulk samples. These are workflow checks, not accuracy.
+    The summary holds the interface position and eta, the largest absolute and relative
+    solute-inventory drift over the whole recorded history (``inventory_drift``), and per phase
+    the number of compositions of the final state only that lie outside the hull of the fitted
+    bulk samples (earlier states are not checked). These are workflow checks, not accuracy.
     """
     model = build_model(config, surrogate)
     model.solve(config.duration, minDtFrac=config.min_dt_frac)
     times, positions = recorded_history(model.interfaceData)
     _, inventory = recorded_history(model.inventoryData)
-    inventory = np.asarray(inventory, dtype=np.float64)
+    absolute_drift, relative_drift = inventory_drift(inventory)
     outside = {}
     for phase, state in zip(surrogate.tieline_phases, model.getTransformedState(float(times[-1]))):
         points = np.asarray(surrogate._fitSupport[phase]["points"], dtype=np.float64)
@@ -550,7 +566,7 @@ def simulate(config, surrogate):
     return model, {"final_time": float(times[-1]), "recorded_steps": int(len(times)),
                    "initial_interface_m": float(positions[0]), "final_interface_m": float(positions[-1]),
                    "final_eta": float(model.getInterfaceEta()),
-                   "inventory_rel_max": float(np.max(np.abs(inventory[-1] - inventory[0]) / np.abs(inventory[0]))),
+                   "inventory_abs_max": absolute_drift, "inventory_rel_max": relative_drift,
                    "final_state_outside_hull": outside}
 
 
@@ -633,7 +649,8 @@ def report(result):
     print("Saved-bundle diagnostics (no backend): provenance, leave-one-out cross-validation, consistency heuristic.")
     print("Fresh queries (same backend): approximation discrepancy; training and held-out queries are separate.")
     print("Comparison: differences between the two surrogates; neither backend is ground truth.")
-    print("Simulation: conservation, coverage and interface position; not an accuracy check.")
+    print("Simulation: inventory drift over the history, final-state coverage and interface position; "
+          "not an accuracy check.")
     print(json.dumps(result.metrics, indent=2, default=float))
 
 

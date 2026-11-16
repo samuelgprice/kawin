@@ -517,7 +517,7 @@ def test_open_fecrni_workflow_runs_on_the_bundled_database(open_workflow):
     assert metrics["fresh_queries"]["failures"] == 0 and metrics["fresh_queries"]["tie_lines"]["failures"] == 0
     simulation = metrics["simulation"]
     assert simulation["final_time"] == pytest.approx(example.WORKFLOW.duration)
-    assert simulation["inventory_rel_max"] < 1.0e-8
+    assert simulation["inventory_rel_max"] < 1.0e-8 and simulation["inventory_abs_max"] >= 0.0
     assert simulation["final_state_outside_hull"] == {phase: 0 for phase in example.PHASES}
     assert "comparison" not in result.metrics and "thermocalc" not in result.metrics
     figures = example.figures(result)
@@ -567,6 +567,17 @@ def test_open_fecrni_missing_or_incompatible_saved_thermocalc_bundle(open_workfl
     _relabelled_thermocalc_bundle(example, _pycalphad_surrogate(example, output), tmp_path, samples_per_side=4)
     with pytest.raises(example.SurrogateArtifactCompatibilityError, match="tie_lines.*--thermocalc build"):
         example.load_saved_thermocalc_bundle(tmp_path / "thermocalc", example.WORKFLOW, None)
+
+
+def test_open_fecrni_inventory_drift_counts_excursions_that_return():
+    """An intermediate excursion back to the initial inventory must still count, per component."""
+    example = load(OPEN)
+    inventory = np.array([[2.0, 4.0], [2.0, 4.4], [2.0, 4.0], [1.9, 4.0], [2.0, 4.0]])
+    absolute, relative = example.inventory_drift(inventory)
+    assert absolute == pytest.approx(0.4) and relative == pytest.approx(0.1)
+    # Comparing only the final row with the first would report no drift at all.
+    assert np.max(np.abs(inventory[-1] - inventory[0])) == 0.0
+    assert example.inventory_drift(inventory[[0, 2, 4]]) == (0.0, 0.0)
 
 
 def test_open_fecrni_thermocalc_cache_must_be_short_and_separate():
