@@ -160,6 +160,15 @@ labels the rest `reference only`, `candidate only` or `neither`. Neither bundle 
 `tolerances` give a verdict only for the limits supplied. The bundles must share the element
 order, phases and temperature.
 
+Bundles whose phase labels differ, such as pycalphad `BCC_A2` and Thermo-Calc composition-set
+`BCC_A2#1`, need an explicit `phase_mapping` from reference to candidate labels, for example
+`phase_mapping={"BCC_A2": "BCC_A2#1", "FCC_A1": "FCC_A1#1"}`. It must cover exactly the
+reference's phases, be one-to-one and reproduce the candidate's phase order. Labels are matched
+exactly: suffixes are never stripped and composition sets are never merged. Each surrogate is
+queried through its own labels; the report stays keyed by reference labels and records the mapping
+under `phase_labels`. This keyword is a package extension; the research comparator has no
+counterpart, and without it the behaviour is unchanged.
+
 The plotting functions set `plotly.io.renderers.default` to their `renderer` argument (default
 `"browser"`) unless it is `None`; they never display or write a figure themselves. Matrices are
 compared in whatever frame and basis the source returned.

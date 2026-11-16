@@ -151,6 +151,7 @@
     "source_commit": "7af24f4b0a41b588824ecff22a9d664475602fcc",
     "source_sha256": "315dab6248a9b59e1e63f7074aa29bc49f31b83711afcd9f981fe697091f9c91",
     "changes": "FUTURE_PORTS entry 2. Whole module (identical at 06dc7b4): provenance and interpretation docstring; the bundle import binds moving_boundary.surrogate_artifacts; the missing-Plotly message adds the moving-boundary[diagnostics] install hint",
-    "numerical_ast": "identical apart from that message constant"
+    "numerical_ast": "identical apart from that message constant (as ported in f78a13a)",
+    "package_extensions": "2026-11-16: optional explicit one-to-one phase_mapping (reference -> candidate labels) in evaluate_saved_surrogate_comparison, with phase_labels/candidate_phase report entries and an overview row only when supplied; no research counterpart. With phase_mapping=None the code paths, reports, figures and messages are the port's."
   }
 }

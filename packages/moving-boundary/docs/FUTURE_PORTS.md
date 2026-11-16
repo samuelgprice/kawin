@@ -102,6 +102,11 @@ O06's byte gate: it must stay bit-identical and needs live Thermo-Calc to prove.
   other's), 36 cases identical; on each side's own bundles, identical apart from bundle paths and
   `created_utc`; known answers (identical bundles give 0, a 1.25 scale gives 0.2); fresh-target
   full tests, exact quick and exact full acceptance bit-identical.
+- **Package extension (2026-11-16, beyond the frozen port):** optional `phase_mapping` for bundles
+  whose phase labels differ (pycalphad `BCC_A2` versus Thermo-Calc `BCC_A2#1`). Explicit, exact
+  and one-to-one; each surrogate is queried through its own labels and the report records both
+  label sets and the mapping. Without it the module behaves as ported. Hand-written tests:
+  `tests/test_surrogate_comparison_phase_mapping.py`; the generated port is unchanged.
 
 ## 3. Surrogate benchmarking
 

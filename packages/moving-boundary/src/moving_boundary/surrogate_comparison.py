@@ -4,7 +4,8 @@ Both bundles are loaded and hash-checked through ``SurrogateArtifactBundle``;
 no thermodynamic backend is used and neither surrogate is modified. They must
 share the element order, the configured and tie-line phases (in order) and the
 temperature (within 1e-8 K); their build specifications may differ and are
-reported. Diffusivity matrices are compared
+reported. Phase labels must be equal unless an explicit ``phase_mapping`` is
+given (see below). Diffusivity matrices are compared
 in whatever frame and basis each source returned.
 
 How to read the report, especially for two different backends:
@@ -38,6 +39,17 @@ Changes: the bundle import binds ``moving_boundary.surrogate_artifacts``, and
 the missing-Plotly message adds the ``moving-boundary[diagnostics]`` install
 hint. Code, defaults, tolerances and arithmetic are otherwise unchanged. See
 NOTICE and docs/relocation-map.json.
+
+Package extension beyond the frozen port (2026-11-16): the optional
+``phase_mapping`` keyword of ``evaluate_saved_surrogate_comparison`` (and so
+``compare_saved_surrogates``) pairs phases whose labels differ between
+bundles, such as pycalphad ``BCC_A2`` and Thermo-Calc composition-set
+``BCC_A2#1``. The mapping is explicit, exact and one-to-one; each surrogate is
+queried through its own labels; reports gain ``phase_labels`` and per-phase
+``candidate_phase`` entries only when a mapping is supplied. With no mapping,
+code paths, reports, figures and error messages are those of the port. The
+research source has no counterpart, so this addition is not covered by the
+AST-parity record.
 """
 
 from __future__ import annotations
@@ -205,9 +217,15 @@ def _point_matches(points, targets, atol=1e-12):
     )
 
 
-def _bulk_points(reference, candidate, phase, grid_counts, bulk_axes):
+def _bulk_points(reference, candidate, phase, grid_counts, bulk_axes, candidate_phase=None):
+    """Build the shared bulk comparison grid for one phase.
+
+    ``phase`` is the reference label; ``candidate_phase`` (default ``phase``)
+    is the candidate's own label for the same phase, used to read its stored
+    fit support (package extension for explicit phase-label mappings).
+    """
     reference_training = _support_points(reference, phase)
-    candidate_training = _support_points(candidate, phase)
+    candidate_training = _support_points(candidate, phase if candidate_phase is None else candidate_phase)
     if not len(reference_training) or not len(candidate_training):
         grid = np.empty((0, 2), dtype=np.float64)
     else:
@@ -257,17 +275,73 @@ def _bulk_points(reference, candidate, phase, grid_counts, bulk_axes):
     return points, source, reference_training, candidate_training
 
 
-def _validate_identity(reference_bundle, candidate_bundle):
+def _validate_identity(reference_bundle, candidate_bundle, phase_mapping=None):
+    """Check that two bundles describe the same system and return the label map.
+
+    Without ``phase_mapping`` (the frozen-port behaviour) the configured and
+    tie-line phase labels must be equal and in the same order, and the
+    returned map is the identity. With a validated ``phase_mapping`` the
+    reference labels, mapped one-to-one, must reproduce the candidate's
+    configured and tie-line labels in order. Element order and temperature
+    are always checked.
+    """
     reference = reference_bundle.surrogate
     candidate = candidate_bundle.surrogate
     if tuple(reference.elements) != tuple(candidate.elements):
         raise ValueError("Cannot compare surrogates with different element order.")
-    if tuple(reference.tieline_phases) != tuple(candidate.tieline_phases):
-        raise ValueError("Cannot compare surrogates with different tie-line phases or phase order.")
-    if tuple(reference.phases) != tuple(candidate.phases):
-        raise ValueError("Cannot compare surrogates with different configured phases or phase order.")
+    if phase_mapping is None:
+        if tuple(reference.tieline_phases) != tuple(candidate.tieline_phases):
+            raise ValueError("Cannot compare surrogates with different tie-line phases or phase order.")
+        if tuple(reference.phases) != tuple(candidate.phases):
+            raise ValueError("Cannot compare surrogates with different configured phases or phase order.")
+        mapping = {phase: phase for phase in tuple(reference.phases) + tuple(reference.tieline_phases)}
+    else:
+        mapping = _validate_phase_mapping(phase_mapping, reference, candidate)
     if not np.isclose(reference.temperature, candidate.temperature, rtol=0.0, atol=1e-8):
         raise ValueError("Cannot compare surrogates at different temperatures.")
+    return mapping
+
+
+def _validate_phase_mapping(phase_mapping, reference, candidate):
+    """Validate an explicit reference-to-candidate phase-label mapping.
+
+    Package extension beyond the frozen port. The mapping must be a mapping of
+    strings whose keys are exactly the reference surrogate's configured and
+    tie-line labels and whose values are distinct (one-to-one). Applying it to
+    the reference configured and tie-line phases must give the candidate's
+    labels in the same order. Labels are compared exactly: suffixes such as
+    ``#1`` are never stripped and composition sets are never merged.
+    """
+    if not isinstance(phase_mapping, Mapping):
+        raise TypeError("phase_mapping must be a mapping from reference to candidate phase labels or None.")
+    mapping = {}
+    for key, value in phase_mapping.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise TypeError("phase_mapping keys and values must be strings.")
+        mapping[key] = value
+    expected = set(reference.phases) | set(reference.tieline_phases)
+    missing = sorted(expected - set(mapping))
+    unknown = sorted(set(mapping) - expected)
+    if missing or unknown:
+        raise ValueError(
+            "phase_mapping keys must be exactly the reference configured and tie-line phases; "
+            f"missing {missing}, not in the reference {unknown}."
+        )
+    if len(set(mapping.values())) != len(mapping):
+        raise ValueError("phase_mapping must be one-to-one; several reference phases map to one candidate label.")
+    mapped_tieline = tuple(mapping[phase] for phase in reference.tieline_phases)
+    if mapped_tieline != tuple(candidate.tieline_phases):
+        raise ValueError(
+            "Cannot compare surrogates with different tie-line phases or phase order under phase_mapping: "
+            f"mapped reference {mapped_tieline}, candidate {tuple(candidate.tieline_phases)}."
+        )
+    mapped_phases = tuple(mapping[phase] for phase in reference.phases)
+    if mapped_phases != tuple(candidate.phases):
+        raise ValueError(
+            "Cannot compare surrogates with different configured phases or phase order under phase_mapping: "
+            f"mapped reference {mapped_phases}, candidate {tuple(candidate.phases)}."
+        )
+    return mapping
 
 
 def _validate_tolerances(tolerances):
@@ -326,6 +400,7 @@ def evaluate_saved_surrogate_comparison(
     bulk_axes=None,
     relative_error_floor=1e-300,
     tolerances=None,
+    phase_mapping=None,
 ):
     """Compare predictions from two verified saved surrogate bundles.
 
@@ -333,6 +408,19 @@ def evaluate_saved_surrogate_comparison(
     build fingerprints are permitted. Interface calculations retain each
     surrogate's validity policy and bulk comparisons use only compositions
     evaluated successfully by both models. No thermodynamic backend is used.
+
+    ``phase_mapping`` (package extension beyond the frozen port) maps each
+    reference phase label to the candidate's label for the same phase, for
+    example ``{"BCC_A2": "BCC_A2#1", "FCC_A1": "FCC_A1#1"}`` when one bundle
+    was built from Thermo-Calc composition-set names. It must cover exactly
+    the reference configured and tie-line phases, be one-to-one, and reproduce
+    the candidate's phase order; labels are matched exactly (no suffix
+    stripping, no merging of composition sets). Each surrogate is queried
+    through its own labels; the report is keyed by reference labels and adds
+    a ``phase_labels`` record and a per-phase ``candidate_phase``. Element
+    order, temperature and coverage handling are unchanged. With
+    ``phase_mapping=None`` the behaviour and report are those of the frozen
+    port. Neither bundle is modified or republished.
     """
     reference_bundle = (
         reference_bundle_path if isinstance(reference_bundle_path, SurrogateArtifactBundle)
@@ -342,7 +430,7 @@ def evaluate_saved_surrogate_comparison(
         candidate_bundle_path if isinstance(candidate_bundle_path, SurrogateArtifactBundle)
         else SurrogateArtifactBundle.load_published(candidate_bundle_path)
     )
-    _validate_identity(reference_bundle, candidate_bundle)
+    labels = _validate_identity(reference_bundle, candidate_bundle, phase_mapping)
     reference = reference_bundle.surrogate
     candidate = candidate_bundle.surrogate
     count = _positive_count(interface_eta_count, "interface_eta_count")
@@ -360,7 +448,8 @@ def evaluate_saved_surrogate_comparison(
     reference_eta = _normalized_eta(reference, normalized)
     candidate_eta = _normalized_eta(candidate, normalized)
     reference_endpoints = _interface_compositions(reference, reference_eta)
-    candidate_endpoints = _interface_compositions(candidate, candidate_eta)
+    candidate_by_own_label = _interface_compositions(candidate, candidate_eta)
+    candidate_endpoints = {phase: candidate_by_own_label[labels[phase]] for phase in reference.tieline_phases}
     displacements = {
         phase: np.linalg.norm(candidate_endpoints[phase] - reference_endpoints[phase], axis=1)
         for phase in reference.tieline_phases
@@ -369,7 +458,7 @@ def evaluate_saved_surrogate_comparison(
         reference_endpoints[reference.tieline_phases[0]], reference_endpoints[reference.tieline_phases[1]]
     )
     candidate_length, candidate_orientation = _tie_geometry(
-        candidate_endpoints[candidate.tieline_phases[0]], candidate_endpoints[candidate.tieline_phases[1]]
+        candidate_by_own_label[candidate.tieline_phases[0]], candidate_by_own_label[candidate.tieline_phases[1]]
     )
     all_displacements = np.concatenate(tuple(displacements.values()))
     tieline = {
@@ -397,13 +486,14 @@ def evaluate_saved_surrogate_comparison(
     cross_total = 0
     cross_shared = 0
     for phase in reference.tieline_phases:
+        candidate_phase = labels[phase]
         reference_own = _evaluate_matrices(reference, reference_endpoints[phase], phase, "interface")
-        candidate_own = _evaluate_matrices(candidate, candidate_endpoints[phase], phase, "interface")
+        candidate_own = _evaluate_matrices(candidate, candidate_endpoints[phase], candidate_phase, "interface")
         own = _matrix_comparison(
             reference_own["matrices"], candidate_own["matrices"],
             reference_own["success"], candidate_own["success"], floor,
         )
-        candidate_on_reference = _evaluate_matrices(candidate, reference_endpoints[phase], phase, "interface")
+        candidate_on_reference = _evaluate_matrices(candidate, reference_endpoints[phase], candidate_phase, "interface")
         at_reference = _matrix_comparison(
             reference_own["matrices"], candidate_on_reference["matrices"],
             reference_own["success"], candidate_on_reference["success"], floor,
@@ -429,6 +519,8 @@ def evaluate_saved_surrogate_comparison(
                 "reference_on_candidate": reference_on_candidate["errors"],
             },
         }
+        if phase_mapping is not None:
+            interface_phases[phase]["candidate_phase"] = candidate_phase
 
     bulk_phases = {}
     bulk_total = 0
@@ -440,11 +532,12 @@ def evaluate_saved_surrogate_comparison(
         "neither": 0,
     }
     for phase in reference.tieline_phases:
+        candidate_phase = labels[phase]
         points, source, reference_training, candidate_training = _bulk_points(
-            reference, candidate, phase, bulk_grid_counts, bulk_axes
+            reference, candidate, phase, bulk_grid_counts, bulk_axes, candidate_phase
         )
         reference_values = _evaluate_matrices(reference, points, phase, "general")
-        candidate_values = _evaluate_matrices(candidate, points, phase, "general")
+        candidate_values = _evaluate_matrices(candidate, points, candidate_phase, "general")
         comparison = _matrix_comparison(
             reference_values["matrices"], candidate_values["matrices"],
             reference_values["success"], candidate_values["success"], floor,
@@ -472,6 +565,8 @@ def evaluate_saved_surrogate_comparison(
             "reference_errors": reference_values["errors"],
             "candidate_errors": candidate_values["errors"],
         }
+        if phase_mapping is not None:
+            bulk_phases[phase]["candidate_phase"] = candidate_phase
 
     differences = _build_spec_differences(
         reference_bundle.manifest["build_spec"], candidate_bundle.manifest["build_spec"]
@@ -523,6 +618,14 @@ def evaluate_saved_surrogate_comparison(
             "relative_error_floor": floor,
         },
     }
+    if phase_mapping is not None:
+        report["phase_labels"] = {
+            "mapping": dict(labels),
+            "reference_phases": tuple(reference.phases),
+            "candidate_phases": tuple(candidate.phases),
+            "reference_tieline_phases": tuple(reference.tieline_phases),
+            "candidate_tieline_phases": tuple(candidate.tieline_phases),
+        }
     report["verdict"] = _verdict(report, tolerances)
     return report
 
@@ -555,6 +658,8 @@ def plot_saved_surrogate_comparison(report, *, renderer="browser"):
 
     ``renderer`` selects Plotly's default renderer but does not display the
     figure; callers retain control over when to call ``figure.show()``.
+    Traces are labelled with the reference phase labels; a report made with
+    ``phase_mapping`` adds the mapping as the first overview row.
     """
     if report.get("kind") != "saved_surrogate_comparison":
         raise ValueError("plot_saved_surrogate_comparison requires a saved-surrogate comparison report.")
@@ -598,6 +703,10 @@ def plot_saved_surrogate_comparison(report, *, renderer="browser"):
         ("Interface cross coverage", report["interface"]["summary"]["cross_shared_fraction"]),
         ("Equivalent", "not evaluated" if verdict is None else verdict),
     ]
+    if "phase_labels" in report:  # package extension: explicit phase-label mapping
+        summary_rows.insert(0, ("Phase labels (reference -> candidate)", ", ".join(
+            f"{key} -> {value}" for key, value in report["phase_labels"]["mapping"].items()
+        )))
     add_group("Overview", [go.Table(
         header={"values": ["Quantity", "Value"]},
         cells={"values": [[row[0] for row in summary_rows], [str(row[1]) for row in summary_rows]]},
@@ -775,8 +884,9 @@ def compare_saved_surrogates(reference_bundle_path, candidate_bundle_path, *, re
     """Return a numerical report and Plotly figure for two verified bundles.
 
     Additional keyword arguments are forwarded to
-    :func:`evaluate_saved_surrogate_comparison`. No Thermo-Calc session is
-    started and neither loaded surrogate is modified.
+    :func:`evaluate_saved_surrogate_comparison`, including the optional
+    ``phase_mapping``. No Thermo-Calc session is started and neither loaded
+    surrogate is modified.
     """
     report = evaluate_saved_surrogate_comparison(reference_bundle_path, candidate_bundle_path, **kwargs)
     return {"report": report, "figure": plot_saved_surrogate_comparison(report, renderer=renderer)}
