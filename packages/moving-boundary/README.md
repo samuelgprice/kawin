@@ -29,6 +29,8 @@ including symbols, in docs/relocation-map.json):
 | equilibrium.py | kawin/diffusion/MovingBoundaryEquilibrium.py |
 | surrogates.py | kawin/diffusion/MovingBoundarySurrogates.py |
 | surrogate_artifacts.py | kawin/diffusion/SurrogateArtifacts.py |
+| surrogate_diagnostics.py | kawin/diffusion/SurrogateDiagnostics.py (recorded at 7af24f4; identical at 06dc7b4) |
+| surrogate_comparison.py | kawin/diffusion/SurrogateComparison.py (recorded at 7af24f4; identical at 06dc7b4) |
 | _diffusivity_domain.py, _spectral_validation.py | kawin/diffusion/ (same names) |
 | providers/pycalphad.py | examples/ternaryExamples/pycalphad_default_phase_adapter.py |
 | providers/thermocalc.py | examples/ThermoCalc/tc_python_adapter.py |
@@ -107,6 +109,49 @@ verified, reloadable bundle; the callback returns `(surrogate, members)`.
 `moving_boundary.surrogates.merge_phase_diffusivity_surrogates` combines one
 phase's diffusivity samples from two surrogates. See
 [research orchestration scope](docs/NEXT_SESSIONS.md#installed-solving-and-research-owned-generation).
+
+## Diagnosing and comparing surrogates
+
+`moving_boundary.surrogate_diagnostics` evaluates a surrogate and
+`moving_boundary.surrogate_comparison` compares two saved bundles. The evaluation functions
+need only NumPy and SciPy. The `plot_*` functions and `compare_saved_surrogates` return Plotly
+figures and need the optional extra; without it they raise an `ImportError` that names it:
+
+    python -m pip install "moving-boundary[diagnostics]"   # adds plotly>=6.0
+
+Sketch (`bundle_a`/`bundle_b` are saved bundle folders; `source` is the same thermodynamics
+source the surrogate was built from):
+
+    from moving_boundary.surrogate_diagnostics import (
+        evaluate_diffusivity_leave_one_out, evaluate_tieline_diagnostics)
+    from moving_boundary.surrogate_comparison import evaluate_saved_surrogate_comparison
+    loo = evaluate_diffusivity_leave_one_out(surrogate, sample_indices=[0, 10, 20])  # per-phase fit rows
+    tielines = evaluate_tieline_diagnostics(surrogate, thermodynamics=source, eta_count=5)
+    report = evaluate_saved_surrogate_comparison(bundle_a, bundle_b)
+
+What each evaluator measures, and whether it needs a live backend:
+
+| Function | Measures | Live backend? |
+|---|---|---|
+| `evaluate_tieline_diagnostics`, `evaluate_diffusivity_diagnostics` with `thermodynamics=` | Approximation discrepancy at the queried points: fresh queries of the same backend | Yes. Without `thermodynamics` they report surrogate values only and make no backend calls |
+| `evaluate_diffusivity_leave_one_out` | Internal cross-validation: each stored sample predicted from a refit without it. Not error against new data | No |
+| `evaluate_interface_bulk_diffusivity_consistency` | A heuristic consistency signal: local outlier and threshold flags between interface and bulk samples, optionally with site fractions from a TC-Python sidecar | No |
+| `evaluate_surrogate_construction_diagnostics` | Provenance and recorded outcomes of construction, read from metadata | No |
+| `evaluate_saved_surrogate_comparison` | Differences between two hash-checked saved bundles | No |
+
+Reading a comparison, especially of two backends: tie lines are paired by **normalized eta**
+(each surrogate's own eta range mapped onto `[0, 1]`), which does not mean matched physical
+equilibrium conditions, so tie-line displacement, length and orientation are differences between
+the two own paths. `interface` reports each surrogate on its own path (`own_paths`, mixing path and
+matrix differences) and both surrogates at identical compositions (`at_reference_compositions`,
+`at_candidate_compositions`). `bulk` compares matrices only where both surrogates are valid and
+labels the rest `reference only`, `candidate only` or `neither`. Neither bundle is ground truth;
+`tolerances` give a verdict only for the limits supplied. The bundles must share the element
+order, phases and temperature.
+
+The plotting functions set `plotly.io.renderers.default` to their `renderer` argument (default
+`"browser"`) unless it is `None`; they never display or write a figure themselves. Matrices are
+compared in whatever frame and basis the source returned.
 
 ## Examples and exact solutions
 

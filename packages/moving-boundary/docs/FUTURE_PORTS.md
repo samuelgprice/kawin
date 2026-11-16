@@ -1,6 +1,7 @@
 # Future ports: research functionality deferred after the authority switch
 
-Status: **backlog only. Every entry is deferred and not implemented.** Recorded 2026-11-10 at
+Status: **backlog. Entries 1 and 2 are ported (2026-11-15, local commits `fa22e73` and
+`f78a13a`); entries 3-6 are deferred and not implemented.** Recorded 2026-11-10 at
 extraction `518162b`. Nothing here is part of the authority-switch work
 ([AUTHORITY_SWITCH_PLAN.md](AUTHORITY_SWITCH_PLAN.md), batches M0-M10), and no entry may expand it.
 
@@ -8,7 +9,7 @@ extraction `518162b`. Nothing here is part of the authority-switch work
   Each port records the source path and `7af24f4` and changes only the package. Porting these
   tools needs no further changes to research main.
 - **Sequence:** authority switch (items 14-18 and 7) → R07/R08 (items 1-2) → entries 1-2
-  (diagnostics, comparison) → entries 3-6 in order of workflow priority.
+  (diagnostics, comparison; done 2026-11-15) → entries 3-6 in order of workflow priority.
 - **Reminder: revisit this backlog after R07/R08 are adopted**, before choosing the next work. Set
   the priority of entries 3-6 then, and confirm the entry 6 decisions with the user.
 - **Rules for any port:** no numerical references or tolerances change; tests are ported with the
@@ -18,7 +19,9 @@ extraction `518162b`. Nothing here is part of the authority-switch work
 ## Does current acceptance need any of this?
 
 **No.** No package tool, test, example or source module executes any of the entries below (checked
-2026-11-10). The only links are historical:
+2026-11-10). Entries 1 and 2 have since been ported (2026-11-15); no acceptance case uses them, and
+their tests run only in the package test suite (including approve's whole-suite gate). The only
+links are historical:
 
 | Link | Where | Normal acceptance? |
 |---|---|---|
@@ -31,9 +34,11 @@ O06's byte gate: it must stay bit-identical and needs live Thermo-Calc to prove.
 
 ## 1. Surrogate diagnostics (`SurrogateDiagnostics.py`)
 
-**Status: deferred, not implemented.** Priority: first after R07/R08 (with entry 2).
+**Status: ported 2026-11-15** (local commit `fa22e73`) as `moving_boundary.surrogate_diagnostics`.
 
-- **Research source:** `kawin/diffusion/SurrogateDiagnostics.py` (3239 lines). Public API:
+- **Research source:** `kawin/diffusion/SurrogateDiagnostics.py` (3239 lines; LF sha256
+  `8d497422…`, identical at `06dc7b4` and `7af24f4`). Public API (14 names, all exported lazily
+  from `moving_boundary`):
   - evaluate: `evaluate_tieline_diagnostics`, `evaluate_interface_bulk_diffusivity_consistency`,
     `evaluate_diffusivity_leave_one_out`, `evaluate_diffusivity_diagnostics`,
     `evaluate_surrogate_construction_diagnostics`;
@@ -42,45 +47,61 @@ O06's byte gate: it must stay bit-identical and needs live Thermo-Calc to prove.
     `plot_surrogate_construction_diagnostics`, `plot_selected_diffusivity_calculations`,
     `plot_surrogate_diagnostics` (interactive HTML/plotly);
   - site fractions: `load_calculation_site_fractions`, `plot_calculation_site_fractions`.
-- **Research tests:**
-  - `kawin/tests/test_surrogate_diagnostics.py` (36);
-  - the 3 construction-diagnostic tests in `kawin/tests/test_illingworth_ternary.py` (see
-    [Deferred tests](#deferred-tests));
-  - `kawin/tests/test_no_debugger_dependencies.py` (4; imports the diagnostics module, port the
-    relevant check).
+- **Research tests** (counted at `7af24f4`):
+  - `kawin/tests/test_surrogate_diagnostics.py`: 36 functions, 37 collected (one parametrized ×2);
+  - the 3 construction-diagnostic tests in `kawin/tests/test_illingworth_ternary.py`;
+  - `kawin/tests/test_no_debugger_dependencies.py`: 4 functions, 6 collected; one imports the
+    diagnostics module.
 - **Research users:** `examples/ternaryExamples/FeCrNi/IllingworthTernaryTwoPhase_FeCrNi_Lee1996Cases.py`,
   `IllingworthTernaryTwoVsThreePhaseSymmetry_copy.py`, `examplesForZhaoxi/*` (3 scripts).
-- **Already in the package:** everything the module imports exists in
-  `moving_boundary.surrogates`: `TernaryMovingBoundaryThermodynamicsSurrogate`,
-  `MergedPhaseDiffusivitySurrogate`, `_BulkDiffusivitySimplexLinear2D`,
-  `_BulkDiffusivitySimplexPositive2x2`, `_matrix_validity_diagnostics`. The surrogate stores and
-  round-trips `construction_records` (same handling as research). `scipy` and `tqdm` are declared
-  dependencies.
-- **Missing:** the whole diagnostics module (evaluation, leave-one-out, consistency checks, reports)
-  and a declared `plotly` dependency (not in `pyproject.toml`; it should be an optional extra, not
-  a core requirement).
-- **Approach:**
-  1. Relocate as `moving_boundary.diagnostics` (or `surrogate_diagnostics`) with import changes
-     only, plus a provenance header.
-  2. Keep plotly imports lazy and add a `[diagnostics]` optional extra.
-  3. Port the 36 + 3 + relevant debugger-guard tests in the same change.
-  4. Validate on surrogates with known values; the evaluation functions are pure numerics on saved
-     surrogates. Report figures are checked structurally (trace and button labels), as the
-     research tests do.
+- **Ported as:** the whole module, AST-identical to the source apart from imports and one string:
+  - provenance docstring (source, commit, sha256, what each evaluator measures);
+  - the surrogate import binds `moving_boundary.surrogates`;
+  - the missing-Plotly message names `moving-boundary[diagnostics]` instead of
+    `kawin[diagnostics]`.
+  - Plotly stays optional: `[diagnostics]` extra (`plotly>=6.0`), tested pin `plotly==6.8.0` in
+    `examples/requirements-tested.txt`; evaluation and ordinary imports work without it.
+- **Tests:**
+  - `tests/test_surrogate_diagnostics.py`, generated by `tools/port_tests.py` (batch 5): 33 ported,
+    1 deferred (`test_three_phase_example_helper_routes_interfaces_truth_and_merged`, entry 6; see
+    [Deferred tests](#deferred-tests)), 2 superseded by package replacements in
+    `tests/test_surrogate_diagnostics_imports.py`:
+    `test_plotly_optional_dependency_is_declared` (reads the research `pyproject.toml` and
+    `environment.yml`) and `test_plotly_import_error_keeps_evaluation_available` (matches the
+    research message text).
+  - The 3 construction-diagnostic tests: un-deferred; `tests/test_illingworth_ternary.py` regenerated
+    (batch 4).
+  - `test_no_debugger_dependencies.py`: its diagnostics import check and debugger-reference scan are
+    hand-ported (extended) in `tests/test_surrogate_diagnostics_imports.py`. Its two solver tests,
+    `test_public_retry_exhaustion_is_batch_safe_and_preserves_state` (×2) and
+    `test_matrix_validation_raises_without_debugger` (×2), are **not ported** (user decision
+    2026-11-15: outside entries 1-2) and remain unported research tests.
+- **Validation (2026-11-15):** oracle-versus-package parity, 45 synthetic cases bit-identical
+  (reports and figure structure, including identical error behaviour); fresh-target full tests and
+  `acceptance.py quick --tolerance exact` bit-identical.
 
 ## 2. Surrogate comparison (`SurrogateComparison.py`)
 
-**Status: deferred, not implemented.** Priority: first after R07/R08 (with entry 1).
+**Status: ported 2026-11-15** (local commit `f78a13a`) as `moving_boundary.surrogate_comparison`.
 
-- **Research source:** `kawin/diffusion/SurrogateComparison.py` (741 lines):
-  `evaluate_saved_surrogate_comparison`, `plot_saved_surrogate_comparison`, `compare_saved_surrogates`.
-- **Research tests:** `kawin/tests/test_surrogate_comparison.py` (10).
-- **Already in the package:** its only internal dependency, `SurrogateArtifactBundle`
-  (`moving_boundary.surrogate_artifacts`), with hash-validated saved bundles.
-- **Missing:** the numerical comparison of two saved bundles and its visual report.
-- **Approach:** relocate next to `surrogate_artifacts` with import changes only; plotting under the
-  same optional extra as entry 1; port the 10 tests. Validate against pairs of bundles built from
-  identical and deliberately different specs (zero and known deviations).
+- **Research source:** `kawin/diffusion/SurrogateComparison.py` (741 lines; LF sha256
+  `315dab62…`, identical at `06dc7b4` and `7af24f4`):
+  `evaluate_saved_surrogate_comparison`, `plot_saved_surrogate_comparison`, `compare_saved_surrogates`
+  (exported lazily from `moving_boundary`).
+- **Research tests:** `kawin/tests/test_surrogate_comparison.py`: 10 functions, 12 collected.
+- **Ported as:** the whole module, AST-identical apart from imports and one string: a provenance and
+  interpretation docstring (tie lines are paired by normalized eta, not matched physical
+  conditions; identical-composition and shared-coverage views; neither bundle is ground truth); the
+  bundle import binds `moving_boundary.surrogate_artifacts`; the missing-Plotly message adds the
+  `moving-boundary[diagnostics]` hint. Plotting uses the same optional extra as entry 1.
+- **Tests:** `tests/test_surrogate_comparison.py`, generated (batch 5), 10 of 10 ported. The import
+  guard in `tests/test_surrogate_diagnostics_imports.py` also runs a saved-bundle comparison with
+  Plotly blocked; its child asserts the `moving_boundary` and public kawin origins and installs the
+  research-independence guard itself when `MB_FORBID_RESEARCH=1`.
+- **Validation (2026-11-15):** parity on bundles read by both implementations (each loads the
+  other's), 36 cases identical; on each side's own bundles, identical apart from bundle paths and
+  `created_utc`; known answers (identical bundles give 0, a 1.25 scale gives 0.2); fresh-target
+  full tests, exact quick and exact full acceptance bit-identical.
 
 ## 3. Surrogate benchmarking
 
@@ -120,7 +141,7 @@ O06's byte gate: it must stay bit-identical and needs live Thermo-Calc to prove.
 
 | Source | Content | Tests | Notes |
 |---|---|---|---|
-| `examples/ternaryExamples/IllingworthTernaryPlotly.py` (1456 lines) | `plot_two_phase_composition_profile`, `plot_three_phase_composition_profile` (interactive, with tie-line overlays) | `kawin/tests/test_ternary_plotly_helper.py` (19) | Imports `evaluate_tieline_diagnostics`, so it **depends on entry 1** |
+| `examples/ternaryExamples/IllingworthTernaryPlotly.py` (1456 lines) | `plot_two_phase_composition_profile`, `plot_three_phase_composition_profile` (interactive, with tie-line overlays) | `kawin/tests/test_ternary_plotly_helper.py` (19) | Imports `evaluate_tieline_diagnostics`, so it **depends on entry 1** (ported 2026-11-15: `moving_boundary.surrogate_diagnostics`) |
 | `examples/ternaryExamples/PlotlyHtmlToMp4.py` | Plotly HTML → MP4 export (subprocess-based) | `kawin/tests/test_plotly_html_to_mp4.py` (6) | **Neither the converter nor its tests are tracked at `7af24f4`.** Both exist only untracked in the research working tree. Before porting, capture provenance for both (e.g. record their sha256 and date in this file). The user keeps the test file out of commits, so how provenance is captured is the user's decision; don't commit either file to research without asking. |
 | `examples/ternaryExamples/IllingworthTernaryConvergence.py` (560 lines) | `default_convergence_config`, `run_convergence_sweep`, `summarize_convergence`, plots, `save_convergence_results` | `kawin/tests/test_illingworth_ternary_convergence.py` (5) | Uses `importlib` to load example modules: replace with package imports |
 | `plotMovingBoundaryState` in `kawin/diffusion/Plot.py` (l.247) | state plot for moving-boundary models and meshes | covered in `kawin/tests/test_plotting.py` (9 tests in total, only some relevant) | Research callers are the Lee-Oh/generic moving-boundary models (`MovingBoundary.py`, `MovingBoundaryFDM.py`, mesh `MovingBoundary*FD1D.py`), **not** the Illingworth solvers. Port only the Illingworth-relevant parts. |
@@ -236,16 +257,19 @@ place, not counted as ported, and get ported in the same change as their feature
 
 | Research test | Count | Needs | Entry |
 |---|---|---|---|
-| `test_illingworth_ternary.py::test_surrogate_construction_provenance_records_line_and_bulk_samples` | 1 | `evaluate_surrogate_construction_diagnostics` | 1 |
-| `test_illingworth_ternary.py::test_surrogate_construction_dashboard_has_phase_tabs` | 1 | `evaluate_…` + `plot_surrogate_construction_diagnostics` (plotly) | 1 |
-| `test_illingworth_ternary.py::test_surrogate_construction_report_includes_thermocalc_metadata` | 1 | `evaluate_surrogate_construction_diagnostics` | 1 |
+| `test_illingworth_ternary.py::test_surrogate_construction_provenance_records_line_and_bulk_samples` | 1 | `evaluate_surrogate_construction_diagnostics`. **Ported 2026-11-15** with entry 1 (`fa22e73`; generated file regenerated) | 1; ported |
+| `test_illingworth_ternary.py::test_surrogate_construction_dashboard_has_phase_tabs` | 1 | `evaluate_…` + `plot_surrogate_construction_diagnostics` (plotly). **Ported 2026-11-15** with entry 1 | 1; ported |
+| `test_illingworth_ternary.py::test_surrogate_construction_report_includes_thermocalc_metadata` | 1 | `evaluate_surrogate_construction_diagnostics`. **Ported 2026-11-15** with entry 1 | 1; ported |
+| `test_surrogate_diagnostics.py::test_three_phase_example_helper_routes_interfaces_truth_and_merged` | 1 | `plot_surrogate_diagnostics_for_run` of the research script `IllingworthTernaryThreePhaseStable` (imports `examples.*`). Deferred when entry 1 was ported (2026-11-15); the other 35 functions of that file are ported or superseded | 6 (decision per script) |
 | `test_illingworth_ternary.py::test_ternary_illingworth_quasi_binary_cu_zn_dummy_matches_binary_brass_case` | 1 | `build_fig3_present_work_model` and `build_fig6_illingworth_case_params` from the research example `examples/Illingworth2005/compare_illingworth2005_planar.py` (not ported). Found in M8 batch 4; not in the original count. **Priority** (user, 2026-11-10): it checks binary/ternary agreement over a long run (accepted times, interface motion, profiles, conservation). Port only those two builders, or reproduce the configuration as a small package test fixture; the plotting example need not be ported. **Ported by hand 2026-11-11** as `tests/test_brass_binary_ternary_parity.py`: a small fixture reproduces the builders' effective inputs, checked against the research builders, which were evaluated read-only in the frozen checkout. Configuration and assertions are unchanged, and it passes on the R07 code (`411bbe2`). The research config's `tolerance=1e-15` is ignored by `build_fig6_illingworth_case_params`, so the binary runs at `1e-10` µm, as in research. It stays a deferred test of the generated, hash-checked `test_illingworth_ternary.py` (`tools/port_tests.py`) | 6; ported separately |
 | `test_illingworth_ternary_convergence.py` (whole file) | 5 | `IllingworthTernaryConvergence` | 4 |
 | `test_three_phase_examples.py` (whole file) | 3 | the research script `IllingworthTernaryThreePhaseStable` | 6 (decision per script) |
 | `test_surrogate_artifacts.py::test_cuniti_tc_python_bundle_smoke` | 1 | an opt-in place outside approve's whole-suite gate: it is a licence smoke test (`KAWIN_RUN_TC_PYTHON_SMOKE=1`, TC-Python with TCHEA5/MOBHEA4) that skips in every normal run, and that gate allows no skips. Its adapter is already ported (`moving_boundary.providers.thermocalc`). Deferred in M8 batch 1; 11 of 12 ported. **Decision** (user, 2026-11-10): port it as an explicit opt-in check outside the mandatory approval gate; TC database licences must not be prerequisites for ordinary solver changes | — (opt-in check) |
 
-Feature test files outside item 16 that are also deferred: `test_surrogate_diagnostics.py` (36),
-`test_no_debugger_dependencies.py` (4, the diagnostics part), `test_surrogate_comparison.py` (10),
+Feature test files outside item 16: `test_surrogate_diagnostics.py` (36) and
+`test_surrogate_comparison.py` (10) were **ported with entries 1-2** (2026-11-15; see those
+entries), and so was the diagnostics part of `test_no_debugger_dependencies.py` (4; its two solver
+tests remain unported). Still deferred:
 `test_surrogate_benchmark*.py` (18 + 10 + 12 + 6), `test_benchmark_wtife_surrogate_runtime.py` (5),
 `test_ternary_plotly_helper.py` (19), `test_plotly_html_to_mp4.py` (6; untracked, provenance to be
 captured first), the relevant parts of `test_plotting.py` (9), the
@@ -255,10 +279,12 @@ figure-9 study scripts through their source, so it goes with entry 6; classified
 
 Effect on the item 16 counts:
 
-- `test_illingworth_ternary.py`: 151 of 155 tests are ported and 4 are deferred (the 3
-  diagnostics tests, plus the quasi-binary brass test found in M8 batch 4). The brass test now
-  exists as a separate hand port (`tests/test_brass_binary_ternary_parity.py`, 2026-11-11), so the
-  generated file and its provenance record are unchanged.
+- `test_illingworth_ternary.py`: 153 of 155 tests are ported, 1 is deferred (the quasi-binary
+  brass test found in M8 batch 4) and 1 is superseded (LEDGERS R13). The 3 construction-diagnostic
+  tests were deferred until entry 1 and ported with it (2026-11-15, generated file regenerated;
+  until then the count was 150 ported / 4 deferred / 1 superseded). The brass test exists as a
+  separate hand port (`tests/test_brass_binary_ternary_parity.py`, 2026-11-11), so it stays
+  deferred in the generated file.
   `test_illingworth_ternary_convergence.py` (5) and `test_three_phase_examples.py` (3) are deferred
   whole.
 - The other similarity-group files *are* portable: `FixedMatrixTernaryDiffusivity`,
@@ -266,7 +292,7 @@ Effect on the item 16 counts:
   `solve_three_phase_similarity_roots`, `SimilarityInitialProfile`, `tie_line_crossing_etas` and
   `compare_three_phase_model_to_similarity` already exist in `moving_boundary.analytic`.
 - **Accounting rule for the port:** the generator excludes the deferred tests *and* their
-  module-level imports (here `evaluate_surrogate_construction_diagnostics` and
-  `plot_surrogate_construction_diagnostics`). Each ported file's docstring names its excluded tests
+  module-level imports (for example `evaluate_surrogate_construction_diagnostics` and
+  `plot_surrogate_construction_diagnostics` before entry 1 was ported). Each ported file's docstring names its excluded tests
   and points here. The port report gives ported / deferred / total per file, and every research
   test function must be either ported or listed in this table.

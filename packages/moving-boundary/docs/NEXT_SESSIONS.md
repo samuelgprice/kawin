@@ -22,8 +22,9 @@ needs no research checkout and no Git.
 ### Current (2026-11-15)
 
 Paths below are relative to `packages/moving-boundary`. The last pushed revision is `522c695` on
-`origin/refactor/package-extraction`, pushed 2026-11-15. It is the pre-transfer checkpoint. Two local
-commits follow it; as of writing they are not pushed:
+`origin/refactor/package-extraction`, pushed 2026-11-15. It is the pre-transfer checkpoint. Four local
+commits follow it, besides the docs commits that record them (`f9855d5` and the entries 1-2 docs
+commit); as of writing none is pushed:
 
 - `9e9464b` adds the hash-checked transfer of local acceptance artifacts (`tools/acceptance_transfer.py`;
   [README "Transferring local artifacts to another checkout"](../README.md#transferring-local-artifacts-to-another-checkout)).
@@ -42,9 +43,21 @@ commits follow it; as of writing they are not pushed:
   tightens one check: a boolean or negative `size` in a bundle entry is now refused as malformed (a
   boolean previously passed the integer check). Validation: 196 focused tests passed, including all 90
   transfer tests. The full suite and the numerical gates were not repeated after this commit.
+- `fa22e73` ports surrogate diagnostics ([FUTURE_PORTS](FUTURE_PORTS.md) entry 1) as
+  `moving_boundary.surrogate_diagnostics`, with the optional `[diagnostics]` extra (Plotly), generated
+  test-port batch 5 and the 3 construction-diagnostic tests of `test_illingworth_ternary.py`
+  un-deferred. Validation: oracle-versus-package parity, 45 cases bit-identical; fresh-target full
+  `tests/` 1903 passed, 5 skipped, 1 deselected; exact quick 31 runs and 5 contracts bit-identical
+  (431 s).
+- `f78a13a` ports saved-surrogate comparison (entry 2) as `moving_boundary.surrogate_comparison`
+  and strengthens the import-guard test (kawin origin asserted; the child installs the independence
+  guard itself). Validation: comparison parity identical on shared and own-published bundles;
+  fresh-target full `tests/` 1918 passed, 5 skipped, 1 deselected; exact quick (424 s) and exact
+  full (42 runs and 5 contracts, 558 s) bit-identical. Usage:
+  [README "Diagnosing and comparing surrogates"](../README.md#diagnosing-and-comparing-surrogates).
 
-State at `522c695`, unchanged by the two local commits (they touch only acceptance tooling, its tests
-and the README):
+State at `522c695`, unchanged by these local commits (they touch tooling, tests, the README and new
+surrogate diagnostics/comparison modules, but no solver, surrogate, provider or acceptance code):
 
 - C33 (quick) and F33 (full_drift), the package-owned two-phase ternary analytic cases, are active since
   `65ce32c` (capture `20261115T224052Z-a26d099-1`); their docs and the R13 retrospective are in `522c695`
@@ -366,6 +379,12 @@ See [LEDGERS.md R03](LEDGERS.md#research-dependency-issue-r03-tc-debugger-import
     `initial_eta_componentwise_scaling` is set.
 
   Defaults are unchanged; any change needs its own plan, correctness gates and approval.
+- FUTURE_PORTS entries 1-2 are ported. The planned follow-on is an open-data Fe-Cr-Ni example that
+  builds pycalphad (and optionally Thermo-Calc) bundles, diagnoses and compares them and runs a small
+  simulation from each. It starts with a database provenance and licence check of the
+  MatCalc-derived `examples/FeCrNi.tdb` at the repository root (it is vendored only if that check
+  passes) and a bounded feasibility study, each followed by a user checkpoint. Entries 3-6 are
+  prioritized at the backlog review ([FUTURE_PORTS.md](FUTURE_PORTS.md)).
 - Example acceptance decisions are pending ([ACCEPTANCE_CANDIDATES.md](ACCEPTANCE_CANDIDATES.md)): E-case
   tiers and limits, the E11 lagged fixture (freeze its configuration first), and whether the Ni-P bonding
   example gets an E case.

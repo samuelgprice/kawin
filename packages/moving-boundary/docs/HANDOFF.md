@@ -12,6 +12,10 @@
   - `b2528a6` keeps digests and private contents out of transfer refusals, and refuses a boolean or
     negative bundle-entry `size`. Validated with 196 focused tests; the full suite and numerical gates
     were not repeated.
+  - `fa22e73` and `f78a13a` port surrogate diagnostics and saved-surrogate comparison
+    ([FUTURE_PORTS.md](FUTURE_PORTS.md) entries 1-2) with an optional Plotly `[diagnostics]` extra.
+    Validated with oracle parity (bit-identical), fresh-target full `tests/` (1918 passed, 5 skipped,
+    1 deselected), and exact quick and exact full acceptance (bit-identical).
 - **Details, current gate counts and open follow-ups:** [NEXT_SESSIONS.md](NEXT_SESSIONS.md) "Current
   checkpoint" and "Next scoped work", and [LEDGERS.md](LEDGERS.md).
 

@@ -16,12 +16,15 @@ physical convergence audit. See ACCEPTANCE_CANDIDATES.md for exact input variant
 | Cached material/provider workflows | O01/O02/O03a/O03b/O04/O07 run whenever present; private TC-derived inputs/references remain ignored |
 | pycalphad generation (Stage 2B relocation complete within O05/O08) | Installed providers/pycalphad.py; real restricted O05 and default-phase O08 sampling, seed 0, package examples import/read guard; O08 has two valid tie lines and one invalid probe, bitwise fixture/metadata gate |
 | TC-Python live generation | Stage 2C complete within full-only O06: installed batch-safe adapter, real guarded sampling, approved suffixed local input, six steps and unseeded repeat pair; exact arrays, only metadata cache path normalized |
+| Surrogate diagnostics and saved-bundle comparison (FUTURE_PORTS entries 1-2, 2026-11-15) | `surrogate_diagnostics.py`, `surrogate_comparison.py`: package tests only (generated ports of the research tests plus import/optional-Plotly guards), no acceptance case; oracle-versus-package parity bit-identical on synthetic surrogates and bundles. Plotly figures are checked structurally; the optional `[diagnostics]` extra is needed only for plotting |
 | Unaccepted workflows | Arbitrary plotting/results/restart/coupling, Numba fallback, other kawin versions, alternative moving-boundary solvers and curvature/precipitation APIs are outside this gate |
 
 ## Ownership and provenance
 
 Original whole-module solver/numerics/mesh/equilibrium/provider/domain copies map
-to 06dc7b4 in relocation-map.json and BINARY_SLICE.md. Stage 2B generation maps
+to 06dc7b4 in relocation-map.json and BINARY_SLICE.md; the diagnostics and comparison modules
+(FUTURE_PORTS entries 1-2) record 7af24f4, where their sources are identical to 06dc7b4, with the
+source sha256 and their two message-only adaptations. Stage 2B generation maps
 function-by-function in PUBLIC_KAWIN_MILESTONE.md and the provider docstring.
 Building Thermo-Calc or pycalphad surrogates uses installed providers and
 from_database, optionally prepare_surrogate_artifact bundles and
