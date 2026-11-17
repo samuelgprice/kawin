@@ -1640,6 +1640,95 @@ fallback), so the timestep is halved until it does.
   verify them against the manifest hashes; without them exact quick/full acceptance fails
   for the R13 cases.
 
+### R14: default Thermo-Calc kinetics settings can produce wrong surrogate samples (open)
+
+**Status:** open; recorded 2026-11-17 from the Nb-Ni-Ti (TCHEA5/MOBHEA3, 1473 K, LIQUID#1 |
+BCC_B2#2) surrogate investigation. No package code has been changed. **Scope:**
+`src/moving_boundary/providers/thermocalc.py` with the default `kinetics_*` settings
+(`ThermoCalcConfig` docstring :209-232, `_force_kinetics_phase` :1250,
+`_validate_single_kinetics_phase` :1268, `_configure_global_minimization` :1543), and every
+surrogate built from forced-phase TC kinetics (`TernaryMovingBoundaryThermodynamicsSurrogate.from_database`).
+Paths are relative to `packages/moving-boundary`.
+
+With the defaults (`kinetics_constrain_single_composition_set=False`,
+`kinetics_disable_positive_definite_hessian=False`, `kinetics_disable_global_minimization=False`),
+a "forced" kinetics calculation suspends only the configured phase names. Two silent failures
+were found:
+
+1. *Forced calculations are not single-phase.* Global minimization re-creates composition sets
+   (`BCC_B2#3`, `BCC_A2#3`) that are not suspended. In the low-Nb build, 1,877 of 2,083 forced
+   `LIQUID#1` samples converged to LIQUID + B2 or B2 only (liquid composition up to 0.09-0.12
+   mole fraction from the request; 740 of them outside the LIQUID + B2 field), and 171 forced
+   `BCC_B2#2` samples split into two bcc sets (offsets up to 0.38). The surrogate stores every
+   one at the *requested* composition. The adapter checks the stable sets and phase
+   composition only in constrained mode, so nothing warns.
+2. *Path-dependent B2 Hessian.* Partway through a long build, the session can switch into a
+   state in which the reported BCC_B2 thermodynamic factors, and hence `DC`, lose the ordering
+   contribution, while site fractions and mobilities stay correct. At Ni 0.4975 / Ti 0.5005 the
+   curvature of G along Ni<->Ti is 2.4654e6 J/mol (finite differences of the basis-free
+   chemical potentials, and TC's Hessian in a fresh session, in every reference basis);
+   affected bundles stored 2.0793e5, and `DC` differed by up to about 60x in the Ni<->Ti
+   exchange term. In calculation order the switch happened once, during the B2 tie-line-end
+   stage, and persisted (old NB build: 11 good points, then 756 bad; old TI/NI builds: none at
+   low Nb; repeat builds with the positive-definite Hessian off still switched). All four
+   bundles also carried bad values at some Nb >= 0.05 points. Local minimization with the
+   forced positive-definite Hessian on reproduces the bad values to every printed digit; the
+   other three on/off combinations give the correct value. A single disordered or split
+   calculation did not trigger the switch in a fresh session, so the exact trigger is not
+   identified. The docstring already notes that reused TC calculation objects "can retain a
+   path-dependent phase-Hessian state", but only to justify fresh multistart candidates.
+
+Consequence: in this system the B2 diffusivities depended on the build history and looked
+like a reference-element dependence (NB- vs TI/NI-reference bundles differed by 5-60x in B2
+fluxes and by 60-210 um in Illingworth interface positions). TC itself is basis-consistent
+when given clean single-set calculations. Liquid samples were consistently wrong in every
+bundle.
+
+**Validated configuration (downsampled).** `kinetics_constrain_single_composition_set=True`
+with `kinetics_disable_positive_definite_hessian=True` (the WTiFe bond example's choice) on
+every 5th point of the low-Nb grid, tie-line stage included (401 bulk points, 176 s): all 538
+liquid and 538 B2 records had one stable set at the requested composition (deviation
+<= 2e-13), and the B2 Hessian matched finite differences of MU at 40 spread points along
+Ni<->Ti and Nb<->Ni (median relative difference 4.5e-8, maximum 8.3e-4 on the dilute-Nb
+direction). The full-grid build with this configuration has not been run.
+
+**Possibly affected elsewhere.** The CuNiTi and FeCrNi Lee1996 research examples use local
+kinetics minimization with the positive-definite Hessian on for their non-multistart phase;
+the NiTiNb three-phase TC example uses the defaults. Disordered phases may be unaffected, but
+this has not been checked.
+
+**Investigate:**
+
+- *Defaults.* Whether to default to single-set kinetics with the positive-definite Hessian off,
+  or to require an explicit choice, at least for ordered phases. Check the cost (the validated
+  run was faster than the default build) and the effect on the existing acceptance and
+  example references before changing anything.
+- *Documentation.* Describe what each `kinetics_*` option does, the failure each default
+  allows, and the recommended combination for ordered phases, in the `ThermoCalcConfig`
+  docstring and the README's Thermo-Calc section.
+- *Validation.* Check every kinetics result, not only in constrained mode: stable sets equal
+  `[requested phase]` and phase composition equals the request. Warn, raise, or at minimum
+  record the mismatch in kinetics diagnostics and surrogate metadata; a build-level summary
+  (count of mismatched samples) would have exposed failure 1 at once.
+- *Hessian check.* An optional diagnostic comparing TC's thermodynamic factors with finite
+  differences of chemical potentials at a few sampled points (two extra equilibria per
+  direction), or a cross-basis consistency check, would expose failure 2.
+- *Tests.* The research fake-backend tests (`kawin/tests/test_thermocalc_examples.py`, from the
+  extraction root) cover the switches' mechanics only and were not ported; no test checks
+  the numerical result. Any fix needs a licence-free test for the validation and, where
+  licensing allows, a live TC check.
+
+**Evidence.** Scripts, logs, outputs and the six examined bundles (with their kinetics
+diagnostics) are in `../ternaryTLP/R14_tc_kinetics_evidence/` (from the extraction root; outside
+this repository, not version-controlled); its `README.md` lists every file. Key items:
+`basis_diag.py`, `basis_order.py`, `basis_hessian.py` (stored-diagnostics comparisons),
+`hess_probe.py` (finite-difference curvature), `order_probe.py`, `option_probe.py`,
+`flip_probe.py` (query order, option combinations, trigger tests), `sequence_check.py`,
+`split_check2.py`, `liquid_split_check.py` (switch position and set splitting in the stored
+bundles) and `mini_fix.py` / `logs/mini_fix.log` (validated configuration). The study context
+is in `../ternaryTLP/NbNiTi_Illingworth_and_DICTRA_followup.md`; its section 6 attributes the B2
+difference to the reference element and is superseded by this entry.
+
 ## Two-phase ternary analytic acceptance cases (C33/F33)
 
 **Status:** active since `65ce32c` (2026-11-15): C33 runs in quick, F33 in full (`full_drift`).

@@ -424,6 +424,10 @@ See [LEDGERS.md R03](LEDGERS.md#research-dependency-issue-r03-tc-debugger-import
     `initial_eta_componentwise_scaling` is set.
 
   Defaults are unchanged; any change needs its own plan, correctness gates and approval.
+- R14 (open, [LEDGERS R14](LEDGERS.md#r14-default-thermo-calc-kinetics-settings-can-produce-wrong-surrogate-samples-open)):
+  with the default `kinetics_*` settings, forced-phase TC kinetics can converge to multi-set
+  equilibria stored under the requested composition, and can return path-dependent B2
+  thermodynamic factors. Decide on defaults, document the options and add result validation.
 - FUTURE_PORTS entries 1-2 and their open-data Fe-Cr-Ni follow-on example are complete (see
   Current checkpoint). Entries 3-6 are prioritized at the backlog review
   ([FUTURE_PORTS.md](FUTURE_PORTS.md)).
@@ -436,6 +440,7 @@ See [LEDGERS.md R03](LEDGERS.md#research-dependency-issue-r03-tc-debugger-import
 - Final package name and intended audience/distribution/maintenance ownership.
 - Pushing branches, publication, MAP licensing outreach and upstream contribution.
 - Changing either ternary solver's thin-phase prompt default.
+- Changing the Thermo-Calc `kinetics_*` defaults (R14).
 
 ## Baseline and research policy
 
