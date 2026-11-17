@@ -4,6 +4,56 @@ These examples show how to set up realistic moving-boundary problems with the in
 package. Each script can be run directly and adapted. Keep the adjacent `advanced/`
 directory when copying scripts; it holds detailed validation and compatibility workflows.
 
+## Notebook tutorials
+
+These independently runnable notebooks use package APIs directly, with physical inputs,
+model construction and plots visible cell by cell. Follow the order below, or begin with
+the first Fe-Cr-Ni simulation if you want a database-backed case. Existing Python workflows
+remain available for detailed validation and command-line use.
+
+| Notebook | Main lesson | Inputs / requirements | Measured run* |
+|---|---|---|---|
+| [binary_tlp_bonding.ipynb](binary_tlp_bonding.ipynb) | Binary Ni-P bonding | Published constant properties; no database | 15 s |
+| [fecrni_first_simulation.ipynb](fecrni_first_simulation.ipynb) | First database-backed simulation | Bundled open TDB; pycalphad | — |
+| [fecrni_surrogate_reuse.ipynb](fecrni_surrogate_reuse.ipynb) | Save, strictly reload, then solve | Bundled open TDB; writes a local bundle | 21 s |
+| [fecrni_surrogate_assessment.ipynb](fecrni_surrogate_assessment.ipynb) | Inspect samples and assess approximation | Bundled open TDB; pycalphad | 18 s |
+| [fecrni_resolution_study.ipynb](fecrni_resolution_study.ipynb) | Vary phase grids, time steps and bulk sampling independently | Bundled open TDB; nine solves | 91 s |
+| [ternary_interstitial_diffusion.ipynb](ternary_interstitial_diffusion.ipynb) | Understand u-fractions and mole fractions | Synthetic constant properties; no database | 12 s |
+| [three_phase_growth.ipynb](three_phase_growth.ipynb) | Track two interfaces and a middle layer | Synthetic constant properties; no database | 19 s |
+| [fecrni_thermocalc.ipynb](fecrni_thermocalc.ipynb) | Sample with Thermo-Calc, close the session, then solve | TC-Python and a working licence | 55 s |
+
+*New notebooks were executed in fresh Jupyter kernels on one Windows workstation in the
+`kawin` environment; measurements include kernel startup, calculations and figure rendering.
+The reuse measurement includes the initial bundle build. A kernel runtime is not reported
+here for the introductory notebook. Timings depend on hardware, caches and backend versions.
+
+**Working directory.** Select the `kawin` kernel and start in either the extraction repository
+root or this examples directory (`packages/moving-boundary/examples`). The database cells
+handle both locations without modifying `sys.path` or changing directories. For another
+layout, edit `database` explicitly. No notebook imports another example or an `advanced/`
+companion, and no notebook requires another notebook's variables or output files.
+
+**Rerunning.** Rebuild the mesh and model before repeating a solve from its initial state;
+`solve(duration)` advances by that duration. Recreate the surrogate when changing its
+sampling settings. Plots use physical mole fractions unless explicitly marked as u-fractions.
+The interstitial and three-phase inputs are synthetic, not material predictions.
+
+**Files and reuse.** Only the reuse tutorial publishes a bundle, under
+`Path.home() / "moving_boundary_example_outputs" / "tutorials" / "fecrni_surrogate_reuse"`.
+Edit `output_dir` to change it. A missing bundle builds, a compatible bundle reloads without
+backend calculations, and incompatible or damaged data raise; only explicit `rebuild=True`
+replaces them. The notebook explains which cells to run after restarting the kernel.
+The other pycalphad tutorials sample afresh. The source distribution includes the notebooks and open
+TDB; installed wheels contain the package APIs, so obtain the examples separately.
+
+**Thermo-Calc.** The tutorial completed a live licensed verification run. Its calculated
+outputs and cache remain local; the shipped notebook contains no saved licensed outputs.
+The normal notebook tests check configuration and session closure without a licence.
+The source session closes before the simulation uses the surrogate. A short system-temp
+cache folder avoids long-path truncation; edit `cache_dir` if necessary.
+
+## Python workflows
+
 | Script | Question | Needs | Time* |
 |---|---|---|---|
 | `binary_planar_growth.py` | How fast does a planar interface grow under diffusion control? | Nothing | Under 1 s |
@@ -205,7 +255,7 @@ The tests need the source distribution or repository, not just the wheel. From t
 directory, using the tested dependency versions:
 
     python -m pip install ".[test]" -c examples/requirements-tested.txt
-    python -m pytest tests/test_analytic.py tests/test_examples.py
+    python -m pytest tests/test_analytic.py tests/test_examples.py tests/test_introductory_notebook.py
 
 Without a database, tests that need one skip with a reason. To include them, set `MB_EXAMPLE_TDB`.
 The open Fe-Cr-Ni workflow tests use the bundled database and need no Thermo-Calc licence.

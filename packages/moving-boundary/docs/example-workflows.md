@@ -6,6 +6,16 @@ prepare inputs and solve once. The original `run` functions and command-line
 options retain the detailed checks, implemented in adjacent `examples/advanced/`
 companions. Keep that directory beside the scripts when copying examples.
 
+## Notebook tutorials
+
+For direct, cell-by-cell teaching examples, see the
+[notebook collection](../examples/README.md#notebook-tutorials). It covers binary bonding,
+Fe-Cr-Ni simulation, verified surrogate reuse, assessment, resolution studies,
+interstitial composition bases, three phases and Thermo-Calc. Each notebook uses
+package APIs without importing example modules. Kernels may start at the extraction
+repository root or in `packages/moving-boundary/examples`; database-backed tutorials
+handle either location. The script-import workflow below still requires the root.
+
 ## A short first run
 
 Start at the **extraction repository root**, with the package installed and the

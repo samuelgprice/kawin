@@ -93,7 +93,12 @@ the accepted scope, remaining research script orchestration and uncovered workfl
 
 ## Streamlined examples and reusable workflows
 
-The [examples](examples/README.md) keep physical inputs and solver construction visible.
+The [notebook tutorials](examples/README.md#notebook-tutorials) show physical inputs,
+model construction, solves and plots through direct package calls. Start with
+[Ni-P bonding](examples/binary_tlp_bonding.ipynb) or the
+[first Fe-Cr-Ni simulation](examples/fecrni_first_simulation.ipynb).
+
+The [Python examples](examples/README.md#python-workflows) keep physical inputs and solver construction visible.
 Their `run_core` entry points solve once with basic checks; existing `run` functions
 and command-line options retain the detailed validation workflows in adjacent advanced
 companions. The wheel also provides constant scalar diffusivities, ternary sampling
