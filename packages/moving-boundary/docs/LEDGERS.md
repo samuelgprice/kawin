@@ -1662,9 +1662,14 @@ were found:
    `BCC_B2#2` samples split into two bcc sets (offsets up to 0.38). The surrogate stores every
    one at the *requested* composition. The adapter checks the stable sets and phase
    composition only in constrained mode, so nothing warns.
-2. *Path-dependent B2 Hessian.* Partway through a long build, the session can switch into a
-   state in which the reported BCC_B2 thermodynamic factors, and hence `DC`, lose the ordering
-   contribution, while site fractions and mobilities stay correct. At Ni 0.4975 / Ti 0.5005 the
+2. *Path-dependent B2 Hessian (disordered state).* Partway through a long build, the session can
+   switch into a state in which the reported BCC_B2 thermodynamic factors, and hence `DC`, are
+   those of *disordered* B2. A fresh session with local minimization and the positive-definite
+   Hessian on reproduces them. It converges to identical site fractions on both sublattices, with
+   G 5.3-5.7 kJ/mol above the ordered equilibrium (Nb 0.002-0.16), and Ni<->Ti `DC` about 110x
+   larger at Nb/Ni/Ti 0.002/0.499/0.499. Yet the stored kinetics diagnostics of the affected
+   records list the *ordered* site fractions, identical to a correct record, so a site-fraction
+   check on stored records does not detect the failure (not explained). At Ni 0.4975 / Ti 0.5005 the
    curvature of G along Ni<->Ti is 2.4654e6 J/mol (finite differences of the basis-free
    chemical potentials, and TC's Hessian in a fresh session, in every reference basis);
    affected bundles stored 2.0793e5, and `DC` differed by up to about 60x in the Ni<->Ti
@@ -1690,7 +1695,30 @@ every 5th point of the low-Nb grid, tie-line stage included (401 bulk points, 17
 liquid and 538 B2 records had one stable set at the requested composition (deviation
 <= 2e-13), and the B2 Hessian matched finite differences of MU at 40 spread points along
 Ni<->Ti and Nb<->Ni (median relative difference 4.5e-8, maximum 8.3e-4 on the dilute-Nb
-direction). The full-grid build with this configuration has not been run.
+direction).
+
+**Full-grid confirmation.** Builds of both full grids with this configuration (1,635 and 2,002 bulk
+points, 3.5-4.2 min instead of 9-16 min) gave single-set records at the requested composition for
+every sample (1,772 / 2,139 per phase). The B2 Hessian matched fresh finite differences at 29
+points per build spread over the build order (median relative difference 4e-8 / 7e-8). The same
+check on the old bundles failed at 52-53 of 58 directions. Each build rejected 50 B2 samples at
+liquid-box compositions (Ni <= 0.40) with a non-positive diffusivity spectrum, where B2 is not
+stable; the old bundles had accepted them as multi-set calculations. Rerunning the 98 Illingworth
+runs that had used the old bundles changed the results qualitatively. Thick-liquid cases moved
+-187 um instead of +64 to +76 um, solidification times changed by up to 30x, and a step-start case
+that had failed with negative Nb now completes with no Nb dip.
+
+**DICTRA uses the same disordered state.** Diffusivities extracted with TC-Python's
+post-processor (`DC`, `TF`, `MUR` along the profile) from short runs of the same cases show:
+
+- DICTRA's sharp-interface solver matches the disordered-state values (median relative difference
+  2e-8 in `DC`), with identical chemical potentials and G.
+- The homogenization solver matches the corrected configuration (2e-7).
+- `Options().enable_forced_starting_values_in_equilibrium_calculations()` does not change the
+  sharp-interface result.
+
+Agreement with sharp-interface DICTRA therefore does not validate ordered-phase kinetics data; it
+was how the old surrogate's errors stayed hidden in this study.
 
 **Possibly affected elsewhere.** The CuNiTi and FeCrNi Lee1996 research examples use local
 kinetics minimization with the positive-definite Hessian on for their non-multistart phase;
@@ -1712,7 +1740,10 @@ this has not been checked.
   (count of mismatched samples) would have exposed failure 1 at once.
 - *Hessian check.* An optional diagnostic comparing TC's thermodynamic factors with finite
   differences of chemical potentials at a few sampled points (two extra equilibria per
-  direction), or a cross-basis consistency check, would expose failure 2.
+  direction), or a cross-basis consistency check, would expose failure 2. Cheaper still for
+  ordered phases: compare G (or the chemical potentials) of the kinetics state with a
+  global-minimization equilibrium of the same phase at the same composition. The disordered
+  state was 5.3-5.7 kJ/mol higher here, while stored site fractions did not show it.
 - *Tests.* The research fake-backend tests (`kawin/tests/test_thermocalc_examples.py`, from the
   extraction root) cover the switches' mechanics only and were not ported; no test checks
   the numerical result. Any fix needs a licence-free test for the validation and, where
@@ -1727,7 +1758,13 @@ this repository, not version-controlled); its `README.md` lists every file. Key 
 `split_check2.py`, `liquid_split_check.py` (switch position and set splitting in the stored
 bundles) and `mini_fix.py` / `logs/mini_fix.log` (validated configuration). The study context
 is in `../ternaryTLP/NbNiTi_Illingworth_and_DICTRA_followup.md`; its section 6 attributes the B2
-difference to the reference element and is superseded by this entry.
+difference to the reference element and is superseded by this entry. The full-grid builds, the
+reruns and the DICTRA diffusivity extraction are reported in
+`../ternaryTLP/NbNiTi_corrected_surrogate_rerun.md` (sections 2-5 and 9), with the corrected bundles,
+run outputs and scripts in `../ternaryTLP/NbNiTi_corrected_surrogate_runs/`. Key items there:
+`verify_ss.py` (full-grid check), `dc_compare.py` (DICTRA vs surrogate and TC diffusivities),
+`state_probe.py` (G and site fractions per mode) and `dictra_dc/` (extraction worker, saved DICTRA
+results).
 
 ## Two-phase ternary analytic acceptance cases (C33/F33)
 
